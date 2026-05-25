@@ -32,6 +32,30 @@ router = APIRouter(prefix="/a2a", tags=["a2a"])
 # ------------------------------------------------------------------
 
 
+class ImportRequest(BaseModel):
+    source_url: str = Field(
+        ...,
+        description=(
+            "AgentHub base URL, e.g. "
+            "agenthub-pre.cn-zhangjiakou.aliyuncs.com"
+        ),
+    )
+
+
+class ImportedAgentResponse(BaseModel):
+    url: str
+    name: str
+    description: Optional[str] = None
+    version: Optional[str] = None
+    skills: Optional[list] = None
+    capabilities: Optional[dict] = None
+    auth_type: str = "gateway"
+
+
+class ImportResponse(BaseModel):
+    agents: list[ImportedAgentResponse]
+
+
 class RegisterRequest(BaseModel):
     url: str = Field(..., description="Remote A2A Agent base URL")
     alias: Optional[str] = Field(None, description="Human-readable alias")
@@ -302,6 +326,98 @@ async def refresh_agent(request: Request, alias: str) -> AgentEntryResponse:
         return _build_entry_response(reg, None, error=str(exc))
 
     return _build_entry_response(reg, card_info)
+
+
+# ------------------------------------------------------------------
+# Batch import from AgentHub
+# ------------------------------------------------------------------
+
+_AGENTHUB_BASE_URL = "https://agenthub-pre.cn-zhangjiakou.aliyuncs.com"
+_AGENTHUB_PAGE_SIZE = 10
+
+
+@router.get(
+    "/import",
+    response_model=ImportResponse,
+    summary="Batch import agents from AgentHub",
+)
+async def import_agents() -> ImportResponse:
+    """Fetch all agents from the hardcoded AgentHub with pagination.
+
+    Fetches all pages from AgentHub ``{base_url}/agents?page=N&pageSize=10``,
+    and extracts agent metadata for the frontend to display and select.
+    """
+    import httpx
+
+    page_size = _AGENTHUB_PAGE_SIZE
+    all_results: list[dict] = []
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # First page to get totalCount
+            resp = await client.get(
+                f"{_AGENTHUB_BASE_URL}/agents",
+                params={"page": 1, "pageSize": page_size},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            total_count = data.get("totalCount", 0)
+            results = data.get("results", [])
+            all_results.extend(results)
+
+            # Fetch remaining pages
+            total_pages = (total_count + page_size - 1) // page_size
+            for page in range(2, total_pages + 1):
+                resp = await client.get(
+                    f"{_AGENTHUB_BASE_URL}/agents",
+                    params={"page": page, "pageSize": page_size},
+                )
+                resp.raise_for_status()
+                page_data = resp.json()
+                all_results.extend(page_data.get("results", []))
+
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=(
+                "Failed to fetch agents from AgentHub: "
+                f"{exc.response.text[:200]}"
+            ),
+        ) from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Network error connecting to AgentHub: {exc}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected error: {exc}",
+        ) from exc
+
+    agents: list[ImportedAgentResponse] = []
+    for item in all_results:
+        interfaces = item.get("supportedInterfaces", [])
+        if not interfaces:
+            continue
+        agent_url = interfaces[0].get("url", "")
+        if not agent_url:
+            continue
+
+        agents.append(
+            ImportedAgentResponse(
+                url=agent_url,
+                name=item.get("name", agent_url),
+                description=item.get("description"),
+                version=item.get("version"),
+                skills=item.get("skills"),
+                capabilities=item.get("capabilities"),
+                auth_type="gateway",
+            ),
+        )
+
+    return ImportResponse(agents=agents)
 
 
 # ------------------------------------------------------------------

@@ -1013,6 +1013,28 @@ function buildPlugin() {
     const [refreshing, setRefreshing] = useState(false);
     const [form] = Form.useForm();
 
+    // Batch import state
+    const [importModalOpen, setImportModalOpen] = useState(false);
+    const [importing, setImporting] = useState(false);
+    const [hubAgents, setHubAgents] = useState<any[]>([]);
+    const [selectedAgents, setSelectedAgents] = useState<Set<string>>(
+      new Set(),
+    );
+    const [importResults, setImportResults] = useState<
+      Array<{ name: string; success: boolean; error?: string }>
+    >([]);
+    const [importPage, setImportPage] = useState(1);
+    const importAbortRef = React.useRef<AbortController | null>(null);
+    const IMPORT_PAGE_SIZE = 10;
+
+    // Derived: which agents are already registered
+    const importedNames = useMemo(
+      () => new Set(agents.map((a) => a.name)),
+      [agents],
+    );
+    const importedNamesRef = React.useRef(importedNames);
+    importedNamesRef.current = importedNames;
+
     const fetchAgents = useCallback(async () => {
       setLoading(true);
       try {
@@ -1129,6 +1151,146 @@ function buildPlugin() {
         setRefreshing(false);
       }
     }, [activeAgent, fetchAgents]);
+
+    // ── Batch import handlers ─────────────────────────────────────────
+
+    const openImportModal = useCallback(() => {
+      setImportModalOpen(true);
+      setHubAgents([]);
+      setSelectedAgents(new Set());
+      setImportResults([]);
+      setImportPage(1);
+      importAbortRef.current = null;
+      // Auto-fetch on open
+      void fetchHubAgents();
+    }, []);
+
+    const closeImportModal = useCallback(() => {
+      if (importing && importAbortRef.current) {
+        importAbortRef.current.abort();
+      }
+      setImportModalOpen(false);
+      setHubAgents([]);
+      setSelectedAgents(new Set());
+      setImportResults([]);
+      setImportPage(1);
+      importAbortRef.current = null;
+    }, [importing]);
+
+    const fetchHubAgents = useCallback(async () => {
+      setImporting(true);
+      const controller = new AbortController();
+      importAbortRef.current = controller;
+      try {
+        const token = getApiToken?.();
+        const agentId = getSelectedAgentId();
+        const headers: Record<string, string> = {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(agentId ? { "X-Agent-Id": agentId } : {}),
+        };
+        const resp = await fetch(getApiUrl("/a2a/import"), {
+          method: "GET",
+          headers,
+          signal: controller.signal,
+        });
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "");
+          throw new Error(text || `HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        const agents = data?.agents || [];
+        if (agents.length === 0) {
+          antdMsg.warning("未找到可用的 Agent");
+          return;
+        }
+        setHubAgents(agents);
+        // Auto-select only agents that haven't been imported yet
+        const currentImportedNames = importedNamesRef.current;
+        setSelectedAgents(
+          new Set(
+            agents
+              .filter((a: any) => !currentImportedNames.has(a.name))
+              .map((a: any) => a.url),
+          ),
+        );
+      } catch (e: any) {
+        if (e?.name === "AbortError") return;
+        antdMsg.error(e.message || "获取 Agent 列表失败");
+      } finally {
+        setImporting(false);
+        importAbortRef.current = null;
+      }
+    }, []);
+
+    const toggleSelectAgent = useCallback((agentUrl: string) => {
+      setSelectedAgents((prev: Set<string>) => {
+        const next = new Set(prev);
+        if (next.has(agentUrl)) next.delete(agentUrl);
+        else next.add(agentUrl);
+        return next;
+      });
+    }, []);
+
+    const selectAllAgents = useCallback(() => {
+      setSelectedAgents(
+        new Set(
+          hubAgents
+            .filter((a: any) => !importedNames.has(a.name))
+            .map((a: any) => a.url),
+        ),
+      );
+    }, [hubAgents, importedNames]);
+
+    const deselectAllAgents = useCallback(() => {
+      setSelectedAgents(new Set());
+    }, []);
+
+    const handleConfirmImport = useCallback(async () => {
+      const toImport = hubAgents.filter(
+        (a: any) => selectedAgents.has(a.url) && !importedNames.has(a.name),
+      );
+      if (toImport.length === 0) {
+        antdMsg.warning("请至少选择一个 Agent");
+        return;
+      }
+      setImporting(true);
+      setImportResults([]);
+      const results: Array<{
+        name: string;
+        success: boolean;
+        error?: string;
+      }> = [];
+      for (const agent of toImport) {
+        try {
+          await a2aFetch(API_BASE, {
+            method: "POST",
+            body: JSON.stringify({
+              url: agent.url,
+              alias: agent.name || undefined,
+              auth_type: agent.auth_type || "gateway",
+              auth_token: "",
+            }),
+          });
+          results.push({ name: agent.name || agent.url, success: true });
+        } catch (e: any) {
+          results.push({
+            name: agent.name || agent.url,
+            success: false,
+            error: e.message || "注册失败",
+          });
+        }
+        setImportResults([...results]);
+      }
+      await fetchAgents();
+      antdMsg.success(
+        `导入完成：成功 ${results.filter((r) => r.success).length} 个，失败 ${
+          results.filter((r) => !r.success).length
+        } 个`,
+      );
+      setImporting(false);
+      // Auto-close modal after 1.5s
+      setTimeout(() => closeImportModal(), 1500);
+    }, [hubAgents, selectedAgents, fetchAgents, importedNames]);
 
     const authTypeValue = Form.useWatch?.("auth_type", form) ?? "";
 
@@ -1378,7 +1540,7 @@ function buildPlugin() {
         footer: isCreateMode
           ? React.createElement(
               Space,
-              { style: { float: "right" } },
+              { style: { display: "flex", justifyContent: "flex-end" } },
               React.createElement(Button, { onClick: handleClose }, "取消"),
               React.createElement(
                 Button,
@@ -1419,6 +1581,14 @@ function buildPlugin() {
           React.createElement(
             Button,
             {
+              icon: ApiOutlined ? React.createElement(ApiOutlined) : null,
+              onClick: openImportModal,
+            },
+            "从阿里云AgentHub导入",
+          ),
+          React.createElement(
+            Button,
+            {
               type: "primary",
               icon: PlusOutlined ? React.createElement(PlusOutlined) : null,
               onClick: handleCreateClick,
@@ -1453,7 +1623,9 @@ function buildPlugin() {
           React.createElement(Spin, { size: "large" }),
         )
       : agents.length === 0
-      ? React.createElement(Empty, { description: "暂无注册的远程 A2A Agent" })
+      ? React.createElement(Empty, {
+          description: "暂无注册的远程 A2A Agent",
+        })
       : React.createElement(
           "div",
           {
@@ -1472,12 +1644,337 @@ function buildPlugin() {
           ),
         );
 
+    // Import modal
+    const hasResults = importResults.length > 0;
+    const totalPages = Math.ceil(hubAgents.length / IMPORT_PAGE_SIZE);
+    const pageStart = (importPage - 1) * IMPORT_PAGE_SIZE;
+    const pageAgents = hubAgents.slice(pageStart, pageStart + IMPORT_PAGE_SIZE);
+
+    const importModalEl = React.createElement(
+      Modal,
+      {
+        title: hasResults ? "导入结果" : "从阿里云AgentHub导入 Agent",
+        open: importModalOpen,
+        onCancel: closeImportModal,
+        closable: !importing || hasResults,
+        maskClosable: !importing || hasResults,
+        width: 800,
+        footer: hasResults
+          ? React.createElement(
+              Space,
+              { style: { display: "flex", justifyContent: "flex-end" } },
+              React.createElement(
+                Button,
+                { type: "primary", onClick: closeImportModal },
+                "关闭",
+              ),
+            )
+          : hubAgents.length > 0
+          ? React.createElement(
+              Space,
+              { style: { display: "flex", justifyContent: "flex-end" } },
+              React.createElement(
+                Button,
+                { onClick: closeImportModal },
+                "取消",
+              ),
+              React.createElement(
+                Button,
+                {
+                  type: "primary",
+                  loading: importing,
+                  disabled: selectedAgents.size === 0,
+                  onClick: handleConfirmImport,
+                },
+                `确认导入 (${selectedAgents.size}/${hubAgents.length})`,
+              ),
+            )
+          : null,
+      },
+      // Loading state
+      importing &&
+        hubAgents.length === 0 &&
+        React.createElement(
+          "div",
+          {
+            style: {
+              textAlign: "center",
+              padding: 40,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 12,
+            },
+          },
+          React.createElement(Spin, { size: "large" }),
+          React.createElement(
+            "span",
+            { style: { fontSize: 13, color: "#8c8c8c" } },
+            "正在从 AgentHub 获取 Agent 列表...",
+          ),
+        ),
+      // Agent selection list
+      !importing &&
+        hubAgents.length > 0 &&
+        React.createElement(
+          "div",
+          null,
+          // Header bar
+          React.createElement(
+            "div",
+            {
+              style: {
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 8,
+                fontSize: 12,
+                color: "#8c8c8c",
+              },
+            },
+            React.createElement(
+              "span",
+              null,
+              `共 ${hubAgents.length} 个 Agent，已选 ${selectedAgents.size} 个`,
+            ),
+            React.createElement(
+              Space,
+              { size: 4 },
+              React.createElement(
+                Button,
+                {
+                  size: "small",
+                  type: "link",
+                  style: { padding: 0, height: "auto" },
+                  onClick: selectAllAgents,
+                },
+                "全选",
+              ),
+              React.createElement(
+                Button,
+                {
+                  size: "small",
+                  type: "link",
+                  style: { padding: 0, height: "auto" },
+                  onClick: deselectAllAgents,
+                },
+                "取消全选",
+              ),
+            ),
+          ),
+          // Agent list
+          React.createElement(
+            "div",
+            {
+              style: {
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                maxHeight: 420,
+                overflowY: "auto",
+              },
+            },
+            ...pageAgents.map((agent: any, idx: number) => {
+              const isSelected = selectedAgents.has(agent.url);
+              return React.createElement(
+                "div",
+                {
+                  key: idx,
+                  style: {
+                    display: "flex",
+                    gap: 8,
+                    padding: 10,
+                    border: isSelected
+                      ? "1px solid #1677ff"
+                      : "1px solid #e8e8e8",
+                    borderRadius: 6,
+                    cursor: importedNames.has(agent.name)
+                      ? "default"
+                      : "pointer",
+                    background: importedNames.has(agent.name)
+                      ? "#fafafa"
+                      : isSelected
+                      ? "#f6f9ff"
+                      : "#fff",
+                    transition: "all 0.15s ease",
+                    opacity: importedNames.has(agent.name) ? 0.7 : 1,
+                  },
+                  onClick: () => {
+                    if (!importedNames.has(agent.name))
+                      toggleSelectAgent(agent.url);
+                  },
+                },
+                React.createElement(
+                  "div",
+                  { style: { flex: 1, minWidth: 0 } },
+                  React.createElement(
+                    "div",
+                    {
+                      style: {
+                        fontWeight: 500,
+                        fontSize: 13,
+                        marginBottom: 2,
+                      },
+                    },
+                    agent.name || agent.url,
+                  ),
+                  agent.description
+                    ? React.createElement(
+                        "div",
+                        {
+                          style: {
+                            fontSize: 11,
+                            color: "#8c8c8c",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          },
+                        },
+                        agent.description,
+                      )
+                    : null,
+                  agent.skills?.length > 0
+                    ? React.createElement(
+                        "div",
+                        { style: { marginTop: 4 } },
+                        ...agent.skills.slice(0, 3).map((s: any, i: number) =>
+                          React.createElement(
+                            Tag,
+                            {
+                              key: i,
+                              style: {
+                                fontSize: 10,
+                                marginRight: 4,
+                              },
+                            },
+                            s.name,
+                          ),
+                        ),
+                        agent.skills.length > 3
+                          ? React.createElement(
+                              Tag,
+                              { style: { fontSize: 10 } },
+                              `+${agent.skills.length - 3}`,
+                            )
+                          : null,
+                      )
+                    : null,
+                ),
+                React.createElement(
+                  Tag,
+                  {
+                    color: importedNames.has(agent.name) ? "green" : "blue",
+                    style: { fontSize: 10, flexShrink: 0, height: 20 },
+                  },
+                  importedNames.has(agent.name)
+                    ? "已导入"
+                    : agent.auth_type === "gateway"
+                    ? "阿里云"
+                    : agent.auth_type,
+                ),
+              );
+            }),
+          ),
+          // Pagination
+          totalPages > 1 &&
+            React.createElement(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  gap: 8,
+                  marginTop: 16,
+                },
+              },
+              React.createElement(
+                Button,
+                {
+                  size: "small",
+                  disabled: importPage === 1,
+                  onClick: () => setImportPage((p) => p - 1),
+                },
+                "上一页",
+              ),
+              React.createElement(
+                "span",
+                { style: { fontSize: 12, color: "#8c8c8c" } },
+                `${importPage} / ${totalPages}`,
+              ),
+              React.createElement(
+                Button,
+                {
+                  size: "small",
+                  disabled: importPage === totalPages,
+                  onClick: () => setImportPage((p) => p + 1),
+                },
+                "下一页",
+              ),
+            ),
+        ),
+      // Import results
+      hasResults &&
+        React.createElement(
+          "div",
+          {
+            style: {
+              maxHeight: 350,
+              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+            },
+          },
+          ...importResults.map((r: any, idx: number) =>
+            React.createElement(
+              "div",
+              {
+                key: idx,
+                style: {
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "6px 10px",
+                  borderRadius: 4,
+                  background: r.success ? "#f6ffed" : "#fff2f0",
+                  border: r.success ? "1px solid #b7eb8f" : "1px solid #ffccc7",
+                  fontSize: 12,
+                },
+              },
+              React.createElement(
+                "span",
+                {
+                  style: {
+                    color: r.success ? "#52c41a" : "#ff4d4f",
+                    fontSize: 14,
+                  },
+                },
+                r.success ? "✓" : "✗",
+              ),
+              React.createElement(
+                "span",
+                {
+                  style: {
+                    flex: 1,
+                    color: r.success ? "#262626" : "#ff4d4f",
+                  },
+                },
+                r.name,
+                r.error ? ` - ${r.error}` : "",
+              ),
+            ),
+          ),
+        ),
+    );
+
     return React.createElement(
       "div",
       { style: { padding: 24 } },
       headerEl,
       bodyEl,
       drawerEl,
+      importModalEl,
     );
   }
 
