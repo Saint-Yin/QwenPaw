@@ -2410,5 +2410,21 @@
     "timeout": "后端服务在 {{seconds}} 秒内未能启动。",
     "timeoutHint": "后端启动失败，请重试，或检查应用日志了解详情。",
     "retry": "重试"
+  },
+  "managePrd": {
+    "status": "状态",
+    "id": "ID",
+    "title": "标题",
+    "priority": "优先级",
+    "description": "描述",
+    "acceptance": "验收标准",
+    "completed": "已完成",
+    "pending": "待处理",
+    "progress": "进度",
+    "loading": "正在更新 PRD...",
+    "errorPrefix": "PRD 格式错误，将会修正：",
+    "unknownError": "未知错误",
+    "expandMore": "+{{count}} 项...",
+    "collapse": "收起"
   }
 }

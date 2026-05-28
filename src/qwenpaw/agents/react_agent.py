@@ -53,6 +53,7 @@ from .tools import (
     glob_search,
     grep_search,
     list_agents,
+    manage_prd,
     materialize_skill,
     read_file,
     send_file_to_user,
@@ -303,6 +304,7 @@ class QwenPawAgent(CodingModeMixin, ToolGuardMixin, ReActAgent):
             "submit_to_agent": submit_to_agent,
             "check_agent_task": check_agent_task,
             "spawn_subagent": spawn_subagent,
+            "manage_prd": manage_prd,
             # Register only when the `make-skill` skill is enabled.
             **(
                 {"materialize_skill": materialize_skill}

@@ -2401,5 +2401,21 @@
     "timeout": "Backend failed to start within {{seconds}} seconds.",
     "timeoutHint": "Backend failed to start. Please retry, or check application logs for details.",
     "retry": "Retry"
+  },
+  "managePrd": {
+    "status": "Status",
+    "id": "ID",
+    "title": "Title",
+    "priority": "Priority",
+    "description": "Description",
+    "acceptance": "Acceptance Criteria",
+    "completed": "Completed",
+    "pending": "Pending",
+    "progress": "Progress",
+    "loading": "Updating PRD...",
+    "errorPrefix": "PRD format error, will be corrected: ",
+    "unknownError": "Unknown error",
+    "expandMore": "+{{count}} items...",
+    "collapse": "Collapse"
   }
 }
