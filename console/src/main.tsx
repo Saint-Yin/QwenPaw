@@ -4,10 +4,12 @@ import "./i18n";
 import { installHostExternals, pluginSystem } from "./plugins/hostExternals";
 import { registerHostModulesEager } from "./plugins/dynamicModuleRegistry";
 import { PRDViewer } from "./components/PRDViewer/index.tsx";
+import { useTheme } from "./contexts/ThemeContext";
 
 // Expose host dependencies (React, antd, etc.) on window
 // so that plugin UI modules can use them without bundling their own copies.
 installHostExternals();
+window.QwenPaw.host.useTheme = useTheme;
 
 // Register built-in tool renderers
 pluginSystem.addToolRenderers("qwenpaw-core", {

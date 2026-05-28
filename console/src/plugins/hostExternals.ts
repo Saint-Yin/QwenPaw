@@ -29,6 +29,8 @@ export interface HostExternals {
   apiBaseUrl: string;
   getApiUrl: typeof getApiUrl;
   getApiToken: typeof getApiToken;
+  /** Hook to get current theme state. Call inside a React component tree. */
+  useTheme: () => { isDark: boolean };
 }
 
 export interface PluginRouteDeclaration {
@@ -166,6 +168,7 @@ export function installHostExternals(): void {
       apiBaseUrl,
       getApiUrl,
       getApiToken,
+      useTheme: null as any,
     };
   }
 

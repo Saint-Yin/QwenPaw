@@ -22,6 +22,7 @@ function buildPlugin() {
     Descriptions,
     Spin,
     message: antdMessage,
+    theme,
   } = antd;
   const { Text } = Typography;
   const { TextArea } = Input;
@@ -197,16 +198,17 @@ function buildPlugin() {
   }
 
   function ProposalChoiceRender({ data }: { data: any }) {
+    const { token } = theme.useToken();
     const [actionType, setActionType] = useState("confirm");
     const [adjustText, setAdjustText] = useState("");
     const [submitting, setSubmitting] = useState(false);
-    const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-    const [expandedCards, setExpandedCards] = useState<Record<number, boolean>>(
-      {},
+    const [selectedIndex, setSelectedIndex] = useState(null as number | null);
+    const [expandedCards, setExpandedCards] = useState(
+      {} as Record<number, boolean>,
     );
     // Use ref to survive re-renders from SSE data updates
     const submittedRef = React.useRef(false);
-    const submitResultRef = React.useRef<string | null>(null);
+    const submitResultRef = React.useRef(null as string | null);
     const [, forceUpdate] = useState(0);
 
     const content = data?.content;
@@ -367,8 +369,8 @@ function buildPlugin() {
             style: {
               width: "100%",
               borderRadius: 10,
-              border: "1px solid #f0f0f0",
-              background: "#fff",
+              border: `1px solid ${token.colorBorderSecondary}`,
+              background: token.colorBgContainer,
               padding: "24px 16px",
               margin: "4px 0",
               display: "flex",
@@ -462,8 +464,10 @@ function buildPlugin() {
         return record;
       });
 
-      const cardBorder = isSelected ? "2px solid #1677ff" : "1px solid #e8e8e8";
-      const cardShadow = isSelected ? "0 0 0 2px #e6f4ff" : "none";
+      const cardBorder = isSelected
+        ? `2px solid ${token.colorInfo}`
+        : `1px solid ${token.colorBorderSecondary}`;
+      const cardShadow = isSelected ? `0 0 0 2px ${token.colorInfoBg}` : "none";
 
       return React.createElement(
         "div",
@@ -477,7 +481,7 @@ function buildPlugin() {
             cursor: isMulti ? "pointer" : "default",
             transition: "all 0.2s ease",
             boxShadow: cardShadow,
-            background: "#fff",
+            background: token.colorBgContainer,
           },
           onClick: isMulti ? () => setSelectedIndex(pIdx) : undefined,
         },
@@ -505,7 +509,9 @@ function buildPlugin() {
                   alignItems: "center",
                   padding: "4px 0",
                   borderBottom:
-                    idx < resources.length - 1 ? "1px solid #f5f5f5" : "none",
+                    idx < resources.length - 1
+                      ? `1px solid ${token.colorSplit}`
+                      : "none",
                 },
               },
               React.createElement(
@@ -513,14 +519,18 @@ function buildPlugin() {
                 { style: { flex: 1, minWidth: 0 } },
                 React.createElement(
                   "span",
-                  { style: { fontSize: 12, color: "#262626" } },
+                  { style: { fontSize: 12, color: token.colorText } },
                   r.type,
                 ),
                 r.spec &&
                   React.createElement(
                     "span",
                     {
-                      style: { fontSize: 11, color: "#8c8c8c", marginLeft: 6 },
+                      style: {
+                        fontSize: 11,
+                        color: token.colorTextTertiary,
+                        marginLeft: 6,
+                      },
                     },
                     r.spec,
                   ),
@@ -531,7 +541,7 @@ function buildPlugin() {
                   {
                     style: {
                       fontSize: 12,
-                      color: "#595959",
+                      color: token.colorTextSecondary,
                       flexShrink: 0,
                       marginLeft: 8,
                     },
@@ -551,7 +561,7 @@ function buildPlugin() {
                   alignItems: "center",
                   marginTop: 6,
                   paddingTop: 6,
-                  borderTop: "1px dashed #e8e8e8",
+                  borderTop: `1px dashed ${token.colorBorder}`,
                 },
               },
               React.createElement(
@@ -575,7 +585,7 @@ function buildPlugin() {
                 display: "flex",
                 alignItems: "center",
                 gap: 4,
-                color: "#8c8c8c",
+                color: token.colorTextTertiary,
                 fontSize: 12,
                 cursor: "pointer",
                 marginTop: 6,
@@ -624,8 +634,8 @@ function buildPlugin() {
       "div",
       {
         style: {
-          background: "#fffbe6",
-          border: "1px solid #ffe58f",
+          background: token.colorWarningBg,
+          border: `1px solid ${token.colorWarningBorder}`,
           borderRadius: 6,
           padding: "8px 12px",
           marginBottom: 10,
@@ -637,7 +647,7 @@ function buildPlugin() {
       InfoCircleOutlined
         ? React.createElement(InfoCircleOutlined, {
             style: {
-              color: "#faad14",
+              color: token.colorWarning,
               fontSize: 14,
               flexShrink: 0,
               marginTop: 1,
@@ -647,7 +657,11 @@ function buildPlugin() {
       React.createElement(
         "span",
         {
-          style: { fontSize: 12, color: "#8c6e00", lineHeight: 1.5 },
+          style: {
+            fontSize: 12,
+            color: token.colorWarningText,
+            lineHeight: 1.5,
+          },
         },
         "在服务部署与配置过程中，可能因实际资源需求变化导致资源变配及费用调整，请及时关注实际资源使用情况与账单详情。",
       ),
@@ -679,7 +693,7 @@ function buildPlugin() {
                 flex: 1,
                 minWidth: 140,
                 border: `1px solid ${
-                  actionType === "confirm" ? "#1677ff" : "#e8e8e8"
+                  actionType === "confirm" ? token.colorInfo : token.colorBorder
                 }`,
                 borderRadius: 6,
                 padding: "8px 12px",
@@ -689,7 +703,7 @@ function buildPlugin() {
                 alignItems: "center",
                 gap: 8,
                 background:
-                  actionType === "confirm" ? "#e6f4ff" : "transparent",
+                  actionType === "confirm" ? token.colorInfoBg : "transparent",
               },
               onClick: () => setActionType("confirm"),
             },
@@ -708,12 +722,13 @@ function buildPlugin() {
                 flex: 1,
                 minWidth: 140,
                 border: `1px solid ${
-                  actionType === "adjust" ? "#1677ff" : "#e8e8e8"
+                  actionType === "adjust" ? token.colorInfo : token.colorBorder
                 }`,
                 borderRadius: 6,
                 padding: "8px 12px",
                 transition: "all 0.15s ease",
-                background: actionType === "adjust" ? "#e6f4ff" : "transparent",
+                background:
+                  actionType === "adjust" ? token.colorInfoBg : "transparent",
               },
             },
             React.createElement(
@@ -787,7 +802,7 @@ function buildPlugin() {
           style: {
             textAlign: "center",
             padding: "8px 0 4px",
-            color: "rgba(0,0,0,0.45)",
+            color: token.colorTextQuaternary,
             fontSize: 12,
           },
         },
@@ -800,9 +815,9 @@ function buildPlugin() {
         style: {
           width: "100%",
           borderRadius: 10,
-          border: "1px solid #f0f0f0",
+          border: `1px solid ${token.colorBorder}`,
           overflow: "hidden",
-          background: "#fff",
+          background: token.colorBgContainer,
           padding: "12px 16px",
           margin: "4px 0",
         },
@@ -846,7 +861,6 @@ function buildPlugin() {
     ReloadOutlined,
     DeleteOutlined,
     LinkOutlined,
-    DisconnectOutlined,
   } = antdIcons || {};
   const { useEffect } = React;
 
@@ -982,8 +996,8 @@ function buildPlugin() {
   }
 
   function useCurrentAgentId(): string | null {
-    const ref = React.useRef<string | null>(getSelectedAgentId());
-    const [agentId, setAgentId] = useState<string | null>(ref.current);
+    const ref = React.useRef(getSelectedAgentId() as string | null);
+    const [agentId, setAgentId] = useState(ref.current as string | null);
     useEffect(() => {
       const check = () => {
         const current = getSelectedAgentId();
@@ -1003,11 +1017,12 @@ function buildPlugin() {
   }
 
   function A2APage() {
+    const { token } = theme.useToken();
     const currentAgentId = useCurrentAgentId();
-    const [agents, setAgents] = useState<any[]>([]);
+    const [agents, setAgents] = useState([] as any[]);
     const [loading, setLoading] = useState(true);
     const [drawerOpen, setDrawerOpen] = useState(false);
-    const [activeAgent, setActiveAgent] = useState<any>(null);
+    const [activeAgent, setActiveAgent] = useState(null as any);
     const [isCreateMode, setIsCreateMode] = useState(false);
     const [saving, setSaving] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
@@ -1016,24 +1031,24 @@ function buildPlugin() {
     // Batch import state
     const [importModalOpen, setImportModalOpen] = useState(false);
     const [importing, setImporting] = useState(false);
-    const [hubAgents, setHubAgents] = useState<any[]>([]);
-    const [selectedAgents, setSelectedAgents] = useState<Set<string>>(
-      new Set(),
+    const [hubAgents, setHubAgents] = useState([] as any[]);
+    const [selectedAgents, setSelectedAgents] = useState(
+      new Set() as Set<string>,
     );
-    const [importResults, setImportResults] = useState<
-      Array<{ name: string; success: boolean; error?: string }>
-    >([]);
+    const [importResults, setImportResults] = useState(
+      [] as Array<{ name: string; success: boolean; error?: string }>,
+    );
     const [importPage, setImportPage] = useState(1);
-    const importAbortRef = React.useRef<AbortController | null>(null);
+    const importAbortRef = React.useRef(null as AbortController | null);
     const IMPORT_PAGE_SIZE = 10;
 
-    // Derived: which agents are already registered
-    const importedNames = useMemo(
-      () => new Set(agents.map((a) => a.name)),
+    // Derived: which agents are already registered (by URL)
+    const importedUrls = useMemo(
+      () => new Set(agents.map((a: any) => a.url)),
       [agents],
     );
-    const importedNamesRef = React.useRef(importedNames);
-    importedNamesRef.current = importedNames;
+    const importedUrlsRef = React.useRef(importedUrls);
+    importedUrlsRef.current = importedUrls;
 
     const fetchAgents = useCallback(async () => {
       setLoading(true);
@@ -1205,11 +1220,11 @@ function buildPlugin() {
         }
         setHubAgents(agents);
         // Auto-select only agents that haven't been imported yet
-        const currentImportedNames = importedNamesRef.current;
+        const currentImportedUrls = importedUrlsRef.current;
         setSelectedAgents(
           new Set(
             agents
-              .filter((a: any) => !currentImportedNames.has(a.name))
+              .filter((a: any) => !currentImportedUrls.has(a.url))
               .map((a: any) => a.url),
           ),
         );
@@ -1235,11 +1250,11 @@ function buildPlugin() {
       setSelectedAgents(
         new Set(
           hubAgents
-            .filter((a: any) => !importedNames.has(a.name))
+            .filter((a: any) => !importedUrls.has(a.url))
             .map((a: any) => a.url),
         ),
       );
-    }, [hubAgents, importedNames]);
+    }, [hubAgents, importedUrls]);
 
     const deselectAllAgents = useCallback(() => {
       setSelectedAgents(new Set());
@@ -1247,7 +1262,7 @@ function buildPlugin() {
 
     const handleConfirmImport = useCallback(async () => {
       const toImport = hubAgents.filter(
-        (a: any) => selectedAgents.has(a.url) && !importedNames.has(a.name),
+        (a: any) => selectedAgents.has(a.url) && !importedUrls.has(a.url),
       );
       if (toImport.length === 0) {
         antdMsg.warning("请至少选择一个 Agent");
@@ -1290,7 +1305,7 @@ function buildPlugin() {
       setImporting(false);
       // Auto-close modal after 1.5s
       setTimeout(() => closeImportModal(), 1500);
-    }, [hubAgents, selectedAgents, fetchAgents, importedNames]);
+    }, [hubAgents, selectedAgents, fetchAgents, importedUrls]);
 
     const authTypeValue = Form.useWatch?.("auth_type", form) ?? "";
 
@@ -1709,7 +1724,7 @@ function buildPlugin() {
           React.createElement(Spin, { size: "large" }),
           React.createElement(
             "span",
-            { style: { fontSize: 13, color: "#8c8c8c" } },
+            { style: { fontSize: 13, color: token.colorTextTertiary } },
             "正在从 AgentHub 获取 Agent 列表...",
           ),
         ),
@@ -1729,7 +1744,7 @@ function buildPlugin() {
                 alignItems: "center",
                 marginBottom: 8,
                 fontSize: 12,
-                color: "#8c8c8c",
+                color: token.colorTextTertiary,
               },
             },
             React.createElement(
@@ -1785,22 +1800,20 @@ function buildPlugin() {
                     gap: 8,
                     padding: 10,
                     border: isSelected
-                      ? "1px solid #1677ff"
-                      : "1px solid #e8e8e8",
+                      ? `1px solid ${token.colorInfo}`
+                      : `1px solid ${token.colorBorderSecondary}`,
                     borderRadius: 6,
-                    cursor: importedNames.has(agent.name)
-                      ? "default"
-                      : "pointer",
-                    background: importedNames.has(agent.name)
-                      ? "#fafafa"
+                    cursor: importedUrls.has(agent.url) ? "default" : "pointer",
+                    background: importedUrls.has(agent.url)
+                      ? token.colorBgLayout
                       : isSelected
-                      ? "#f6f9ff"
-                      : "#fff",
+                      ? token.colorInfoBg
+                      : token.colorBgContainer,
                     transition: "all 0.15s ease",
-                    opacity: importedNames.has(agent.name) ? 0.7 : 1,
+                    opacity: importedUrls.has(agent.url) ? 0.7 : 1,
                   },
                   onClick: () => {
-                    if (!importedNames.has(agent.name))
+                    if (!importedUrls.has(agent.url))
                       toggleSelectAgent(agent.url);
                   },
                 },
@@ -1824,7 +1837,7 @@ function buildPlugin() {
                         {
                           style: {
                             fontSize: 11,
-                            color: "#8c8c8c",
+                            color: token.colorTextTertiary,
                             overflow: "hidden",
                             textOverflow: "ellipsis",
                             whiteSpace: "nowrap",
@@ -1860,18 +1873,22 @@ function buildPlugin() {
                       )
                     : null,
                 ),
-                React.createElement(
-                  Tag,
-                  {
-                    color: importedNames.has(agent.name) ? "green" : "blue",
-                    style: { fontSize: 10, flexShrink: 0, height: 20 },
-                  },
-                  importedNames.has(agent.name)
-                    ? "已导入"
-                    : agent.auth_type === "gateway"
-                    ? "阿里云"
-                    : agent.auth_type,
-                ),
+                importedUrls.has(agent.url)
+                  ? React.createElement(
+                      Tag,
+                      {
+                        style: {
+                          background: token.colorSuccessBg,
+                          border: `1px solid ${token.colorSuccessBorder}`,
+                          color: token.colorSuccessText,
+                          fontSize: 10,
+                          flexShrink: 0,
+                          height: 20,
+                        },
+                      },
+                      "已导入",
+                    )
+                  : null,
               );
             }),
           ),
@@ -1893,13 +1910,13 @@ function buildPlugin() {
                 {
                   size: "small",
                   disabled: importPage === 1,
-                  onClick: () => setImportPage((p) => p - 1),
+                  onClick: () => setImportPage((p: number) => p - 1),
                 },
                 "上一页",
               ),
               React.createElement(
                 "span",
-                { style: { fontSize: 12, color: "#8c8c8c" } },
+                { style: { fontSize: 12, color: token.colorTextTertiary } },
                 `${importPage} / ${totalPages}`,
               ),
               React.createElement(
@@ -1907,7 +1924,7 @@ function buildPlugin() {
                 {
                   size: "small",
                   disabled: importPage === totalPages,
-                  onClick: () => setImportPage((p) => p + 1),
+                  onClick: () => setImportPage((p: number) => p + 1),
                 },
                 "下一页",
               ),
@@ -1937,8 +1954,12 @@ function buildPlugin() {
                   gap: 8,
                   padding: "6px 10px",
                   borderRadius: 4,
-                  background: r.success ? "#f6ffed" : "#fff2f0",
-                  border: r.success ? "1px solid #b7eb8f" : "1px solid #ffccc7",
+                  background: r.success
+                    ? token.colorInfoBg
+                    : token.colorErrorBg,
+                  border: r.success
+                    ? `1px solid ${token.colorInfo}`
+                    : `1px solid ${token.colorErrorBorder}`,
                   fontSize: 12,
                 },
               },
@@ -1946,7 +1967,7 @@ function buildPlugin() {
                 "span",
                 {
                   style: {
-                    color: r.success ? "#52c41a" : "#ff4d4f",
+                    color: r.success ? token.colorSuccess : token.colorError,
                     fontSize: 14,
                   },
                 },
@@ -1957,7 +1978,7 @@ function buildPlugin() {
                 {
                   style: {
                     flex: 1,
-                    color: r.success ? "#262626" : "#ff4d4f",
+                    color: r.success ? token.colorText : token.colorError,
                   },
                 },
                 r.name,
@@ -1981,8 +2002,9 @@ function buildPlugin() {
   // ── a2a_call tool renderer ───────────────────────────────────────────
 
   function A2ACallRender({ data }: { data: any }) {
-    const scrollRef = React.useRef<HTMLDivElement>(null);
-    const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
+    const { token } = theme.useToken();
+    const scrollRef = React.useRef(null as HTMLDivElement | null);
+    const [collapsed, setCollapsed] = useState({} as Record<number, boolean>);
 
     const toolArgs = useMemo(() => {
       const argsStr = data?.content?.[0]?.data?.arguments;
@@ -2271,7 +2293,7 @@ function buildPlugin() {
                   marginLeft: 20,
                   padding: "2px 8px",
                   fontSize: 11,
-                  color: "#8c8c8c",
+                  color: token.colorTextTertiary,
                 },
               },
               step.desc,
