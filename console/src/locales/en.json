@@ -2564,5 +2564,21 @@
       "NOT_FOUND": "File not found. It may have been moved or deleted.",
       "LOAD_FAILED": "Failed to load file preview."
     }
+  },
+  "managePrd": {
+    "status": "Status",
+    "id": "ID",
+    "title": "Title",
+    "priority": "Priority",
+    "description": "Description",
+    "acceptance": "Acceptance Criteria",
+    "completed": "Completed",
+    "pending": "Pending",
+    "progress": "Progress",
+    "loading": "Updating PRD...",
+    "errorPrefix": "PRD format error, will be corrected: ",
+    "unknownError": "Unknown error",
+    "expandMore": "+{{count}} items...",
+    "collapse": "Collapse"
   }
 }
