@@ -56,9 +56,9 @@ def _check_iac_model_configured() -> bool:
         return False
 
 
-def _check_environment_ready() -> (  # pylint: disable=too-many-branches
+def _check_environment_ready() -> (
     str | None
-):
+):  # pylint: disable=too-many-branches
     """Check that all required components are configured for CloudPaw.
 
     Returns a warning/error message string if any check fails, or None if
@@ -238,18 +238,10 @@ def _pick_allow_option(options: list) -> object | None:
 
     for preferred in _ALLOW_OPTION_PREFERENCE:
         for opt, option_id, kind, name in indexed:
-            if (
-                preferred in option_id.lower()
-                or preferred == kind
-                or preferred in name
-            ):
+            if preferred in option_id.lower() or preferred == kind or preferred in name:
                 return opt
     for opt, option_id, kind, name in indexed:
-        if (
-            "allow" in option_id.lower()
-            or "allow" in kind
-            or "proceed" in kind
-        ):
+        if "allow" in option_id.lower() or "allow" in kind or "proceed" in kind:
             return opt
     return indexed[0][0]
 
@@ -273,8 +265,7 @@ def setup_acp_auto_approve() -> None:
         from qwenpaw.agents.acp.client import ACPHostedClient
     except ImportError as exc:
         logger.error(
-            "Cannot import ACPHostedClient; "
-            "ACP auto-approve patch skipped: %s",
+            "Cannot import ACPHostedClient; " "ACP auto-approve patch skipped: %s",
             exc,
         )
         return
@@ -353,8 +344,7 @@ def setup_acp_auto_approve() -> None:
             )
 
         logger.info(
-            "[CloudPaw] Auto-approved ACP permission (runner=%s, tool=%s, "
-            "kind=%s)",
+            "[CloudPaw] Auto-approved ACP permission (runner=%s, tool=%s, " "kind=%s)",
             runner,
             suspended.tool_name,
             suspended.tool_kind,
@@ -369,9 +359,7 @@ def setup_acp_auto_approve() -> None:
     )
 
 
-def setup_tool_and_prompt_hooks() -> (  # pylint: disable=too-many-statements
-    None
-):
+def setup_tool_and_prompt_hooks() -> None:  # pylint: disable=too-many-statements
     """Monkey-patch QwenPawAgent to add cloudpaw tools and prompt sections."""
     # IaC operations are delegated to iac-code via the built-in async
     # `delegate_external_agent` tool (qwenpaw >= v1.1.7b1).  No CloudPaw-side
@@ -398,9 +386,7 @@ def setup_tool_and_prompt_hooks() -> (  # pylint: disable=too-many-statements
         )
 
         agent_id = (
-            self._request_context.get("agent_id")
-            if self._request_context
-            else None
+            self._request_context.get("agent_id") if self._request_context else None
         )
 
         try:
@@ -462,9 +448,7 @@ def setup_tool_and_prompt_hooks() -> (  # pylint: disable=too-many-statements
         sys_prompt = _original_build_sys_prompt(self)
 
         agent_id = (
-            self._request_context.get("agent_id")
-            if self._request_context
-            else None
+            self._request_context.get("agent_id") if self._request_context else None
         )
 
         # Runtime environment check for orchestrator
@@ -500,8 +484,7 @@ def setup_tool_and_prompt_hooks() -> (  # pylint: disable=too-many-statements
     QwenPawAgent._build_sys_prompt = _patched_build_sys_prompt
     QwenPawAgent.interrupt = _patched_interrupt
     logger.info(
-        "Patched QwenPawAgent with cloudpaw tools, prompt hooks, "
-        "and interrupt",
+        "Patched QwenPawAgent with cloudpaw tools, prompt hooks, " "and interrupt",
     )
 
     _setup_a2a_query_rewrite()
@@ -611,6 +594,7 @@ def setup_mission_hooks() -> None:
     """
     _patch_mission_master_prompt()
     _patch_stream_task_timeout()
+    _patch_run_mission_phase1()
 
 
 _CLOUDPAW_STREAM_TASK_TIMEOUT = 3600  # 60 minutes
@@ -640,6 +624,116 @@ def _patch_stream_task_timeout() -> None:
         )
 
 
+def _patch_run_mission_phase1() -> None:
+    """Patch ``run_mission_phase2`` to inject Phase 2 prompt on transition.
+
+    During Phase 1 the LLM only sees the Phase 1 prompt (no execution
+    model, no dispatch rules).  When the LLM sets ``execution_confirmed``
+    and we transition to Phase 2, we inject the complete Phase 2
+    instructions as a new user message so the LLM knows how to execute.
+
+    We wrap ``run_mission_phase2`` because it is called both from within
+    ``run_mission_phase1`` (on transition) and from the runner loop
+    (on subsequent Phase 2 turns).  We only inject on the first call.
+    """
+    try:
+        from qwenpaw.agents.mission import mission_runner
+        from qwenpaw.agents.mission.state import read_loop_config
+        from qwenpaw.agents.mission.prompts import (
+            WORKER_PROMPT_TEMPLATE,
+            build_verifier_prompt,
+            _build_git_sections,
+        )
+        from .prompts.master_prompt import CLOUDPAW_MASTER_PROMPT_PHASE2
+    except ImportError:
+        logger.warning(
+            "Cannot import mission modules; Phase 2 injection skipped",
+        )
+        return
+
+    _original_run_mission_phase2 = mission_runner.run_mission_phase2
+    _injected = {"done": False}
+
+    async def _patched_run_mission_phase2(
+        agent,
+        msgs,
+        loop_dir,
+        max_iterations=20,
+        agent_id=None,
+    ):
+        if not _injected["done"]:
+            _injected["done"] = True
+
+            # Read loop_config for git context and workspace_dir
+            git_ctx = {}
+            ws_dir = str(Path(loop_dir))
+            try:
+                cfg = read_loop_config(Path(loop_dir))
+                git_ctx = {
+                    "git_installed": cfg.get("git_installed", False),
+                    "is_git_repo": cfg.get("is_git_repo", False),
+                    "branch_name": cfg.get("branch_name", ""),
+                    "repo_root": cfg.get("repo_root", ""),
+                }
+                ws_dir = cfg.get("workspace_dir", ws_dir)
+            except Exception:
+                pass
+
+            loop_dir_str = str(loop_dir)
+            prd_path = f"{loop_dir_str}/prd.json"
+            progress_path = f"{loop_dir_str}/progress.txt"
+
+            gsec = _build_git_sections(git_ctx) if git_ctx else {}
+
+            worker_tpl = WORKER_PROMPT_TEMPLATE.format(
+                loop_dir=loop_dir_str,
+                prd_path=prd_path,
+                progress_path=progress_path,
+                **gsec,
+            )
+
+            verifier_tpl = build_verifier_prompt(
+                loop_dir=loop_dir_str,
+            )
+
+            phase2_msg = CLOUDPAW_MASTER_PROMPT_PHASE2.format(
+                loop_dir=loop_dir_str,
+                workspace_dir=ws_dir,
+                agent_id=agent_id or "",
+                max_iterations=max_iterations,
+                verify_commands="",
+                worker_prompt_template=worker_tpl,
+                verifier_prompt_template=verifier_tpl,
+                **gsec,
+            )
+
+            # Prepend Phase 2 instruction to msgs
+            from agentscope.message import Msg, TextBlock
+
+            instruction_msg = Msg(
+                name="system",
+                role="user",
+                content=[TextBlock(type="text", text=phase2_msg)],
+            )
+
+            if msgs is None:
+                msgs = [instruction_msg]
+            else:
+                msgs = [instruction_msg] + list(msgs)
+
+        async for msg, last in _original_run_mission_phase2(
+            agent,
+            msgs,
+            loop_dir,
+            max_iterations,
+            agent_id,
+        ):
+            yield msg, last
+
+    mission_runner.run_mission_phase2 = _patched_run_mission_phase2
+    logger.info("[CloudPaw] Patched run_mission_phase2 for Phase 2 injection")
+
+
 def _patch_mission_master_prompt() -> None:
     """Conditionally replace build_master_prompt for CloudPaw agents.
 
@@ -663,7 +757,7 @@ def _patch_mission_master_prompt() -> None:
         )
         return
 
-    from .prompts.master_prompt import CLOUDPAW_MASTER_PROMPT
+    from .prompts.master_prompt import CLOUDPAW_MASTER_PROMPT_PHASE1
 
     _CLOUDPAW_AGENT_IDS = frozenset(
         {
@@ -730,7 +824,7 @@ def _patch_mission_master_prompt() -> None:
             verify_commands=verify_commands,
         )
 
-        prompt = CLOUDPAW_MASTER_PROMPT.format(
+        prompt = CLOUDPAW_MASTER_PROMPT_PHASE1.format(
             loop_dir=loop_dir,
             workspace_dir=workspace_dir,
             agent_id=agent_id,

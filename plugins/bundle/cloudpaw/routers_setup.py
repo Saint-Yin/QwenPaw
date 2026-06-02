@@ -40,18 +40,34 @@ def mount_routers() -> None:
         prd_router = APIRouter(prefix="/prd", tags=["prd"])
 
         @prd_router.get("")
-        async def read_prd(loop_dir: str = Query(...)) -> dict:
-            """Read prd.json from a mission loop directory."""
+        async def read_prd(
+            loop_dir: str = Query(...),
+            timestamp: str = Query(None, description="Snapshot timestamp"),
+        ) -> dict:
+            """Read prd.json (or a historical snapshot) from a mission loop dir.
+
+            If a timestamp is provided but the snapshot does not exist,
+            falls back to the current prd.json for backward compatibility.
+            """
             import json
             from pathlib import Path
             from fastapi import HTTPException
 
-            prd_path = Path(loop_dir).expanduser().resolve() / "prd.json"
+            base = Path(loop_dir).expanduser().resolve()
+            prd_path = base / "prd.json"
+
+            if timestamp:
+                snap_path = base / "snapshots" / f"{timestamp}.json"
+                if snap_path.exists():
+                    prd_path = snap_path
+                # else: snapshot not found (old data), fall back to prd.json
+
             if not prd_path.exists():
                 raise HTTPException(
                     status_code=404,
                     detail="prd.json not found",
                 )
+
             try:
                 return json.loads(prd_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError as exc:
