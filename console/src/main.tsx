@@ -11,7 +11,6 @@ import { registerBuiltinCards } from "./components/Chat/ToolCards/registerBuilti
 import "./layouts/registry/builtinMenu";
 import "./layouts/registry/builtinRoutes.tsx";
 
-
 // Expose host dependencies (React, antd, etc.) on window
 // so that plugin UI modules can use them without bundling their own copies.
 installHostExternals();

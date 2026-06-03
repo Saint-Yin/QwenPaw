@@ -228,8 +228,10 @@ export function PRDViewer({ data }: PRDViewerProps) {
   if (!isSuccess || fetchError || !prd) return null;
 
   const stories = prd.userStories as Array<Record<string, unknown>>;
-  const sortedStories = [...stories].sort(
-    (a, b) => ((a.priority as number) || 99) - ((b.priority as number) || 99),
+  const sortedStories = [...stories].sort((a, b) =>
+    (a.id as string).localeCompare(b.id as string, undefined, {
+      numeric: true,
+    }),
   );
   const passedCount = stories.filter((s) => s.passes).length;
 
