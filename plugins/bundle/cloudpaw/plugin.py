@@ -465,6 +465,17 @@ class CloudPawPlugin:
 
     def register(self, api):
         """Register all CloudPaw components via startup hook."""
+        # Register HTTP routers via the official PluginApi — no manual
+        # app mounting needed. The registry already has the FastAPI app
+        # set via set_plugin_http_app() before load_all_plugins().
+        try:
+            from .routers_setup import build_plugin_routers
+
+            for router, prefix in build_plugin_routers():
+                api.register_http_router(router, prefix=prefix)
+        except Exception as e:
+            logger.warning("Failed to register HTTP routers: %s", e)
+
         api.register_startup_hook(
             hook_name="cloudpaw_init",
             callback=self._on_startup,
@@ -479,14 +490,13 @@ class CloudPawPlugin:
 
     async def _on_startup(self):
         """Initialize all CloudPaw components on application startup."""
-        from .injectors import inject_interaction_module
         from .agents_setup import ensure_builtin_agents
         from .hooks import (
             setup_tool_and_prompt_hooks,
             setup_mission_hooks,
             setup_acp_auto_approve,
         )
-        from .routers_setup import mount_routers
+        from .injectors import inject_interaction_module
 
         logger.info("CloudPaw plugin starting up...")
 
@@ -510,9 +520,6 @@ class CloudPawPlugin:
 
         logger.info("[CloudPaw] Setting up mission mode hooks...")
         setup_mission_hooks()
-
-        logger.info("[CloudPaw] Mounting API routers...")
-        mount_routers()
 
         logger.info("[CloudPaw] Initializing A2A client manager...")
         _init_a2a_manager()

@@ -1,169 +1,93 @@
 # -*- coding: utf-8 -*-
-"""API router mounting for CloudPaw plugin."""
+"""API router builders for CloudPaw plugin.
+
+Returns FastAPI APIRouter instances that the plugin registers via
+``api.register_http_router()`` — no manual app mounting needed.
+"""
 
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-def mount_routers() -> None:
-    """Mount plugin API routers onto the FastAPI app."""
-    try:
-        from fastapi import APIRouter, Query
+def build_plugin_routers():
+    """Build and return all plugin API routers.
 
-        # pylint: disable=no-name-in-module
-        from qwenpaw.app.interaction import InteractionManager
+    The caller should register each router via
+    ``api.register_http_router(router, prefix=...)``.
+    """
+    from fastapi import APIRouter, Query
 
-        interaction_router = APIRouter(
-            prefix="/interaction",
-            tags=["interaction"],
-        )
+    # pylint: disable=no-name-in-module
+    from qwenpaw.app.interaction import InteractionManager
 
-        from pydantic import BaseModel
+    # ── Interaction router ──────────────────────────────────────────────
 
-        class InteractionRequest(BaseModel):
-            session_id: str
-            result: str
+    interaction_router = APIRouter(
+        prefix="/interaction",
+        tags=["interaction"],
+    )
 
-        @interaction_router.post("")
-        async def resolve_interaction(body: InteractionRequest) -> dict:
-            success = InteractionManager.resolve(body.session_id, body.result)
-            if not success:
-                from fastapi import HTTPException
+    from pydantic import BaseModel
 
-                raise HTTPException(
-                    status_code=404,
-                    detail="No pending interaction for this session",
-                )
-            return {"status": "ok"}
+    class InteractionRequest(BaseModel):
+        session_id: str
+        result: str
 
-        prd_router = APIRouter(prefix="/prd", tags=["prd"])
-
-        @prd_router.get("")
-        async def read_prd(
-            loop_dir: str = Query(...),
-            timestamp: str = Query(None, description="Snapshot timestamp"),
-        ) -> dict:
-            """Read prd.json (or a historical snapshot) from a mission loop dir.
-
-            If a timestamp is provided but the snapshot does not exist,
-            falls back to the current prd.json for backward compatibility.
-            """
-            import json
-            from pathlib import Path
+    @interaction_router.post("")
+    async def resolve_interaction(body: InteractionRequest) -> dict:
+        success = InteractionManager.resolve(body.session_id, body.result)
+        if not success:
             from fastapi import HTTPException
 
-            base = Path(loop_dir).expanduser().resolve()
-            prd_path = base / "prd.json"
-
-            if timestamp:
-                snap_path = base / "snapshots" / f"{timestamp}.json"
-                if snap_path.exists():
-                    prd_path = snap_path
-                # else: snapshot not found (old data), fall back to prd.json
-
-            if not prd_path.exists():
-                raise HTTPException(
-                    status_code=404,
-                    detail="prd.json not found",
-                )
-
-            try:
-                return json.loads(prd_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid prd.json: {exc}",
-                ) from exc
-
-        from routers.a2a import router as a2a_router
-
-        _inject_routers([interaction_router, prd_router, a2a_router])
-
-    except Exception as e:
-        logger.error("Failed to mount plugin routers: %s", e, exc_info=True)
-
-
-def _reorder_catch_all(app) -> None:
-    """Move SPA catch-all route to the end of the route list.
-
-    The main app registers ``/{full_path:path}`` as a SPA fallback.
-    Because Starlette matches routes by registration order, any route
-    added *after* the catch-all (e.g. by a plugin startup hook) will
-    never be reached — the catch-all grabs the request first and
-    returns 404 for ``/api/*`` paths.
-
-    This function finds that route and moves it to the very end so
-    that all concrete API routes are tried before the fallback.
-    """
-    try:
-        catch_all_indices = [
-            i
-            for i, r in enumerate(app.routes)
-            if getattr(r, "path", "") == "/{full_path:path}"
-        ]
-        if not catch_all_indices:
-            return
-        for idx in reversed(catch_all_indices):
-            route = app.routes.pop(idx)
-            app.routes.append(route)
-            logger.info(
-                "Moved SPA catch-all route from position %d to end (%d)",
-                idx,
-                len(app.routes) - 1,
+            raise HTTPException(
+                status_code=404,
+                detail="No pending interaction for this session",
             )
-    except Exception as exc:
-        logger.warning("Failed to reorder catch-all route: %s", exc)
+        return {"status": "ok"}
 
+    # ── PRD router ──────────────────────────────────────────────────────
 
-def _inject_routers(routers: list) -> None:
-    """Inject routers into the running FastAPI application."""
-    app = None
-    try:
-        from agentscope_runtime.engine.app import AgentApp
+    prd_router = APIRouter(prefix="/prd", tags=["prd"])
 
-        # pylint: disable=protected-access
-        agent_app = (
-            AgentApp._instances.get(AgentApp)
-            if hasattr(AgentApp, "_instances")
-            else None
-        )
-        if agent_app:
-            app = agent_app.app
-    except Exception:
-        pass
+    @prd_router.get("")
+    async def read_prd(
+        loop_dir: str = Query(...),
+        timestamp: str = Query(None, description="Snapshot timestamp"),
+    ) -> dict:
+        """Read prd.json (or a historical snapshot) from a mission loop dir."""
+        import json
+        from pathlib import Path
+        from fastapi import HTTPException
 
-    if app is None:
+        base = Path(loop_dir).expanduser().resolve()
+        prd_path = base / "prd.json"
+
+        if timestamp:
+            snap_path = base / "snapshots" / f"{timestamp}.json"
+            if snap_path.exists():
+                prd_path = snap_path
+
+        if not prd_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail="prd.json not found",
+            )
+
         try:
-            from qwenpaw.app._app import app as _app
+            return json.loads(prd_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid prd.json: {exc}",
+            ) from exc
 
-            if hasattr(_app, "state"):
-                app = _app
-        except Exception:
-            pass
+    # ── A2A router ──────────────────────────────────────────────────────
 
-    if app is None:
-        logger.warning(
-            "Cannot find FastAPI app instance; plugin routers not mounted. "
-            "This is expected during CLI-only usage.",
-        )
-        return
+    from routers.a2a import router as a2a_router
 
-    for router in routers:
-        try:
-            app.include_router(router, prefix="/api")
-            logger.info("Mounted plugin router: %s", router.prefix)
-        except Exception as e:
-            logger.warning("Failed to mount router %s: %s", router.prefix, e)
-
-    # Move the SPA catch-all route to the end so dynamically added
-    # /api/* routes are matched first.  Starlette matches routes in
-    # registration order; the catch-all `/{full_path:path}` was
-    # registered before our plugin routes and would intercept them.
-    _reorder_catch_all(app)
-
-    # Force Starlette to rebuild its middleware stack so that
-    # dynamically added routes become reachable.
-    if hasattr(app, "middleware_stack"):
-        app.middleware_stack = None
-        logger.info("Reset middleware_stack to pick up new routes")
+    return [
+        (interaction_router, "/interaction"),
+        (prd_router, "/prd"),
+        (a2a_router, "/a2a"),
+    ]
