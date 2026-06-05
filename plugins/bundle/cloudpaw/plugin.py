@@ -465,16 +465,40 @@ class CloudPawPlugin:
 
     def register(self, api):
         """Register all CloudPaw components via startup hook."""
+        logger.info("CloudPawPlugin.register() called")
+
+        # Inject synthetic modules BEFORE route registration so that
+        # routers_setup.py can import InteractionManager.  This must
+        # happen early because on cold restart sys.modules is empty.
+        from .injectors import inject_interaction_module
+
+        inject_interaction_module()
+        logger.info("CloudPaw: injected synthetic modules")
+
         # Register HTTP routers via the official PluginApi — no manual
         # app mounting needed. The registry already has the FastAPI app
         # set via set_plugin_http_app() before load_all_plugins().
         try:
             from .routers_setup import build_plugin_routers
 
-            for router, prefix in build_plugin_routers():
+            routers = build_plugin_routers()
+            logger.info(
+                "CloudPaw: got %d HTTP routers: %s",
+                len(routers),
+                [(r.prefix, p) for r, p in routers],
+            )
+            for router, prefix in routers:
+                logger.info(
+                    "CloudPaw: registering router at prefix '/api%s'",
+                    prefix,
+                )
                 api.register_http_router(router, prefix=prefix)
         except Exception as e:
-            logger.warning("Failed to register HTTP routers: %s", e)
+            logger.warning(
+                "Failed to register HTTP routers: %s",
+                e,
+                exc_info=True,
+            )
 
         api.register_startup_hook(
             hook_name="cloudpaw_init",
@@ -496,15 +520,11 @@ class CloudPawPlugin:
             setup_mission_hooks,
             setup_acp_auto_approve,
         )
-        from .injectors import inject_interaction_module
 
         logger.info("CloudPaw plugin starting up...")
 
         logger.info("[CloudPaw] Ensuring default environment variables...")
         _ensure_default_env_vars()
-
-        logger.info("[CloudPaw] Injecting synthetic modules...")
-        inject_interaction_module()
 
         logger.info("[CloudPaw] Installing skills to pool...")
         _install_plugin_skills()

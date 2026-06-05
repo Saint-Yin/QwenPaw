@@ -84,7 +84,7 @@ def build_plugin_routers():
 
     # ── A2A router ──────────────────────────────────────────────────────
 
-    from routers.a2a import router as a2a_router
+    from .routers.a2a import router as a2a_router
 
     return [
         (interaction_router, "/interaction"),

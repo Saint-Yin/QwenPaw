@@ -1026,6 +1026,8 @@ function buildPlugin() {
     const [isCreateMode, setIsCreateMode] = useState(false);
     const [saving, setSaving] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
+    const [editingAlias, setEditingAlias] = useState(false);
+    const [newAliasValue, setNewAliasValue] = useState("");
     const [form] = Form.useForm();
 
     // Batch import state
@@ -1038,9 +1040,7 @@ function buildPlugin() {
     const [importResults, setImportResults] = useState(
       [] as Array<{ name: string; success: boolean; error?: string }>,
     );
-    const [importPage, setImportPage] = useState(1);
     const importAbortRef = React.useRef(null as AbortController | null);
-    const IMPORT_PAGE_SIZE = 10;
 
     // Derived: which agents are already registered (by URL)
     const importedUrls = useMemo(
@@ -1085,12 +1085,44 @@ function buildPlugin() {
       setDrawerOpen(true);
     }, []);
 
+    // ── Alias editing ─────────────────────────────────────────────────
+    const cancelEditAlias = useCallback(() => {
+      setEditingAlias(false);
+      setNewAliasValue("");
+    }, []);
+
+    const saveAlias = useCallback(async () => {
+      if (!activeAgent || !newAliasValue.trim()) return;
+      const oldAlias = activeAgent.alias || activeAgent.url;
+      if (newAliasValue.trim() === oldAlias) {
+        cancelEditAlias();
+        return;
+      }
+      try {
+        const updated = await a2aFetch(
+          `${API_BASE}?alias=${encodeURIComponent(oldAlias)}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ new_alias: newAliasValue.trim() }),
+          },
+        );
+        antdMsg.success("别名已修改");
+        setEditingAlias(false);
+        setActiveAgent(updated);
+        await fetchAgents();
+      } catch (e: any) {
+        antdMsg.error(e.message || "修改失败");
+      }
+    }, [activeAgent, newAliasValue, fetchAgents, cancelEditAlias]);
+
     const handleClose = useCallback(() => {
+      cancelEditAlias();
       setDrawerOpen(false);
       setActiveAgent(null);
       setIsCreateMode(false);
       form.resetFields();
-    }, [form]);
+    }, [cancelEditAlias, form]);
 
     const handleSubmit = useCallback(async () => {
       let values: any;
@@ -1125,18 +1157,19 @@ function buildPlugin() {
     const handleDelete = useCallback(async () => {
       if (!activeAgent) return;
       const alias = activeAgent.alias || activeAgent.url;
+      const displayName = activeAgent.name || alias;
       Modal.confirm({
-        title: `删除 ${alias}`,
-        content: "确定删除该远程 A2A Agent 吗？此操作不可撤销。",
+        title: `确认删除`,
+        content: `确定删除 A2A Agent「${displayName}」吗？此操作不可撤销。`,
         okText: "删除",
         cancelText: "取消",
         okButtonProps: { danger: true },
         async onOk() {
           try {
-            await a2aFetch(`${API_BASE}/${encodeURIComponent(alias)}`, {
+            await a2aFetch(`${API_BASE}?alias=${encodeURIComponent(alias)}`, {
               method: "DELETE",
             });
-            antdMsg.success("A2A Agent 已删除");
+            antdMsg.success(`已删除 A2A Agent「${displayName}」`);
             await fetchAgents();
             handleClose();
           } catch (e: any) {
@@ -1152,7 +1185,7 @@ function buildPlugin() {
       setRefreshing(true);
       try {
         const updated = await a2aFetch(
-          `${API_BASE}/${encodeURIComponent(alias)}/refresh`,
+          `${API_BASE}/refresh?alias=${encodeURIComponent(alias)}`,
           {
             method: "POST",
           },
@@ -1167,6 +1200,12 @@ function buildPlugin() {
       }
     }, [activeAgent, fetchAgents]);
 
+    const startEditAlias = useCallback(() => {
+      if (!activeAgent) return;
+      setNewAliasValue(activeAgent.alias || "");
+      setEditingAlias(true);
+    }, [activeAgent]);
+
     // ── Batch import handlers ─────────────────────────────────────────
 
     const openImportModal = useCallback(() => {
@@ -1174,7 +1213,6 @@ function buildPlugin() {
       setHubAgents([]);
       setSelectedAgents(new Set());
       setImportResults([]);
-      setImportPage(1);
       importAbortRef.current = null;
       // Auto-fetch on open
       void fetchHubAgents();
@@ -1188,7 +1226,6 @@ function buildPlugin() {
       setHubAgents([]);
       setSelectedAgents(new Set());
       setImportResults([]);
-      setImportPage(1);
       importAbortRef.current = null;
     }, [importing]);
 
@@ -1303,8 +1340,8 @@ function buildPlugin() {
         } 个`,
       );
       setImporting(false);
-      // Auto-close modal after 1.5s
-      setTimeout(() => closeImportModal(), 1500);
+      // Auto-close modal after 0.8s
+      setTimeout(() => closeImportModal(), 800);
     }, [hubAgents, selectedAgents, fetchAgents, importedUrls]);
 
     const authTypeValue = Form.useWatch?.("auth_type", form) ?? "";
@@ -1392,7 +1429,48 @@ function buildPlugin() {
             React.createElement(
               Descriptions.Item,
               { label: "别名" },
-              activeAgent.alias || "-",
+              editingAlias
+                ? React.createElement(
+                    "div",
+                    {
+                      style: { display: "flex", alignItems: "center", gap: 6 },
+                    },
+                    React.createElement(Input, {
+                      value: newAliasValue,
+                      onChange: (e: any) => setNewAliasValue(e.target.value),
+                      onPressEnter: saveAlias,
+                      autoFocus: true,
+                      placeholder: "输入新别名",
+                      size: "small",
+                      style: { flex: 1 },
+                    }),
+                    React.createElement(
+                      Button,
+                      {
+                        type: "link",
+                        size: "small",
+                        onClick: saveAlias,
+                        disabled: !newAliasValue.trim(),
+                        style: { padding: 0 },
+                      },
+                      "保存",
+                    ),
+                  )
+                : React.createElement(
+                    "div",
+                    {
+                      style: { display: "flex", alignItems: "center", gap: 8 },
+                    },
+                    React.createElement("span", null, activeAgent.alias || "-"),
+                    React.createElement(
+                      "a",
+                      {
+                        style: { fontSize: 12 },
+                        onClick: startEditAlias,
+                      },
+                      "修改",
+                    ),
+                  ),
             ),
             React.createElement(
               Descriptions.Item,
@@ -1661,9 +1739,6 @@ function buildPlugin() {
 
     // Import modal
     const hasResults = importResults.length > 0;
-    const totalPages = Math.ceil(hubAgents.length / IMPORT_PAGE_SIZE);
-    const pageStart = (importPage - 1) * IMPORT_PAGE_SIZE;
-    const pageAgents = hubAgents.slice(pageStart, pageStart + IMPORT_PAGE_SIZE);
 
     const importModalEl = React.createElement(
       Modal,
@@ -1728,8 +1803,9 @@ function buildPlugin() {
             "正在从 AgentHub 获取 Agent 列表...",
           ),
         ),
-      // Agent selection list
+      // Agent selection list (hide after import completed)
       !importing &&
+        !hasResults &&
         hubAgents.length > 0 &&
         React.createElement(
           "div",
@@ -1789,12 +1865,12 @@ function buildPlugin() {
                 overflowY: "auto",
               },
             },
-            ...pageAgents.map((agent: any, idx: number) => {
+            ...hubAgents.map((agent: any) => {
               const isSelected = selectedAgents.has(agent.url);
               return React.createElement(
                 "div",
                 {
-                  key: idx,
+                  key: agent.url,
                   style: {
                     display: "flex",
                     gap: 8,
@@ -1855,9 +1931,11 @@ function buildPlugin() {
                             Tag,
                             {
                               key: i,
+                              color: token.colorInfoHover,
                               style: {
                                 fontSize: 10,
                                 marginRight: 4,
+                                fontWeight: 500,
                               },
                             },
                             s.name,
@@ -1877,58 +1955,23 @@ function buildPlugin() {
                   ? React.createElement(
                       Tag,
                       {
+                        color: token.colorSuccess,
                         style: {
-                          background: token.colorSuccessBg,
-                          border: `1px solid ${token.colorSuccessBorder}`,
-                          color: token.colorSuccessText,
-                          fontSize: 10,
+                          fontWeight: 600,
+                          fontSize: 11,
                           flexShrink: 0,
-                          height: 20,
+                          padding: "2px 8px",
+                          lineHeight: "18px",
+                          height: 22,
+                          borderRadius: 4,
                         },
                       },
-                      "已导入",
+                      "✓ 已导入",
                     )
                   : null,
               );
             }),
           ),
-          // Pagination
-          totalPages > 1 &&
-            React.createElement(
-              "div",
-              {
-                style: {
-                  display: "flex",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  gap: 8,
-                  marginTop: 16,
-                },
-              },
-              React.createElement(
-                Button,
-                {
-                  size: "small",
-                  disabled: importPage === 1,
-                  onClick: () => setImportPage((p: number) => p - 1),
-                },
-                "上一页",
-              ),
-              React.createElement(
-                "span",
-                { style: { fontSize: 12, color: token.colorTextTertiary } },
-                `${importPage} / ${totalPages}`,
-              ),
-              React.createElement(
-                Button,
-                {
-                  size: "small",
-                  disabled: importPage === totalPages,
-                  onClick: () => setImportPage((p: number) => p + 1),
-                },
-                "下一页",
-              ),
-            ),
         ),
       // Import results
       hasResults &&

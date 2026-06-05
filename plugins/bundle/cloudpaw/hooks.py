@@ -238,10 +238,18 @@ def _pick_allow_option(options: list) -> object | None:
 
     for preferred in _ALLOW_OPTION_PREFERENCE:
         for opt, option_id, kind, name in indexed:
-            if preferred in option_id.lower() or preferred == kind or preferred in name:
+            if (
+                preferred in option_id.lower()
+                or preferred == kind
+                or preferred in name
+            ):
                 return opt
     for opt, option_id, kind, name in indexed:
-        if "allow" in option_id.lower() or "allow" in kind or "proceed" in kind:
+        if (
+            "allow" in option_id.lower()
+            or "allow" in kind
+            or "proceed" in kind
+        ):
             return opt
     return indexed[0][0]
 
@@ -265,7 +273,8 @@ def setup_acp_auto_approve() -> None:
         from qwenpaw.agents.acp.client import ACPHostedClient
     except ImportError as exc:
         logger.error(
-            "Cannot import ACPHostedClient; " "ACP auto-approve patch skipped: %s",
+            "Cannot import ACPHostedClient; "
+            "ACP auto-approve patch skipped: %s",
             exc,
         )
         return
@@ -344,7 +353,8 @@ def setup_acp_auto_approve() -> None:
             )
 
         logger.info(
-            "[CloudPaw] Auto-approved ACP permission (runner=%s, tool=%s, " "kind=%s)",
+            "[CloudPaw] Auto-approved ACP permission (runner=%s, tool=%s, "
+            "kind=%s)",
             runner,
             suspended.tool_name,
             suspended.tool_kind,
@@ -359,7 +369,9 @@ def setup_acp_auto_approve() -> None:
     )
 
 
-def setup_tool_and_prompt_hooks() -> None:  # pylint: disable=too-many-statements
+def setup_tool_and_prompt_hooks() -> (
+    None
+):  # pylint: disable=too-many-statements
     """Monkey-patch QwenPawAgent to add cloudpaw tools and prompt sections."""
     # IaC operations are delegated to iac-code via the built-in async
     # `delegate_external_agent` tool (qwenpaw >= v1.1.7b1).  No CloudPaw-side
@@ -386,7 +398,9 @@ def setup_tool_and_prompt_hooks() -> None:  # pylint: disable=too-many-statement
         )
 
         agent_id = (
-            self._request_context.get("agent_id") if self._request_context else None
+            self._request_context.get("agent_id")
+            if self._request_context
+            else None
         )
 
         try:
@@ -448,7 +462,9 @@ def setup_tool_and_prompt_hooks() -> None:  # pylint: disable=too-many-statement
         sys_prompt = _original_build_sys_prompt(self)
 
         agent_id = (
-            self._request_context.get("agent_id") if self._request_context else None
+            self._request_context.get("agent_id")
+            if self._request_context
+            else None
         )
 
         # Runtime environment check for orchestrator
@@ -484,7 +500,8 @@ def setup_tool_and_prompt_hooks() -> None:  # pylint: disable=too-many-statement
     QwenPawAgent._build_sys_prompt = _patched_build_sys_prompt
     QwenPawAgent.interrupt = _patched_interrupt
     logger.info(
-        "Patched QwenPawAgent with cloudpaw tools, prompt hooks, " "and interrupt",
+        "Patched QwenPawAgent with cloudpaw tools, prompt hooks, "
+        "and interrupt",
     )
 
     _setup_a2a_query_rewrite()
