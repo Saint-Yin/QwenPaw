@@ -15,7 +15,9 @@ from .constants import (
     _AGENT_SPECS,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("qwenpaw").getChild(
+    __name__.replace("plugin_cloudpaw.", ""),
+)
 
 
 def register_extra_tools(agent_id: str, extra_tools: dict[str, dict]) -> None:

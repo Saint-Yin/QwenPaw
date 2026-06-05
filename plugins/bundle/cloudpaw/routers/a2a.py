@@ -23,7 +23,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("qwenpaw").getChild("plugin.cloudpaw.routers.a2a")
 
 router = APIRouter(prefix="", tags=["a2a"])
 
@@ -410,7 +410,7 @@ async def refresh_agent(
 
 _AGENTHUB_BASE_URL = "https://agenthub-pre.cn-zhangjiakou.aliyuncs.com"
 _AGENTHUB_API_URL = f"{_AGENTHUB_BASE_URL}/agents"  # Agent list API endpoint
-_AGENTHUB_PAGE_SIZE = 1
+_AGENTHUB_PAGE_SIZE = 10
 
 
 @router.get(

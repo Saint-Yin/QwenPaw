@@ -14,7 +14,9 @@ from .constants import (
     PLUGIN_DIR,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("qwenpaw").getChild(
+    __name__.replace("plugin_cloudpaw.", ""),
+)
 
 
 # ---------------------------------------------------------------------------

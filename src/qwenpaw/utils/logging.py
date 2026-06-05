@@ -70,14 +70,16 @@ class ColorFormatter(logging.Formatter):
         level = f"{color}{record.levelname}{reset}"
 
         full_path = record.pathname
-        cwd = os.getcwd()
-        # Use os.path for cross-platform path prefix stripping
-        try:
-            if os.path.commonpath([full_path, cwd]) == cwd:
-                full_path = os.path.relpath(full_path, cwd)
-        except ValueError:
-            # Different drives on Windows (e.g., C: vs D:) are not comparable.
-            pass
+        # Shorten log file path to the first matching base directory:
+        # 1. Project source files: relative to CWD (e.g. src/qwenpaw/app/...)
+        # 2. Plugin files: relative to WORKING_DIR (e.g. plugins/cloudpaw/...)
+        for base in (os.getcwd(), str(WORKING_DIR)):
+            try:
+                if os.path.commonpath([full_path, base]) == base:
+                    full_path = os.path.relpath(full_path, base)
+                    break
+            except ValueError:
+                pass
 
         prefix = f"{level} {full_path}:{record.lineno}"
         original_msg = super().format(record)
@@ -108,12 +110,16 @@ class _SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
 class PlainFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         full_path = record.pathname
-        cwd = os.getcwd()
-        try:
-            if os.path.commonpath([full_path, cwd]) == cwd:
-                full_path = os.path.relpath(full_path, cwd)
-        except ValueError:
-            pass
+        # Shorten log file path to the first matching base directory:
+        # 1. Project source files: relative to CWD
+        # 2. Plugin files: relative to WORKING_DIR
+        for base in (os.getcwd(), str(WORKING_DIR)):
+            try:
+                if os.path.commonpath([full_path, base]) == base:
+                    full_path = os.path.relpath(full_path, base)
+                    break
+            except ValueError:
+                pass
 
         prefix = f"{record.levelname} | {full_path}:{record.lineno}"
         formatted_time = self.formatTime(record, self.datefmt)

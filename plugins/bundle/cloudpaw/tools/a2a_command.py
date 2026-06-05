@@ -10,7 +10,9 @@ from qwenpaw.app.runner.control_commands.base import (
     ControlContext,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("qwenpaw").getChild(
+    __name__.replace("plugin_cloudpaw.", ""),
+)
 
 _A2A_CONFIG_FILENAME = "a2a_config.json"
 
