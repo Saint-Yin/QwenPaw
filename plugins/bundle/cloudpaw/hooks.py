@@ -14,7 +14,9 @@ from .constants import (
     PLUGIN_DIR,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("qwenpaw").getChild(
+    __name__.replace("plugin_cloudpaw.", ""),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +391,77 @@ def setup_tool_and_prompt_hooks() -> (  # pylint: disable=too-many-statements
     _original_create_toolkit = QwenPawAgent._create_toolkit
     _original_build_sys_prompt = QwenPawAgent._build_sys_prompt
 
+    def _build_a2a_agent_section() -> str:
+        """Build a markdown table of registered A2A agents."""
+        try:
+            from tools.a2a_list import load_a2a_agents
+            from modules.a2a.client_manager import get_a2a_manager
+        except ImportError:
+            return ""
+
+        from qwenpaw.constant import WORKING_DIR
+
+        ws = WORKING_DIR / "workspaces"
+        ws_dir = ws / BUILTIN_ORCHESTRATION_AGENT_ID
+        agents_cfg = load_a2a_agents(ws_dir)
+        if not agents_cfg:
+            return ""
+
+        manager = get_a2a_manager()
+        rows: list[str] = []
+        for alias, reg in agents_cfg.items():
+            card_info = None
+            try:
+                card_info = manager.get_card_info(reg["url"])
+            except Exception:
+                pass
+            name = (card_info or {}).get("name", "")
+            desc = (card_info or {}).get("description", "")
+            skills = (card_info or {}).get("skills", [])
+            sk_list = [s.get("name", "") for s in skills[:3]] if skills else []
+            sk_str = ", ".join(sk_list)
+            n = name or "-"
+            d = desc or "-"
+            sk = sk_str or "-"
+            rows.append(f"| {alias} | {n} | {d} | {sk} |")
+
+        if not rows:
+            return ""
+
+        hdr = "### 已注册的远程 A2A Agent"
+        usage = (
+            "使用 `a2a_list()` 查看 → "
+            '`a2a_call(agent_alias="...", message="...", '
+            'context_id="...")` 调用'
+        )
+        example = (
+            "**多轮对话示例**：\n"
+            "```python\n"
+            "# 第一轮：首次调用，无需传入 context_id\n"
+            'a2a_call(agent_alias="agent-a", message="你好，请帮我查下数据")\n'
+            '# 返回结果中包含 context_id = "abc-123"\n'
+            "\n"
+            "# 第二轮：同一话题的后续追问，传入上一轮的 context_id\n"
+            'a2a_call(agent_alias="agent-a", message="请把结果整理成表格", '
+            'context_id="abc-123")\n'
+            "```\n"
+            "同一个上下文的后续追问可以复用 context_id 保持对话连续性。\n\n"
+            "切换话题或 agent 时无需传入，会自动创建新会话。\n\n"
+            "工具返回的 context_id 仅用于下一轮调用，前端已有控件展示，无需向用户展示。"
+        )
+        col = "| 别名 | 名称 | 能力 | 技能 |"
+        sep = "|------|------|------|------|"
+        lines = [f"\n{hdr}", "", usage, "", example, "", col, sep] + rows
+        return "\n".join(lines) + "\n"
+
+    def _render_base_supplement() -> str:
+        """Load and render base supplement with A2A agents injected."""
+        supplement = _load_prompt_file("base_supplement.md")
+        if not supplement:
+            return ""
+        a2a_section = _build_a2a_agent_section()
+        return supplement.replace("{a2a_agents_section}", a2a_section)
+
     def _patched_create_toolkit(self, *args, **kwargs):
         namesake_strategy = kwargs.get("namesake_strategy", "skip")
         toolkit = _original_create_toolkit(
@@ -487,7 +560,7 @@ def setup_tool_and_prompt_hooks() -> (  # pylint: disable=too-many-statements
                 return sys_prompt
 
         if agent_id == BUILTIN_ORCHESTRATION_AGENT_ID:
-            sys_prompt += "\n\n" + _CLOUDPAW_BASE_SUPPLEMENT
+            sys_prompt += "\n\n" + _render_base_supplement()
 
         return sys_prompt
 
