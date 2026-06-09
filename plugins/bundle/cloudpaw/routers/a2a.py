@@ -611,7 +611,8 @@ async def direct_call(request: Request, body: A2ACallRequest) -> dict:
 
     logger.info(
         "direct_call: agent_alias='%s' agent_url='%s'",
-        body.agent_alias or body.agent_url,
+        body.agent_alias,
+        body.agent_url,
     )
 
     agent_id = request.headers.get("X-Agent-Id")
@@ -623,15 +624,21 @@ async def direct_call(request: Request, body: A2ACallRequest) -> dict:
 
     from tools.a2a_call import a2a_call
 
-    tool_resp = await a2a_call(
+    # a2a_call is an async generator; iterate and take the final chunk
+    final_chunk = None
+    async for chunk in a2a_call(
         message=body.message,
         agent_alias=body.agent_alias,
         agent_url=body.agent_url,
         context_id=body.context_id,
-    )
+    ):
+        final_chunk = chunk
+
+    if final_chunk is None:
+        return {"error": "A2A call produced no result"}
 
     result: dict = {}
-    for block in tool_resp.content:
+    for block in final_chunk.content:
         if block.get("type") == "text":
             try:
                 result = json.loads(block["text"])
