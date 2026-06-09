@@ -899,7 +899,7 @@ function Ht() {
           e.createElement(
             "span",
             null,
-            n.name || n.alias || n.url
+            n.alias || n.name || n.url
           )
         ),
         extra: n.auth_type ? e.createElement(

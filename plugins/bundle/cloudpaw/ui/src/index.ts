@@ -1210,7 +1210,7 @@ function buildPlugin() {
           React.createElement(
             "span",
             null,
-            agent.name || agent.alias || agent.url,
+            agent.alias || agent.name || agent.url,
           ),
         ),
         extra: agent.auth_type
