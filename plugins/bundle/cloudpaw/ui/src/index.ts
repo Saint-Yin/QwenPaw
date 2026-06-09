@@ -1318,6 +1318,17 @@ function buildPlugin() {
     );
     const importAbortRef = React.useRef(null as AbortController | null);
 
+    // ── Alias validation ──────────────────────────────────────────────
+    // Alias must not contain whitespace (breaks /a2a shortcut parsing).
+    // All other characters (Chinese, uppercase, symbols) are allowed.
+    const validateAlias = (value: string): string | null => {
+      if (!value || !value.trim()) return null; // optional field
+      if (/\s/.test(value)) {
+        return "别名不能包含空格";
+      }
+      return null;
+    };
+
     // Derived: which agents are already registered (by URL)
     const importedUrls = useMemo(
       () => new Set(agents.map((a: any) => a.url)),
@@ -1369,8 +1380,14 @@ function buildPlugin() {
 
     const saveAlias = useCallback(async () => {
       if (!activeAgent || !newAliasValue.trim()) return;
+      const aliasErr = validateAlias(newAliasValue);
+      if (aliasErr) {
+        antdMsg.error(aliasErr);
+        return;
+      }
       const oldAlias = activeAgent.alias || activeAgent.url;
-      if (newAliasValue.trim() === oldAlias) {
+      const trimmed = newAliasValue.trim();
+      if (trimmed === oldAlias) {
         cancelEditAlias();
         return;
       }
@@ -1380,7 +1397,7 @@ function buildPlugin() {
           {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ new_alias: newAliasValue.trim() }),
+            body: JSON.stringify({ new_alias: trimmed }),
           },
         );
         antdMsg.success("别名已修改");
@@ -1639,8 +1656,21 @@ function buildPlugin() {
       ),
       React.createElement(
         Form.Item,
-        { name: "alias", label: "别名" },
-        React.createElement(Input, { placeholder: "输入别名（可选）" }),
+        {
+          name: "alias",
+          label: "别名",
+          rules: [
+            {
+              validator: (_rule: any, value: string) => {
+                const err = validateAlias(value);
+                return err ? Promise.reject(new Error(err)) : Promise.resolve();
+              },
+            },
+          ],
+        },
+        React.createElement(Input, {
+          placeholder: "输入别名（可选，仅小写字母、数字和连字符）",
+        }),
       ),
       React.createElement(
         Form.Item,
@@ -2750,7 +2780,11 @@ function buildPlugin() {
           margin: "4px 0",
         },
       },
-      React.createElement("div", { style: { marginBottom: 6 } }, headerEl),
+      React.createElement(
+        "div",
+        { style: { marginBottom: 6 } },
+        ...bodyContent,
+      ),
       loadingSpinner,
       stepsEl,
       legacyTextEl,

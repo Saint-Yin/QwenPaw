@@ -19,11 +19,29 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
 logger = logging.getLogger("qwenpaw").getChild("plugin.cloudpaw")
+
+
+# ---------------------------------------------------------------------------
+# Plugin path initialization (must run before any router/tool imports)
+# ---------------------------------------------------------------------------
+
+
+def _init_plugin_path() -> None:
+    """Ensure the plugin directory is on sys.path.
+
+    This eliminates the cold-start window where absolute imports like
+    ``from modules.a2a.client_manager`` would fail because ``constants.py``
+    (which does ``sys.path.insert``) has not been imported yet.
+    """
+    plugin_dir = str(Path(__file__).parent)
+    if plugin_dir not in sys.path:
+        sys.path.insert(0, plugin_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +484,9 @@ class CloudPawPlugin:
     def register(self, api):
         """Register all CloudPaw components via startup hook."""
         logger.info("CloudPawPlugin.register() called")
+
+        # Ensure plugin dir is on sys.path BEFORE any router/tool imports.
+        _init_plugin_path()
 
         # Inject synthetic modules BEFORE route registration so that
         # routers_setup.py can import InteractionManager.  This must

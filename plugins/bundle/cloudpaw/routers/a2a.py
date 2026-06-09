@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -133,6 +134,19 @@ def _get_manager():
     return get_a2a_manager()
 
 
+def _sanitize_card_name(name: str) -> str:
+    """Convert a card name like 'ECS Backup Assistant' into a stable alias.
+
+    Strips non-alphanumeric characters, collapses whitespace, lowercases,
+    and joins with hyphens.
+    E.g. ``'ECS Backup Assistant'`` -> ``'ecs-backup-assistant'``.
+    """
+    result = re.sub(r"[^a-zA-Z0-9一-鿿\s-]+", "", name)
+    result = result.strip()
+    result = re.sub(r"[\s_]+", "-", result)
+    return result.lower() or "unknown"
+
+
 def _make_alias(url: str, alias: str | None) -> str:
     """Derive alias: explicit alias, or sanitised URL host."""
     if alias:
@@ -164,6 +178,9 @@ def _build_entry_response(
         data["capabilities"] = card_info.get("capabilities")
     else:
         data["status"] = "disconnected"
+        # Fallback display name from registry when card is unavailable
+        if reg_info.get("card_name"):
+            data["name"] = reg_info["card_name"]
     if error:
         data["error"] = error
         data["status"] = "error"
@@ -247,19 +264,30 @@ async def register_agent(
         connect_error = str(exc)
         logger.warning("Failed to connect to %s: %s", body.url, exc)
 
-    # Derive alias: explicit alias > card name > URL hostname
+    # Derive alias: explicit alias > sanitised card name > URL hostname
     alias: str
     if body.alias:
-        alias = body.alias.strip()
+        alias = _sanitize_card_name(body.alias)
+        card_name = body.alias.strip()
     elif card_info and card_info.get("name"):
-        alias = card_info["name"]
+        alias = _sanitize_card_name(card_info["name"])
+        card_name = card_info["name"]
     else:
         from urllib.parse import urlparse
 
         parsed = urlparse(body.url)
         alias = parsed.hostname or body.url
+        card_name = ""
 
-    logger.info("register_agent: alias='%s' url='%s'", alias, body.url)
+    if not card_name and card_info and card_info.get("name"):
+        card_name = card_info["name"]
+
+    logger.info(
+        "register_agent: alias='%s' card_name='%s' url='%s'",
+        alias,
+        card_name,
+        body.url,
+    )
 
     existing = agents_cfg.get(alias)
     if existing and existing["url"] != body.url:
@@ -275,6 +303,8 @@ async def register_agent(
         "auth_token": body.auth_token or "",
         "gateway_config": body.gateway_config or {},
     }
+    if card_name:
+        reg_info["card_name"] = card_name
 
     agents_cfg[alias] = reg_info
     _save_config(ws_dir, agents_cfg)
@@ -305,6 +335,12 @@ async def rename_agent(
         raise HTTPException(
             status_code=400,
             detail="Alias cannot be empty",
+        )
+    # Validate alias format: no whitespace (breaks /a2a shortcut parsing)
+    if re.search(r"\s", new_alias):
+        raise HTTPException(
+            status_code=400,
+            detail="Alias cannot contain whitespace",
         )
 
     reg = agents_cfg.get(alias)

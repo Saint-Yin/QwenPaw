@@ -496,10 +496,10 @@ def setup_tool_and_prompt_hooks() -> (  # pylint: disable=too-many-statements
         )
 
         try:
-            from tools.proposal_choice import (
+            from .tools.proposal_choice import (
                 proposal_choice as _proposal_choice_fn,
             )
-            from tools.manage_prd import (
+            from .tools.manage_prd import (
                 manage_prd as _manage_prd_fn,
             )
 
@@ -532,8 +532,8 @@ def setup_tool_and_prompt_hooks() -> (  # pylint: disable=too-many-statements
         # A2A tools: register for orchestration agent
         if agent_id == BUILTIN_ORCHESTRATION_AGENT_ID:
             try:
-                from tools.a2a_list import a2a_list as _a2a_list_fn
-                from tools.a2a_call import a2a_call as _a2a_call_fn
+                from .tools.a2a_list import a2a_list as _a2a_list_fn
+                from .tools.a2a_call import a2a_call as _a2a_call_fn
 
                 try:
                     toolkit.register_tool_function(
