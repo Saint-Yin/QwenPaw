@@ -2,6 +2,7 @@
 # pylint: disable=protected-access
 """Monkey-patch hooks for tools, prompts, and mission mode."""
 
+import json
 import logging
 import os
 import shutil
@@ -394,16 +395,14 @@ def setup_tool_and_prompt_hooks() -> (  # pylint: disable=too-many-statements
     def _build_a2a_agent_section() -> str:
         """Build a markdown table of registered A2A agents."""
         try:
-            from tools.a2a_list import load_a2a_agents
-            from modules.a2a.client_manager import get_a2a_manager
+            from .tools.a2a_config_helper import load_a2a_agents
+            from .modules.a2a.client_manager import get_a2a_manager
         except ImportError:
             return ""
 
-        from qwenpaw.constant import WORKING_DIR
+        import asyncio
 
-        ws = WORKING_DIR / "workspaces"
-        ws_dir = ws / BUILTIN_ORCHESTRATION_AGENT_ID
-        agents_cfg = load_a2a_agents(ws_dir)
+        agents_cfg = load_a2a_agents()
         if not agents_cfg:
             return ""
 
@@ -412,9 +411,29 @@ def setup_tool_and_prompt_hooks() -> (  # pylint: disable=too-many-statements
         for alias, reg in agents_cfg.items():
             card_info = None
             try:
-                card_info = manager.get_card_info(reg["url"])
+                # Try to get from manager's cache (already connected)
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Already in async context — use a sync fallback
+                    card_info = None
+                else:
+                    card_info = loop.run_until_complete(
+                        manager.get_card_info(reg["url"]),
+                    )
             except Exception:
                 pass
+            # Sync fallback: direct HTTP GET to .well-known/agent.json
+            if not card_info:
+                try:
+                    import urllib.request
+
+                    url = reg["url"].rstrip("/") + "/.well-known/agent.json"
+                    req = urllib.request.Request(url)
+                    req.add_header("Accept", "application/json")
+                    with urllib.request.urlopen(req, timeout=3) as resp:
+                        card_info = json.loads(resp.read())
+                except Exception:
+                    pass
             name = (card_info or {}).get("name", "")
             desc = (card_info or {}).get("description", "")
             skills = (card_info or {}).get("skills", [])
@@ -654,8 +673,6 @@ def _try_rewrite_a2a_query(  # pylint: disable=too-many-return-statements
     unknown alias, bad syntax), in which case the control-command path will
     handle it and show an appropriate error or listing.
     """
-    import json as _json
-
     rest = query[len("/a2a") :].strip()
     if not rest:
         return None
@@ -673,9 +690,9 @@ def _try_rewrite_a2a_query(  # pylint: disable=too-many-return-statements
         return None
 
     try:
-        data = _json.loads(config_path.read_text(encoding="utf-8"))
+        data = json.loads(config_path.read_text(encoding="utf-8"))
         agents_cfg = data.get("agents", {})
-    except (_json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError):
         return None
 
     if agent_name not in agents_cfg:
