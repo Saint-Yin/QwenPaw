@@ -2,15 +2,18 @@
 """PRD API router — read prd.json or snapshots."""
 
 import json
-import os
 import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 
+from qwenpaw.constant import WORKING_DIR
+
 router = APIRouter(prefix="/prd", tags=["prd"])
 
 _TIMESTAMP_RE = re.compile(r"^\d{8}-\d{6}$")
+
+_ALLOWED_ROOT: Path = WORKING_DIR.resolve()
 
 
 @router.get("")
@@ -25,14 +28,8 @@ async def read_prd(
     """
     base = Path(loop_dir).expanduser().resolve()
 
-    # Validate: resolved path must be within the working directory
-    working_dir = Path(os.environ.get("QWENPAW_WORKING_DIR", os.getcwd()))
-    working_dir = working_dir.expanduser().resolve()
-    try:
-        common = os.path.commonpath([str(base), str(working_dir)])
-    except ValueError:
-        common = ""
-    if common != str(working_dir):
+    # Validate: resolved path must be under WORKING_DIR
+    if not (base == _ALLOWED_ROOT or base.is_relative_to(_ALLOWED_ROOT)):
         raise HTTPException(
             status_code=403,
             detail="loop_dir must be within the working directory",
