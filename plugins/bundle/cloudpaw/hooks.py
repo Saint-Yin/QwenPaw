@@ -393,85 +393,28 @@ def setup_tool_and_prompt_hooks() -> (  # pylint: disable=too-many-statements
     _original_build_sys_prompt = QwenPawAgent._build_sys_prompt
 
     def _build_a2a_agent_section() -> str:
-        """Build a markdown table of registered A2A agents."""
+        """Build a compact list of registered A2A agent aliases.
+
+        Reads only from local config — no HTTP requests.
+        The LLM should call a2a_list() for name/description/skills details.
+        """
         try:
             from .tools.a2a_config_helper import load_a2a_agents
-            from .modules.a2a.client_manager import get_a2a_manager
         except ImportError:
             return ""
-
-        import asyncio
 
         agents_cfg = load_a2a_agents()
         if not agents_cfg:
             return ""
 
-        manager = get_a2a_manager()
-        rows: list[str] = []
-        for alias, reg in agents_cfg.items():
-            card_info = None
-            try:
-                # Try to get from manager's cache (already connected)
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Already in async context — use a sync fallback
-                    card_info = None
-                else:
-                    card_info = loop.run_until_complete(
-                        manager.get_card_info(reg["url"]),
-                    )
-            except Exception:
-                pass
-            # Sync fallback: direct HTTP GET to .well-known/agent.json
-            if not card_info:
-                try:
-                    import urllib.request
-
-                    url = reg["url"].rstrip("/") + "/.well-known/agent.json"
-                    req = urllib.request.Request(url)
-                    req.add_header("Accept", "application/json")
-                    with urllib.request.urlopen(req, timeout=3) as resp:
-                        card_info = json.loads(resp.read())
-                except Exception:
-                    pass
-            name = (card_info or {}).get("name", "")
-            desc = (card_info or {}).get("description", "")
-            skills = (card_info or {}).get("skills", [])
-            sk_list = [s.get("name", "") for s in skills[:3]] if skills else []
-            sk_str = ", ".join(sk_list)
-            n = name or "-"
-            d = desc or "-"
-            sk = sk_str or "-"
-            rows.append(f"| {alias} | {n} | {d} | {sk} |")
-
-        if not rows:
-            return ""
-
-        hdr = "### 已注册的远程 A2A Agent"
-        usage = (
-            "使用 `a2a_list()` 查看 → "
-            '`a2a_call(agent_alias="...", message="...", '
-            'context_id="...")` 调用'
+        aliases = ", ".join(sorted(agents_cfg.keys()))
+        return (
+            "\n### 已注册的远程 A2A Agent\n\n"
+            f"可用别名：{aliases}\n\n"
+            "调用远程 Agent 前，先调用 `a2a_list()` 查看各 Agent "
+            "的名称、描述和技能列表，再选择合适的 Agent。\n"
+            '使用 `a2a_call(agent_alias="...", message="...")` 调用。'
         )
-        example = (
-            "**多轮对话示例**：\n"
-            "```python\n"
-            "# 第一轮：首次调用，无需传入 context_id\n"
-            'a2a_call(agent_alias="agent-a", message="你好，请帮我查下数据")\n'
-            '# 返回结果中包含 context_id = "abc-123"\n'
-            "\n"
-            "# 第二轮：同一话题的后续追问，传入上一轮的 context_id\n"
-            'a2a_call(agent_alias="agent-a", message="请把结果整理成表格", '
-            'context_id="abc-123")\n'
-            "```\n"
-            "同一个上下文的后续追问可以复用 context_id 保持对话连续性。\n\n"
-            "切换话题或 agent 时无需传入，会自动创建新会话。\n\n"
-            "工具返回的 context_id 仅用于下一轮调用，前端已有控件展示，无需向用户展示。"
-        )
-        col = "| 别名 | 名称 | 能力 | 技能 |"
-        sep = "|------|------|------|------|"
-        lines = [f"\n{hdr}", "", usage, "", example, "", col, sep] + rows
-        return "\n".join(lines) + "\n"
 
     def _render_base_supplement() -> str:
         """Load and render base supplement with A2A agents injected."""
