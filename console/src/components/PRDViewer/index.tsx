@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Table,
   Tag,
@@ -119,7 +119,6 @@ export function PRDViewer({ data }: PRDViewerProps) {
   const { token } = theme.useToken();
   const [prd, setPrd] = useState<Record<string, unknown> | null>(null);
   const [fetchError, setFetchError] = useState(false);
-  const [snapshotTs, setSnapshotTs] = useState<string | null>(null);
 
   const isLoading =
     (data as any)?.status === "in_progress" ||
@@ -148,48 +147,49 @@ export function PRDViewer({ data }: PRDViewerProps) {
     ? ((toolResult as any)?.message as string) || t("managePrd.unknownError")
     : null;
 
-  // Extract snapshot timestamp from tool result
-  useEffect(() => {
-    if (isSuccess) {
-      const ts = (toolResult as any)?.data?.timestamp;
-      setSnapshotTs(ts || null);
-    }
-  }, [isSuccess, toolResult]);
-
-  const fetchPrd = useCallback(async () => {
-    if (!loopDir) return;
-    try {
-      const host = (window as any).QwenPaw?.host;
-      if (!host) return;
-      const token = host.getApiToken();
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      let url = `/prd?loop_dir=${encodeURIComponent(loopDir)}`;
-      if (snapshotTs) {
-        url += `&timestamp=${encodeURIComponent(snapshotTs)}`;
-      }
-      const res = await fetch(host.getApiUrl(url), { headers });
-      if (!res.ok) {
-        setFetchError(true);
-        return;
-      }
-      const json = await res.json();
-      if (json && Array.isArray(json.userStories)) {
-        setPrd(json);
-        setFetchError(false);
-      } else {
-        setFetchError(true);
-      }
-    } catch {
-      setFetchError(true);
-    }
-  }, [loopDir, snapshotTs]);
+  // Fetch PRD when tool result is ready. Track the last fetched
+  // request key (loopDir + timestamp) to avoid infinite loop caused
+  // by toolResult being a new object each render, while still allowing
+  // different missions / operations to fetch correctly.
+  const lastFetchKey = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isLoading && isSuccess && loopDir) {
-      fetchPrd();
+      const ts = (toolResult as any)?.data?.timestamp;
+      const key = `${loopDir}|${ts || ""}`;
+      if (key === lastFetchKey.current) return;
+
+      (async () => {
+        if (!loopDir) return;
+        try {
+          const host = (window as any).QwenPaw?.host;
+          if (!host) return;
+          const token = host.getApiToken();
+          const headers: Record<string, string> = {};
+          if (token) headers["Authorization"] = `Bearer ${token}`;
+          let url = `/prd?loop_dir=${encodeURIComponent(loopDir)}`;
+          if (ts) {
+            url += `&timestamp=${encodeURIComponent(ts)}`;
+          }
+          const res = await fetch(host.getApiUrl(url), { headers });
+          if (!res.ok) {
+            setFetchError(true);
+            return;
+          }
+          const json = await res.json();
+          if (json && Array.isArray(json.userStories)) {
+            setPrd(json);
+            setFetchError(false);
+            lastFetchKey.current = key;
+          } else {
+            setFetchError(true);
+          }
+        } catch {
+          setFetchError(true);
+        }
+      })();
     }
-  }, [isLoading, isSuccess, loopDir, fetchPrd, snapshotTs]);
+  }, [isLoading, isSuccess, loopDir, toolResult]);
 
   if (isLoading) {
     return (

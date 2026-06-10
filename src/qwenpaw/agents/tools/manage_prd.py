@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=too-many-return-statements
 """Manage PRD tool — CRUD and mark_passed for prd.json stories."""
 
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -46,8 +48,6 @@ def _to_kebab_case(text: str) -> str:
     - "AuthSystem" -> "auth-system"
     - "User Authentication" -> "user-authentication"
     """
-    import re
-
     s = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", text)
     s = re.sub(r"[\s_]+", "-", s)
     return s.lower().strip("-")
@@ -92,7 +92,8 @@ def _save_prd(prd_path: Path, prd: dict) -> str:
     """Save prd.json and create a timestamped snapshot.
 
     Saves a snapshot at ``loop_dir/snapshots/{timestamp}.json`` for
-    frontend historical retrieval.
+    frontend historical retrieval.  Keeps at most 50 snapshots;
+    oldest are removed first.
 
     Returns the timestamp string.
     """
@@ -115,6 +116,20 @@ def _save_prd(prd_path: Path, prd: dict) -> str:
         )
     except Exception as exc:
         logger.warning("Failed to create snapshot %s: %s", snapshot_path, exc)
+
+    # Cleanup: keep at most 50 snapshots (oldest removed first)
+    _MAX_SNAPSHOTS = 50
+    try:
+        snapshots = sorted(snapshot_dir.glob("*.json"))
+        if len(snapshots) > _MAX_SNAPSHOTS:
+            for old in snapshots[: len(snapshots) - _MAX_SNAPSHOTS]:
+                old.unlink()
+    except Exception as exc:
+        logger.warning(
+            "Failed to clean snapshots in %s: %s",
+            snapshot_dir,
+            exc,
+        )
 
     logger.info(
         "Updated prd.json at: %s (snapshot: %s)",
@@ -346,7 +361,8 @@ async def _handle_update(
     fields, err = _parse_fields(fields)
     if fields is None:
         return _error_response(err)
-    assert isinstance(fields, dict)
+    if not isinstance(fields, dict):
+        return _error_response("update fields must be a dict")
 
     forbidden = {"id", "passes"}
     if any(k in forbidden for k in fields.keys()):
