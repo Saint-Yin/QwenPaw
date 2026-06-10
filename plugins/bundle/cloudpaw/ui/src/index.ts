@@ -3054,6 +3054,33 @@ function buildPlugin() {
     },
   ]);
 
+  const a2aDescriptions: Record<string, string> = {
+    zh: "查看或调用已注册的远程 A2A Agent",
+    en: "View or call registered remote A2A agents",
+    ja: "登録済みのリモート A2A エージェントを表示または呼び出す",
+    ru: "Просмотр или вызов зарегистрированных удалённых агентов A2A",
+    id: "Lihat atau panggil agen A2A jarak jauh yang terdaftar",
+    pt: "Ver ou chamar agentes A2A remotos registrados",
+  };
+
+  function registerA2aSuggestion() {
+    const lang = (() => {
+      const s = localStorage.getItem("language") || "";
+      return s ? s.split("-")[0] : (navigator.language || "en").split("-")[0];
+    })();
+    (window as any).QwenPaw.registerCommandSuggestions?.("cloudpaw", [
+      {
+        command: "/a2a",
+        description: a2aDescriptions[lang] || a2aDescriptions.en,
+      },
+    ]);
+  }
+
+  registerA2aSuggestion();
+  window.addEventListener("qwenpaw:language-change", () => {
+    registerA2aSuggestion();
+  });
+
   // ── Ensure CloudPaw-Master is selected on first install ───────────
 
   ensureDefaultAgent();
