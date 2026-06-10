@@ -558,45 +558,42 @@ async def manage_prd(
 
     # --- all other ops need an existing valid prd.json ---
     if not prd_path.exists():
-        msg = f"prd.json not found: {prd_path}"
-    else:
-        prd, err = _load_prd(prd_path)
-        if prd is None:
-            msg = err
-        else:
-            msg = ""
+        return _error_response(f"prd.json not found: {prd_path}")
 
-    if msg:
-        return _error_response(msg)
+    prd, err = _load_prd(prd_path)
+    if prd is None:
+        return _error_response(err)
 
-    assert prd is not None
     prd_stories: list[dict[str, Any]] = prd.get("userStories") or prd.get(
         "stories",
         [],
     )
 
-    handler_map: dict[str, Any] = {
-        "add": _handle_add(prd_path, prd, prd_stories, story),
-        "update": _handle_update(
+    # --- dispatch by operation ---
+    if op == "add":
+        return await _handle_add(prd_path, prd, prd_stories, story)
+
+    if op == "update":
+        return await _handle_update(
             prd_path,
             prd,
             prd_stories,
             story_id,
             fields,
-        ),
-        "delete": _handle_delete(prd_path, prd, prd_stories, story_ids),
-        "mark_passed": _handle_mark_passed(
+        )
+
+    if op == "delete":
+        return await _handle_delete(prd_path, prd, prd_stories, story_ids)
+
+    if op == "mark_passed":
+        return await _handle_mark_passed(
             prd_path,
             prd,
             prd_stories,
             story_ids,
-        ),
-    }
-
-    handler = handler_map.get(op)
-    if handler is None:
-        allowed = ", ".join(handler_map.keys())
-        return _error_response(
-            f"invalid operation: '{op}'. allowed: {allowed}",
         )
-    return await handler
+
+    allowed = "add, update, delete, mark_passed"
+    return _error_response(
+        f"invalid operation: '{op}'. allowed: {allowed}",
+    )

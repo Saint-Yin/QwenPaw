@@ -2,11 +2,15 @@
 """PRD API router — read prd.json or snapshots."""
 
 import json
+import os
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 
 router = APIRouter(prefix="/prd", tags=["prd"])
+
+_TIMESTAMP_RE = re.compile(r"^\d{8}-\d{6}$")
 
 
 @router.get("")
@@ -20,9 +24,28 @@ async def read_prd(
     falls back to the current prd.json for backward compatibility.
     """
     base = Path(loop_dir).expanduser().resolve()
+
+    # Validate: resolved path must be within the working directory
+    working_dir = Path(os.environ.get("QWENPAW_WORKING_DIR", os.getcwd()))
+    working_dir = working_dir.expanduser().resolve()
+    try:
+        common = os.path.commonpath([str(base), str(working_dir)])
+    except ValueError:
+        common = ""
+    if common != str(working_dir):
+        raise HTTPException(
+            status_code=403,
+            detail="loop_dir must be within the working directory",
+        )
+
     prd_path = base / "prd.json"
 
     if timestamp:
+        if not _TIMESTAMP_RE.match(timestamp):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid timestamp format. Expected: YYYYMMDD-HHMMSS",
+            )
         snap_path = base / "snapshots" / f"{timestamp}.json"
         if snap_path.exists():
             prd_path = snap_path
