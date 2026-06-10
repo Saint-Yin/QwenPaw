@@ -245,6 +245,13 @@ export interface PluginRouteDeclaration {
   priority?: number;
 }
 
+export interface PluginCommandSuggestion {
+  /** Command string, e.g. "/a2a". */
+  command: string;
+  /** Human-readable description shown in suggestion popup. */
+  description: string;
+}
+
 export interface QwenPawWindowNamespace {
   host: QwenPawHostNamespace;
   chat: QwenPawChatNamespace;
@@ -254,6 +261,10 @@ export interface QwenPawWindowNamespace {
   registerToolRender?(
     pluginId: string,
     renderers: Record<string, React.FC<Record<string, unknown>>>,
+  ): void;
+  registerCommandSuggestions?(
+    pluginId: string,
+    suggestions: PluginCommandSuggestion[],
   ): void;
 }
 

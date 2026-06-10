@@ -720,7 +720,7 @@ export default function ChatPage() {
     }>
   >([]);
   const { selectedAgent } = useAgentStore();
-  const { toolRenderConfig } = usePlugins();
+  const { toolRenderConfig, pluginCommandSuggestions } = usePlugins();
   const extScalar = useChatScalarSnapshot();
   const extLists = useChatListSnapshot();
   const [refreshKey, setRefreshKey] = useState(0);
@@ -1494,6 +1494,14 @@ export default function ChatPage() {
       );
     }
 
+    for (const s of pluginCommandSuggestions) {
+      commandSuggestions.push({
+        command: s.command,
+        value: s.command.replace(/^\//, "") + " ",
+        description: s.description,
+      });
+    }
+
     const baseSuggestions = [...commandSuggestions, ...skillSuggestions].map(
       (item) => ({
         label: renderSuggestionLabel(item.command, item.description),
@@ -1735,6 +1743,7 @@ export default function ChatPage() {
     isDark,
     multimodalCaps,
     toolRenderConfig,
+    pluginCommandSuggestions,
     extScalar,
     extLists,
     scheduleHistoryClear,
