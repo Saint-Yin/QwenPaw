@@ -246,8 +246,10 @@ def _remaining_summary(
         "1. Dispatch **workers** for remaining stories\n"
         "2. Once a worker finishes, dispatch a **verifier** for "
         "that story\n"
-        "3. Parse verifier VERDICT: PASS → set `passes: true` "
-        "in prd.json; FAIL → retry with error context\n\n"
+        "3. Parse verifier VERDICT: **only PASS** → use "
+        "`manage_prd(operation='mark_passed', ...)` to set passes; "
+        "FAIL/PARTIAL → retry with error context. "
+        "NEVER mark_passed before verifier says PASS.\n\n"
         "Remember: you are the CONTROLLER — delegate ALL work "
         "via `qwenpaw agents chat --background`."
     )
