@@ -191,6 +191,11 @@ class PluginSystem {
   private _notify(): void {
     this.listeners.forEach((fn) => fn());
   }
+
+  /** Reset all plugin data — for testing only. */
+  __resetForTests(): void {
+    this.records.clear();
+  }
 }
 
 /** Global singleton — imported by PluginContext to subscribe to changes. */
