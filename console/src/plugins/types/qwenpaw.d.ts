@@ -16,6 +16,11 @@
  *   render(pluginId, node)  → whole-section replacement (welcome / leftHeader)
  *   add(pluginId, item)     → append to additive lists
  * ─────────────────────────────────────────────────────────────────────────
+ *
+ * Language switching: the host dispatches a `qwenpaw:language-change` custom
+ * event (via `window.addEventListener`) when the user switches the console
+ * language.  Plugins can listen to this event and re-register command
+ * suggestions with locale-appropriate descriptions.
  */
 import type React from "react";
 

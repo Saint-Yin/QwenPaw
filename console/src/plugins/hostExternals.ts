@@ -6,6 +6,36 @@
  * without bundling their own copies of React / antd.
  *
  * Call `installHostExternals()` once at application startup (main.tsx).
+ *
+ * ── Plugin command suggestions ─────────────────────────────────────────
+ *
+ * Plugins can register slash-command suggestions that appear in the chat
+ * input autocomplete popup.  To support language switching, listen for the
+ * host-dispatched `qwenpaw:language-change` event and re-register with the
+ * new locale's descriptions:
+ *
+ * ```ts
+ * // 1. Register on load
+ * window.QwenPaw.registerCommandSuggestions?.("my-plugin", [
+ *   { command: "/cmd", description: "Do something useful" },
+ * ]);
+ *
+ * // 2. Listen for language change to update descriptions
+ * window.addEventListener("qwenpaw:language-change", (e) => {
+ *   const lang = (e as CustomEvent).detail.language;
+ *   const descriptions: Record<string, string> = {
+ *     en: "Do something useful",
+ *     zh: "做一些有用的事",
+ *   };
+ *   window.QwenPaw.registerCommandSuggestions?.("my-plugin", [
+ *     { command: "/cmd", description: descriptions[lang] ?? descriptions.en },
+ *   ]);
+ * });
+ * ```
+ *
+ * The host fires `qwenpaw:language-change` from `LanguageSwitcher` whenever
+ * the user switches the console language.  Same-command re-registrations
+ * replace the previous entry (merge-by-key), so suggestions never duplicate.
  */
 
 import React from "react";
