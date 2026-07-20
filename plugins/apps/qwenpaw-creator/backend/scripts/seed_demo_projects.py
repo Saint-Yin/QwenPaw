@@ -44,8 +44,8 @@ DEMOS: tuple[DemoProject, ...] = (
         scenario="short_drama",
         goal=(
             "请制作一部约 36 秒、16:9、720P 的三段式短剧《雪夜重逢》。"
-            "先规划 Section、Unit 和 Shot，再补齐角色、雪夜车站场景与关键道具的视觉资产；"
-            "每个 Unit 使用 R2V，人物造型和环境光线要连续。完成修改后提交统一审阅。"
+            "先在 Timeline 上规划 R2V Element 与 Shot，再补齐角色、雪夜车站场景与关键道具的视觉资产；"
+            "每个 R2V Element 不超过 15 秒，人物造型和环境光线要连续。"
         ),
         brief_name="雪夜重逢创作要求.txt",
         brief_text=(
@@ -63,7 +63,7 @@ DEMOS: tuple[DemoProject, ...] = (
         goal=(
             "请把素材要求整理为一支约 45 秒、16:9、720P 的采访精剪方案。"
             "保留完整核心观点，删除停顿和重复表达，开头先给出结论，结尾保留行动建议；"
-            "先建立可审阅的 Section、Unit 和 AI Edit 计划，不要虚构素材中不存在的画面或对白。"
+            "把每个素材选择直接建立为 Edit Element，不要虚构素材中不存在的画面或对白。"
         ),
         brief_name="采访精剪要求.txt",
         brief_text=(

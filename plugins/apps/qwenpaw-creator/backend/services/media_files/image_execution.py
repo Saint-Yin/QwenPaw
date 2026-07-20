@@ -55,10 +55,15 @@ from services.project_files.models import (
     ArtifactVersion,
     IndexedFile,
     Project,
-    R2VProduction,
-    Unit,
+    R2VCreation,
     VisualEntity,
     VisualVariant,
+)
+from services.media_files.element_adapter import (
+    bind_candidate_output,
+    find_timeline_element,
+    selected_element_output,
+    target_element_id,
 )
 from services.project_files.remote_cache import public_source_url
 from services.project_files.store import ProjectSnapshot
@@ -78,7 +83,11 @@ from services.runtime_files.execution_store import (
     ProjectExecutionStore,
 )
 from services.runtime_files.models import ChangeOrigin, ReviewPolicy
+
+# pylint: disable=no-name-in-module
 from utils.paths import media_path_from_url, media_task_scope
+
+# pylint: enable=no-name-in-module
 
 if TYPE_CHECKING:
     from services.project_files.facade import CreatorFileServices
@@ -214,14 +223,6 @@ def _list_of_strings(value: Any, *, label: str) -> list[str]:
     ):
         raise ValidationError(f"{label} 必须是字符串数组")
     return [item.strip() for item in value if item.strip()]
-
-
-def _find_unit(project: Project, unit_id: str) -> Unit:
-    for section in project.story.sections.items.values():
-        unit = section.units.items.get(unit_id)
-        if unit is not None:
-            return unit
-    raise NotFoundError("Unit 不存在")
 
 
 def _target_id(target_ref: str, prefix: str) -> str:
@@ -422,29 +423,26 @@ def _resolve_request(
     explicit_version_ids = [*explicit_version_ids, *exact_ref_version_ids]
 
     if command is CreatorCommandType.GENERATE_STORYBOARD_IMAGE:
-        unit_id = _target_id(target_ref, "unit")
-        unit = _find_unit(project, unit_id)
-        if unit.route.value != "r2v":
-            raise ValidationError("仅 R2V Unit 可以生成分镜图")
-        production = project.production.units_by_id.get(unit_id)
-        if production is not None and not isinstance(
-            production,
-            R2VProduction,
-        ):
-            raise ValidationError("Unit Production route 与 R2V 不一致")
-        production = production or R2VProduction()
-        prompt = explicit_prompt or production.storyboard_prompt.strip()
+        element_id = target_element_id(
+            target_ref,
+            command=CreatorCommandType.GENERATE_STORYBOARD_IMAGE.value,
+        )
+        _, element = find_timeline_element(project, element_id)
+        creation = element.creation
+        if not isinstance(creation, R2VCreation):
+            raise ValidationError("仅 R2V Element 可以生成分镜图")
+        prompt = explicit_prompt or creation.storyboard_prompt.strip()
         if not prompt:
             shot_text = "；".join(
                 shot.description.strip()
-                for shot in unit.shots.items.values()
+                for shot in creation.shots.items.values()
                 if shot.description.strip()
             )
             prompt = "，".join(
                 item
                 for item in (
-                    unit.title.strip(),
-                    unit.narrative.strip(),
+                    element.label.strip(),
+                    creation.narrative.strip(),
                     shot_text,
                 )
                 if item
@@ -452,24 +450,24 @@ def _resolve_request(
         if not prompt:
             raise ValidationError("生成分镜图需要 storyboard prompt")
         version_ids = [
-            *production.storyboard_reference_version_ids,
+            *creation.storyboard_reference_version_ids,
             *explicit_version_ids,
         ]
         resolved = _ResolvedRequest(
             command=command,
-            target_ref=f"unit:{unit_id}",
+            target_ref=target_ref,
             prompt=prompt,
             aspect_ratio=project.settings.aspect_ratio,
             reference_image_urls=(),
             reference_version_ids=tuple(dict.fromkeys(version_ids)),
             reference_checksums=(),
             read_set=(),
-            slot_id=f"unit:{unit_id}:storyboard",
+            slot_id=f"element:{element_id}:storyboard",
             slot_kind="r2v_storyboard_image",
-            owner_ref=f"unit:{unit_id}",
-            artifact_name=f"{unit.title or unit_id} 分镜图",
+            owner_ref=f"element:{element_id}",
+            artifact_name=f"{element.label or element_id} 分镜图",
             role=SpecialistRole.R2V_GENERATION_DIRECTOR,
-            target_id=unit_id,
+            target_id=element_id,
         )
     elif command is CreatorCommandType.GENERATE_ASSET:
         entity_id = _target_id(target_ref, "asset")
@@ -1421,13 +1419,13 @@ class FileImageExecutionService:
         command = str(result.get("commandType") or "")
         target_ref = str(result.get("targetRef") or "")
         if command == CreatorCommandType.GENERATE_STORYBOARD_IMAGE.value:
-            unit_id = _target_id(target_ref, "unit")
-            production = project.production.units_by_id.get(unit_id)
-            return (
-                isinstance(production, R2VProduction)
-                and production.selected_storyboard_artifact_version_id
-                == artifact.version_id
-            )
+            element_id = target_element_id(target_ref, command=command)
+            try:
+                _, element = find_timeline_element(project, element_id)
+            except NotFoundError:
+                return False
+            selected = selected_element_output(project, element, "storyboard")
+            return selected is not None and selected[1] == artifact.version_id
         entity_id = _target_id(target_ref, "asset")
         entity = project.visual.entities.items.get(entity_id)
         return (
@@ -1480,16 +1478,14 @@ class FileImageExecutionService:
         command = CreatorCommandType(str(result["commandType"]))
         target_ref = str(result["targetRef"])
         if command is CreatorCommandType.GENERATE_STORYBOARD_IMAGE:
-            unit_id = _target_id(target_ref, "unit")
-            production = candidate["production"]["units_by_id"].get(unit_id)
-            if production is None:
-                production = R2VProduction().model_dump(mode="json")
-                candidate["production"]["units_by_id"][unit_id] = production
-            if production.get("route") != "r2v":
-                raise ConflictError("Unit Production route 已变化")
-            production[
-                "selected_storyboard_artifact_version_id"
-            ] = artifact.version_id
+            element_id = target_element_id(target_ref, command=command.value)
+            bind_candidate_output(
+                candidate,
+                element_id=element_id,
+                output_name="storyboard",
+                slot_id=artifact.slot_id,
+                select_for_render=False,
+            )
         else:
             entity_id = _target_id(target_ref, "asset")
             entity = candidate["visual"]["entities"]["items"].get(entity_id)

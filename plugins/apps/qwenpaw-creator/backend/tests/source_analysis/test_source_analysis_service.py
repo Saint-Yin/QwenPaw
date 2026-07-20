@@ -18,7 +18,6 @@ from api.file_asset_routes import (
     _ingest_many_sync,
     _register_remote_asset_sync,
 )
-from api.file_command_routes import router as command_router
 from api.file_execution_routes import _cancel_task_sync
 from api.file_source_intelligence_routes import router as source_router
 from domain.enums import SpecialistRunStatus, TaskStatus
@@ -511,7 +510,7 @@ def test_missing_media_tools_fail_task_and_run_once_without_retry(
     ] == [TaskAttemptStatus.RUNNING, TaskAttemptStatus.FAILED]
 
 
-def test_analyze_command_dispatches_directly_without_agent_queue(
+def test_analyze_endpoint_dispatches_directly(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -524,20 +523,22 @@ def test_analyze_command_dispatches_directly_without_agent_queue(
             return SimpleNamespace(
                 job=SimpleNamespace(
                     round_id="round-source",
+                    input_generation=0,
                     input_etag="sha256:input",
                 ),
+                task=SimpleNamespace(
+                    task_id="task-source",
+                    status=TaskStatus.QUEUED,
+                ),
+                run=SimpleNamespace(run_id="run-source"),
             )
 
     monkeypatch.setattr(
-        "api.file_command_routes.source_analysis_service",
+        "api.file_source_intelligence_routes.source_analysis_service",
         lambda _services: Dispatcher(),
     )
-    monkeypatch.setattr(
-        "api.file_command_routes.notify_creator_agent_runtime",
-        lambda *_args: pytest.fail("ANALYZE_SOURCE_MEDIA entered Agent queue"),
-    )
     app = FastAPI()
-    app.include_router(command_router)
+    app.include_router(source_router)
     app.dependency_overrides[project_file_services] = lambda: services
 
     async def submit():
@@ -547,24 +548,22 @@ def test_analyze_command_dispatches_directly_without_agent_queue(
             base_url="http://test",
         ) as client:
             return await client.post(
-                "/projects/project-1/commands",
+                f"/projects/project-1/assets/{asset_id}/analyze",
                 headers={"Idempotency-Key": "analyze-command"},
                 json={
-                    "clientCommandId": "analyze-command",
-                    "type": "ANALYZE_SOURCE_MEDIA",
-                    "targetRef": f"asset:{asset_id}",
-                    "arguments": {},
+                    "clientRequestId": "analyze-command",
                 },
             )
 
     response = asyncio.run(submit())
     assert response.status_code == 202
     assert response.json() == {
-        "commandId": "analyze-command",
+        "taskId": "task-source",
+        "runId": "run-source",
         "status": "QUEUED",
-        "eventSeq": 0,
         "transactionId": "round-source",
-        "workingHead": "sha256:input",
+        "inputGeneration": 0,
+        "inputEtag": "sha256:input",
     }
     assert calls[0]["target_ref"] == f"asset:{asset_id}"
 

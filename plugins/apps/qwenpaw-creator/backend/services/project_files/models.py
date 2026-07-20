@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import StrEnum
 import hashlib
-import json
+import math
 from pathlib import PurePosixPath
 from typing import Annotated, Any, Generic, Literal, TypeVar
 from urllib.parse import urlsplit
@@ -30,7 +30,9 @@ from pydantic import (
 )
 
 
-CURRENT_PROJECT_SCHEMA_VERSION = 1
+CURRENT_PROJECT_SCHEMA_VERSION = 2
+DEFAULT_TIMELINE_ID = "timeline:main"
+DEFAULT_TIMELINE_TICKS_PER_SECOND = 1_000
 SHA256_PATTERN = r"^[a-f0-9]{64}$"
 
 
@@ -432,11 +434,6 @@ class VisualDevelopment(StrictModel):
     )
 
 
-class UnitTaskType(StrEnum):
-    R2V = "r2v"
-    EDIT = "edit"
-
-
 class ShotCamera(StrEnum):
     STATIC = "⊙ 静止"
     PUSH_IN = "↑ 推近"
@@ -468,62 +465,6 @@ class Shot(StrictModel):
     prop_refs: list[EntityId] = Field(default_factory=list)
 
 
-class Unit(StrictModel):
-    unit_id: EntityId
-    title: str = ""
-    route: UnitTaskType
-    duration_seconds: float = Field(ge=0)
-    narrative: str = ""
-    continuity: str = ""
-    source_refs: list[EntityId] = Field(default_factory=list)
-    character_refs: list[EntityId] = Field(default_factory=list)
-    scene_ref: EntityId | None = None
-    prop_refs: list[EntityId] = Field(default_factory=list)
-    shots: EntityCollection[Shot] = Field(default_factory=EntityCollection)
-
-    @model_validator(mode="after")
-    def _validate_shots_for_route(self) -> Unit:
-        _require_collection_identity(self.shots, "shot_id", "shots")
-        if self.route == UnitTaskType.R2V:
-            for shot in self.shots.items.values():
-                if shot.camera is None or shot.framing is None:
-                    raise ValueError("R2V shot requires camera and framing")
-        return self
-
-
-class Section(StrictModel):
-    section_id: EntityId
-    title: str = Field(min_length=1)
-    summary: str = ""
-    narrative: str = ""
-    script: str = ""
-    voiceover: str = ""
-    duration_budget_seconds: float | None = Field(default=None, ge=0)
-    pacing: str = ""
-    constraints: list[str] = Field(default_factory=list)
-    transition: str = ""
-    units: EntityCollection[Unit] = Field(default_factory=EntityCollection)
-
-    @model_validator(mode="after")
-    def _validate_unit_identity(self) -> Section:
-        _require_collection_identity(self.units, "unit_id", "units")
-        return self
-
-
-class Story(StrictModel):
-    title: str = ""
-    outline: str = ""
-    narration: str = ""
-    sections: EntityCollection[Section] = Field(
-        default_factory=EntityCollection,
-    )
-
-    @model_validator(mode="after")
-    def _validate_section_identity(self) -> Story:
-        _require_collection_identity(self.sections, "section_id", "sections")
-        return self
-
-
 class GenerationRecipe(StrictModel):
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
@@ -531,177 +472,361 @@ class GenerationRecipe(StrictModel):
     candidate_count: int = Field(default=1, ge=1)
 
 
-class R2VProduction(StrictModel):
-    route: Literal["r2v"] = "r2v"
+class TimelineSpan(StrictModel):
+    """One half-open interval on a Timeline: ``[start_tick, end_tick)``."""
+
+    start_tick: int = Field(ge=0)
+    duration_tick: int = Field(gt=0)
+
+    @property
+    def end_tick(self) -> int:
+        return self.start_tick + self.duration_tick
+
+    def contains(self, tick: int) -> bool:
+        return self.start_tick <= tick < self.end_tick
+
+    def overlaps(self, other: TimelineSpan) -> bool:
+        return (
+            self.start_tick < other.end_tick
+            and other.start_tick < self.end_tick
+        )
+
+
+class ElementLocation(StrictModel):
+    """Normalized canvas placement; values may extend beyond the canvas."""
+
+    coordinate_space: Literal["normalized_canvas"] = "normalized_canvas"
+    x: float = 0.0
+    y: float = 0.0
+    width: float = Field(default=1.0, gt=0)
+    height: float = Field(default=1.0, gt=0)
+    anchor_x: float = Field(default=0.5, ge=0, le=1)
+    anchor_y: float = Field(default=0.5, ge=0, le=1)
+    rotation_degrees: float = 0.0
+    opacity: float = Field(default=1.0, ge=0, le=1)
+
+    @field_validator(
+        "x",
+        "y",
+        "width",
+        "height",
+        "anchor_x",
+        "anchor_y",
+        "rotation_degrees",
+        "opacity",
+    )
+    @classmethod
+    def _validate_finite(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("element location values must be finite")
+        return value
+
+
+class ElementOutput(StrictModel):
+    """A stable named output backed by the generic ArtifactSlot index."""
+
+    slot_id: EntityId
+
+
+class SourceVersionRenderSource(StrictModel):
+    type: Literal["source_asset_version"] = "source_asset_version"
+    version_id: EntityId
+    source_in_tick: int = Field(default=0, ge=0)
+    source_out_tick: int | None = Field(default=None, gt=0)
+    playback_rate: float = Field(default=1.0, gt=0)
+    loop: bool = False
+
+    @field_validator("playback_rate")
+    @classmethod
+    def _validate_rate(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("playback_rate must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_range(self) -> SourceVersionRenderSource:
+        if (
+            self.source_out_tick is not None
+            and self.source_out_tick <= self.source_in_tick
+        ):
+            raise ValueError(
+                "source_out_tick must be greater than source_in_tick",
+            )
+        return self
+
+
+class ArtifactVersionRenderSource(SourceVersionRenderSource):
+    type: Literal["artifact_version"] = "artifact_version"
+
+
+class ElementOutputRenderSource(StrictModel):
+    type: Literal["element_output"] = "element_output"
+    element_id: EntityId
+    output_name: EntityId
+    source_in_tick: int = Field(default=0, ge=0)
+    source_out_tick: int | None = Field(default=None, gt=0)
+    playback_rate: float = Field(default=1.0, gt=0)
+    loop: bool = False
+
+    @field_validator("playback_rate")
+    @classmethod
+    def _validate_rate(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("playback_rate must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_range(self) -> ElementOutputRenderSource:
+        if (
+            self.source_out_tick is not None
+            and self.source_out_tick <= self.source_in_tick
+        ):
+            raise ValueError(
+                "source_out_tick must be greater than source_in_tick",
+            )
+        return self
+
+
+RenderSource = Annotated[
+    SourceVersionRenderSource
+    | ArtifactVersionRenderSource
+    | ElementOutputRenderSource,
+    Field(discriminator="type"),
+]
+
+
+class R2VCreation(StrictModel):
+    """Declarative R2V creative facts, independent of the executing Agent."""
+
+    type: Literal["r2v"] = "r2v"
+    intent: str = ""
+    narrative: str = ""
+    continuity: str = ""
+    character_refs: list[EntityId] = Field(default_factory=list)
+    scene_ref: EntityId | None = None
+    prop_refs: list[EntityId] = Field(default_factory=list)
+    shots: EntityCollection[Shot] = Field(default_factory=EntityCollection)
     recipe: GenerationRecipe | None = None
     storyboard_prompt: str = ""
     storyboard_reference_version_ids: list[EntityId] = Field(
         default_factory=list,
     )
-    selected_storyboard_artifact_version_id: EntityId | None = None
     video_prompt: str = ""
     video_reference_version_ids: list[EntityId] = Field(default_factory=list)
-    selected_video_artifact_version_id: EntityId | None = None
-
-
-class EditClip(StrictModel):
-    clip_id: EntityId
-    source_asset_version_id: EntityId
-    source_in_seconds: float = Field(ge=0)
-    source_out_seconds: float = Field(gt=0)
-    transition: str = "cut"
-    original_sound: str = "preserve"
-    reason: str = ""
-    overlay: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _validate_source_range(self) -> EditClip:
-        if self.source_out_seconds <= self.source_in_seconds:
-            raise ValueError(
-                "source_out_seconds must be greater than source_in_seconds",
-            )
-        return self
-
-
-class EditStoryboardPanel(StrictModel):
-    panel_id: EntityId
-    clip_id: EntityId
-    title: str = ""
-    description: str = ""
-    source_timestamp_seconds: float = Field(ge=0)
-    frame_artifact_version_id: EntityId | None = None
-
-
-class EditAudioPlan(StrictModel):
-    preserve_original: bool = True
-    music_prompt: str = ""
-    voiceover: str = ""
-    notes: str = ""
-
-
-class AiEditPlan(StrictModel):
-    """Structured edit plan embedded directly in ``project.json``."""
-
-    plan_id: EntityId
-    plan_hash: Sha256 | None = None
-    summary: str = ""
-    target_duration_seconds: float | None = Field(default=None, ge=0)
-    timeline: EntityCollection[EditClip] = Field(
-        default_factory=EntityCollection,
-    )
-    storyboard: EntityCollection[EditStoryboardPanel] = Field(
-        default_factory=EntityCollection,
-    )
-    audio_plan: EditAudioPlan = Field(default_factory=EditAudioPlan)
-    model: dict[str, Any] = Field(default_factory=dict)
-    provenance: dict[str, Any] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _validate_and_hash_plan(self) -> AiEditPlan:
-        _require_collection_identity(self.timeline, "clip_id", "edit timeline")
+    def _validate_shots(self) -> R2VCreation:
         _require_collection_identity(
-            self.storyboard,
-            "panel_id",
-            "edit storyboard",
+            self.shots,
+            "shot_id",
+            "R2V creation shots",
         )
-        for panel in self.storyboard.items.values():
-            _require_key(
-                self.timeline.items,
-                panel.clip_id,
-                "storyboard panel clip",
-            )
-        actual = self.content_hash()
-        if self.plan_hash is not None and self.plan_hash != actual:
-            raise ValueError(
-                "plan_hash does not match canonical AI Edit Plan content",
-            )
-        object.__setattr__(self, "plan_hash", actual)
+        for shot in self.shots.items.values():
+            if shot.camera is None or shot.framing is None:
+                raise ValueError(
+                    "R2V creation shot requires camera and framing",
+                )
         return self
 
-    def content_hash(self) -> str:
-        payload = self.model_dump(mode="json", exclude={"plan_hash"})
-        encoded = json.dumps(
-            payload,
-            ensure_ascii=False,
-            allow_nan=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
 
+class EditCreation(StrictModel):
+    """Creative facts for one selected source range.
 
-class EditProduction(StrictModel):
-    route: Literal["edit"] = "edit"
+    The exact source and range live in the Element's ``render_source``.  A
+    multi-selection edit is represented by multiple Elements, never by a
+    nested range list.
+    """
+
+    type: Literal["edit"] = "edit"
     intent: str = ""
-    source_asset_version_ids: list[EntityId] = Field(default_factory=list)
-    plan: AiEditPlan | None = None
-    storyboard_sheet_artifact_version_id: EntityId | None = None
-    timeline_summary: str = ""
-    subtitles_file_id: EntityId | None = None
-    rendered_video_artifact_version_id: EntityId | None = None
+    reason: str = ""
+    original_sound: Literal["preserve"] = "preserve"
+    source_intelligence_version_id: EntityId | None = None
 
 
-UnitProduction = Annotated[
-    R2VProduction | EditProduction,
-    Field(discriminator="route"),
+class OverlayCreation(StrictModel):
+    """Procedural or generated overlay creative facts."""
+
+    type: Literal["overlay"] = "overlay"
+    overlay_kind: Literal["pet_os", "interview_summary", "motion", "media"]
+    text: str = ""
+    vibe: str = "chill"
+    prompt: str = ""
+    reference_version_ids: list[EntityId] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> OverlayCreation:
+        if (
+            self.overlay_kind in {"pet_os", "interview_summary"}
+            and not self.text.strip()
+        ):
+            raise ValueError("text overlay requires non-empty text")
+        if self.overlay_kind in {"motion", "media"} and not (
+            self.prompt.strip() or self.reference_version_ids
+        ):
+            raise ValueError(
+                "generated overlay requires prompt or reference versions",
+            )
+        return self
+
+
+class TransitionCreation(StrictModel):
+    """A time-bounded effect between two explicit Element endpoints."""
+
+    type: Literal["transition"] = "transition"
+    from_element_id: EntityId
+    to_element_id: EntityId
+    transition_kind: str = Field(min_length=1)
+    easing: str = "linear"
+
+    @model_validator(mode="after")
+    def _validate_endpoints(self) -> TransitionCreation:
+        if self.from_element_id == self.to_element_id:
+            raise ValueError("transition endpoints must be different")
+        return self
+
+
+class AudioCreation(StrictModel):
+    """An exact audio version placed directly on the Timeline."""
+
+    type: Literal["audio"] = "audio"
+    source_asset_version_id: EntityId
+    gain_db: float = 0.0
+    pan: float = Field(default=0.0, ge=-1, le=1)
+
+    @field_validator("gain_db", "pan")
+    @classmethod
+    def _validate_finite(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("audio values must be finite")
+        return value
+
+
+ElementCreation = Annotated[
+    R2VCreation
+    | EditCreation
+    | OverlayCreation
+    | TransitionCreation
+    | AudioCreation,
+    Field(discriminator="type"),
 ]
 
 
-class Production(StrictModel):
-    units_by_id: dict[EntityId, UnitProduction] = Field(default_factory=dict)
+class TimelineElement(StrictModel):
+    """The only persisted time/layer entity; no Track or Content indirection."""
 
-
-class SequenceItem(StrictModel):
-    selection_id: EntityId
-    source_ref: str
-    source_kind: Literal["unit_video", "section_video"]
-    artifact_version_id: EntityId
-
-
-class Transition(StrictModel):
-    from_selection_id: EntityId
-    to_selection_id: EntityId
-    kind: str
-    duration_ms: int = Field(default=0, ge=0)
-
-
-class Composition(StrictModel):
-    sequence: EntityCollection[SequenceItem] = Field(
-        default_factory=EntityCollection,
-    )
-    transitions: list[Transition] = Field(default_factory=list)
-    audio_plan: str = ""
-    subtitle_file_id: EntityId | None = None
-    rendered_video_artifact_version_id: EntityId | None = None
+    element_id: EntityId
+    label: str = ""
+    enabled: bool = True
+    span: TimelineSpan
+    location: ElementLocation | None = None
+    z_index: int = 0
+    creation: ElementCreation
+    outputs: dict[EntityId, ElementOutput] = Field(default_factory=dict)
+    render_source: RenderSource | None = None
+    provenance_refs: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _validate_sequence(self) -> Composition:
-        _require_collection_identity(
-            self.sequence,
-            "selection_id",
-            "composition sequence",
-        )
-        for transition in self.transitions:
-            _require_key(
-                self.sequence.items,
-                transition.from_selection_id,
-                "transition source",
+    def _validate_element(self) -> TimelineElement:
+        output_slots = [output.slot_id for output in self.outputs.values()]
+        if len(output_slots) != len(set(output_slots)):
+            raise ValueError("Element outputs cannot reuse one ArtifactSlot")
+        if (
+            isinstance(
+                self.creation,
+                (R2VCreation, EditCreation, OverlayCreation),
             )
-            _require_key(
-                self.sequence.items,
-                transition.to_selection_id,
-                "transition target",
+            and self.location is None
+        ):
+            raise ValueError("visual Elements require location")
+        if isinstance(self.creation, (TransitionCreation, AudioCreation)) and (
+            self.location is not None
+        ):
+            raise ValueError(
+                "transition/audio Elements cannot have visual location",
+            )
+        if isinstance(self.creation, TransitionCreation) and (
+            self.outputs or self.render_source is not None
+        ):
+            raise ValueError(
+                "Transition Element is procedural and has no output",
             )
         return self
 
 
-class PostProduction(StrictModel):
-    sections_by_id: dict[EntityId, Composition] = Field(default_factory=dict)
-    final: Composition | None = None
+class Timeline(StrictModel):
+    """One time coordinate system containing freely overlapping Elements."""
+
+    timeline_id: EntityId
+    ticks_per_second: int = Field(
+        default=DEFAULT_TIMELINE_TICKS_PER_SECOND,
+        gt=0,
+    )
+    elements_by_id: dict[EntityId, TimelineElement] = Field(
+        default_factory=dict,
+    )
+
+    @model_validator(mode="after")
+    def _validate_elements(self) -> Timeline:
+        _require_mapping_identity(
+            self.elements_by_id,
+            "element_id",
+            "timeline elements",
+        )
+        for element in self.elements_by_id.values():
+            creation = element.creation
+            if not isinstance(creation, TransitionCreation):
+                continue
+            source = _require_key(
+                self.elements_by_id,
+                creation.from_element_id,
+                "transition source",
+            )
+            target = _require_key(
+                self.elements_by_id,
+                creation.to_element_id,
+                "transition target",
+            )
+            if isinstance(source.creation, TransitionCreation) or isinstance(
+                target.creation,
+                TransitionCreation,
+            ):
+                raise ValueError("transition endpoints cannot be transitions")
+            intersection_start = max(
+                source.span.start_tick,
+                target.span.start_tick,
+            )
+            intersection_end = min(source.span.end_tick, target.span.end_tick)
+            if (
+                element.span.start_tick < intersection_start
+                or element.span.end_tick > intersection_end
+            ):
+                raise ValueError(
+                    "transition span must be contained in its endpoint intersection",
+                )
+        return self
+
+    def elements_at(
+        self,
+        tick: int,
+        *,
+        include_disabled: bool = False,
+    ) -> list[TimelineElement]:
+        if isinstance(tick, bool) or tick < 0:
+            raise ValueError("tick must be a non-negative integer")
+        return sorted(
+            (
+                element
+                for element in self.elements_by_id.values()
+                if (include_disabled or element.enabled)
+                and element.span.contains(tick)
+            ),
+            key=lambda element: (element.span.start_tick, element.element_id),
+        )
 
 
 class Project(StrictModel):
-    schema_version: Literal[1] = CURRENT_PROJECT_SCHEMA_VERSION
+    schema_version: Literal[2] = CURRENT_PROJECT_SCHEMA_VERSION
     project_id: EntityId
     generation: int = Field(default=0, ge=0)
     created_at: UtcDateTime
@@ -713,9 +838,14 @@ class Project(StrictModel):
     strategy: CreativeStrategy = Field(default_factory=CreativeStrategy)
     sources: SourceCatalog = Field(default_factory=SourceCatalog)
     visual: VisualDevelopment = Field(default_factory=VisualDevelopment)
-    story: Story = Field(default_factory=Story)
-    production: Production = Field(default_factory=Production)
-    post_production: PostProduction = Field(default_factory=PostProduction)
+    timelines: EntityCollection[Timeline] = Field(
+        default_factory=lambda: EntityCollection(
+            items={
+                DEFAULT_TIMELINE_ID: Timeline(timeline_id=DEFAULT_TIMELINE_ID),
+            },
+            order=[DEFAULT_TIMELINE_ID],
+        ),
+    )
     assets: AssetIndex = Field(default_factory=AssetIndex)
 
     @field_validator("project_id")
@@ -742,10 +872,8 @@ class Project(StrictModel):
             "entity_id",
             "visual entities",
         )
-        source_ids = set(self.sources.sources.items)
         source_versions = self.assets.source_versions_by_id
         artifact_versions = self.assets.artifact_versions_by_id
-        indexed_files = self.assets.files_by_id
 
         for source in self.sources.sources.items.values():
             selected = _require_key(
@@ -806,111 +934,183 @@ class Project(StrictModel):
                     "selected visual artifact",
                 )
 
-        story_units: dict[str, Unit] = {}
-        for section in self.story.sections.items.values():
-            for unit in section.units.items.values():
-                if unit.unit_id in story_units:
+        _require_collection_identity(
+            self.timelines,
+            "timeline_id",
+            "timelines",
+        )
+        elements: dict[str, TimelineElement] = {}
+        element_timelines: dict[str, Timeline] = {}
+        for timeline in self.timelines.items.values():
+            for element_id, element in timeline.elements_by_id.items():
+                if element_id in elements:
                     raise ValueError(
-                        f"unit id {unit.unit_id} is duplicated across sections",
+                        f"element id {element_id} is duplicated across timelines",
                     )
-                story_units[unit.unit_id] = unit
-                _require_all_ids(source_ids, unit.source_refs, "unit source")
-                _validate_visual_refs(unit, visual_ids)
-                for shot in unit.shots.items.values():
-                    _validate_visual_refs(shot, visual_ids)
+                elements[element_id] = element
+                element_timelines[element_id] = timeline
 
-        for unit_id, production in self.production.units_by_id.items():
-            unit = _require_key(story_units, unit_id, "production unit")
-            if production.route != unit.route.value:
-                raise ValueError(
-                    f"production route does not match story unit {unit_id}",
-                )
-            if isinstance(production, R2VProduction):
+        for element_id, element in elements.items():
+            creation = element.creation
+            if isinstance(creation, R2VCreation):
                 _require_version_refs(
                     source_versions,
                     artifact_versions,
-                    production.storyboard_reference_version_ids,
+                    creation.storyboard_reference_version_ids,
                     "storyboard reference",
                 )
                 _require_version_refs(
                     source_versions,
                     artifact_versions,
-                    production.video_reference_version_ids,
+                    creation.video_reference_version_ids,
                     "video reference",
                 )
-                for version_id in (
-                    production.selected_storyboard_artifact_version_id,
-                    production.selected_video_artifact_version_id,
+                _validate_visual_refs(creation, visual_ids)
+                for shot in creation.shots.items.values():
+                    _validate_visual_refs(shot, visual_ids)
+            elif isinstance(creation, EditCreation):
+                if not isinstance(
+                    element.render_source,
+                    SourceVersionRenderSource,
+                ) or isinstance(
+                    element.render_source,
+                    ArtifactVersionRenderSource,
                 ):
-                    if version_id is not None:
-                        _require_key(
-                            artifact_versions,
-                            version_id,
-                            "selected production artifact",
-                        )
-            else:
-                _require_all(
-                    source_versions,
-                    production.source_asset_version_ids,
-                    "edit source version",
+                    raise ValueError(
+                        "Edit Element render_source must select one source asset range",
+                    )
+                if element.render_source.source_out_tick is None:
+                    raise ValueError(
+                        "Edit Element source range requires source_out_tick",
+                    )
+                source_duration_tick = (
+                    element.render_source.source_out_tick
+                    - element.render_source.source_in_tick
                 )
-                if production.plan is not None:
-                    for clip in production.plan.timeline.items.values():
-                        _require_key(
-                            source_versions,
-                            clip.source_asset_version_id,
-                            "AI Edit Plan source",
+                rendered_duration_tick = round(
+                    source_duration_tick / element.render_source.playback_rate,
+                )
+                if rendered_duration_tick != element.span.duration_tick:
+                    raise ValueError(
+                        "Edit Element span must match its selected source range",
+                    )
+                if creation.source_intelligence_version_id is not None:
+                    intelligence = _require_key(
+                        self.assets.intelligence_versions_by_id,
+                        creation.source_intelligence_version_id,
+                        "edit source intelligence",
+                    )
+                    if (
+                        intelligence.source_asset_version_id
+                        != element.render_source.version_id
+                    ):
+                        raise ValueError(
+                            "Edit Element intelligence targets another source version",
                         )
-                    for panel in production.plan.storyboard.items.values():
-                        if panel.frame_artifact_version_id is not None:
-                            _require_key(
-                                artifact_versions,
-                                panel.frame_artifact_version_id,
-                                "AI Edit Plan storyboard frame",
-                            )
-                for version_id in (
-                    production.storyboard_sheet_artifact_version_id,
-                    production.rendered_video_artifact_version_id,
-                ):
-                    if version_id is not None:
-                        _require_key(
-                            artifact_versions,
-                            version_id,
-                            "edit production artifact",
-                        )
-                if production.subtitles_file_id is not None:
-                    _require_key(
-                        indexed_files,
-                        production.subtitles_file_id,
-                        "edit subtitles",
+            elif isinstance(creation, OverlayCreation):
+                _require_version_refs(
+                    source_versions,
+                    artifact_versions,
+                    creation.reference_version_ids,
+                    "overlay reference",
+                )
+            elif isinstance(creation, AudioCreation):
+                _require_key(
+                    source_versions,
+                    creation.source_asset_version_id,
+                    "audio source version",
+                )
+
+            for output_name, output in element.outputs.items():
+                slot = _require_key(
+                    self.assets.artifact_slots_by_id,
+                    output.slot_id,
+                    f"Element output {output_name} ArtifactSlot",
+                )
+                if slot.owner_ref != f"element:{element_id}":
+                    raise ValueError(
+                        f"Element output {output_name} references a foreign ArtifactSlot",
                     )
 
-        compositions = [
-            *self.post_production.sections_by_id.values(),
-            self.post_production.final,
-        ]
-        for composition in compositions:
-            if composition is None:
-                continue
-            for item in composition.sequence.items.values():
-                _require_key(
+            render_source = element.render_source
+            if isinstance(
+                render_source,
+                SourceVersionRenderSource,
+            ) and not isinstance(
+                render_source,
+                ArtifactVersionRenderSource,
+            ):
+                version = _require_key(
+                    source_versions,
+                    render_source.version_id,
+                    "Element render source",
+                )
+                _validate_render_range(
+                    render_source,
+                    version.duration_seconds,
+                    element_timelines[element_id].ticks_per_second,
+                )
+                if isinstance(creation, AudioCreation) and (
+                    creation.source_asset_version_id
+                    != render_source.version_id
+                ):
+                    raise ValueError(
+                        "audio render source must match its creation source",
+                    )
+            elif isinstance(render_source, ArtifactVersionRenderSource):
+                version = _require_key(
                     artifact_versions,
-                    item.artifact_version_id,
-                    "composition artifact",
+                    render_source.version_id,
+                    "Element render artifact",
                 )
-            if composition.subtitle_file_id is not None:
-                _require_key(
-                    indexed_files,
-                    composition.subtitle_file_id,
-                    "composition subtitles",
+                _validate_render_range(
+                    render_source,
+                    version.duration_seconds,
+                    element_timelines[element_id].ticks_per_second,
                 )
-            if composition.rendered_video_artifact_version_id is not None:
-                _require_key(
+            elif isinstance(render_source, ElementOutputRenderSource):
+                output_element = _require_key(
+                    elements,
+                    render_source.element_id,
+                    "Element output render source",
+                )
+                output = _require_key(
+                    output_element.outputs,
+                    render_source.output_name,
+                    "Element named output",
+                )
+                slot = _require_key(
+                    self.assets.artifact_slots_by_id,
+                    output.slot_id,
+                    "Element output ArtifactSlot",
+                )
+                if slot.selected_version_id is None:
+                    raise ValueError(
+                        "rendered Element output has no selected ArtifactVersion",
+                    )
+                version = _require_key(
                     artifact_versions,
-                    composition.rendered_video_artifact_version_id,
-                    "composition output",
+                    slot.selected_version_id,
+                    "Element output selected version",
                 )
+                _validate_render_range(
+                    render_source,
+                    version.duration_seconds,
+                    element_timelines[element_id].ticks_per_second,
+                )
+
+        _validate_render_source_cycles(elements)
         return self
+
+    def elements_at(
+        self,
+        timeline_id: str,
+        tick: int,
+        *,
+        include_disabled: bool = False,
+    ) -> list[TimelineElement]:
+        timeline = _require_key(self.timelines.items, timeline_id, "timeline")
+        return timeline.elements_at(tick, include_disabled=include_disabled)
 
     @classmethod
     def new(
@@ -984,8 +1184,52 @@ def _require_version_refs(
             raise ValueError(f"{label} references missing exact version {key}")
 
 
+def _validate_render_range(
+    source: SourceVersionRenderSource | ElementOutputRenderSource,
+    duration_seconds: float | None,
+    ticks_per_second: int,
+) -> None:
+    if source.source_out_tick is None or duration_seconds is None:
+        return
+    available_tick = round(duration_seconds * ticks_per_second)
+    if source.source_out_tick > available_tick:
+        raise ValueError(
+            "Element render source range exceeds known media duration",
+        )
+
+
+def _validate_render_source_cycles(
+    elements: dict[str, TimelineElement],
+) -> None:
+    edges = {
+        element_id: element.render_source.element_id
+        for element_id, element in elements.items()
+        if isinstance(element.render_source, ElementOutputRenderSource)
+        and element.render_source.element_id != element_id
+    }
+    complete: set[str] = set()
+    visiting: set[str] = set()
+
+    def visit(element_id: str) -> None:
+        if element_id in complete:
+            return
+        if element_id in visiting:
+            raise ValueError(
+                "Element output render sources cannot form a cycle",
+            )
+        visiting.add(element_id)
+        target_id = edges.get(element_id)
+        if target_id is not None:
+            visit(target_id)
+        visiting.remove(element_id)
+        complete.add(element_id)
+
+    for element_id in edges:
+        visit(element_id)
+
+
 def _validate_visual_refs(
-    value: Unit | Shot,
+    value: Shot | R2VCreation,
     known: dict[str, set[str]],
 ) -> None:
     _require_all_ids(known["character"], value.character_refs, "character")
@@ -996,33 +1240,38 @@ def _validate_visual_refs(
 
 __all__ = [
     "CURRENT_PROJECT_SCHEMA_VERSION",
-    "AiEditPlan",
+    "DEFAULT_TIMELINE_ID",
+    "DEFAULT_TIMELINE_TICKS_PER_SECOND",
+    "ArtifactVersionRenderSource",
+    "AudioCreation",
     "ArtifactSlot",
     "ArtifactVersion",
     "AssetIndex",
-    "Composition",
     "CreativeStrategy",
-    "EditProduction",
+    "EditCreation",
+    "ElementLocation",
+    "ElementOutput",
+    "ElementOutputRenderSource",
     "EntityCollection",
     "EntityId",
     "IndexedContentRef",
     "IndexedFile",
-    "PostProduction",
-    "Production",
     "Project",
     "ProjectSettings",
     "ProjectSource",
-    "R2VProduction",
-    "Section",
+    "R2VCreation",
+    "RenderSource",
     "Shot",
     "SourceAssetVersion",
     "SourceCatalog",
     "SourceIntelligenceVersion",
-    "Story",
-    "Unit",
-    "UnitProduction",
-    "UnitTaskType",
+    "SourceVersionRenderSource",
+    "Timeline",
+    "TimelineElement",
+    "TimelineSpan",
+    "TransitionCreation",
     "VisualDevelopment",
     "VisualEntity",
     "VisualVariant",
+    "OverlayCreation",
 ]

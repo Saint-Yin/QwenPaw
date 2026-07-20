@@ -26,13 +26,13 @@ def test_specialist_registry_owns_role_specific_media_tools(tmp_path) -> None:
     r2v = _names(
         registry.manifest_for(
             SpecialistRole.R2V_GENERATION_DIRECTOR,
-            admitted_target_refs=["unit:u1"],
+            admitted_target_refs=["element:r2v-1"],
         ),
     )
     editing = _names(
         registry.manifest_for(
             SpecialistRole.AI_EDITING_DIRECTOR,
-            admitted_target_refs=["unit:u2"],
+            admitted_target_refs=["timeline:timeline:main"],
         ),
     )
     source = _names(
@@ -112,7 +112,7 @@ def test_project_assets_scope_admits_image_asset_children(tmp_path) -> None:
     )
     assert not spec.admits_target_ref(
         role=SpecialistRole.VISUAL_DEVELOPMENT,
-        target_ref="unit:char-cat",
+        target_ref="timeline:char-cat",
         admitted_target_refs=["project:assets"],
     )
 

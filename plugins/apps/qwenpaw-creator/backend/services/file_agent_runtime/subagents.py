@@ -27,21 +27,21 @@ _DELEGATABLE_ROLES = (
 _ROLE_TARGETS: dict[SpecialistRole, tuple[set[str], set[str]]] = {
     SpecialistRole.SOURCE_INTELLIGENCE: ({"asset"}, set()),
     SpecialistRole.VISUAL_DEVELOPMENT: (
-        {"project", "section", "unit", "asset", "artifact"},
+        {"project", "element", "asset", "artifact"},
         {"assets"},
     ),
-    SpecialistRole.R2V_GENERATION_DIRECTOR: ({"unit"}, set()),
-    SpecialistRole.AI_EDITING_DIRECTOR: ({"unit"}, set()),
+    SpecialistRole.R2V_GENERATION_DIRECTOR: ({"element"}, set()),
+    SpecialistRole.AI_EDITING_DIRECTOR: ({"timeline"}, set()),
 }
 
 _TARGET_GUIDANCE = {
     SpecialistRole.SOURCE_INTELLIGENCE: "asset:<logicalAssetId>",
     SpecialistRole.VISUAL_DEVELOPMENT: (
-        "overall visuals: project:assets; or section:<id>, unit:<id>, "
+        "overall visuals: project:assets; or element:<id>, "
         "asset:<id>, artifact:<id>"
     ),
-    SpecialistRole.R2V_GENERATION_DIRECTOR: "an existing r2v unit:<id>",
-    SpecialistRole.AI_EDITING_DIRECTOR: "an existing edit unit:<id>",
+    SpecialistRole.R2V_GENERATION_DIRECTOR: "an existing r2v element:<id>",
+    SpecialistRole.AI_EDITING_DIRECTOR: "an existing timeline:<id>",
 }
 
 _ROLE_PROMPT_IDS = {
@@ -96,7 +96,8 @@ def delegate_tool_manifest() -> dict[str, Any]:
                 "把一个边界明确的素材理解、视觉媒体、R2V 或 AI 剪辑任务委派给"
                 "对应 Creator Specialist。source_intelligence_agent 使用 asset:<id>；"
                 "visual_development_agent 的整体视觉使用 project:assets；"
-                "r2v_generation_director 和 ai_editing_director 使用已有 unit:<id>。"
+                "r2v_generation_director 使用 element:<id>，"
+                "ai_editing_director 使用 timeline:<id>。"
             ),
             "parameters": deepcopy(
                 {

@@ -99,18 +99,11 @@ def bind_write_file_runtime_expectations(
     return normalized
 
 
-def _shot_unit_route_path(path: str) -> str | None:
-    marker = "/shots/"
-    if PurePosixPath(path).name != "camera.md" or marker not in f"/{path}":
-        return None
-    return f"{path.split(marker, 1)[0]}/route.txt"
-
-
 def _validate_projected_text(
     path: str,
     text: str,
     *,
-    unit_route: str | None = None,
+    creation_type: str | None = None,
 ) -> None:
     """Keep every committed Agent value round-trippable by Format Layer."""
 
@@ -129,22 +122,9 @@ def _validate_projected_text(
             details={"path": path},
         )
     if (
-        leaf == "route.txt"
-        and "/units/" in f"/{path}"
-        and stripped
-        not in {
-            "r2v",
-            "edit",
-        }
-    ):
-        raise ValidationError(
-            "Unit route.txt 只能逐字为 r2v 或 edit",
-            details={"path": path},
-        )
-    if (
         leaf == "camera.md"
         and "/shots/" in f"/{path}"
-        and unit_route != "edit"
+        and creation_type != "edit"
     ):
         match = _CAMERA_VALUE_RE.fullmatch(stripped)
         if match is None:
@@ -835,15 +815,7 @@ class WorkspaceFileTools:
         )
         self._assert_read_set_current()
         entries = self._entry_map()
-        unit_route = None
-        route_path = _shot_unit_route_path(normalized)
-        if route_path is not None and route_path in entries:
-            unit_route = self.text_store.read_text(
-                self.context.project_id,
-                route_path,
-                **self._view_kwargs(),
-            ).strip()
-        _validate_projected_text(normalized, text, unit_route=unit_route)
+        _validate_projected_text(normalized, text)
         before = entries.get(normalized)
         actual_blob = before.blob_hash if before else None
         actual_object = before.object_version if before else None

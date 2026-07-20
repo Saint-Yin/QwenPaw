@@ -40,7 +40,7 @@ def _task(
         status=status,
         request_fingerprint="fingerprint-1",
         progress=progress,
-        input_refs=["unit:unit-1"],
+        input_refs=["element:edit-1"],
     )
 
 
@@ -59,7 +59,7 @@ def test_active_task_supplies_real_operation_progress_and_target() -> None:
         "updatedAt": view["progress"]["updatedAt"],
         "completed": 42,
         "total": 100,
-        "unitId": "unit-1",
+        "elementId": "edit-1",
     }
     assert view["activity"] == {
         "label": "附件入库中 · 42%",
@@ -85,12 +85,12 @@ def test_idle_status_reuses_latest_durable_completion() -> None:
         round_id="round-1",
         role=SpecialistRole.STORY_PLANNING,
         status=SpecialistRunStatus.SUCCEEDED,
-        target_refs=["section:section-1"],
+        target_refs=["timeline:timeline:main"],
         input_generation=0,
         input_etag="etag-1",
     )
     view = build_agent_status_bar(_session(), runs=[run])
 
     assert view["progress"]["label"] == "故事策划已完成"
-    assert view["progress"]["sectionId"] == "section-1"
+    assert view["progress"]["timelineId"] == "timeline:main"
     assert "activity" not in view

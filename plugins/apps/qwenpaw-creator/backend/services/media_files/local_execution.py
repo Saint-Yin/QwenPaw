@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
-# pylint: disable=consider-using-with,raise-missing-from,too-many-branches
+# pylint: disable=consider-using-with,raise-missing-from,too-many-branches,unused-argument
 # pylint: disable=too-many-statements
 """File-native local video execution for edit and composition commands.
 
@@ -57,10 +57,21 @@ from services.project_files.assets import (
 from services.project_files.models import (
     ArtifactSlot,
     ArtifactVersion,
-    Composition,
-    EditProduction,
+    ArtifactVersionRenderSource,
+    EditCreation,
+    ElementOutputRenderSource,
     IndexedFile,
+    OverlayCreation,
     Project,
+    R2VCreation,
+    SourceVersionRenderSource,
+    Timeline,
+    TimelineElement,
+    TransitionCreation,
+)
+from services.media_files.element_adapter import (
+    find_timeline_element,
+    selected_element_output,
 )
 from services.project_files.remote_cache import (
     public_source_url,
@@ -97,7 +108,6 @@ logger = setup_logger("services.media_files.local_execution")
 _LOCAL_MEDIA_COMMANDS = frozenset(
     {
         CreatorCommandType.EXECUTE_EDIT,
-        CreatorCommandType.STITCH_SECTION,
         CreatorCommandType.COMPOSE_FINAL_VIDEO,
     },
 )
@@ -132,7 +142,7 @@ class LocalMediaExecutionSpec:
     transitions: tuple[dict[str, Any], ...]
     audio_plan: Mapping[str, Any] | str
     expected_duration_seconds: float | None
-    on_clip_done: Callable[[int, int], None] | None = None
+    on_element_done: Callable[[int, int], None] | None = None
 
 
 class LocalMediaRunner(Protocol):
@@ -184,22 +194,31 @@ class FfmpegLocalMediaRunner:
             raise ValidationError("本地媒体执行至少需要一个输入")
         concat_inputs: list[Path] = []
         overlay_warnings: list[str] = []
-        if spec.command is CreatorCommandType.EXECUTE_EDIT:
+        if spec.command is CreatorCommandType.EXECUTE_EDIT or any(
+            item.start_seconds is not None or item.overlay is not None
+            for item in spec.inputs
+        ):
             segment_dir = _ensure_real_directory_chain(
                 spec.work_dir,
                 "segments",
             )
             for index, item in enumerate(spec.inputs):
-                if item.start_seconds is None or item.end_seconds is None:
-                    raise ValidationError("AI Edit clip 缺少 source range")
+                start_seconds = item.start_seconds or 0.0
+                end_seconds = item.end_seconds
+                if end_seconds is None:
+                    if item.duration_seconds is None:
+                        raise ValidationError(
+                            "Edit Element 缺少可执行 source range",
+                        )
+                    end_seconds = start_seconds + item.duration_seconds
                 segment = segment_dir / f"{index:06d}.mp4"
                 self._run(
                     [
                         "-y",
                         "-ss",
-                        f"{item.start_seconds:.6f}",
+                        f"{start_seconds:.6f}",
                         "-t",
-                        f"{item.end_seconds - item.start_seconds:.6f}",
+                        f"{end_seconds - start_seconds:.6f}",
                         "-i",
                         os.fspath(item.path),
                         "-map",
@@ -228,8 +247,8 @@ class FfmpegLocalMediaRunner:
                         f"{item.source_ref or item.version_id}: {warning}",
                     )
                 concat_inputs.append(segment)
-                if spec.on_clip_done is not None:
-                    spec.on_clip_done(index + 1, len(spec.inputs))
+                if spec.on_element_done is not None:
+                    spec.on_element_done(index + 1, len(spec.inputs))
         else:
             concat_inputs.extend(item.path for item in spec.inputs)
         self._concat(concat_inputs, spec.output_path, work_dir=spec.work_dir)
@@ -281,12 +300,12 @@ class FfmpegLocalMediaRunner:
         text = str(raw.get("text") or "").strip()
         if kind not in {"pet_os", "interview_summary"} or not text:
             return None
-        clip_duration = (
+        segment_duration = (
             item.end_seconds - item.start_seconds
             if item.start_seconds is not None and item.end_seconds is not None
             else item.duration_seconds
         )
-        if clip_duration is None or not math.isfinite(clip_duration):
+        if segment_duration is None or not math.isfinite(segment_duration):
             return None
         try:
             appear_at = float(raw.get("appear_at", 0.0))
@@ -295,15 +314,15 @@ class FfmpegLocalMediaRunner:
         if not math.isfinite(appear_at):
             appear_at = 0.0
         appear_at = max(0.0, appear_at)
-        if appear_at >= clip_duration:
+        if appear_at >= segment_duration:
             return None
         try:
-            duration = float(raw.get("duration", clip_duration - appear_at))
+            duration = float(raw.get("duration", segment_duration - appear_at))
         except (TypeError, ValueError):
-            duration = clip_duration - appear_at
+            duration = segment_duration - appear_at
         if not math.isfinite(duration) or duration <= 0:
-            duration = clip_duration - appear_at
-        duration = min(duration, clip_duration - appear_at)
+            duration = segment_duration - appear_at
+        duration = min(duration, segment_duration - appear_at)
         vibe = str(raw.get("vibe") or "chill").strip().casefold()
         return {
             "kind": kind,
@@ -504,8 +523,6 @@ class _ResolvedExecution:
     artifact_name: str
     read_set: tuple[dict[str, Any], ...]
     source_selections: tuple[dict[str, Any], ...]
-    edit_plan_id: str | None = None
-    edit_plan_hash: str | None = None
 
 
 def _stable_id(prefix: str, project_id: str, key: str) -> str:
@@ -567,21 +584,6 @@ def _ensure_real_directory_chain(root: Path, *segments: str) -> Path:
     return current
 
 
-def _find_section(project: Project, section_id: str):
-    section = project.story.sections.items.get(section_id)
-    if section is None:
-        raise NotFoundError("Section 不存在")
-    return section
-
-
-def _find_unit(project: Project, unit_id: str):
-    for section in project.story.sections.items.values():
-        unit = section.units.items.get(unit_id)
-        if unit is not None:
-            return unit
-    raise NotFoundError("Unit 不存在")
-
-
 def _indexed_version(
     project: Project,
     version_id: str,
@@ -627,43 +629,172 @@ def _read_set_item(
     }
 
 
-def _composition_execution(
+def _resolved_element_input(
+    project: Project,
+    element: TimelineElement,
+) -> tuple[IndexedFile | None, Any, str]:
+    render_source = element.render_source
+    if isinstance(render_source, ElementOutputRenderSource):
+        selected = selected_element_output(
+            project,
+            find_timeline_element(project, render_source.element_id)[1],
+            render_source.output_name,
+        )
+        if selected is None:
+            raise ConflictError(
+                f"Element {element.element_id} 的 render_source 尚无选中版本",
+            )
+        version_id = selected[1]
+        indexed, version = _indexed_version(
+            project,
+            version_id,
+            require_artifact=True,
+        )
+        return indexed, version, "artifact-version"
+    if isinstance(render_source, ArtifactVersionRenderSource):
+        indexed, version = _indexed_version(
+            project,
+            render_source.version_id,
+            require_artifact=True,
+        )
+        return indexed, version, "artifact-version"
+    if isinstance(render_source, SourceVersionRenderSource):
+        indexed, version = _indexed_version(
+            project,
+            render_source.version_id,
+            require_artifact=False,
+        )
+        return indexed, version, "asset-version"
+    raise ConflictError(f"Element {element.element_id} 尚无可渲染来源")
+
+
+def _edit_overlay(
+    timeline: Timeline,
+    element: TimelineElement,
+) -> Mapping[str, Any] | None:
+    """Project one independently persisted Overlay onto one edit input.
+
+    The domain permits any number of overlapping Elements.  The current local
+    runner can burn in one text overlay per source segment, so it fails clearly
+    when the Timeline asks it to render more than that.
+    """
+
+    overlays = sorted(
+        (
+            candidate
+            for candidate in timeline.elements_by_id.values()
+            if candidate.enabled
+            and isinstance(candidate.creation, OverlayCreation)
+            and candidate.creation.overlay_kind
+            in {"pet_os", "interview_summary"}
+            and candidate.span.overlaps(element.span)
+        ),
+        key=lambda candidate: (candidate.z_index, candidate.element_id),
+    )
+    if not overlays:
+        return None
+    if len(overlays) > 1:
+        raise ValidationError(
+            f"本地 runner 暂不支持在 Edit Element {element.element_id} 上叠加多个 Overlay Element",
+        )
+    overlay = overlays[0]
+    intersection_start = max(element.span.start_tick, overlay.span.start_tick)
+    intersection_end = min(element.span.end_tick, overlay.span.end_tick)
+    return {
+        "kind": overlay.creation.overlay_kind,
+        "text": overlay.creation.text,
+        "vibe": overlay.creation.vibe,
+        "appear_at": (intersection_start - element.span.start_tick)
+        / timeline.ticks_per_second,
+        "duration": (intersection_end - intersection_start)
+        / timeline.ticks_per_second,
+        "element_id": overlay.element_id,
+    }
+
+
+def _timeline_execution(
     *,
     project: Project,
-    command: CreatorCommandType,
+    timeline: Timeline,
     target_ref: str,
-    composition: Composition | None,
-    owner_ref: str,
-    slot_id: str,
-    slot_kind: str,
-    artifact_name: str,
+    command: CreatorCommandType,
 ) -> _ResolvedExecution:
-    if composition is None or not composition.sequence.order:
-        raise ConflictError("Compose 必须先保存明确 ArtifactVersion selections")
+    creation_types = (
+        (EditCreation,)
+        if command is CreatorCommandType.EXECUTE_EDIT
+        else (R2VCreation, EditCreation)
+    )
+    visual_elements = sorted(
+        (
+            element
+            for element in timeline.elements_by_id.values()
+            if element.enabled and isinstance(element.creation, creation_types)
+        ),
+        key=lambda element: (element.span.start_tick, element.element_id),
+    )
+    if not visual_elements:
+        label = (
+            "Edit"
+            if command is CreatorCommandType.EXECUTE_EDIT
+            else "R2V/Edit"
+        )
+        raise ConflictError(f"Timeline 没有可执行的 {label} Element")
     inputs: list[_FrozenInput] = []
     read_set: list[dict[str, Any]] = []
     selections: list[dict[str, Any]] = []
     durations: list[float | None] = []
-    for order, selection_id in enumerate(composition.sequence.order, 1):
-        selection = composition.sequence.items[selection_id]
-        indexed, version = _indexed_version(
+    for order, element in enumerate(visual_elements, 1):
+        indexed, version, version_kind = _resolved_element_input(
             project,
-            selection.artifact_version_id,
-            require_artifact=True,
+            element,
         )
+        render_source = element.render_source
+        start_seconds: float | None = None
+        end_seconds: float | None = None
+        if isinstance(element.creation, EditCreation):
+            assert isinstance(render_source, SourceVersionRenderSource)
+            assert not isinstance(render_source, ArtifactVersionRenderSource)
+            assert render_source.source_out_tick is not None
+            start_seconds = (
+                render_source.source_in_tick / timeline.ticks_per_second
+            )
+            end_seconds = (
+                render_source.source_out_tick / timeline.ticks_per_second
+            )
         inputs.append(
             _FrozenInput(
                 version_id=version.version_id,
                 indexed=indexed,
                 checksum=version.checksum,
-                source_ref=selection.source_ref,
-                media_type=indexed.media_type,
+                source_ref=f"element:{element.element_id}",
+                media_type=(
+                    indexed.media_type
+                    if indexed is not None
+                    else version.media_type
+                ),
+                source_url=(
+                    public_source_url(version)
+                    if indexed is None and version_kind == "asset-version"
+                    else None
+                ),
                 duration_seconds=version.duration_seconds,
+                start_seconds=start_seconds,
+                end_seconds=end_seconds,
+                original_sound=(
+                    element.creation.original_sound
+                    if isinstance(element.creation, EditCreation)
+                    else "preserve"
+                ),
+                overlay=(
+                    _edit_overlay(timeline, element)
+                    if isinstance(element.creation, EditCreation)
+                    else None
+                ),
             ),
         )
         read_set.append(
             _read_set_item(
-                "artifact-version",
+                version_kind,
                 version.version_id,
                 indexed,
                 version.checksum,
@@ -671,13 +802,42 @@ def _composition_execution(
         )
         selections.append(
             {
-                "sourceRef": selection.source_ref,
-                "artifactVersionId": version.version_id,
+                "sourceRef": f"element:{element.element_id}",
+                "versionId": version.version_id,
                 "order": order,
-                "sourceKind": selection.source_kind,
+                "startTick": element.span.start_tick,
+                "durationTick": element.span.duration_tick,
+                "sourceInTick": (
+                    render_source.source_in_tick
+                    if isinstance(element.creation, EditCreation)
+                    else None
+                ),
+                "sourceOutTick": (
+                    render_source.source_out_tick
+                    if isinstance(element.creation, EditCreation)
+                    else None
+                ),
             },
         )
-        durations.append(version.duration_seconds)
+        durations.append(
+            element.span.duration_tick / timeline.ticks_per_second,
+        )
+    transitions = tuple(
+        {
+            "elementId": element.element_id,
+            "fromElementId": element.creation.from_element_id,
+            "toElementId": element.creation.to_element_id,
+            "kind": element.creation.transition_kind,
+            "duration_ms": round(
+                element.span.duration_tick * 1000 / timeline.ticks_per_second,
+            ),
+        }
+        for element in sorted(
+            timeline.elements_by_id.values(),
+            key=lambda item: (item.span.start_tick, item.element_id),
+        )
+        if element.enabled and isinstance(element.creation, TransitionCreation)
+    )
     duration = (
         sum(item for item in durations if item is not None)
         if all(item is not None for item in durations)
@@ -686,18 +846,23 @@ def _composition_execution(
     return _ResolvedExecution(
         command=command,
         target_ref=target_ref,
-        task_kind=TaskKind.COMPOSE,
-        inputs=tuple(inputs),
-        transitions=tuple(
-            transition.model_dump(mode="json")
-            for transition in composition.transitions
+        task_kind=(
+            TaskKind.AI_EDIT_EXECUTE
+            if command is CreatorCommandType.EXECUTE_EDIT
+            else TaskKind.COMPOSE
         ),
-        audio_plan=composition.audio_plan,
+        inputs=tuple(inputs),
+        transitions=transitions,
+        audio_plan="",
         expected_duration_seconds=duration,
-        slot_id=slot_id,
-        slot_kind=slot_kind,
-        owner_ref=owner_ref,
-        artifact_name=artifact_name,
+        slot_id=f"timeline:{timeline.timeline_id}:render",
+        slot_kind="final_video",
+        owner_ref=f"timeline:{timeline.timeline_id}",
+        artifact_name=(
+            f"{project.name} AI 剪辑成片"
+            if command is CreatorCommandType.EXECUTE_EDIT
+            else f"{project.name} 最终成片"
+        ),
         read_set=tuple(read_set),
         source_selections=tuple(selections),
     )
@@ -712,119 +877,26 @@ def _resolve_execution(
 ) -> _ResolvedExecution:
     project = snapshot.project
     if command is CreatorCommandType.EXECUTE_EDIT:
-        unit_id = _target_id(target_ref, "unit")
-        unit = _find_unit(project, unit_id)
-        production = project.production.units_by_id.get(unit_id)
-        if unit.route.value != "edit" or not isinstance(
-            production,
-            EditProduction,
-        ):
-            raise ConflictError("EXECUTE_EDIT 只能执行 edit Unit")
-        plan = production.plan
-        if plan is None or not plan.timeline.order:
-            raise ConflictError("Unit 缺少可执行 AI Edit Plan")
-        requested_plan_id = str(arguments.get("planVersionId") or "").strip()
-        if requested_plan_id and requested_plan_id != plan.plan_id:
-            raise ConflictError("planVersionId 不是当前嵌入式 AI Edit Plan")
-        inputs: list[_FrozenInput] = []
-        read_set: list[dict[str, Any]] = []
-        duration = 0.0
-        content_type = getattr(project, "content_type", None) or ""
-        for clip_id in plan.timeline.order:
-            clip = plan.timeline.items[clip_id]
-            indexed, version = _indexed_version(
-                project,
-                clip.source_asset_version_id,
-                require_artifact=False,
-            )
-            overlay = clip.overlay
-            if (
-                content_type == "interview"
-                and (not overlay or not overlay.get("text"))
-                and clip.reason
-            ):
-                clip_dur = clip.source_out_seconds - clip.source_in_seconds
-                overlay = {
-                    "kind": "interview_summary",
-                    "text": clip.reason[:30],
-                    "appear_at": 0.2,
-                    "duration": min(3.0, max(0.5, clip_dur - 0.3)),
-                }
-            inputs.append(
-                _FrozenInput(
-                    version_id=version.version_id,
-                    indexed=indexed,
-                    checksum=version.checksum,
-                    source_ref=f"clip:{clip.clip_id}",
-                    media_type=version.media_type,
-                    source_url=public_source_url(version),
-                    start_seconds=clip.source_in_seconds,
-                    end_seconds=clip.source_out_seconds,
-                    duration_seconds=clip.source_out_seconds
-                    - clip.source_in_seconds,
-                    original_sound=clip.original_sound,
-                    overlay=overlay,
-                ),
-            )
-            read_set.append(
-                _read_set_item(
-                    "asset-version",
-                    version.version_id,
-                    indexed,
-                    version.checksum,
-                ),
-            )
-            duration += clip.source_out_seconds - clip.source_in_seconds
-        return _ResolvedExecution(
-            command=command,
-            target_ref=f"unit:{unit_id}",
-            task_kind=TaskKind.AI_EDIT_EXECUTE,
-            inputs=tuple(inputs),
-            transitions=tuple(
-                {
-                    "clipId": clip_id,
-                    "kind": plan.timeline.items[clip_id].transition,
-                }
-                for clip_id in plan.timeline.order
-            ),
-            audio_plan=plan.audio_plan.model_dump(mode="json"),
-            expected_duration_seconds=round(duration, 6),
-            slot_id=f"unit:{unit_id}:video",
-            slot_kind="unit_video",
-            owner_ref=f"unit:{unit_id}",
-            artifact_name=f"{unit.title or unit_id} AI 剪辑成片",
-            read_set=tuple(read_set),
-            source_selections=(),
-            edit_plan_id=plan.plan_id,
-            edit_plan_hash=plan.plan_hash,
-        )
-    if command is CreatorCommandType.STITCH_SECTION:
-        section_id = _target_id(target_ref, "post")
-        section = _find_section(project, section_id)
-        return _composition_execution(
+        timeline_id = _target_id(target_ref, "timeline")
+        timeline = project.timelines.items.get(timeline_id)
+        if timeline is None:
+            raise NotFoundError("Timeline 不存在")
+        return _timeline_execution(
             project=project,
+            timeline=timeline,
+            target_ref=target_ref,
             command=command,
-            target_ref=f"post:{section_id}",
-            composition=project.post_production.sections_by_id.get(section_id),
-            owner_ref=f"section:{section_id}",
-            slot_id=f"section:{section_id}:video",
-            slot_kind="section_video",
-            artifact_name=f"{section.title or section_id} 合成视频",
         )
     if command is CreatorCommandType.COMPOSE_FINAL_VIDEO:
-        if target_ref != "post:final":
-            raise ValidationError(
-                "COMPOSE_FINAL_VIDEO targetRef 必须是 post:final",
-            )
-        return _composition_execution(
+        timeline_id = _target_id(target_ref, "timeline")
+        timeline = project.timelines.items.get(timeline_id)
+        if timeline is None:
+            raise NotFoundError("Timeline 不存在")
+        return _timeline_execution(
             project=project,
+            timeline=timeline,
+            target_ref=target_ref,
             command=command,
-            target_ref="post:final",
-            composition=project.post_production.final,
-            owner_ref=f"project:{project.project_id}",
-            slot_id="project:final:video",
-            slot_kind="final_video",
-            artifact_name=f"{project.name} 最终成片",
         )
     raise ValidationError(f"不支持的本地媒体命令: {command.value}")
 
@@ -859,8 +931,6 @@ def _resolved_fingerprint(
             ],
             "transitions": list(resolved.transitions),
             "audioPlan": resolved.audio_plan,
-            "editPlanId": resolved.edit_plan_id,
-            "editPlanHash": resolved.edit_plan_hash,
             "inputGeneration": generation,
             "inputEtag": etag,
         },
@@ -1446,7 +1516,7 @@ class FileLocalMediaExecutionService:
         if output_path.exists():
             raise StorageIntegrityError("Task output scratch 已存在")
 
-        def on_clip_done(done: int, total: int) -> None:
+        def on_element_done(done: int, total: int) -> None:
             if total <= 0:
                 return
             try:
@@ -1472,8 +1542,8 @@ class FileLocalMediaExecutionService:
             transitions=resolved.transitions,
             audio_plan=resolved.audio_plan,
             expected_duration_seconds=resolved.expected_duration_seconds,
-            on_clip_done=(
-                on_clip_done
+            on_element_done=(
+                on_element_done
                 if resolved.command is CreatorCommandType.EXECUTE_EDIT
                 else None
             ),
@@ -1570,13 +1640,6 @@ class FileLocalMediaExecutionService:
             "sourceSelections": list(resolved.source_selections),
             "runner": _json_mapping(runner_output.get("metadata")),
         }
-        if resolved.edit_plan_id is not None:
-            metadata.update(
-                {
-                    "editPlanId": resolved.edit_plan_id,
-                    "editPlanHash": resolved.edit_plan_hash,
-                },
-            )
         reported_duration = runner_output.get("duration_seconds")
         duration = (
             float(reported_duration)
@@ -1740,7 +1803,6 @@ class FileLocalMediaExecutionService:
                 result["artifactVersion"],
             )
             command = CreatorCommandType(str(result["commandType"]))
-            target_ref = str(result["targetRef"])
         except (KeyError, TypeError, ValueError):
             return False
         slot = project.assets.artifact_slots_by_id.get(artifact.slot_id)
@@ -1752,26 +1814,10 @@ class FileLocalMediaExecutionService:
             or slot.selected_version_id != artifact.version_id
         ):
             return False
-        if command is CreatorCommandType.EXECUTE_EDIT:
-            unit_id = _target_id(target_ref, "unit")
-            production = project.production.units_by_id.get(unit_id)
-            return (
-                isinstance(production, EditProduction)
-                and production.rendered_video_artifact_version_id
-                == artifact.version_id
-            )
-        if command is CreatorCommandType.STITCH_SECTION:
-            section_id = _target_id(target_ref, "post")
-            composition = project.post_production.sections_by_id.get(
-                section_id,
-            )
-        else:
-            composition = project.post_production.final
-        return (
-            composition is not None
-            and composition.rendered_video_artifact_version_id
-            == artifact.version_id
-        )
+        return command in {
+            CreatorCommandType.EXECUTE_EDIT,
+            CreatorCommandType.COMPOSE_FINAL_VIDEO,
+        }
 
     @staticmethod
     def _apply_result(
@@ -1813,26 +1859,11 @@ class FileLocalMediaExecutionService:
                 raw_slot["version_ids"].append(artifact.version_id)
             raw_slot["selected_version_id"] = artifact.version_id
         command = CreatorCommandType(str(result["commandType"]))
-        target_ref = str(result["targetRef"])
-        if command is CreatorCommandType.EXECUTE_EDIT:
-            unit_id = _target_id(target_ref, "unit")
-            production = candidate["production"]["units_by_id"].get(unit_id)
-            if production is None or production.get("route") != "edit":
-                raise ConflictError("EditProduction 已不存在")
-            production[
-                "rendered_video_artifact_version_id"
-            ] = artifact.version_id
-            return
-        if command is CreatorCommandType.STITCH_SECTION:
-            section_id = _target_id(target_ref, "post")
-            composition = candidate["post_production"]["sections_by_id"].get(
-                section_id,
-            )
-        else:
-            composition = candidate["post_production"].get("final")
-        if composition is None:
-            raise ConflictError("Composition 已不存在")
-        composition["rendered_video_artifact_version_id"] = artifact.version_id
+        if command not in {
+            CreatorCommandType.EXECUTE_EDIT,
+            CreatorCommandType.COMPOSE_FINAL_VIDEO,
+        }:
+            raise ConflictError("Timeline 不支持该本地媒体命令")
 
     async def _quarantine(
         self,

@@ -27,7 +27,7 @@ def test_delegate_input_rejects_duplicate_target_refs() -> None:
         )
 
 
-def test_story_and_unit_planning_are_not_delegatable() -> None:
+def test_only_current_element_specialists_are_delegatable() -> None:
     roles = delegate_tool_manifest()["function"]["parameters"]["properties"][
         "role"
     ]["enum"]
@@ -38,16 +38,31 @@ def test_story_and_unit_planning_are_not_delegatable() -> None:
         "ai_editing_director",
     ]
 
-    for role, target_ref in (
-        ("story_planning_agent", "project:plan"),
-        ("unit_planning_routing_agent", "section:section-1"),
-    ):
-        delegated = DelegateToAgentInput.model_validate(
+    with pytest.raises(ValidationError):
+        DelegateToAgentInput.model_validate(
             {
-                "role": role,
-                "target_refs": [target_ref],
+                "role": "retired_planning_agent",
+                "target_refs": ["project:plan"],
                 "task": "这个职责现在属于 Creator 主 Agent",
             },
         )
-        with pytest.raises(ValueError, match="is not delegatable"):
-            delegated.validate_contract(project_id="project-1")
+
+
+def test_r2v_and_edit_use_element_domain_targets() -> None:
+    r2v = DelegateToAgentInput.model_validate(
+        {
+            "role": "r2v_generation_director",
+            "target_refs": ["element:r2v-1"],
+            "task": "生成目标 Element",
+        },
+    )
+    r2v.validate_contract(project_id="project-1")
+
+    edit = DelegateToAgentInput.model_validate(
+        {
+            "role": "ai_editing_director",
+            "target_refs": ["timeline:timeline:main"],
+            "task": "选择并执行 Edit Elements",
+        },
+    )
+    edit.validate_contract(project_id="project-1")

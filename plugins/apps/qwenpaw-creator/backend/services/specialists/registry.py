@@ -71,71 +71,26 @@ _SPECS = (
         "素材理解",
         "llm_backed",
         "source_intelligence.system",
-        ("sources/**",),
-        (
-            "sources/*/understanding/versions/**",
-            "sources/*/understanding/current.ref",
-        ),
+        ("project.json", "assets/source-intelligence/**"),
+        (),
         ("asset",),
         "asset:<logicalAssetId>",
         media=("image", "video"),
         file_tools=(),
     ),
     _writable(
-        SpecialistRole.STORY_PLANNING,
-        "故事规划",
-        "llm_backed",
-        None,
-        ("settings/**", "strategy/**", "sources/**", "story/**"),
-        (
-            "story/outline.md",
-            "story/sections/*/title.txt",
-            "story/sections/*/narrative.md",
-            "story/sections/*/script.md",
-            "story/sections/*/constraints.md",
-            "story/sections/*/duration-budget.txt",
-            "story/sections/*/source-analysis.ref",
-        ),
-        ("project", "section"),
-        "新建/整体故事用 project:plan；已有单节修改用 section:<id>",
-        project_targets=("plan",),
-        media=("image", "video", "document"),
-    ),
-    _writable(
         SpecialistRole.VISUAL_DEVELOPMENT,
         "视觉开发",
         "llm_backed",
         "visual_development.system",
-        ("settings/**", "strategy/**", "sources/**", "story/**", "visual/**"),
-        ("visual/**",),
-        ("project", "section", "unit", "asset", "artifact"),
+        ("project.json", "assets/source-intelligence/**"),
+        (),
+        ("project", "element", "asset", "artifact"),
         (
-            "整体视觉用 project:assets；局部视觉用 section:<id>、unit:<id>、"
+            "整体视觉用 project:assets；局部视觉用 element:<id>、"
             "asset:<logicalId> 或 artifact:<slotId>"
         ),
         project_targets=("assets",),
-        media=("image", "video"),
-    ),
-    _writable(
-        SpecialistRole.UNIT_PLANNING_ROUTING,
-        "Unit 规划",
-        "llm_backed",
-        None,
-        ("strategy/**", "sources/**", "visual/**", "story/**"),
-        (
-            "story/sections/*/units/*/title.txt",
-            "story/sections/*/units/*/route.txt",
-            "story/sections/*/units/*/duration.txt",
-            "story/sections/*/units/*/continuity.md",
-            "story/sections/*/units/*/refs/*.ref",
-            "story/sections/*/units/*/refs/*/*.ref",
-            "story/sections/*/units/*/shots/*/description.md",
-            "story/sections/*/units/*/shots/*/camera.md",
-            "story/sections/*/units/*/shots/*/dialogue.md",
-            "story/sections/*/units/*/shots/*/duration.txt",
-        ),
-        ("section", "unit"),
-        "必须指向已存在的 section:<id> 或 unit:<id>；Section 尚未建立时先等待故事规划",
         media=("image", "video"),
     ),
     _writable(
@@ -143,10 +98,10 @@ _SPECS = (
         "R2V 生成导演",
         "hybrid",
         "r2v_generation.system",
-        ("strategy/**", "visual/**", "story/sections/*/units/**"),
-        ("story/sections/*/units/*/production/r2v/**",),
-        ("unit",),
-        "unit:<id>（该 Unit route 必须是 r2v）",
+        ("project.json",),
+        (),
+        ("element",),
+        "element:<id>（该 Element creation.type 必须是 r2v）",
         media=("image", "video"),
     ),
     SpecialistSpec(
@@ -154,31 +109,14 @@ _SPECS = (
         display_name="AI 剪辑导演",
         runner_type="service_backed",
         prompt_spec_id=None,
-        read_scopes=("sources/**", "story/sections/*/units/**"),
-        write_scopes=("story/sections/*/units/*/production/edit/**",),
+        read_scopes=("project.json", "assets/source-intelligence/**"),
+        write_scopes=(),
         allowed_file_tools=(),
         # The durable executor reads local media, but the Director's model
         # receives only versioned Source Intelligence text candidates.
         multimodal_kinds=(),
-        delegate_target_kinds=("unit",),
-        delegate_target_guidance="unit:<id>（该 Unit route 必须是 edit）",
-    ),
-    SpecialistSpec(
-        role=SpecialistRole.REVIEW_CONSISTENCY,
-        display_name="一致性质检",
-        runner_type="llm_backed",
-        prompt_spec_id=None,
-        read_scopes=("**",),
-        write_scopes=(),
-        allowed_file_tools=READ_FILE_TOOLS,
-        multimodal_kinds=("image", "video", "audio", "document"),
-        delegate_target_kinds=("project", "section", "unit", "post"),
-        delegate_target_guidance=(
-            "project:<projectId from CREATOR_RUNTIME_CONTEXT>、project:plan 或具体 "
-            "section/unit/post ref"
-        ),
-        delegate_project_targets=("plan",),
-        allow_project_id_target=True,
+        delegate_target_kinds=("timeline",),
+        delegate_target_guidance="timeline:<id>",
     ),
 )
 
@@ -186,27 +124,13 @@ SPECIALIST_REGISTRY: dict[SpecialistRole, SpecialistSpec] = {
     spec.role: spec for spec in _SPECS
 }
 
-# Retired planning roles remain readable in historical Runtime records, but new
-# Creator runs author their fields directly. Review is likewise unavailable.
-CREATOR_DISABLED_DELEGATE_ROLES = frozenset(
-    {
-        SpecialistRole.STORY_PLANNING,
-        SpecialistRole.UNIT_PLANNING_ROUTING,
-        SpecialistRole.REVIEW_CONSISTENCY,
-    },
-)
-
 
 def creator_delegatable_registry() -> dict[SpecialistRole, SpecialistSpec]:
-    return {
-        role: spec
-        for role, spec in SPECIALIST_REGISTRY.items()
-        if role not in CREATOR_DISABLED_DELEGATE_ROLES
-    }
+    return dict(SPECIALIST_REGISTRY)
 
 
-if len(SPECIALIST_REGISTRY) != 7:  # import-time invariant
-    raise RuntimeError("Specialist registry must contain exactly seven roles")
+if len(SPECIALIST_REGISTRY) != 4:  # import-time invariant
+    raise RuntimeError("Specialist registry must contain exactly four roles")
 
 
 def delegate_registry() -> dict[SpecialistRole, SpecialistSpec]:

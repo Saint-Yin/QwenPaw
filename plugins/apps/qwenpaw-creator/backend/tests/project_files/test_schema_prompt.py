@@ -29,7 +29,8 @@ def test_schema_prompt_is_static_deterministic_and_cached_across_turns(
         + hashlib.sha256(regenerated.text.encode("utf-8")).hexdigest()
     )
     assert '"project_id"' in regenerated.text
-    assert '"plan_hash"' in regenerated.text
+    assert '"elements_by_id"' in regenerated.text
+    assert '"source_in_tick"' in regenerated.text
     assert "./project.json" in regenerated.text
     assert "./assets/source-intelligence/*" in regenerated.text
     assert "Pydantic 权威 JSON Schema" in regenerated.text

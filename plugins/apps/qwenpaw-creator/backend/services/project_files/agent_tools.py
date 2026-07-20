@@ -26,7 +26,7 @@ from services.runtime_files.models import (
 from .assets import AssetFileStore
 from .commit import ProjectCommitBoundary
 from .jq_transform import JqProjectTransformer
-from .models import Project
+from .models import Project, TimelineElement
 from .schema_prompt import ProjectSchemaPrompt, build_project_schema_prompt
 from .store import ProjectSnapshot, ProjectStore
 
@@ -34,6 +34,7 @@ from .store import ProjectSnapshot, ProjectStore
 READ_PROJECT_TOOL_NAME = "read_project"
 READ_PROJECT_FILE_TOOL_NAME = "read_project_file"
 JQ_PROJECT_TOOL_NAME = "jq_project"
+ELEMENTS_AT_TOOL_NAME = "elements_at"
 _DEFAULT_TEXT_PAGE_BYTES = 64 * 1024
 _MAX_TEXT_PAGE_BYTES = 256 * 1024
 
@@ -103,6 +104,13 @@ class JqProjectToolInput(_ToolModel):
         default_factory=dict,
         alias="jsonArgs",
     )
+
+
+class ElementsAtToolInput(_ToolModel):
+    project_id: str = Field(alias="projectId", min_length=1)
+    timeline_id: str = Field(alias="timelineId", min_length=1)
+    tick: int = Field(ge=0)
+    include_disabled: bool = Field(default=False, alias="includeDisabled")
 
 
 class AgentProjectToolContext(_ToolModel):
@@ -189,6 +197,14 @@ class AgentProjectCommitResult(AgentProjectSnapshotResult):
     review_id: str | None = Field(default=None, alias="reviewId")
 
 
+class AgentElementsAtResult(_ToolModel):
+    project_id: str = Field(alias="projectId")
+    project_etag: str = Field(alias="projectEtag")
+    timeline_id: str = Field(alias="timelineId")
+    tick: int = Field(ge=0)
+    elements: list[TimelineElement]
+
+
 AGENT_PROJECT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     READ_PROJECT_TOOL_NAME: {
         "description": (
@@ -251,6 +267,24 @@ AGENT_PROJECT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
             },
             "required": ["projectId", "baseEtag", "program"],
+            "additionalProperties": False,
+        },
+    },
+    ELEMENTS_AT_TOOL_NAME: {
+        "description": (
+            "查询 Timeline 某一整数 tick 上按半开区间仍然活跃的完整 Element。"
+            "默认排除 disabled，并按 (start_tick, element_id) 稳定排序；"
+            "固定 ID 路径和其他筛选继续使用 read_project/jq_project。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "projectId": {"type": "string", "minLength": 1},
+                "timelineId": {"type": "string", "minLength": 1},
+                "tick": {"type": "integer", "minimum": 0},
+                "includeDisabled": {"type": "boolean", "default": False},
+            },
+            "required": ["projectId", "timelineId", "tick"],
             "additionalProperties": False,
         },
     },
@@ -477,6 +511,34 @@ class AgentProjectTools:
             else None,
         )
 
+    def elements_at(
+        self,
+        *,
+        project_id: str,
+        timeline_id: str,
+        tick: int,
+        include_disabled: bool = False,
+    ) -> AgentElementsAtResult:
+        request = ElementsAtToolInput(
+            projectId=project_id,
+            timelineId=timeline_id,
+            tick=tick,
+            includeDisabled=include_disabled,
+        )
+        snapshot = self.store.read(request.project_id)
+        self._remember(snapshot)
+        return AgentElementsAtResult(
+            projectId=request.project_id,
+            projectEtag=snapshot.etag,
+            timelineId=request.timeline_id,
+            tick=request.tick,
+            elements=snapshot.project.elements_at(
+                request.timeline_id,
+                request.tick,
+                include_disabled=request.include_disabled,
+            ),
+        )
+
     def invoke(
         self,
         tool_name: str,
@@ -504,6 +566,14 @@ class AgentProjectTools:
                 string_args=request.string_args,
                 json_args=request.json_args,
             )
+        elif tool_name == ELEMENTS_AT_TOOL_NAME:
+            request = ElementsAtToolInput.model_validate(dict(arguments))
+            result = self.elements_at(
+                project_id=request.project_id,
+                timeline_id=request.timeline_id,
+                tick=request.tick,
+                include_disabled=request.include_disabled,
+            )
         else:
             raise UnknownAgentProjectTool(
                 f"unknown Project tool: {tool_name!r}",
@@ -518,11 +588,13 @@ AgentProjectToolBoundary = AgentProjectTools
 
 __all__ = [
     "AGENT_PROJECT_TOOL_SCHEMAS",
+    "ELEMENTS_AT_TOOL_NAME",
     "JQ_PROJECT_TOOL_NAME",
     "READ_PROJECT_FILE_TOOL_NAME",
     "READ_PROJECT_TOOL_NAME",
     "AgentProjectBaseRequired",
     "AgentProjectCommitResult",
+    "AgentElementsAtResult",
     "AgentProjectFileResult",
     "AgentProjectSnapshotResult",
     "AgentProjectToolContext",
@@ -530,6 +602,7 @@ __all__ = [
     "AgentProjectToolError",
     "AgentProjectTools",
     "JqProjectToolInput",
+    "ElementsAtToolInput",
     "ReadProjectFileToolInput",
     "ReadProjectToolInput",
     "UnknownAgentProjectTool",

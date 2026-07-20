@@ -137,7 +137,7 @@ class MediaComparisonView(StrictModel):
 
 class IntegrationPreviewView(StrictModel):
     id: str
-    scope: Literal["section", "final"]
+    scope: Literal["timeline", "project"]
     target_ref: str = Field(alias="targetRef")
     title: str
     operation_ids: list[str] = Field(alias="operationIds")

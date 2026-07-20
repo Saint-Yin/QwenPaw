@@ -4,7 +4,7 @@
 """Generic JSON Pointer diff, hashing, CAS, and merge helpers.
 
 The Project commit boundary deliberately operates on JSON values instead of
-knowing about Sections, Units, Shots, or any other Creator domain entity.  A
+knowing about any particular Creator domain entity.  A
 model or browser may therefore change several related fields in one request,
 while the runtime still detects same-field conflicts without rejecting
 unrelated concurrent edits.

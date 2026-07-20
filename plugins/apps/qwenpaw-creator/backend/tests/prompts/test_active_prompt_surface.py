@@ -19,7 +19,6 @@ from services.project_files.models import Project
 
 _INACTIVE_ROLE_NAMES = {
     "story_planning_agent",
-    "unit_planning_routing_agent",
     "review_consistency_agent",
 }
 _INACTIVE_STATE_WORDS = {
@@ -97,14 +96,14 @@ def test_creator_asset_flow_is_conditional_and_uses_visible_message_language() -
     assert "CURRENT_REQUEST_ASSET_VERSION_REFS" not in prompt
 
 
-def test_creator_owns_story_section_unit_and_shot_planning() -> None:
+def test_creator_owns_timeline_element_planning() -> None:
     prompt = load_file_agent_prompt("creator_agent.system")
     for responsibility in (
-        "完整故事构建",
-        "Section 切分",
-        "Unit 规划与路由",
-        "Shot 设计",
-        "R2V Unit 不超过 15 秒",
+        "Timeline Element",
+        "creation.type=r2v/edit/overlay/transition/audio",
+        "单个 R2V Element 不超过 15 秒",
+        "elements_at",
+        "jq_project",
     ):
         assert responsibility in prompt
     assert "结构完成后才进入视觉和媒体生产" in prompt
@@ -122,14 +121,8 @@ def test_ai_editing_director_requires_pet_inner_monologue_not_action_labels() ->
     None
 ):
     prompt = load_file_agent_prompt("ai_editing_director.system")
-    for field in (
-        "kind=pet_os",
-        "`text`",
-        "`vibe`",
-        "`appear_at`",
-        "`duration`",
-    ):
+    for field in ("overlay_kind=pet_os", "文案", "`vibe`", "绝对 span"):
         assert field in prompt
-    assert "不是镜头标题、动作标签、旁白摘要" in prompt
-    assert "`碎石路上飞奔` → `这条路归我巡逻`" in prompt
-    assert "禁止机械覆盖整个 clip" in prompt
+    assert "不是镜头标题、动作标签或客观摘要" in prompt
+    assert "不再使用相对某个内部对象" in prompt
+    assert "多个选择就是多个 Element" in prompt

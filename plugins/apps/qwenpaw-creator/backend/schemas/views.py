@@ -19,8 +19,8 @@ class CreatorTaskProgress(StrictModel):
     latest_milestone: str | None = Field(None, alias="latestMilestone")
     completed: int | None = None
     total: int | None = None
-    section_id: str | None = Field(None, alias="sectionId")
-    unit_id: str | None = Field(None, alias="unitId")
+    timeline_id: str | None = Field(None, alias="timelineId")
+    element_id: str | None = Field(None, alias="elementId")
     source_event_seq: int = Field(0, alias="sourceEventSeq")
     updated_at: str = Field(alias="updatedAt")
 

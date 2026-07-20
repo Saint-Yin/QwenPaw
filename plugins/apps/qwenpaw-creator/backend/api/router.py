@@ -18,14 +18,12 @@ from services.runtime_files.runtime_dependencies import (
 )
 
 from .file_asset_routes import router as file_assets_router
-from .file_command_routes import router as file_commands_router
 from .file_execution_routes import router as file_execution_router
 from .file_media_routes import router as file_media_router
 from .file_session_routes import router as file_sessions_router
 from .file_source_intelligence_routes import (
     router as file_source_intelligence_router,
 )
-from .file_view_routes import router as file_views_router
 from .model_routes import bind_creator_tool_config
 from .model_routes import router as model_router
 from .project_file_routes import router as project_files_router
@@ -47,11 +45,9 @@ router.include_router(projects_router)
 router.include_router(project_files_router)
 router.include_router(file_assets_router)
 router.include_router(file_source_intelligence_router)
-router.include_router(file_commands_router)
 router.include_router(file_sessions_router)
 router.include_router(file_execution_router)
 router.include_router(file_media_router)
-router.include_router(file_views_router)
 router.include_router(model_router)
 
 

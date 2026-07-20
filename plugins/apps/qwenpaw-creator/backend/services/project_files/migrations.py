@@ -24,7 +24,6 @@ ProjectMigration = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 # A migration registered under N must return exactly schema_version N + 1.
-# Version 1 is the first file-native schema, so the initial registry is empty.
 PROJECT_MIGRATIONS: dict[int, ProjectMigration] = {}
 
 

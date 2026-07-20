@@ -62,8 +62,13 @@ from services.project_files.models import (
     ArtifactVersion,
     IndexedFile,
     Project,
-    R2VProduction,
-    Unit,
+    R2VCreation,
+)
+from services.media_files.element_adapter import (
+    bind_candidate_output,
+    find_timeline_element,
+    selected_element_output,
+    target_element_id,
 )
 from services.project_files.remote_cache import public_source_url
 from services.project_files.store import ProjectSnapshot
@@ -84,7 +89,11 @@ from services.runtime_files.execution_store import (
 )
 from services.runtime_files.models import ChangeOrigin, ReviewPolicy
 from services.runtime_files.reconciliation import reconcile_terminal_task_runs
+
+# pylint: disable=no-name-in-module
 from utils.paths import media_task_scope, task_work_root
+
+# pylint: enable=no-name-in-module
 
 from .secure_video_stream import MaterializedVideo, materialize_r2v_video
 
@@ -246,8 +255,8 @@ class _R2VClaimLost(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class _ResolvedR2V:
     target_ref: str
-    unit_id: str
-    unit_title: str
+    element_id: str
+    element_label: str
     prompt: str
     ratio: str
     duration_seconds: int
@@ -331,19 +340,8 @@ def _json_mapping(value: Any, *, label: str) -> dict[str, Any]:
     return decoded
 
 
-def _find_unit(project: Project, unit_id: str) -> Unit:
-    for section in project.story.sections.items.values():
-        unit = section.units.items.get(unit_id)
-        if unit is not None:
-            return unit
-    raise NotFoundError("Unit 不存在")
-
-
-def _target_unit_id(target_ref: str) -> str:
-    prefix = "unit:"
-    if not target_ref.startswith(prefix) or not target_ref[len(prefix) :]:
-        raise ValidationError("GENERATE_R2V_VIDEO targetRef 必须是 unit:<id>")
-    return target_ref[len(prefix) :]
+def _target_element_id(target_ref: str) -> str:
+    return target_element_id(target_ref, command="GENERATE_R2V_VIDEO")
 
 
 def _duration(value: Any) -> int:
@@ -440,23 +438,28 @@ def _resolve_request(
     arguments: Mapping[str, Any],
 ) -> _ResolvedR2V:
     project = snapshot.project
-    unit_id = _target_unit_id(target_ref)
-    unit = _find_unit(project, unit_id)
-    if unit.route.value != "r2v":
-        raise ValidationError("仅 unit:r2v 可以生成 R2V 视频")
-    production = project.production.units_by_id.get(unit_id)
-    if not isinstance(production, R2VProduction):
-        raise ValidationError("R2V Unit 缺少 project.json production 配置")
-    storyboard_id = production.selected_storyboard_artifact_version_id
+    element_id = _target_element_id(target_ref)
+    timeline, element = find_timeline_element(project, element_id)
+    creation = element.creation
+    if not isinstance(creation, R2VCreation):
+        raise ValidationError("仅 R2V Element 可以生成 R2V 视频")
+    selected_storyboard = selected_element_output(
+        project,
+        element,
+        "storyboard",
+    )
+    storyboard_id = (
+        selected_storyboard[1] if selected_storyboard is not None else None
+    )
     if not storyboard_id:
-        raise ValidationError("R2V Unit 尚未选择 storyboard ArtifactVersion")
+        raise ValidationError("R2V Element 尚未选择 storyboard ArtifactVersion")
     storyboard = project.assets.artifact_versions_by_id.get(storyboard_id)
     if storyboard is None:
         raise StorageIntegrityError("selected storyboard ArtifactVersion 不存在")
-    if storyboard.owner_ref != f"unit:{unit_id}":
-        raise StorageIntegrityError("selected storyboard 不属于目标 Unit")
+    if storyboard.owner_ref != f"element:{element_id}":
+        raise StorageIntegrityError("selected storyboard 不属于目标 Element")
 
-    prompt = str(arguments.get("prompt") or production.video_prompt).strip()
+    prompt = str(arguments.get("prompt") or creation.video_prompt).strip()
     if not prompt:
         raise ValidationError("生成 R2V 视频需要 video prompt")
     if "referenceImageUrls" in arguments or "referenceVersionIds" in arguments:
@@ -464,7 +467,10 @@ def _resolve_request(
             "R2V reference 只能来自 project.json 的 exact version 列表",
         )
     duration_seconds = _duration(
-        arguments.get("durationSeconds", unit.duration_seconds),
+        arguments.get(
+            "durationSeconds",
+            element.span.duration_tick / timeline.ticks_per_second,
+        ),
     )
     ratio = str(
         arguments.get("ratio") or project.settings.aspect_ratio,
@@ -481,7 +487,7 @@ def _resolve_request(
 
     version_ids = tuple(
         dict.fromkeys(
-            [storyboard_id, *production.video_reference_version_ids],
+            [storyboard_id, *creation.video_reference_version_ids],
         ),
     )
     urls, checksums, provenance, read_set = _resolve_reference_versions(
@@ -490,9 +496,9 @@ def _resolve_request(
         version_ids=version_ids,
     )
     return _ResolvedR2V(
-        target_ref=f"unit:{unit_id}",
-        unit_id=unit_id,
-        unit_title=unit.title,
+        target_ref=target_ref,
+        element_id=element_id,
+        element_label=element.label,
         prompt=prompt,
         ratio=ratio,
         duration_seconds=duration_seconds,
@@ -504,9 +510,9 @@ def _resolve_request(
         reference_checksums=tuple(checksums),
         provenance_refs=tuple(provenance),
         read_set=tuple(read_set),
-        slot_id=f"unit:{unit_id}:video",
-        slot_kind="unit_video",
-        owner_ref=f"unit:{unit_id}",
+        slot_id=f"element:{element_id}:main",
+        slot_kind="element_video",
+        owner_ref=f"element:{element_id}",
     )
 
 
@@ -1029,8 +1035,8 @@ class FileR2VExecutionService:
     ) -> dict[str, Any]:
         return {
             "targetRef": resolved.target_ref,
-            "unitId": resolved.unit_id,
-            "unitTitle": resolved.unit_title,
+            "elementId": resolved.element_id,
+            "elementLabel": resolved.element_label,
             "prompt": resolved.prompt,
             "ratio": resolved.ratio,
             "durationSeconds": resolved.duration_seconds,
@@ -2653,7 +2659,9 @@ class FileR2VExecutionService:
             slot_id=str(request["slotId"]),
             kind=str(request["slotKind"]),
             owner_ref=str(request["ownerRef"]),
-            name=f"{str(request.get('unitTitle') or request['unitId'])} R2V 视频",
+            name=(
+                f"{str(request.get('elementLabel') or request['elementId'])} R2V 视频"
+            ),
             file_id=stable["file_id"],
             checksum=materialized.sha256,
             based_on_generation=task.input_generation or 0,
@@ -3300,20 +3308,23 @@ class FileR2VExecutionService:
             artifact = ArtifactVersion.model_validate(
                 result["artifactVersion"],
             )
-            unit_id = _target_unit_id(str(result["targetRef"]))
+            element_id = _target_element_id(str(result["targetRef"]))
         except (KeyError, TypeError, ValueError):
             return False
         slot = project.assets.artifact_slots_by_id.get(artifact.slot_id)
-        production = project.production.units_by_id.get(unit_id)
+        try:
+            _, element = find_timeline_element(project, element_id)
+        except NotFoundError:
+            return False
+        selected = selected_element_output(project, element, "main")
         return (
             project.assets.files_by_id.get(indexed.file_id) == indexed
             and project.assets.artifact_versions_by_id.get(artifact.version_id)
             == artifact
             and slot is not None
             and slot.selected_version_id == artifact.version_id
-            and isinstance(production, R2VProduction)
-            and production.selected_video_artifact_version_id
-            == artifact.version_id
+            and selected is not None
+            and selected[1] == artifact.version_id
         )
 
     @staticmethod
@@ -3323,7 +3334,7 @@ class FileR2VExecutionService:
     ) -> None:
         indexed = IndexedFile.model_validate(result["indexedFile"])
         artifact = ArtifactVersion.model_validate(result["artifactVersion"])
-        unit_id = _target_unit_id(str(result["targetRef"]))
+        element_id = _target_element_id(str(result["targetRef"]))
         assets = candidate["assets"]
         files = assets["files_by_id"]
         versions = assets["artifact_versions_by_id"]
@@ -3357,10 +3368,13 @@ class FileR2VExecutionService:
             if artifact.version_id not in raw_slot["version_ids"]:
                 raw_slot["version_ids"].append(artifact.version_id)
             raw_slot["selected_version_id"] = artifact.version_id
-        production = candidate["production"]["units_by_id"].get(unit_id)
-        if production is None or production.get("route") != "r2v":
-            raise ConflictError("Unit R2V Production 已变化")
-        production["selected_video_artifact_version_id"] = artifact.version_id
+        bind_candidate_output(
+            candidate,
+            element_id=element_id,
+            output_name="main",
+            slot_id=artifact.slot_id,
+            select_for_render=True,
+        )
 
     async def _quarantine(
         self,

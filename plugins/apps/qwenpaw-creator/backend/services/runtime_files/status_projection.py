@@ -45,19 +45,17 @@ _TASK_PRESENTATION: dict[TaskKind, tuple[str, str]] = {
     TaskKind.ASSET_IMPORT: ("source_ingest", "素材导入"),
     TaskKind.SOURCE_INTELLIGENCE: ("source_intelligence", "素材理解"),
     TaskKind.IMAGE_GENERATION: ("visual_development", "图片生成"),
-    TaskKind.R2V_GENERATION: ("unit_production", "视频生成"),
-    TaskKind.AI_EDIT_PLAN: ("unit_production", "AI 剪辑规划"),
-    TaskKind.AI_EDIT_EXECUTE: ("unit_production", "AI 剪辑执行"),
-    TaskKind.COMPOSE: ("post_production", "视频合成"),
+    TaskKind.R2V_GENERATION: ("timeline_render", "视频生成"),
+    TaskKind.AI_EDIT_EXECUTE: ("timeline_edit", "AI 剪辑执行"),
+    TaskKind.COMPOSE: ("timeline_render", "视频合成"),
 }
 
 _RUN_PRESENTATION: dict[SpecialistRole, tuple[str, str]] = {
     SpecialistRole.SOURCE_INTELLIGENCE: ("source_intelligence", "素材理解"),
     SpecialistRole.STORY_PLANNING: ("story_planning", "故事策划"),
     SpecialistRole.VISUAL_DEVELOPMENT: ("visual_development", "视觉开发"),
-    SpecialistRole.UNIT_PLANNING_ROUTING: ("unit_planning", "单元规划"),
-    SpecialistRole.R2V_GENERATION_DIRECTOR: ("unit_production", "视频生成"),
-    SpecialistRole.AI_EDITING_DIRECTOR: ("unit_production", "AI 剪辑"),
+    SpecialistRole.R2V_GENERATION_DIRECTOR: ("timeline_render", "视频生成"),
+    SpecialistRole.AI_EDITING_DIRECTOR: ("timeline_edit", "AI 剪辑"),
     SpecialistRole.REVIEW_CONSISTENCY: ("review", "一致性审阅"),
 }
 
@@ -69,8 +67,8 @@ class _ProjectedProgress:
     updated_at: datetime | None
     completed: int | None = None
     total: int | None = None
-    section_id: str | None = None
-    unit_id: str | None = None
+    timeline_id: str | None = None
+    element_id: str | None = None
 
 
 def _progress_percent(task: TaskRecord) -> int | None:
@@ -96,15 +94,15 @@ def _task_progress(task: TaskRecord) -> _ProjectedProgress:
         label = f"{base}结果已隔离"
     else:
         label = f"{base}失败"
-    section_id, unit_id = _target_ids(task)
+    timeline_id, element_id = _target_ids(task)
     return _ProjectedProgress(
         phase=phase,
         label=label,
         updated_at=task.updated_at,
         completed=percent,
         total=100 if percent is not None else None,
-        section_id=section_id,
-        unit_id=unit_id,
+        timeline_id=timeline_id,
+        element_id=element_id,
     )
 
 
@@ -131,13 +129,13 @@ def _run_progress(run: SpecialistRunRecord) -> _ProjectedProgress:
         label = f"{base}已取消"
     else:
         label = f"{base}失败"
-    section_id, unit_id = _refs_target_ids(run.target_refs)
+    timeline_id, element_id = _refs_target_ids(run.target_refs)
     return _ProjectedProgress(
         phase=phase,
         label=label,
         updated_at=run.updated_at,
-        section_id=section_id,
-        unit_id=unit_id,
+        timeline_id=timeline_id,
+        element_id=element_id,
     )
 
 
@@ -148,21 +146,21 @@ def _ref_target_ids(ref: str) -> tuple[str | None, str | None]:
         kind, separator, identifier = normalized.partition("/")
     if not separator or not identifier:
         return None, None
-    if kind == "section":
+    if kind == "timeline":
         return identifier, None
-    if kind == "unit":
+    if kind == "element":
         return None, identifier
     return None, None
 
 
 def _refs_target_ids(refs: Iterable[str]) -> tuple[str | None, str | None]:
-    section_id: str | None = None
-    unit_id: str | None = None
+    timeline_id: str | None = None
+    element_id: str | None = None
     for ref in refs:
-        section, unit = _ref_target_ids(ref)
-        section_id = section_id or section
-        unit_id = unit_id or unit
-    return section_id, unit_id
+        timeline, element = _ref_target_ids(ref)
+        timeline_id = timeline_id or timeline
+        element_id = element_id or element
+    return timeline_id, element_id
 
 
 def _target_ids(task: TaskRecord) -> tuple[str | None, str | None]:
@@ -180,7 +178,7 @@ def _session_progress(
         return _ProjectedProgress("review", "等待审阅", session.updated_at)
     if status is CreatorSessionStatus.WAITING_EXECUTION_AUTH:
         return _ProjectedProgress(
-            "unit_production",
+            "timeline_render",
             "等待执行授权",
             session.updated_at,
         )
@@ -356,10 +354,10 @@ def build_agent_status_bar(
     if projected.completed is not None:
         progress["completed"] = projected.completed
         progress["total"] = projected.total
-    if projected.section_id is not None:
-        progress["sectionId"] = projected.section_id
-    if projected.unit_id is not None:
-        progress["unitId"] = projected.unit_id
+    if projected.timeline_id is not None:
+        progress["timelineId"] = projected.timeline_id
+    if projected.element_id is not None:
+        progress["elementId"] = projected.element_id
 
     result: dict[str, Any] = {"progress": progress, "badges": badges}
     if running_count:

@@ -9,7 +9,6 @@ import pytest
 from pydantic import ValidationError
 
 from services.project_files import (
-    AiEditPlan,
     CanonicalJsonError,
     Project,
     canonical_json_bytes,
@@ -50,6 +49,7 @@ def _edit_project() -> Project:
                 "checksum": "a" * 64,
                 "media_kind": "video",
                 "media_type": "video/mp4",
+                "duration_seconds": 10,
                 "created_at": "2026-07-15T08:00:00Z",
             },
         },
@@ -67,59 +67,41 @@ def _edit_project() -> Project:
             "order": ["source-1"],
         },
     }
-    raw["story"] = {
-        "sections": {
-            "items": {
-                "section-1": {
-                    "section_id": "section-1",
-                    "title": "Section",
-                    "units": {
-                        "items": {
-                            "unit-1": {
-                                "unit_id": "unit-1",
-                                "route": "edit",
-                                "duration_seconds": 3,
-                                "source_refs": ["source-1"],
-                            },
-                        },
-                        "order": ["unit-1"],
-                    },
-                },
+    raw["timelines"]["items"]["timeline:main"]["elements_by_id"] = {
+        "element-1": {
+            "element_id": "element-1",
+            "label": "Edit Element",
+            "enabled": True,
+            "span": {"start_tick": 0, "duration_tick": 3000},
+            "location": {
+                "coordinate_space": "normalized_canvas",
+                "x": 0,
+                "y": 0,
+                "width": 1,
+                "height": 1,
+                "anchor_x": 0.5,
+                "anchor_y": 0.5,
+                "rotation_degrees": 0,
+                "opacity": 1,
             },
-            "order": ["section-1"],
-        },
-    }
-    raw["production"] = {
-        "units_by_id": {
-            "unit-1": {
-                "route": "edit",
-                "source_asset_version_ids": ["source-version-1"],
-                "plan": {
-                    "plan_id": "plan-1",
-                    "summary": "Embedded, not a sidecar",
-                    "timeline": {
-                        "items": {
-                            "clip-1": {
-                                "clip_id": "clip-1",
-                                "source_asset_version_id": "source-version-1",
-                                "source_in_seconds": 0,
-                                "source_out_seconds": 3,
-                            },
-                        },
-                        "order": ["clip-1"],
-                    },
-                    "storyboard": {
-                        "items": {
-                            "panel-1": {
-                                "panel_id": "panel-1",
-                                "clip_id": "clip-1",
-                                "source_timestamp_seconds": 1,
-                            },
-                        },
-                        "order": ["panel-1"],
-                    },
-                },
+            "z_index": 0,
+            "creation": {
+                "type": "edit",
+                "intent": "选择素材高光",
+                "reason": "素材理解确认该范围有关键动作",
+                "original_sound": "preserve",
+                "source_intelligence_version_id": None,
             },
+            "outputs": {},
+            "render_source": {
+                "type": "source_asset_version",
+                "version_id": "source-version-1",
+                "source_in_tick": 0,
+                "source_out_tick": 3000,
+                "playback_rate": 1,
+                "loop": False,
+            },
+            "provenance_refs": [],
         },
     }
     return Project.model_validate(raw)
@@ -132,25 +114,31 @@ def test_project_new_has_complete_valid_defaults_and_utc_time():
         now=datetime(2026, 7, 15, 16, 0, tzinfo=timezone.utc),
     )
 
-    assert project.schema_version == 1
+    assert project.schema_version == 2
     assert project.generation == 0
     assert project.created_at.tzinfo == timezone.utc
-    assert project.story.sections.items == {}
+    assert project.timelines.order == ["timeline:main"]
+    assert project.timelines.items["timeline:main"].elements_by_id == {}
     assert project.assets.files_by_id == {}
 
 
-def test_ai_edit_plan_is_embedded_and_hashes_its_canonical_content():
+def test_one_edit_element_selects_exactly_one_source_range():
     project = _edit_project()
-    production = project.production.units_by_id["unit-1"]
+    creation = (
+        project.timelines.items["timeline:main"]
+        .elements_by_id["element-1"]
+        .creation
+    )
 
-    assert production.route == "edit"
-    assert production.plan is not None
-    assert production.plan.plan_hash == production.plan.content_hash()
-    assert production.plan.summary == "Embedded, not a sidecar"
-    assert "ai_edit_plan" not in project.assets.files_by_id
-
-    with pytest.raises(ValidationError, match="plan_hash"):
-        AiEditPlan(plan_id="plan-bad", plan_hash="0" * 64)
+    assert creation.type == "edit"
+    element = project.timelines.items["timeline:main"].elements_by_id[
+        "element-1"
+    ]
+    assert element.render_source is not None
+    assert element.render_source.version_id == "source-version-1"
+    assert element.render_source.source_in_tick == 0
+    assert element.render_source.source_out_tick == 3000
+    assert "plan" not in creation.model_dump(mode="json")
 
 
 def test_canonical_serialization_is_stable_human_readable_and_round_trips():
@@ -194,15 +182,44 @@ def test_indexed_file_uri_must_name_a_file_below_assets(relative_uri):
         Project.model_validate(raw)
 
 
-def test_graph_rejects_production_for_missing_story_unit():
+def test_graph_rejects_edit_element_with_missing_source_version():
     raw = Project.new(project_id="project-bad", name="Bad").model_dump(
         mode="json",
     )
-    raw["production"] = {"units_by_id": {"missing": {"route": "edit"}}}
+    raw["timelines"]["items"]["timeline:main"]["elements_by_id"]["bad"] = {
+        "element_id": "bad",
+        "span": {"start_tick": 0, "duration_tick": 1000},
+        "location": {
+            "coordinate_space": "normalized_canvas",
+            "x": 0,
+            "y": 0,
+            "width": 1,
+            "height": 1,
+            "anchor_x": 0.5,
+            "anchor_y": 0.5,
+            "rotation_degrees": 0,
+            "opacity": 1,
+        },
+        "creation": {
+            "type": "edit",
+            "intent": "",
+            "reason": "",
+            "original_sound": "preserve",
+            "source_intelligence_version_id": None,
+        },
+        "render_source": {
+            "type": "source_asset_version",
+            "version_id": "missing",
+            "source_in_tick": 0,
+            "source_out_tick": 1000,
+            "playback_rate": 1,
+            "loop": False,
+        },
+    }
 
     with pytest.raises(
         ValidationError,
-        match="production unit references missing",
+        match="Element render source references missing",
     ):
         Project.model_validate(raw)
 
@@ -212,7 +229,13 @@ def test_project_json_is_plain_json_with_no_runtime_state():
 
     assert "runtime" not in payload
     assert "reviews" not in payload
-    assert (
-        payload["production"]["units_by_id"]["unit-1"]["plan"]["plan_id"]
-        == "plan-1"
-    )
+    creation = payload["timelines"]["items"]["timeline:main"][
+        "elements_by_id"
+    ]["element-1"]["creation"]
+    assert set(creation) == {
+        "type",
+        "intent",
+        "reason",
+        "original_sound",
+        "source_intelligence_version_id",
+    }

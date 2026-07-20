@@ -5,7 +5,7 @@
 """The generic Project commit boundary.
 
 This is intentionally the only write primitive for ``project.json``.  It has
-no Section/Unit/Shot CRUD methods: callers provide a real base snapshot and a
+no content-tree CRUD methods: callers provide a real base snapshot and a
 candidate object (commonly produced by jq or a typed browser patch), and the
 boundary derives touched pointers, performs field-level CAS, validates the
 root Pydantic model, atomically publishes it, and persists Runtime facts.
@@ -190,10 +190,7 @@ def _validate_same_round(
 
 
 def is_protected_pointer(pointer: str) -> bool:
-    return pointer in PROTECTED_EXACT_POINTERS or (
-        pointer.startswith("/production/units_by_id/")
-        and pointer.endswith("/plan/plan_hash")
-    )
+    return pointer in PROTECTED_EXACT_POINTERS
 
 
 def _now() -> datetime:
@@ -211,21 +208,6 @@ def _candidate_hash(candidate: Mapping[str, Any]) -> str:
 
     payload = canonical_json_bytes(canonical_data(dict(candidate)))
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
-
-
-def _reset_derived_plan_hashes(project: dict[str, Any]) -> None:
-    production = project.get("production")
-    units = (
-        production.get("units_by_id") if isinstance(production, dict) else None
-    )
-    if not isinstance(units, dict):
-        return
-    for value in units.values():
-        if not isinstance(value, dict) or value.get("route") != "edit":
-            continue
-        plan = value.get("plan")
-        if isinstance(plan, dict):
-            plan["plan_hash"] = None
 
 
 def _runtime_change(change: JsonChange) -> ProjectChange:
@@ -545,7 +527,6 @@ class ProjectCommitBoundary:
                     merged["created_at"] = latest_data["created_at"]
                     merged["generation"] = latest.generation + 1
                     merged["updated_at"] = _now().isoformat()
-                    _reset_derived_plan_hashes(merged)
                     final_project = Project.model_validate(merged)
                     final_data = _json(final_project)
                     pre_publish_etag = latest.etag

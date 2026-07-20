@@ -41,7 +41,7 @@ FILE_AGENT_PROMPT_SPECS = {
         _spec(
             "creator_agent.system",
             "creator_agent.system.txt",
-            "cddaa72842b9683130f16295b9350d38ad274f9fa371ec4f9d295eb9b41b2688",
+            "4e4d8fdb9bd1f200d03ccabf70fd625f15d9dc333114657d77f410b9238e303c",
             "project_id",
             "workspace_schema",
         ),
@@ -55,21 +55,21 @@ FILE_AGENT_PROMPT_SPECS = {
         _spec(
             "visual_development_agent.system",
             "visual_development_agent.system.txt",
-            "0f93c373364b0796b3bc42050d106a32e00025a4c11c7a647fd90c7497416022",
+            "60dc39457ac7396aaaa81cc8c53fc155e71addba9be398b513b9a9a57baec184",
             "project_id",
             "workspace_schema",
         ),
         _spec(
             "r2v_generation_director.system",
             "r2v_generation_director.system.txt",
-            "c51503cff856959ec01d7ad770e33fbab84c506a7e32a1dbbf79f7fea826c640",
+            "cb98a516cb4067d95ac4fd84758fce39cdc8110e26c1aa9f326cbcc8ddba40dd",
             "project_id",
             "workspace_schema",
         ),
         _spec(
             "ai_editing_director.system",
             "ai_editing_director.system.txt",
-            "469bffa837b80aa7205045a755a314d898375eb486a41f035c41524ba1026c6c",
+            "f03eb3572c92b3589f1232b1956de1253705c63a577f436dc1f19c02b7d16f3e",
             "project_id",
             "workspace_schema",
             "content_type",

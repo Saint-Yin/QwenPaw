@@ -4,7 +4,7 @@
 
 The AI Editing Director owns all copy generation.  These tools only turn an
 already validated ``overlay_copy`` payload into pixels and composite those
-pixels over a prepared clip.
+pixels over a prepared media segment.
 """
 
 from __future__ import annotations
@@ -275,7 +275,7 @@ def _composite_overlay(
 ) -> OverlayRenderResult:
     # A PNG has no duration/PTS.  Loop it as a 25 fps stream and stop at the
     # primary video boundary so the overlay remains visible for its requested
-    # interval without extending the rendered clip.
+    # interval without extending the rendered segment.
     command = [
         ffmpeg_path,
         "-y",
@@ -328,7 +328,7 @@ def render_pet_os_overlay(
     appear_at: float,
     duration: float,
 ) -> OverlayRenderResult:
-    """Render and composite a pet speech bubble over one prepared clip."""
+    """Render and composite a pet speech bubble over one prepared segment."""
 
     overlay_path = output_path.with_suffix(".overlay.png")
     if not _render_pet_os_png(text, vibe, *video_size, overlay_path):
@@ -355,7 +355,7 @@ def render_interview_summary_overlay(
     appear_at: float,
     duration: float,
 ) -> OverlayRenderResult:
-    """Render and composite an interview summary over one prepared clip."""
+    """Render and composite an interview summary over one prepared segment."""
 
     overlay_path = output_path.with_suffix(".overlay.png")
     if not _render_interview_summary_png(text, *video_size, overlay_path):

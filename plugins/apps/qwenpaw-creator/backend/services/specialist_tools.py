@@ -249,7 +249,7 @@ _SPECS = (
     SpecialistToolSpec(
         name="r2v_generation",
         description=(
-            "为已选择真实 storyboard ArtifactVersion 的 r2v Unit 提交视频生成；"
+            "为已选择真实 storyboard ArtifactVersion 的 R2V Element 提交视频生成；"
             "Runtime 文件任务完成后结果自动写回 Asset Index 与 project.json。"
         ),
         roles=frozenset({SpecialistRole.R2V_GENERATION_DIRECTOR}),
@@ -262,8 +262,8 @@ _SPECS = (
     SpecialistToolSpec(
         name="ai_edit",
         description=(
-            "执行已经通过 jq_project 写入 project.json 的当前 AI Edit Plan。"
-            "本工具不生成 plan；plan 的内容与规则来自本 Specialist 的 prompt。"
+            "执行已经通过 jq_project 写入目标 Timeline 的 Edit/Overlay Elements。"
+            "本工具不生成选择；选择内容来自本 Specialist 的 prompt。"
         ),
         roles=frozenset({SpecialistRole.AI_EDITING_DIRECTOR}),
         parameters=_tool_schema(

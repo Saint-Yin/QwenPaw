@@ -6,11 +6,6 @@ from __future__ import annotations
 from enum import StrEnum
 
 
-class UnitTaskType(StrEnum):
-    R2V = "r2v"
-    EDIT = "edit"
-
-
 class ShotCamera(StrEnum):
     STATIC = "⊙ 静止"
     PUSH_IN = "↑ 推近"
@@ -33,7 +28,6 @@ class SpecialistRole(StrEnum):
     SOURCE_INTELLIGENCE = "source_intelligence_agent"
     STORY_PLANNING = "story_planning_agent"
     VISUAL_DEVELOPMENT = "visual_development_agent"
-    UNIT_PLANNING_ROUTING = "unit_planning_routing_agent"
     R2V_GENERATION_DIRECTOR = "r2v_generation_director"
     AI_EDITING_DIRECTOR = "ai_editing_director"
     REVIEW_CONSISTENCY = "review_consistency_agent"
@@ -115,7 +109,6 @@ class TaskKind(StrEnum):
     SOURCE_INTELLIGENCE = "source_intelligence"
     IMAGE_GENERATION = "image_generation"
     R2V_GENERATION = "r2v_generation"
-    AI_EDIT_PLAN = "ai_edit_plan"
     AI_EDIT_EXECUTE = "ai_edit_execute"
     COMPOSE = "compose"
 
@@ -154,8 +147,8 @@ class CreatorProgressPhase(StrEnum):
     CREATIVE_STRATEGY = "creative_strategy"
     STORY_PLANNING = "story_planning"
     VISUAL_DEVELOPMENT = "visual_development"
-    UNIT_PLANNING = "unit_planning"
-    UNIT_PRODUCTION = "unit_production"
+    TIMELINE_EDIT = "timeline_edit"
+    TIMELINE_RENDER = "timeline_render"
     POST_PRODUCTION = "post_production"
     REVIEW = "review"
     COMPLETED = "completed"
@@ -165,16 +158,6 @@ class CreatorCommandType(StrEnum):
     GENERATE_SCRIPT = "GENERATE_SCRIPT"
     IMPORT_SCRIPT = "IMPORT_SCRIPT"
     SET_STRATEGY_TEXT = "SET_STRATEGY_TEXT"
-    SET_SECTION_TEXT = "SET_SECTION_TEXT"
-    SET_UNIT_TEXT = "SET_UNIT_TEXT"
-    PLAN_UNITS = "PLAN_UNITS"
-    CREATE_SECTION = "CREATE_SECTION"
-    DELETE_SECTION = "DELETE_SECTION"
-    MOVE_SECTION = "MOVE_SECTION"
-    CREATE_UNIT = "CREATE_UNIT"
-    DELETE_UNIT = "DELETE_UNIT"
-    MOVE_UNIT = "MOVE_UNIT"
-    CHANGE_UNIT_ROUTE = "CHANGE_UNIT_ROUTE"
     UPSERT_SHOT = "UPSERT_SHOT"
     DELETE_SHOT = "DELETE_SHOT"
     MOVE_SHOT = "MOVE_SHOT"
@@ -184,22 +167,12 @@ class CreatorCommandType(StrEnum):
     GENERATE_STORYBOARD_IMAGE = "GENERATE_STORYBOARD_IMAGE"
     GENERATE_VIDEO_PROMPT = "GENERATE_VIDEO_PROMPT"
     GENERATE_R2V_VIDEO = "GENERATE_R2V_VIDEO"
-    BUILD_EDIT_PLAN = "BUILD_EDIT_PLAN"
     EXECUTE_EDIT = "EXECUTE_EDIT"
-    SET_EDIT_CLIP_RANGE = "SET_EDIT_CLIP_RANGE"
-    SET_EDIT_CLIP_OS = "SET_EDIT_CLIP_OS"
-    SET_EDIT_CLIP_TRANSITION = "SET_EDIT_CLIP_TRANSITION"
-    MOVE_EDIT_CLIP = "MOVE_EDIT_CLIP"
-    DELETE_EDIT_CLIP = "DELETE_EDIT_CLIP"
-    SET_EDIT_AUDIO_PLAN = "SET_EDIT_AUDIO_PLAN"
     ATTACH_SOURCE_ASSETS = "ATTACH_SOURCE_ASSETS"
     DETACH_SOURCE_ASSETS = "DETACH_SOURCE_ASSETS"
     SUPPLEMENT_ASSET = "SUPPLEMENT_ASSET"
     GENERATE_ASSET = "GENERATE_ASSET"
     SELECT_ARTIFACT_VERSION = "SELECT_ARTIFACT_VERSION"
-    SET_SECTION_COMPOSE_SELECTION = "SET_SECTION_COMPOSE_SELECTION"
-    SET_SECTION_COMPOSE_TRANSITION = "SET_SECTION_COMPOSE_TRANSITION"
-    STITCH_SECTION = "STITCH_SECTION"
     SET_FINAL_COMPOSE_SELECTION = "SET_FINAL_COMPOSE_SELECTION"
     SET_FINAL_COMPOSE_TRANSITION = "SET_FINAL_COMPOSE_TRANSITION"
     COMPOSE_FINAL_VIDEO = "COMPOSE_FINAL_VIDEO"
@@ -210,32 +183,15 @@ DETERMINISTIC_COMMANDS = frozenset(
     {
         CreatorCommandType.IMPORT_SCRIPT,
         CreatorCommandType.SET_STRATEGY_TEXT,
-        CreatorCommandType.SET_SECTION_TEXT,
-        CreatorCommandType.SET_UNIT_TEXT,
-        CreatorCommandType.CREATE_SECTION,
-        CreatorCommandType.DELETE_SECTION,
-        CreatorCommandType.MOVE_SECTION,
-        CreatorCommandType.CREATE_UNIT,
-        CreatorCommandType.DELETE_UNIT,
-        CreatorCommandType.MOVE_UNIT,
-        CreatorCommandType.CHANGE_UNIT_ROUTE,
         CreatorCommandType.UPSERT_SHOT,
         CreatorCommandType.DELETE_SHOT,
         CreatorCommandType.MOVE_SHOT,
         CreatorCommandType.BIND_REFERENCE,
         CreatorCommandType.UNBIND_REFERENCE,
-        CreatorCommandType.SET_EDIT_CLIP_RANGE,
-        CreatorCommandType.SET_EDIT_CLIP_OS,
-        CreatorCommandType.SET_EDIT_CLIP_TRANSITION,
-        CreatorCommandType.MOVE_EDIT_CLIP,
-        CreatorCommandType.DELETE_EDIT_CLIP,
-        CreatorCommandType.SET_EDIT_AUDIO_PLAN,
         CreatorCommandType.ATTACH_SOURCE_ASSETS,
         CreatorCommandType.DETACH_SOURCE_ASSETS,
         CreatorCommandType.SUPPLEMENT_ASSET,
         CreatorCommandType.SELECT_ARTIFACT_VERSION,
-        CreatorCommandType.SET_SECTION_COMPOSE_SELECTION,
-        CreatorCommandType.SET_SECTION_COMPOSE_TRANSITION,
         CreatorCommandType.SET_FINAL_COMPOSE_SELECTION,
         CreatorCommandType.SET_FINAL_COMPOSE_TRANSITION,
     },

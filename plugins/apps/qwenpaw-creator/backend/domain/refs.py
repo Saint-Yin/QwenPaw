@@ -13,11 +13,11 @@ from .errors import ValidationError
 
 
 _TARGET_RE = re.compile(
-    r"^(project|section|unit|shot|asset|asset-import|analysis|post):([^/\\]+)$",
+    r"^(project|timeline|element|shot|asset|asset-import|analysis):([^/\\]+)$",
 )
 _ARTIFACT_TARGET_RE = re.compile(r"^artifact:([^\\]+)$")
 _WORKSPACE_SCHEMES = frozenset(
-    {"project", "asset", "artifact", "analysis", "ai-edit-plan"},
+    {"project", "asset", "artifact", "analysis"},
 )
 
 

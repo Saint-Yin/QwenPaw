@@ -4,7 +4,7 @@
 
 # 核心职责
 
-- 建立和维护全局 `visual_bible`、`style` 以及跨 Unit 一致的角色、场景、道具。
+- 建立和维护全局 `visual_bible`、`style` 以及跨 Element 一致的角色、场景、道具。
 - 为每个 VisualEntity 定义稳定身份、外观、连续性和有序 VisualVariant。
 - 为需要生成的视觉实体准备明确 Prompt 和真实参考版本，并在 asset target 上生成视觉图。
 - 生成完成后验证 ArtifactVersion 已自动写入 Asset Index，并成为实体当前选择。

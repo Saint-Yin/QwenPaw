@@ -115,18 +115,16 @@ class CreatorRuntimeContext:
                     "project:header",
                     "project:plan",
                     "project:assets",
-                    "section:<sectionId>",
-                    "unit:<unitId>",
+                    "timeline:<timelineId>",
+                    "element:<elementId>",
                     "shot:<shotId>",
                     "asset:<logicalAssetId>",
                     "artifact:<slotId>",
                     "analysis:<assetId>",
-                    "post:<sectionId|final>",
                 ],
                 "targetRefIdentityRule": (
-                    "For ordered directory 001000--intro--mixed-video, the stable id is the "
-                    "middle segment intro, so use section:intro. Apply the same rule to "
-                    "unit and shot refs; never put the full directory segment in a ref."
+                    "Use stable Timeline and Element ids exactly as stored in project.json; "
+                    "never put a display label or JSON path in a target ref."
                 ),
             },
             ensure_ascii=False,

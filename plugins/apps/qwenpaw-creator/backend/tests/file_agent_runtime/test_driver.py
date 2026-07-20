@@ -67,10 +67,10 @@ def test_message_text_includes_exact_project_json_selection_locator() -> None:
             "context": {
                 "panel": "workbench",
                 "selection": {
-                    "ref": "unit:unit-1",
-                    "field": "unit:unit-1/editPlan/storyboard/panel:panel-1/description",
-                    "path": "/production/units_by_id/unit-1/plan/storyboard/items/panel-1/description",
-                    "label": "VLM 分镜 1 · 描述",
+                    "ref": "element:edit-1",
+                    "field": "element:edit-1/creation/reason",
+                    "path": "/timelines/items/timeline:main/elements_by_id/edit-1/creation/reason",
+                    "label": "素材选择依据",
                     "text": "猫跳上桌面",
                     "start": 0,
                     "end": 5,
@@ -82,13 +82,10 @@ def test_message_text_includes_exact_project_json_selection_locator() -> None:
     rendered = _message_text(message)
 
     assert rendered.startswith("修改这段描述\n[Creator UI 结构化上下文")
-    assert '"ref":"unit:unit-1"' in rendered
+    assert '"ref":"element:edit-1"' in rendered
+    assert '"field":"element:edit-1/creation/reason"' in rendered
     assert (
-        '"field":"unit:unit-1/editPlan/storyboard/panel:panel-1/description"'
-        in rendered
-    )
-    assert (
-        '"path":"/production/units_by_id/unit-1/plan/storyboard/items/panel-1/description"'
+        '"path":"/timelines/items/timeline:main/elements_by_id/edit-1/creation/reason"'
         in rendered
     )
 
@@ -101,7 +98,7 @@ def test_ai_edit_idempotency_can_be_scoped_to_one_model_tool_call() -> None:
 
     arguments = {
         "projectId": PROJECT_ID,
-        "targetRef": "unit:unit-1",
+        "targetRef": "timeline:timeline:main",
         "arguments": {"operation": "execute"},
     }
     first = _specialist_tool_invocation_id(
@@ -178,6 +175,7 @@ def _edit_client(*, description: str):
             "read_project_file",
             "jq_project",
             "ground_prompt_context",
+            "elements_at",
             "delegate_to_agent",
         }
         # The role prompt and static Pydantic schema form one stable system prompt.
@@ -538,7 +536,7 @@ def test_stream_persistence_failure_is_not_reported_as_a_model_failure(
     assert failed[-1].payload["error"]["code"] == "STREAM_PERSISTENCE_FAILED"
 
 
-def test_parent_authors_story_units_and_production_without_planning_specialists(
+def test_parent_authors_timeline_elements_without_planning_specialists(
     tmp_path,
 ) -> None:
     turn = 0
@@ -551,6 +549,7 @@ def test_parent_authors_story_units_and_production_without_planning_specialists(
             "read_project_file",
             "jq_project",
             "ground_prompt_context",
+            "elements_at",
             "delegate_to_agent",
         }
         delegate = next(
@@ -561,8 +560,12 @@ def test_parent_authors_story_units_and_production_without_planning_specialists(
         roles = delegate["function"]["parameters"]["properties"]["role"][
             "enum"
         ]
-        assert "story_planning_agent" not in roles
-        assert "unit_planning_routing_agent" not in roles
+        assert roles == [
+            "source_intelligence_agent",
+            "visual_development_agent",
+            "r2v_generation_director",
+            "ai_editing_director",
+        ]
 
         turn += 1
         if turn == 1:
@@ -577,58 +580,48 @@ def test_parent_authors_story_units_and_production_without_planning_specialists(
             )
         if turn == 2:
             observed = json.loads(messages[-1]["content"])
-            story = {
-                "title": "主 Agent 创建的项目",
-                "outline": "理解任务后建立可执行结构",
-                "narration": "",
-                "sections": {
-                    "items": {
-                        "section-1": {
-                            "section_id": "section-1",
-                            "title": "主体",
-                            "summary": "",
-                            "narrative": "",
-                            "script": "",
-                            "voiceover": "",
-                            "duration_budget_seconds": 15,
-                            "pacing": "",
-                            "constraints": [],
-                            "transition": "",
-                            "units": {
-                                "items": {
-                                    "unit-1": {
-                                        "unit_id": "unit-1",
-                                        "title": "剪辑单元",
-                                        "route": "edit",
-                                        "duration_seconds": 15,
-                                        "narrative": "",
-                                        "continuity": "",
-                                        "source_refs": [],
-                                        "character_refs": [],
-                                        "scene_ref": None,
-                                        "prop_refs": [],
-                                        "shots": {"items": {}, "order": []},
-                                    },
+            elements = {
+                "r2v-1": {
+                    "element_id": "r2v-1",
+                    "label": "主 Agent 创建的画面",
+                    "enabled": True,
+                    "span": {"start_tick": 0, "duration_tick": 15_000},
+                    "location": {
+                        "coordinate_space": "normalized_canvas",
+                        "x": 0,
+                        "y": 0,
+                        "width": 1,
+                        "height": 1,
+                        "anchor_x": 0.5,
+                        "anchor_y": 0.5,
+                        "rotation_degrees": 0,
+                        "opacity": 1,
+                    },
+                    "z_index": 0,
+                    "creation": {
+                        "type": "r2v",
+                        "intent": "建立可执行生成画面",
+                        "narrative": "角色走入雨夜街道",
+                        "continuity": "保持角色造型",
+                        "character_refs": [],
+                        "scene_ref": None,
+                        "prop_refs": [],
+                        "shots": {
+                            "items": {
+                                "shot-1": {
+                                    "shot_id": "shot-1",
+                                    "description": "角色走入雨夜街道",
+                                    "camera": "⊙ 静止",
+                                    "framing": "全景",
+                                    "duration_seconds": 15,
                                 },
-                                "order": ["unit-1"],
                             },
+                            "order": ["shot-1"],
                         },
                     },
-                    "order": ["section-1"],
-                },
-            }
-            production = {
-                "units_by_id": {
-                    "unit-1": {
-                        "route": "edit",
-                        "intent": "",
-                        "source_asset_version_ids": [],
-                        "plan": None,
-                        "storyboard_sheet_artifact_version_id": None,
-                        "timeline_summary": "",
-                        "subtitles_file_id": None,
-                        "rendered_video_artifact_version_id": None,
-                    },
+                    "outputs": {},
+                    "render_source": None,
+                    "provenance_refs": [],
                 },
             }
             return AgentModelTurn(
@@ -639,16 +632,13 @@ def test_parent_authors_story_units_and_production_without_planning_specialists(
                         arguments={
                             "projectId": PROJECT_ID,
                             "baseEtag": observed["etag"],
-                            "program": ".story = $story | .production = $production",
-                            "jsonArgs": {
-                                "story": story,
-                                "production": production,
-                            },
+                            "program": '.timelines.items["timeline:main"].elements_by_id = $elements',
+                            "jsonArgs": {"elements": elements},
                         },
                     ),
                 ),
             )
-        return AgentModelTurn(content="主 Agent 已建立 Story、Unit 与 Production。")
+        return AgentModelTurn(content="主 Agent 已建立 Timeline Element。")
 
     async def scenario():
         services, _snapshot = _create_project(
@@ -676,10 +666,11 @@ def test_parent_authors_story_units_and_production_without_planning_specialists(
         return project, specialist_runs, events
 
     project, specialist_runs, events = asyncio.run(scenario())
-    assert project.project.story.title == "主 Agent 创建的项目"
-    section = project.project.story.sections.items["section-1"]
-    assert section.units.items["unit-1"].route.value == "edit"
-    assert project.project.production.units_by_id["unit-1"].route == "edit"
+    element = project.project.timelines.items["timeline:main"].elements_by_id[
+        "r2v-1"
+    ]
+    assert element.creation.type == "r2v"
+    assert element.span.duration_tick == 15_000
     assert specialist_runs == []
     event_types = [item.event_type for item in events]
     assert "workspace.head_changed" in event_types
@@ -948,58 +939,48 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
                 for message in reversed(messages)
                 if message.get("name") == "read_project"
             )
-            story = {
-                "title": "海边日落剪辑",
-                "outline": "依据素材理解建立剪辑结构",
-                "narration": "",
-                "sections": {
-                    "items": {
-                        "section-source": {
-                            "section_id": "section-source",
-                            "title": "日落主体",
-                            "summary": "海边日落中人物向镜头走来",
-                            "narrative": "保留人物走向镜头的完整动作",
-                            "script": "",
-                            "voiceover": "",
-                            "duration_budget_seconds": 5,
-                            "pacing": "自然",
-                            "constraints": [],
-                            "transition": "",
-                            "units": {
-                                "items": {
-                                    "unit-source": {
-                                        "unit_id": "unit-source",
-                                        "title": "素材剪辑",
-                                        "route": "edit",
-                                        "duration_seconds": 5,
-                                        "narrative": "人物在日落海边走向镜头",
-                                        "continuity": "",
-                                        "source_refs": [source_id],
-                                        "character_refs": [],
-                                        "scene_ref": None,
-                                        "prop_refs": [],
-                                        "shots": {"items": {}, "order": []},
-                                    },
-                                },
-                                "order": ["unit-source"],
-                            },
-                        },
+            intelligence_id = latest["project"]["sources"]["sources"]["items"][
+                source_id
+            ]["current_intelligence_version_id"]
+            assert intelligence_id
+            elements = {
+                "edit-source": {
+                    "element_id": "edit-source",
+                    "label": "海边日落素材选择",
+                    "enabled": True,
+                    "span": {"start_tick": 0, "duration_tick": 5_000},
+                    "location": {
+                        "coordinate_space": "normalized_canvas",
+                        "x": 0,
+                        "y": 0,
+                        "width": 1,
+                        "height": 1,
+                        "anchor_x": 0.5,
+                        "anchor_y": 0.5,
+                        "rotation_degrees": 0,
+                        "opacity": 1,
                     },
-                    "order": ["section-source"],
-                },
-            }
-            production = {
-                "units_by_id": {
-                    "unit-source": {
-                        "route": "edit",
-                        "intent": "剪出人物在海边日落中走向镜头的段落",
-                        "source_asset_version_ids": [asset_version_id],
-                        "plan": None,
-                        "storyboard_sheet_artifact_version_id": None,
-                        "timeline_summary": "",
-                        "subtitles_file_id": None,
-                        "rendered_video_artifact_version_id": None,
+                    "z_index": 0,
+                    "creation": {
+                        "type": "edit",
+                        "intent": "剪出人物在海边日落中走向镜头的范围",
+                        "reason": "素材理解确认该时段包含完整动作",
+                        "original_sound": "preserve",
+                        "source_intelligence_version_id": intelligence_id,
                     },
+                    "outputs": {},
+                    "render_source": {
+                        "type": "source_asset_version",
+                        "version_id": asset_version_id,
+                        "source_in_tick": 0,
+                        "source_out_tick": 5_000,
+                        "playback_rate": 1,
+                        "loop": False,
+                    },
+                    "provenance_refs": [
+                        f"source:{source_id}",
+                        f"source-intelligence:{intelligence_id}",
+                    ],
                 },
             }
             return AgentModelTurn(
@@ -1010,16 +991,13 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
                         arguments={
                             "projectId": PROJECT_ID,
                             "baseEtag": latest["etag"],
-                            "program": ".story = $story | .production = $production",
-                            "jsonArgs": {
-                                "story": story,
-                                "production": production,
-                            },
+                            "program": '.timelines.items["timeline:main"].elements_by_id = $elements',
+                            "jsonArgs": {"elements": elements},
                         },
                     ),
                 ),
             )
-        return AgentModelTurn(content="已根据素材理解建立剪辑项目结构。")
+        return AgentModelTurn(content="已根据素材理解建立 Edit Element。")
 
     async def source_callback(messages, tools):
         nonlocal source_turn
@@ -1136,12 +1114,12 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
 
     project, specialist_runs = asyncio.run(scenario())
     assert read_intelligence is True
-    unit = project.story.sections.items["section-source"].units.items[
-        "unit-source"
+    element = project.timelines.items["timeline:main"].elements_by_id[
+        "edit-source"
     ]
-    assert unit.source_refs == [source_id]
-    production = project.production.units_by_id["unit-source"]
-    assert production.source_asset_version_ids == [asset_version_id]
+    assert element.render_source is not None
+    assert element.render_source.version_id == asset_version_id
+    assert element.creation.source_intelligence_version_id is not None
     assert (
         project.sources.sources.items[
             source_id
