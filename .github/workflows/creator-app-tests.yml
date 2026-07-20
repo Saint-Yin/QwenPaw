@@ -70,9 +70,10 @@ jobs:
           cache-dependency-path: plugins/apps/qwenpaw-creator/ui/package-lock.json
 
       - name: Install dependencies
-        # npm ci occasionally crashes ("Exit handler never called") while
-        # still exiting 0, leaving a broken node_modules behind. Retry the
-        # install from a clean slate until the toolchain binaries exist.
+        # npm ci occasionally crashes ("Exit handler never called") and can
+        # leave a broken node_modules behind. A poisoned ~/.npm cache restored
+        # by setup-node reproduces the crash on every retry, so wipe the npm
+        # cache between attempts before reinstalling from a clean slate.
         run: |
           for attempt in 1 2 3; do
             rm -rf node_modules
@@ -86,6 +87,7 @@ jobs:
             if [ "${attempt}" = "3" ]; then
               exit 1
             fi
+            npm cache clean --force
           done
 
       - name: Verify toolchain matches lockfile

@@ -85,11 +85,14 @@ from services.runtime_files.execution_store import (
 from services.runtime_files.models import ChangeOrigin, ReviewPolicy
 from services.runtime_files.media_probe import MediaProbeError, probe_media
 from services.runtime_files.runtime_dependencies import resolve_ffmpeg
+from utils.logger import setup_logger
 from utils.remote_download import download_remote_file
 
 if TYPE_CHECKING:
     from services.project_files.facade import CreatorFileServices
 
+
+logger = setup_logger("services.media_files.local_execution")
 
 _LOCAL_MEDIA_COMMANDS = frozenset(
     {
@@ -370,8 +373,16 @@ class FfmpegLocalMediaRunner:
                     "默认 ffmpeg runner 仅支持保留原声且无配乐、旁白或备注的 audio_plan",
                 )
         elif str(spec.audio_plan or "").strip():
-            raise ValidationError(
-                "默认 ffmpeg runner 尚不支持非空 composition audio_plan",
+            # Planning agents record free-text audio ideas on the
+            # composition (e.g. "轻快节奏背景音乐").  The string form carries no
+            # structured directive the local pipeline could execute, and
+            # neither the UI nor any command lets users clear the field, so
+            # failing here would dead-end COMPOSE_FINAL_VIDEO for every
+            # agent-driven project.  Preserve the original audio and surface
+            # the note in the log instead.
+            logger.warning(
+                "默认 ffmpeg runner 忽略自由文本 audio_plan（保留原声）: %s",
+                str(spec.audio_plan).strip(),
             )
 
     def _concat(

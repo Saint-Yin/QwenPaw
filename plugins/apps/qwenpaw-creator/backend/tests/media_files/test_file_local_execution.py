@@ -893,7 +893,6 @@ def test_task_work_parent_symlink_is_rejected_without_writing_outside_project(
             None,
             "audio_plan",
         ),
-        (({"kind": "cut"},), "duck music", "preserve", None, "audio_plan"),
         (({"kind": "cut"},), {}, "mute", None, "original_sound"),
     ],
 )
@@ -937,6 +936,56 @@ def test_default_ffmpeg_runner_rejects_unimplemented_directives(
         asyncio.run(
             FfmpegLocalMediaRunner(executable="unused-ffmpeg").render(spec),
         )
+
+
+def test_default_ffmpeg_runner_treats_freetext_audio_plan_as_advisory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Planning agents may leave a descriptive audio note on the composition.
+
+    The plain-string form carries no executable directive and users have no
+    way to clear it, so the runner must keep the original audio instead of
+    dead-ending COMPOSE_FINAL_VIDEO.
+    """
+    work_dir = tmp_path / "task-work"
+    work_dir.mkdir()
+    source = work_dir / "source.mp4"
+    source.write_bytes(b"source")
+    runner = FfmpegLocalMediaRunner(executable="fake-ffmpeg")
+
+    def fake_run(arguments, *, cwd):
+        Path(arguments[-1]).write_bytes(b"rendered")
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    monkeypatch.setattr(runner, "_probe_video_size", lambda _path: (640, 360))
+    spec = LocalMediaExecutionSpec(
+        command=CreatorCommandType.COMPOSE_FINAL_VIDEO,
+        target_ref="post:final",
+        task_id="task-1",
+        work_dir=work_dir,
+        output_path=work_dir / "output.mp4",
+        inputs=(
+            LocalMediaInput(
+                version_id="source-version-1",
+                file_id="file-source",
+                checksum="a" * 64,
+                media_type="video/mp4",
+                path=source,
+                source_ref="section:section-1",
+                start_seconds=0,
+                end_seconds=1,
+            ),
+        ),
+        transitions=({"kind": "cut"},),
+        audio_plan="轻快节奏背景音乐，配合猫咪精彩片段切换",
+        expected_duration_seconds=1,
+    )
+
+    result = asyncio.run(runner.render(spec))
+
+    assert spec.output_path.read_bytes() == b"rendered"
+    assert result["metadata"] == {"runner": "ffmpeg"}
 
 
 def test_default_ffmpeg_runner_applies_supported_text_overlay(
