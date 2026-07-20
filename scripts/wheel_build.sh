@@ -8,7 +8,7 @@ cd "$REPO_ROOT"
 
 CONSOLE_DIR="$REPO_ROOT/console"
 CONSOLE_DEST="$REPO_ROOT/src/qwenpaw/console"
-CREATOR_UI_DIR="$REPO_ROOT/plugins/app/qwenpaw-creator/ui"
+CREATOR_UI_DIR="$REPO_ROOT/plugins/apps/qwenpaw-creator/ui"
 
 echo "[wheel_build] Building console frontend..."
 (cd "$CONSOLE_DIR" && npm ci)

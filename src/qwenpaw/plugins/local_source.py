@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Resolve plugins shipped beside the current QwenPaw installation."""
 
 from __future__ import annotations

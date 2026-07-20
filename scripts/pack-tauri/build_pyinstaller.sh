@@ -67,8 +67,8 @@ fi
 echo "PyInstaller installed"
 
 echo "== Building bundled Creator frontend =="
-npm --prefix "${REPO_ROOT}/plugins/app/qwenpaw-creator/ui" ci
-npm --prefix "${REPO_ROOT}/plugins/app/qwenpaw-creator/ui" run build
+npm --prefix "${REPO_ROOT}/plugins/apps/qwenpaw-creator/ui" ci
+npm --prefix "${REPO_ROOT}/plugins/apps/qwenpaw-creator/ui" run build
 echo "Creator frontend built"
 echo ""
 

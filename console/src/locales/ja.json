@@ -51,7 +51,6 @@
   },
   "nav": {
     "chat": "チャット",
-    "creator": "Creator",
     "control": "コントロール",
     "channels": "チャンネル",
     "sessions": "セッション",
@@ -2596,17 +2595,6 @@
     "sourceTypeCron": "Cron",
     "sourceTypeHeartbeat": "Heartbeat",
     "sourceTypeMemory": "Memory"
-  },
-  "creator": {
-    "badge": "Creator アプリ",
-    "introTitle": "Agent と一緒に、アイデアを作品に",
-    "introDescription": "Creator は、制作の全工程に Agent が寄り添う AI クリエイティブワークスペースです。アイデアから始めて、コンテンツの整理、設定の構築、ショットの計画、素材の生成、クリップの編集による動画の完成まで Agent が支援します。いつでも会話で修正を依頼でき、手動で編集・確認することもできるため、制作の主導権を保てます。",
-    "installTitle": "Creator はまだインストールされていません",
-    "installHint": "ここで QwenPaw Creator をインストールしてください。インストール後、このタブから全画面の Creator ワークスペースへ直接移動します。",
-    "installAction": "Creator をインストール",
-    "installingAction": "インストール中",
-    "installSuccess": "Creator をインストールしました",
-    "installFailed": "Creator のインストールに失敗しました"
   },
   "codingMode": {
     "title": "コーディングモード",

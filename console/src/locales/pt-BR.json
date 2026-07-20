@@ -53,7 +53,6 @@
   },
   "nav": {
     "chat": "Chat",
-    "creator": "Creator",
     "control": "Controle",
     "channels": "Canais",
     "sessions": "Sessoes",
@@ -2651,17 +2650,6 @@
     "sourceTypeCron": "Cron",
     "sourceTypeHeartbeat": "Heartbeat",
     "sourceTypeMemory": "Memory"
-  },
-  "creator": {
-    "badge": "Aplicativo Creator",
-    "introTitle": "Junto com um Agent, transforme ideias em obras",
-    "introDescription": "O Creator é um espaço de criação com IA, com um Agent acompanhando todo o processo. Comece com uma ideia e deixe o Agent ajudar a organizar o conteúdo, construir o conceito, planejar os planos, gerar materiais e editar clipes em um vídeo completo. Você pode pedir alterações por conversa a qualquer momento ou editar e confirmar tudo manualmente, mantendo o controle do processo criativo.",
-    "installTitle": "O Creator ainda não está instalado",
-    "installHint": "Instale o QwenPaw Creator aqui. Após a instalação, esta aba irá diretamente para o espaço de trabalho do Creator em tela cheia.",
-    "installAction": "Instalar Creator",
-    "installingAction": "Instalando",
-    "installSuccess": "Creator instalado com sucesso",
-    "installFailed": "Falha ao instalar o Creator"
   },
   "codingMode": {
     "title": "Modo de Codificação",

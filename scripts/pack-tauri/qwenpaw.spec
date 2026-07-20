@@ -82,10 +82,10 @@ datas = [
 ]
 datas += collect_tree(CONSOLE_DIST, "qwenpaw/console")
 
-CREATOR_SOURCE = REPO_ROOT / "plugins" / "app" / "qwenpaw-creator"
+CREATOR_SOURCE = REPO_ROOT / "plugins" / "apps" / "qwenpaw-creator"
 CREATOR_RUNTIME_PATHS = (
     "__init__.py",
-    "plugin.py",
+    "backend/main.py",
     "plugin.json",
     "requirements.txt",
     "backend/api/__init__.py",
@@ -133,7 +133,7 @@ CREATOR_RUNTIME_PATHS = (
 )
 datas += collect_selected_tree(
     CREATOR_SOURCE,
-    "qwenpaw/_bundled_plugins/app/qwenpaw-creator",
+    "qwenpaw/_bundled_plugins/apps/qwenpaw-creator",
     CREATOR_RUNTIME_PATHS,
 )
 

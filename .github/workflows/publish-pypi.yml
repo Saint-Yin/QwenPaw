@@ -40,7 +40,7 @@ jobs:
           cache: "npm"
           cache-dependency-path: |
             console/package-lock.json
-            plugins/app/qwenpaw-creator/ui/package-lock.json
+            plugins/apps/qwenpaw-creator/ui/package-lock.json
 
       - name: Build console frontend
         run: |
@@ -54,8 +54,8 @@ jobs:
 
       - name: Build bundled Creator frontend
         run: |
-          npm --prefix plugins/app/qwenpaw-creator/ui ci
-          npm --prefix plugins/app/qwenpaw-creator/ui run build
+          npm --prefix plugins/apps/qwenpaw-creator/ui ci
+          npm --prefix plugins/apps/qwenpaw-creator/ui run build
 
       - name: Bundle docs into package
         run: |

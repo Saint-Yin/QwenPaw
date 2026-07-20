@@ -514,7 +514,7 @@ class InstallPluginRequest(BaseModel):
         "required."
     ),
 )
-async def install_plugin(
+async def install_plugin(  # pylint: disable=too-many-statements
     body: InstallPluginRequest,
     request: Request,
 ):

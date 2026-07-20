@@ -7,7 +7,7 @@ Set-Location $RepoRoot
 
 $ConsoleDir = Join-Path $RepoRoot "console"
 $ConsoleDest = Join-Path $RepoRoot "src\qwenpaw\console"
-$CreatorUiDir = Join-Path $RepoRoot "plugins\app\qwenpaw-creator\ui"
+$CreatorUiDir = Join-Path $RepoRoot "plugins\apps\qwenpaw-creator\ui"
 
 Write-Host "[wheel_build] Building console frontend..."
 Push-Location $ConsoleDir
