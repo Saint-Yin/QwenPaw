@@ -116,6 +116,11 @@ _TERMINAL_TASKS = frozenset(
 logger = logging.getLogger(__name__)
 
 
+def _log_safe(value: object) -> str:
+    """Neutralise CR/LF so identifier values cannot forge log lines."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")
+
+
 class R2VProvider(Protocol):
     """Injectable provider boundary.  Calls happen outside all file locks."""
 
@@ -1324,8 +1329,8 @@ class FileR2VExecutionService:
             except Exception:
                 logger.exception(
                     "deferred R2V terminal recovery failed for %s/%s",
-                    project_id,
-                    task_id,
+                    _log_safe(project_id),
+                    _log_safe(task_id),
                 )
                 delay = min(
                     _TERMINAL_RECOVERY_POLL_SECONDS,

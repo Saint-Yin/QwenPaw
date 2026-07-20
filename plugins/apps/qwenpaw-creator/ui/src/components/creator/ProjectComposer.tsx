@@ -189,7 +189,7 @@ export function ProjectComposer({ open, onClose }: ProjectComposerProps) {
       }
       const drafts: AttachmentDraft[] = Array.from(files).map((file) => ({
         kind: "file",
-        id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: newClientId("att"),
         file,
         source,
         relativePath:

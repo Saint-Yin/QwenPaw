@@ -15,6 +15,7 @@ registering it in ``_PROVIDERS`` below.
 """
 
 import os
+from urllib.parse import urlsplit
 
 from models.image.base import BaseImageModel
 from models.image.openai_provider import OpenAIImageModel
@@ -35,6 +36,23 @@ _PROVIDERS: dict[str, type[BaseImageModel]] = {
     "OPENAI": OpenAIImageModel,
     "DASHSCOPE": DashScopeImageModel,
 }
+
+
+def _is_maas_endpoint(base_url: str) -> bool:
+    """True when *base_url*'s host is maas.aliyuncs.com or a subdomain.
+
+    Hostname parsing (instead of substring matching) keeps lookalike
+    URLs such as ``https://evil.example/.maas.aliyuncs.com`` from
+    selecting the DashScope backend.
+    """
+    candidate = base_url if "://" in base_url else f"//{base_url}"
+    try:
+        hostname = (urlsplit(candidate).hostname or "").casefold()
+    except ValueError:
+        return False
+    return hostname == "maas.aliyuncs.com" or hostname.endswith(
+        ".maas.aliyuncs.com",
+    )
 
 
 def get_image_backend() -> str:
@@ -70,7 +88,7 @@ def get_image_backend() -> str:
             model_name.startswith("qwen-image")
             or "multimodal-generation" in base_url
             or "dashscope" in base_url
-            or ".maas.aliyuncs.com" in base_url
+            or _is_maas_endpoint(base_url)
         ):
             return "DASHSCOPE"
     model_name = os.environ.get("IMAGE_MODEL_NAME", "").casefold()
@@ -80,7 +98,7 @@ def get_image_backend() -> str:
         or model_name.startswith("qwen-image")
         or "multimodal-generation" in base_url
         or "dashscope" in base_url
-        or ".maas.aliyuncs.com" in base_url
+        or _is_maas_endpoint(base_url)
     ):
         return "DASHSCOPE"
     return "OPENAI"

@@ -27,10 +27,15 @@ export function creatorApiUrl(path: string): string {
   return `${CREATOR_API_BASE}${normalized}`;
 }
 
+function secureRandomHex(byteLength = 8): string {
+  const bytes = new Uint8Array(byteLength);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export function newClientId(prefix = "client"): string {
   const id =
-    globalThis.crypto?.randomUUID?.() ??
-    `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${secureRandomHex()}`;
   return `${prefix}-${id}`;
 }
 

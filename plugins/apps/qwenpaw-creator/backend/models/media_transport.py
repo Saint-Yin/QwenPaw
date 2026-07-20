@@ -2,7 +2,6 @@
 # flake8: noqa: E501
 # pylint: disable=line-too-long,too-many-return-statements
 import asyncio
-import hashlib
 import mimetypes
 import re
 import time
@@ -32,6 +31,7 @@ _dashscope_temp_upload_locks: dict[
     tuple[str, int, int, str, str],
     asyncio.Lock,
 ] = {}
+_dashscope_credential_tokens: dict[str, str] = {}
 
 
 async def get_oss_policy(model: str = "wan2.7-r2v") -> dict:
@@ -94,6 +94,16 @@ def _dashscope_transport_filename(path: Path, media_type: str) -> str:
     return _safe_filename(filename)
 
 
+def _credential_cache_token(api_key: str) -> str:
+    """Opaque per-process stand-in for *api_key* inside cache keys.
+
+    The temp-upload cache is process-local, so a random token per
+    credential keeps entries isolated without deriving cache material
+    from the secret itself.
+    """
+    return _dashscope_credential_tokens.setdefault(api_key, uuid.uuid4().hex)
+
+
 def _dashscope_temp_upload_cache_key(
     path: Path,
     *,
@@ -101,9 +111,7 @@ def _dashscope_temp_upload_cache_key(
     model_name: str,
 ) -> tuple[str, int, int, str, str]:
     stat = path.stat()
-    credential_fingerprint = hashlib.sha256(
-        api_key.encode("utf-8"),
-    ).hexdigest()[:16]
+    credential_fingerprint = _credential_cache_token(api_key)
     return (
         str(path.resolve()),
         int(stat.st_size),
