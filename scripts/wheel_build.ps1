@@ -7,6 +7,7 @@ Set-Location $RepoRoot
 
 $ConsoleDir = Join-Path $RepoRoot "console"
 $ConsoleDest = Join-Path $RepoRoot "src\qwenpaw\console"
+$CreatorUiDir = Join-Path $RepoRoot "plugins\app\qwenpaw-creator\ui"
 
 Write-Host "[wheel_build] Building console frontend..."
 Push-Location $ConsoleDir
@@ -34,6 +35,12 @@ $DocsDest = Join-Path $RepoRoot "src\qwenpaw\docs"
 if (Test-Path $DocsDest) { Remove-Item -Recurse -Force $DocsDest }
 New-Item -ItemType Directory -Force -Path $DocsDest | Out-Null
 Copy-Item -Path (Join-Path $DocsSrc "*.md") -Destination $DocsDest -Force
+
+Write-Host "[wheel_build] Building bundled Creator frontend..."
+npm --prefix $CreatorUiDir ci
+if ($LASTEXITCODE -ne 0) { throw "Creator npm ci failed with exit code $LASTEXITCODE" }
+npm --prefix $CreatorUiDir run build
+if ($LASTEXITCODE -ne 0) { throw "Creator npm run build failed with exit code $LASTEXITCODE" }
 
 Write-Host "[wheel_build] Building wheel + sdist..."
 python -m pip install --quiet build

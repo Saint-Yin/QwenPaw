@@ -1,0 +1,287 @@
+"""Small, dependency-free tracing layer for the complete Creator runtime.
+
+The runtime persists business authority in ``project.json`` and scoped Runtime
+JSON/JSONL files.  These traces serve a different purpose: one chronological,
+correlation-friendly account of how an HTTP intent moved through Creator, its
+agent loops, SpecialistRuns, runtime actions, durable Tasks, and providers.
+They remain diagnostic evidence rather than a second source of truth.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+import re
+import time
+import traceback
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
+from datetime import datetime, timezone
+from functools import wraps
+from pathlib import Path
+from typing import Any, ParamSpec, TypeVar
+from uuid import uuid4
+
+from .config import load_observability_config, trace_root
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+_TRACE_LOGGER = logging.getLogger("qwenpaw").getChild("creator.trace")
+_CONTEXT: ContextVar[dict[str, str]] = ContextVar("creator_trace_context", default={})
+_SECRET_KEY = re.compile(r"(api[-_]?key|authorization|cookie|secret|password|token)$", re.I)
+_ID_KEYS = frozenset(
+    {
+        "requestId",
+        "projectId",
+        "sessionId",
+        "conversationId",
+        "goalId",
+        "transactionId",
+        "assistantMessageId",
+        "actionId",
+        "runId",
+        "taskId",
+        "modelRunId",
+        "providerTaskId",
+        "workerId",
+    }
+)
+_MAX_VALUE_CHARS = 4_000
+_MAX_COLLECTION_ITEMS = 50
+
+
+def _enabled() -> bool:
+    try:
+        return load_observability_config().enabled
+    except Exception:
+        # Diagnostics must never become a runtime dependency. Startup paths and
+        # isolated unit tests may intentionally have no Creator Data Workspace.
+        return False
+
+
+def _capture_content() -> bool:
+    return load_observability_config().capture_content
+
+
+def _trace_root() -> Path:
+    return trace_root()
+
+
+def _json_safe(value: Any, *, key: str = "", depth: int = 0) -> Any:
+    if _SECRET_KEY.search(key):
+        return "[REDACTED]"
+    if depth > 6:
+        return "[MAX_DEPTH]"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        if not _capture_content() and key.lower() in {
+            "content",
+            "prompt",
+            "systemprompt",
+            "rawtext",
+            "thinking",
+            "delta",
+        }:
+            return {"redacted": True, "chars": len(value)}
+        return value if len(value) <= _MAX_VALUE_CHARS else value[:_MAX_VALUE_CHARS] + "...[TRUNCATED]"
+    if isinstance(value, Mapping):
+        return {
+            str(item_key): _json_safe(item_value, key=str(item_key), depth=depth + 1)
+            for item_key, item_value in list(value.items())[:_MAX_COLLECTION_ITEMS]
+        }
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [
+            _json_safe(item, key=key, depth=depth + 1)
+            for item in list(value)[:_MAX_COLLECTION_ITEMS]
+        ]
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).isoformat()
+    return _json_safe(str(value), key=key, depth=depth + 1)
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}-{uuid4().hex}"
+
+
+def stable_trace_id(*parts: object) -> str:
+    raw = "\x00".join(str(part) for part in parts if part not in (None, ""))
+    if not raw:
+        return _new_id("trace")
+    return f"trace-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:32]}"
+
+
+def _trace_id_for(context: Mapping[str, object]) -> str:
+    """Choose one stable logical-work anchor, not a changing combination of ids."""
+
+    for key in ("requestId", "goalId", "sessionId", "runId", "taskId", "projectId"):
+        value = context.get(key)
+        if value not in (None, ""):
+            return stable_trace_id(key, value)
+    return stable_trace_id()
+
+
+def current_trace_context() -> dict[str, str]:
+    return dict(_CONTEXT.get())
+
+
+@contextmanager
+def bind_trace_context(**values: object) -> Iterator[dict[str, str]]:
+    merged = current_trace_context()
+    for key, value in values.items():
+        if value not in (None, ""):
+            merged[key] = str(value)
+    token = _CONTEXT.set(merged)
+    try:
+        yield merged
+    finally:
+        _CONTEXT.reset(token)
+
+
+def _write(record: Mapping[str, Any]) -> None:
+    if not _enabled():
+        return
+    try:
+        config = load_observability_config()
+    except Exception:
+        return
+    _TRACE_LOGGER.setLevel(getattr(logging, config.log_level, logging.INFO))
+    safe = _json_safe(record)
+    line = json.dumps(safe, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    try:
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        path = _trace_root() / f"creator-trace-{day}.jsonl"
+        descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+        try:
+            os.write(descriptor, (line + "\n").encode("utf-8"))
+        finally:
+            os.close(descriptor)
+    except Exception:
+        _TRACE_LOGGER.exception("creator trace persistence failed")
+    _TRACE_LOGGER.info(line)
+
+
+def trace_event(
+    name: str,
+    *,
+    component: str,
+    status: str = "ok",
+    attributes: Mapping[str, Any] | None = None,
+    **context: object,
+) -> None:
+    if not _enabled():
+        return
+    inherited = current_trace_context()
+    inherited.update({key: str(value) for key, value in context.items() if value not in (None, "")})
+    trace_id = inherited.get("traceId") or _trace_id_for(inherited)
+    inherited["traceId"] = trace_id
+    record = {
+        "schemaVersion": 1,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "kind": "event",
+        "name": name,
+        "component": component,
+        "status": status,
+        **{key: value for key, value in inherited.items() if key in _ID_KEYS or key in {"traceId", "spanId", "parentSpanId"}},
+        "attributes": dict(attributes or {}),
+    }
+    _write(record)
+
+
+@asynccontextmanager
+async def trace_span(
+    name: str,
+    *,
+    component: str,
+    attributes: Mapping[str, Any] | None = None,
+    **context: object,
+):
+    inherited = current_trace_context()
+    parent_span_id = inherited.get("spanId")
+    trace_id = inherited.get("traceId") or _trace_id_for(context)
+    span_id = _new_id("span")
+    started_ns = time.perf_counter_ns()
+    with bind_trace_context(
+        **context,
+        traceId=trace_id,
+        parentSpanId=parent_span_id,
+        spanId=span_id,
+    ):
+        trace_event(f"{name}.started", component=component, attributes=attributes)
+        try:
+            yield current_trace_context()
+        except BaseException as exc:
+            trace_event(
+                f"{name}.finished",
+                component=component,
+                status="error",
+                attributes={
+                    **dict(attributes or {}),
+                    "durationMs": round((time.perf_counter_ns() - started_ns) / 1_000_000, 3),
+                    "errorType": type(exc).__name__,
+                    "error": str(exc),
+                    "stack": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-12_000:],
+                },
+            )
+            raise
+        else:
+            trace_event(
+                f"{name}.finished",
+                component=component,
+                attributes={
+                    **dict(attributes or {}),
+                    "durationMs": round((time.perf_counter_ns() - started_ns) / 1_000_000, 3),
+                },
+            )
+
+
+def traced_async(
+    name: str,
+    *,
+    component: str,
+    context: Callable[..., Mapping[str, object]] | None = None,
+    attributes: Callable[..., Mapping[str, Any]] | None = None,
+) -> Callable[[Callable[_P, Any]], Callable[_P, Any]]:
+    def decorate(function: Callable[_P, Any]) -> Callable[_P, Any]:
+        @wraps(function)
+        async def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> Any:
+            correlation = dict(context(*args, **kwargs)) if context else {}
+            details = dict(attributes(*args, **kwargs)) if attributes else {}
+            async with trace_span(name, component=component, attributes=details, **correlation):
+                return await function(*args, **kwargs)
+
+        return wrapped
+
+    return decorate
+
+
+def read_trace_records(
+    *,
+    filters: Mapping[str, str] | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Read newest matching records directly from diagnostic JSONL files."""
+
+    if limit < 1 or limit > 2_000:
+        raise ValueError("trace limit must be between 1 and 2000")
+    wanted = {key: value for key, value in dict(filters or {}).items() if value}
+    matches: list[dict[str, Any]] = []
+    paths = sorted(_trace_root().glob("creator-trace-*.jsonl"), reverse=True)
+    for path in paths:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in reversed(lines):
+            try:
+                record = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if all(str(record.get(key) or "") == value for key, value in wanted.items()):
+                matches.append(record)
+                if len(matches) >= limit:
+                    return list(reversed(matches))
+    return list(reversed(matches))

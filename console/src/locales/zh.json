@@ -94,6 +94,7 @@
     "sessions": "会话",
     "inbox": "收件箱",
     "apps": "应用",
+    "creator": "Creator",
     "cronJobs": "定时任务",
     "heartbeat": "心跳",
     "agent": "工作区",
@@ -2767,6 +2768,17 @@
     "compatWarningTitle": "兼容性警告",
     "compatWarningContent": "该插件标注适配 QwenPaw {{labels}}，而您当前的 QwenPaw 版本为 {{version}}。安装后可能出现错误，是否确认继续？",
     "compatWarningConfirm": "仍然安装"
+  },
+  "creator": {
+    "badge": "Creator 应用",
+    "introTitle": "和 Agent 一起，把想法做成作品",
+    "introDescription": "Creator 是一个由 Agent 贯穿的 AI 创作工作空间。你可以从一句想法开始，让 Agent 协助你组织内容、构建设定、规划镜头、生成素材，并将片段剪辑成完整视频；也可以随时通过对话提出修改，或直接手动编辑和确认，让创作始终由你掌控。",
+    "installTitle": "尚未安装 Creator",
+    "installHint": "在此安装 QwenPaw Creator。安装完成后，此标签页将直接跳转进入全屏 Creator 工作区。",
+    "installAction": "安装 Creator",
+    "installingAction": "安装中",
+    "installSuccess": "Creator 安装成功",
+    "installFailed": "Creator 安装失败"
   },
   "codingMode": {
     "title": "编程模式",

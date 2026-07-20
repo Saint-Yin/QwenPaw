@@ -51,6 +51,7 @@
   },
   "nav": {
     "chat": "Чат",
+    "creator": "Creator",
     "control": "Управление",
     "channels": "Каналы",
     "sessions": "Сессии",
@@ -2610,6 +2611,17 @@
     "sourceTypeCron": "Cron",
     "sourceTypeHeartbeat": "Heartbeat",
     "sourceTypeMemory": "Memory"
+  },
+  "creator": {
+    "badge": "Приложение Creator",
+    "introTitle": "Вместе с Agent превратите идею в произведение",
+    "introDescription": "Creator — это творческое рабочее пространство с ИИ, где Agent сопровождает весь процесс. Начните с идеи: Agent поможет организовать содержание, создать концепцию, спланировать кадры, сгенерировать материалы и смонтировать клипы в готовое видео. Вы можете в любой момент попросить об изменениях в диалоге или вручную отредактировать и подтвердить результат, сохраняя контроль над творческим процессом.",
+    "installTitle": "Creator еще не установлен",
+    "installHint": "Установите QwenPaw Creator здесь. После установки эта вкладка напрямую перейдёт в полноэкранное рабочее пространство Creator.",
+    "installAction": "Установить Creator",
+    "installingAction": "Установка",
+    "installSuccess": "Creator успешно установлен",
+    "installFailed": "Не удалось установить Creator"
   },
   "codingMode": {
     "title": "Режим кодирования",

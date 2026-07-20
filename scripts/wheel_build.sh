@@ -8,6 +8,7 @@ cd "$REPO_ROOT"
 
 CONSOLE_DIR="$REPO_ROOT/console"
 CONSOLE_DEST="$REPO_ROOT/src/qwenpaw/console"
+CREATOR_UI_DIR="$REPO_ROOT/plugins/app/qwenpaw-creator/ui"
 
 echo "[wheel_build] Building console frontend..."
 (cd "$CONSOLE_DIR" && npm ci)
@@ -25,6 +26,10 @@ DOCS_DEST="$REPO_ROOT/src/qwenpaw/docs"
 rm -rf "$DOCS_DEST"
 mkdir -p "$DOCS_DEST"
 cp "$DOCS_SRC/"*.md "$DOCS_DEST/"
+
+echo "[wheel_build] Building bundled Creator frontend..."
+npm --prefix "$CREATOR_UI_DIR" ci
+npm --prefix "$CREATOR_UI_DIR" run build
 
 echo "[wheel_build] Building wheel + sdist..."
 python3 -m pip install --quiet build

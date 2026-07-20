@@ -1,0 +1,1 @@
+"""QwenPaw Creator plugin."""

@@ -94,6 +94,7 @@
     "sessions": "Sessions",
     "inbox": "Inbox",
     "apps": "Apps",
+    "creator": "Creator",
     "cronJobs": "Cron Jobs",
     "heartbeat": "Heartbeat",
     "agent": "Workspace",
@@ -2748,6 +2749,17 @@
     "compatWarningTitle": "Compatibility Warning",
     "compatWarningContent": "This plugin is labeled for QwenPaw {{labels}}. Your QwenPaw version is {{version}}. Installing it may cause errors. Are you sure you want to continue?",
     "compatWarningConfirm": "Install anyway"
+  },
+  "creator": {
+    "badge": "Creator App",
+    "introTitle": "Create with an Agent, from idea to work",
+    "introDescription": "Creator is an AI creative workspace with an Agent throughout the process. Start with an idea and let the Agent help organize content, build the creative setting, plan shots, generate materials, and edit clips into a complete video. You can revise through conversation at any time, or edit and confirm everything manually, keeping you in control of the creative process.",
+    "installTitle": "Creator is not installed yet",
+    "installHint": "Install QwenPaw Creator here. After installation, this tab jumps directly to the full-screen Creator workspace.",
+    "installAction": "Install Creator",
+    "installingAction": "Installing",
+    "installSuccess": "Creator installed successfully",
+    "installFailed": "Creator installation failed"
   },
   "codingMode": {
     "title": "Coding Mode",

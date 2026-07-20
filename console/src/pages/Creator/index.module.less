@@ -1,0 +1,243 @@
+.page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #f8f7fb;
+}
+
+.content {
+  position: relative;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  background: radial-gradient(
+      circle at 16% 18%,
+      rgb(140 111 210 / 12%),
+      transparent 31%
+    ),
+    radial-gradient(circle at 88% 78%, rgb(101 143 231 / 10%), transparent 34%),
+    linear-gradient(145deg, #fbfafc 0%, #f5f3f9 52%, #faf9fc 100%);
+}
+
+.content::before {
+  position: absolute;
+  inset: 76px 0 0;
+  pointer-events: none;
+  content: "";
+  opacity: 0.32;
+  background-image: radial-gradient(
+    rgb(91 70 132 / 18%) 0.7px,
+    transparent 0.7px
+  );
+  background-size: 24px 24px;
+  mask-image: linear-gradient(to bottom, black, transparent 76%);
+}
+
+.introduction {
+  position: relative;
+  z-index: 1;
+  width: min(920px, calc(100% - 64px));
+  min-height: calc(100% - 124px);
+  margin: 28px auto 48px;
+  padding: clamp(52px, 7vw, 82px) clamp(42px, 7vw, 80px);
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgb(75 56 112 / 9%);
+  border-radius: 28px;
+  background: rgb(255 255 255 / 76%);
+  box-shadow:
+    0 30px 80px rgb(53 39 82 / 10%),
+    inset 0 1px 0 rgb(255 255 255 / 90%);
+  backdrop-filter: blur(20px);
+}
+
+.introduction::after {
+  position: absolute;
+  top: -130px;
+  right: -120px;
+  width: 330px;
+  height: 330px;
+  border-radius: 50%;
+  background: linear-gradient(
+    145deg,
+    rgb(143 110 216 / 18%),
+    rgb(105 147 230 / 8%)
+  );
+  filter: blur(2px);
+  content: "";
+}
+
+.introCopy {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+}
+
+.introCopy h1 {
+  max-width: 720px;
+  margin: 20px 0 22px;
+  color: #211d2b;
+  font-size: clamp(40px, 5.4vw, 64px);
+  line-height: 1.06;
+  letter-spacing: -0.04em;
+}
+
+.badge {
+  margin: 0;
+  padding: 5px 13px;
+  border-color: rgb(112 78 177 / 16%);
+  border-radius: 999px;
+  background: rgb(120 84 190 / 9%);
+  color: #6f4dad;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.description {
+  max-width: 730px;
+  margin: 0;
+  color: rgb(33 29 43 / 64%);
+  font-size: 16px;
+  line-height: 1.8;
+}
+
+.installPrompt {
+  width: 100%;
+  min-height: 124px;
+  margin-top: 38px;
+  padding: 22px 24px;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 148px;
+  gap: 10px 16px;
+  align-items: center;
+  border: 1px solid rgb(95 67 148 / 12%);
+  border-radius: 20px;
+  background: rgb(255 255 255 / 88%);
+  box-shadow: 0 16px 42px rgb(57 41 88 / 8%);
+}
+
+.installMark {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #7652ba, #9572d3);
+  box-shadow: 0 9px 22px rgb(111 77 173 / 24%);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.installCopy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.installCopy strong {
+  color: #272131;
+  font-size: 16px;
+}
+
+.installCopy span {
+  color: rgb(39 33 49 / 57%);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.installButton {
+  width: 148px;
+  height: 44px;
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #7652ba, #8863c8);
+  box-shadow: 0 10px 24px rgb(111 77 173 / 22%);
+  font-weight: 600;
+}
+
+.installButton:hover:not(:disabled) {
+  background: linear-gradient(135deg, #6d49b1, #805abd) !important;
+}
+
+.installButton:disabled,
+.installButton:disabled:hover {
+  border-color: transparent !important;
+  color: rgb(255 255 255 / 92%) !important;
+  background: linear-gradient(135deg, #7652ba, #8863c8) !important;
+  box-shadow: 0 10px 24px rgb(111 77 173 / 18%);
+  opacity: 0.82;
+  cursor: wait;
+}
+
+.installSpinner {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border: 1.5px solid rgb(255 255 255 / 42%);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: creator-install-spin 0.75s linear infinite;
+}
+
+.installError {
+  grid-column: 2 / -1;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: rgb(207 49 49 / 7%);
+  color: #a02c2c;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@keyframes creator-install-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 900px) {
+  .introduction {
+    width: min(680px, calc(100% - 32px));
+    min-height: auto;
+    padding: 48px 32px;
+  }
+
+  .installPrompt {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .installButton {
+    width: 100%;
+    grid-column: 1 / -1;
+  }
+
+  .installError {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 520px) {
+  .introduction {
+    width: calc(100% - 24px);
+    margin-top: 12px;
+    padding: 36px 22px;
+    border-radius: 22px;
+  }
+
+  .introCopy h1 {
+    font-size: 38px;
+  }
+
+  .installPrompt {
+    padding: 18px;
+  }
+}

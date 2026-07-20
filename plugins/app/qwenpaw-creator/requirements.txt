@@ -1,0 +1,5 @@
+# QwenPaw supplies the shared framework/runtime dependencies. Keep only
+# Creator-specific, non-database packages that are absent from the host
+# lockfile here. Creator persistence is filesystem-native.
+oss2
+imageio-ffmpeg

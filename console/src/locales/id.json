@@ -53,6 +53,7 @@
   },
   "nav": {
     "chat": "Chat",
+    "creator": "Creator",
     "control": "Kontrol",
     "channels": "Saluran",
     "sessions": "Sesi",
@@ -986,6 +987,17 @@
       "refreshSuccess": "Log disegarkan",
       "copyBackend": "Salin log backend"
     }
+  },
+  "creator": {
+    "badge": "Aplikasi Creator",
+    "introTitle": "Bersama Agent, wujudkan ide menjadi karya",
+    "introDescription": "Creator adalah ruang kerja kreatif berbasis AI dengan Agent yang mendampingi seluruh proses. Mulai dari sebuah ide, Agent membantu mengatur konten, membangun konsep, merencanakan shot, membuat materi, dan menyunting klip menjadi video lengkap. Anda dapat mengajukan perubahan melalui percakapan kapan saja, atau mengedit dan mengonfirmasi semuanya secara manual agar tetap memegang kendali atas proses kreatif.",
+    "installTitle": "Creator belum terpasang",
+    "installHint": "Pasang QwenPaw Creator di sini. Setelah dipasang, tab ini akan langsung beralih ke ruang kerja Creator layar penuh.",
+    "installAction": "Pasang Creator",
+    "installingAction": "Memasang",
+    "installSuccess": "Creator berhasil dipasang",
+    "installFailed": "Pemasangan Creator gagal"
   },
   "codingMode": {
     "title": "Mode Coding",

@@ -53,6 +53,7 @@
   },
   "nav": {
     "chat": "Trò chuyện",
+    "creator": "Creator",
     "control": "Điều khiển",
     "channels": "Kênh",
     "sessions": "Phiên",
@@ -740,6 +741,17 @@
     "version": "Phiên bản",
     "author": "Tác giả",
     "loadError": "Tải plugin thất bại"
+  },
+  "creator": {
+    "badge": "Ứng dụng Creator",
+    "introTitle": "Cùng Agent biến ý tưởng thành tác phẩm",
+    "introDescription": "Creator là không gian sáng tạo AI với Agent đồng hành trong suốt quá trình. Bắt đầu từ một ý tưởng, Agent sẽ hỗ trợ bạn tổ chức nội dung, xây dựng bối cảnh, lập kế hoạch cảnh quay, tạo tài nguyên và dựng các clip thành một video hoàn chỉnh. Bạn có thể trò chuyện để yêu cầu chỉnh sửa bất cứ lúc nào, hoặc tự chỉnh sửa và xác nhận thủ công để luôn làm chủ quá trình sáng tạo.",
+    "installTitle": "Creator chưa được cài đặt",
+    "installHint": "Cài đặt QwenPaw Creator ngay tại đây. Sau khi cài đặt, thẻ này sẽ chuyển thẳng đến không gian Creator toàn màn hình.",
+    "installAction": "Cài đặt Creator",
+    "installingAction": "Đang cài đặt",
+    "installSuccess": "Đã cài đặt Creator thành công",
+    "installFailed": "Cài đặt Creator thất bại"
   },
   "codingMode": {
     "title": "Chế độ Lập trình",

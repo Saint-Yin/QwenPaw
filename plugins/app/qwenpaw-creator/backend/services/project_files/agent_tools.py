@@ -1,0 +1,532 @@
+"""Model-facing read/jq tools over the single-file Project authority.
+
+The model supplies only the Project identity, the ETag it actually observed and
+a jq transformation.  Request provenance and Review policy are captured by the
+Runtime before this request-scoped boundary is constructed; they are never
+accepted as model tool arguments.
+"""
+
+from __future__ import annotations
+
+from collections import OrderedDict
+from copy import deepcopy
+from typing import Any, Mapping
+import threading
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from services.runtime_files.models import (
+    ChangeOrigin,
+    ReviewBoundary,
+    ReviewPolicy,
+)
+
+from .assets import AssetFileStore
+from .commit import ProjectCommitBoundary
+from .jq_transform import JqProjectTransformer
+from .models import Project
+from .schema_prompt import ProjectSchemaPrompt, build_project_schema_prompt
+from .store import ProjectSnapshot, ProjectStore
+
+
+READ_PROJECT_TOOL_NAME = "read_project"
+READ_PROJECT_FILE_TOOL_NAME = "read_project_file"
+JQ_PROJECT_TOOL_NAME = "jq_project"
+_DEFAULT_TEXT_PAGE_BYTES = 64 * 1024
+_MAX_TEXT_PAGE_BYTES = 256 * 1024
+
+
+class AgentProjectToolError(RuntimeError):
+    """Base error for the Project tool boundary."""
+
+
+class UnknownAgentProjectTool(AgentProjectToolError):
+    pass
+
+
+class AgentProjectBaseRequired(AgentProjectToolError):
+    """The requested historical base is not available in this Runtime."""
+
+    def __init__(
+        self,
+        *,
+        project_id: str,
+        base_etag: str,
+        latest_etag: str,
+    ) -> None:
+        self.project_id = project_id
+        self.base_etag = base_etag
+        self.latest_etag = latest_etag
+        super().__init__(
+            "jq_project baseEtag is stale; its base snapshot is not cached. "
+            f"call read_project again for {project_id!r} before retrying"
+        )
+
+
+class _ToolModel(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+        revalidate_instances="always",
+    )
+
+
+class ReadProjectToolInput(_ToolModel):
+    project_id: str = Field(alias="projectId", min_length=1)
+
+
+class ReadProjectFileToolInput(_ToolModel):
+    project_id: str = Field(alias="projectId", min_length=1)
+    file_id: str = Field(alias="fileId", min_length=1)
+    offset: int = Field(default=0, ge=0)
+    max_bytes: int = Field(
+        default=_DEFAULT_TEXT_PAGE_BYTES,
+        alias="maxBytes",
+        # Four bytes are enough for every valid UTF-8 code point, allowing a
+        # page to make progress without ever exceeding the caller's byte cap.
+        ge=4,
+        le=_MAX_TEXT_PAGE_BYTES,
+    )
+
+
+class JqProjectToolInput(_ToolModel):
+    project_id: str = Field(alias="projectId", min_length=1)
+    base_etag: str = Field(alias="baseEtag", min_length=1)
+    program: str = Field(min_length=1)
+    string_args: dict[str, str] = Field(
+        default_factory=dict,
+        alias="stringArgs",
+    )
+    json_args: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="jsonArgs",
+    )
+
+
+class AgentProjectToolContext(_ToolModel):
+    """Runtime-only request provenance; this is not a model tool schema."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        revalidate_instances="always",
+    )
+
+    origin: ChangeOrigin
+    review_policy: ReviewPolicy = ReviewPolicy.AUTO_FIX
+    review_boundary: ReviewBoundary | None = None
+    caused_by_request_id: str | None = None
+    caused_by_message_seq: int | None = Field(default=None, ge=1)
+    round_id: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_review_provenance(self) -> AgentProjectToolContext:
+        if self.review_policy is ReviewPolicy.REQUIRE_REVIEW:
+            if self.origin is not ChangeOrigin.AGENTDOCK_INTERRUPT:
+                raise ValueError(
+                    "only an AgentDock interrupt context may require review"
+                )
+            if self.review_boundary is None:
+                raise ValueError(
+                    "review-required Agent tools need a ReviewBoundary"
+                )
+            if self.caused_by_request_id != self.review_boundary.request_id:
+                raise ValueError(
+                    "request provenance must match the ReviewBoundary"
+                )
+            if (
+                self.caused_by_message_seq
+                != self.review_boundary.request_message_seq
+            ):
+                raise ValueError(
+                    "message provenance must match the ReviewBoundary"
+                )
+        elif self.review_boundary is not None:
+            raise ValueError(
+                "auto-fix Agent tools cannot carry a ReviewBoundary"
+            )
+        return self
+
+    def commit_metadata(self) -> dict[str, Any]:
+        return {
+            "origin": self.origin,
+            "review_policy": self.review_policy,
+            "review_boundary": self.review_boundary,
+            "caused_by_request_id": self.caused_by_request_id,
+            "caused_by_message_seq": self.caused_by_message_seq,
+            "round_id": self.round_id,
+            "advance_accepted_baseline": (
+                self.review_policy is ReviewPolicy.AUTO_FIX
+            ),
+        }
+
+
+class AgentProjectSnapshotResult(_ToolModel):
+    project: Project
+    generation: int = Field(ge=0)
+    etag: str = Field(min_length=1)
+
+
+class AgentProjectFileResult(_ToolModel):
+    project_id: str = Field(alias="projectId")
+    project_etag: str = Field(alias="projectEtag")
+    file_id: str = Field(alias="fileId")
+    kind: str
+    media_type: str = Field(alias="mediaType")
+    sha256: str
+    size_bytes: int = Field(alias="sizeBytes", ge=0)
+    offset: int = Field(ge=0)
+    next_offset: int = Field(alias="nextOffset", ge=0)
+    eof: bool
+    content: str
+
+
+class AgentProjectCommitResult(AgentProjectSnapshotResult):
+    transaction_id: str = Field(alias="transactionId", min_length=1)
+    changed_pointers: list[str] = Field(alias="changedPointers")
+    review_id: str | None = Field(default=None, alias="reviewId")
+
+
+AGENT_PROJECT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
+    READ_PROJECT_TOOL_NAME: {
+        "description": (
+            "读取 project.json 的完整已验证快照，"
+            "并返回 generation 与 ETag。修改前先调用此工具；"
+            "后续 jq_project 必须回传这里得到的 ETag。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "projectId": {"type": "string", "minLength": 1},
+            },
+            "required": ["projectId"],
+            "additionalProperties": False,
+        },
+    },
+    READ_PROJECT_FILE_TOOL_NAME: {
+        "description": (
+            "按 fileId 读取 project.json Asset Index 中已校验的 UTF-8 文本文件。"
+            "用于 large_text、source_intelligence 等索引内容；只支持字节 offset "
+            "分页，绝不接受文件系统路径。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "projectId": {"type": "string", "minLength": 1},
+                "fileId": {"type": "string", "minLength": 1},
+                "offset": {"type": "integer", "minimum": 0, "default": 0},
+                "maxBytes": {
+                    "type": "integer",
+                    "minimum": 4,
+                    "maximum": _MAX_TEXT_PAGE_BYTES,
+                    "default": _DEFAULT_TEXT_PAGE_BYTES,
+                },
+            },
+            "required": ["projectId", "fileId"],
+            "additionalProperties": False,
+        },
+    },
+    JQ_PROJECT_TOOL_NAME: {
+        "description": (
+            "在最近读取的 Project base 上运行一段 jq，"
+            "Runtime 再执行字段 CAS、三方合并、"
+            "Pydantic 校验和原子发布。"
+            "不要修改 Runtime 保护字段。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "projectId": {"type": "string", "minLength": 1},
+                "baseEtag": {"type": "string", "minLength": 1},
+                "program": {"type": "string", "minLength": 1},
+                "stringArgs": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+                "jsonArgs": {
+                    "type": "object",
+                    "additionalProperties": True,
+                },
+            },
+            "required": ["projectId", "baseEtag", "program"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def agent_project_tool_manifest() -> tuple[dict[str, Any], ...]:
+    """Return the fixed OpenAI/AgentScope-compatible Project tool manifest."""
+
+    return tuple(
+        {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": definition["description"],
+                "parameters": deepcopy(definition["parameters"]),
+            },
+        }
+        for name, definition in AGENT_PROJECT_TOOL_SCHEMAS.items()
+    )
+
+
+class AgentProjectTools:
+    """Request-scoped implementation of the indexed Project tool surface."""
+
+    def __init__(
+        self,
+        store: ProjectStore,
+        *,
+        context: AgentProjectToolContext,
+        transformer: JqProjectTransformer | None = None,
+        commits: ProjectCommitBoundary | None = None,
+        max_cached_bases: int = 32,
+    ) -> None:
+        if max_cached_bases <= 0:
+            raise ValueError("max_cached_bases must be positive")
+        self.store = store
+        self.context = AgentProjectToolContext.model_validate(context)
+        self.transformer = transformer or JqProjectTransformer()
+        self.commits = commits or ProjectCommitBoundary(store)
+        # Generated once per process/schema and reused byte-for-byte across
+        # every model turn, preserving the provider KV-cache prefix.
+        self.schema_prompt: ProjectSchemaPrompt = build_project_schema_prompt()
+        self.max_cached_bases = max_cached_bases
+        self._cache_lock = threading.RLock()
+        self._bases: OrderedDict[tuple[str, str], ProjectSnapshot] = (
+            OrderedDict()
+        )
+
+    @staticmethod
+    def _snapshot_result(
+        snapshot: ProjectSnapshot,
+    ) -> AgentProjectSnapshotResult:
+        # Never expose the mutable Pydantic instance held by the base cache.
+        return AgentProjectSnapshotResult(
+            project=snapshot.project.model_copy(deep=True),
+            generation=snapshot.generation,
+            etag=snapshot.etag,
+        )
+
+    def _remember(self, snapshot: ProjectSnapshot) -> None:
+        key = (snapshot.project.project_id, snapshot.etag)
+        with self._cache_lock:
+            self._bases[key] = snapshot
+            self._bases.move_to_end(key)
+            while len(self._bases) > self.max_cached_bases:
+                self._bases.popitem(last=False)
+
+    def _cached(
+        self,
+        project_id: str,
+        etag: str,
+    ) -> ProjectSnapshot | None:
+        key = (project_id, etag)
+        with self._cache_lock:
+            snapshot = self._bases.get(key)
+            if snapshot is not None:
+                self._bases.move_to_end(key)
+            return snapshot
+
+    def _base(self, project_id: str, base_etag: str) -> ProjectSnapshot:
+        cached = self._cached(project_id, base_etag)
+        if cached is not None:
+            return cached
+        latest = self.store.read(project_id)
+        if latest.etag != base_etag:
+            raise AgentProjectBaseRequired(
+                project_id=project_id,
+                base_etag=base_etag,
+                latest_etag=latest.etag,
+            )
+        # A caller may reconnect with an ETag that is still current. It is
+        # safe to reconstruct that base: latest and base are byte-identical.
+        self._remember(latest)
+        return latest
+
+    def read_project(self, project_id: str) -> AgentProjectSnapshotResult:
+        request = ReadProjectToolInput(projectId=project_id)
+        snapshot = self.store.read(request.project_id)
+        self._remember(snapshot)
+        return self._snapshot_result(snapshot)
+
+    def read_project_file(
+        self,
+        *,
+        project_id: str,
+        file_id: str,
+        offset: int = 0,
+        max_bytes: int = _DEFAULT_TEXT_PAGE_BYTES,
+    ) -> AgentProjectFileResult:
+        request = ReadProjectFileToolInput(
+            projectId=project_id,
+            fileId=file_id,
+            offset=offset,
+            maxBytes=max_bytes,
+        )
+        snapshot = self.store.read(request.project_id)
+        indexed = snapshot.project.assets.files_by_id.get(request.file_id)
+        if indexed is None:
+            raise AgentProjectToolError(
+                f"Project IndexedFile does not exist: {request.file_id!r}"
+            )
+        media_type = indexed.media_type.casefold().split(";", 1)[0].strip()
+        if not (
+            media_type.startswith("text/")
+            or media_type
+            in {
+                "application/json",
+                "application/ld+json",
+                "application/xml",
+            }
+        ):
+            raise AgentProjectToolError(
+                f"IndexedFile is not readable UTF-8 text: {indexed.media_type!r}"
+            )
+        if request.offset > indexed.size_bytes:
+            raise AgentProjectToolError("read_project_file offset exceeds file size")
+        stream = AssetFileStore(
+            self.store.project_root(request.project_id)
+        ).open_verified(indexed)
+        try:
+            stream.seek(request.offset)
+            buffered = stream.read(request.max_bytes)
+        finally:
+            stream.close()
+        # Return only complete UTF-8 code points. The resulting nextOffset is
+        # therefore always a valid boundary for the next page.
+        raw = buffered
+        while True:
+            try:
+                content = raw.decode("utf-8")
+                break
+            except UnicodeDecodeError as error:
+                # A valid page can only fail at its trailing, incomplete code
+                # point. Any error earlier in the page (or at the requested
+                # offset) means the IndexedFile is not valid UTF-8 for this
+                # byte-pagination contract.
+                if (
+                    error.reason != "unexpected end of data"
+                    or request.offset + len(buffered) >= indexed.size_bytes
+                ):
+                    raise AgentProjectToolError(
+                        "IndexedFile is not valid UTF-8 text"
+                    ) from error
+                raw = raw[: error.start]
+        next_offset = request.offset + len(raw)
+        return AgentProjectFileResult(
+            projectId=request.project_id,
+            projectEtag=snapshot.etag,
+            fileId=indexed.file_id,
+            kind=indexed.kind,
+            mediaType=indexed.media_type,
+            sha256=indexed.sha256,
+            sizeBytes=indexed.size_bytes,
+            offset=request.offset,
+            nextOffset=next_offset,
+            eof=next_offset >= indexed.size_bytes,
+            content=content,
+        )
+
+    def jq_project(
+        self,
+        *,
+        project_id: str,
+        base_etag: str,
+        program: str,
+        string_args: Mapping[str, str] | None = None,
+        json_args: Mapping[str, Any] | None = None,
+    ) -> AgentProjectCommitResult:
+        request = JqProjectToolInput(
+            projectId=project_id,
+            baseEtag=base_etag,
+            program=program,
+            stringArgs=dict(string_args or {}),
+            jsonArgs=dict(json_args or {}),
+        )
+        base = self._base(request.project_id, request.base_etag)
+        candidate = self.transformer.transform(
+            base.project.model_dump(mode="json"),
+            request.program,
+            string_args=request.string_args,
+            json_args=request.json_args,
+        )
+        result = self.commits.commit(
+            base=base,
+            candidate=candidate,
+            **self.context.commit_metadata(),
+        )
+        self._remember(result.snapshot)
+        snapshot = self._snapshot_result(result.snapshot)
+        return AgentProjectCommitResult(
+            **snapshot.model_dump(mode="python"),
+            transactionId=result.transaction_id,
+            changedPointers=[
+                change.json_pointer
+                for change in result.changeset.changes
+                if change.json_pointer is not None
+            ],
+            reviewId=result.review.review_id
+            if result.review is not None
+            else None,
+        )
+
+    def invoke(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Validate model-facing camelCase arguments and return JSON data."""
+
+        if tool_name == READ_PROJECT_TOOL_NAME:
+            request = ReadProjectToolInput.model_validate(dict(arguments))
+            result: BaseModel = self.read_project(request.project_id)
+        elif tool_name == READ_PROJECT_FILE_TOOL_NAME:
+            request = ReadProjectFileToolInput.model_validate(dict(arguments))
+            result = self.read_project_file(
+                project_id=request.project_id,
+                file_id=request.file_id,
+                offset=request.offset,
+                max_bytes=request.max_bytes,
+            )
+        elif tool_name == JQ_PROJECT_TOOL_NAME:
+            request = JqProjectToolInput.model_validate(dict(arguments))
+            result = self.jq_project(
+                project_id=request.project_id,
+                base_etag=request.base_etag,
+                program=request.program,
+                string_args=request.string_args,
+                json_args=request.json_args,
+            )
+        else:
+            raise UnknownAgentProjectTool(
+                f"unknown Project tool: {tool_name!r}"
+            )
+        return result.model_dump(mode="json", by_alias=True)
+
+
+# Explicit architectural name; ``AgentProjectTools`` remains the shorter
+# request-runtime construction name.
+AgentProjectToolBoundary = AgentProjectTools
+
+
+__all__ = [
+    "AGENT_PROJECT_TOOL_SCHEMAS",
+    "JQ_PROJECT_TOOL_NAME",
+    "READ_PROJECT_FILE_TOOL_NAME",
+    "READ_PROJECT_TOOL_NAME",
+    "AgentProjectBaseRequired",
+    "AgentProjectCommitResult",
+    "AgentProjectFileResult",
+    "AgentProjectSnapshotResult",
+    "AgentProjectToolContext",
+    "AgentProjectToolBoundary",
+    "AgentProjectToolError",
+    "AgentProjectTools",
+    "JqProjectToolInput",
+    "ReadProjectFileToolInput",
+    "ReadProjectToolInput",
+    "UnknownAgentProjectTool",
+    "agent_project_tool_manifest",
+]

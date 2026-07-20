@@ -1,0 +1,10 @@
+ui/node_modules/
+# !ui/dist/
+# !ui/dist/**
+.env
+__pycache__/
+*.pyc
+data/
+generated/
+backend/data/
+backend/generated/

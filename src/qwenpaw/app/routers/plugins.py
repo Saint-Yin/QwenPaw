@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from ...plugins.local_source import resolve_local_plugin_source
 from ..utils import schedule_agent_reload
 
 logger = logging.getLogger(__name__)
@@ -535,7 +536,17 @@ async def install_plugin(
     temp_dir: Optional[Path] = None
 
     try:
-        if is_url:
+        try:
+            source_path = resolve_local_plugin_source(source)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if source_path is not None:
+            logger.info(
+                "Installing plugin from QwenPaw source: %s",
+                source_path,
+            )
+        elif is_url:
             # Download and extract the zip archive
             temp_dir = Path(tempfile.mkdtemp())
             zip_path = temp_dir / "plugin.zip"

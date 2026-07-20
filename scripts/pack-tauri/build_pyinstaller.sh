@@ -66,6 +66,12 @@ if ! "$PYTHON_BIN" -c "import PyInstaller" 2> /dev/null; then
 fi
 echo "PyInstaller installed"
 
+echo "== Building bundled Creator frontend =="
+npm --prefix "${REPO_ROOT}/plugins/app/qwenpaw-creator/ui" ci
+npm --prefix "${REPO_ROOT}/plugins/app/qwenpaw-creator/ui" run build
+echo "Creator frontend built"
+echo ""
+
 # Install project dependencies (ensures ALL runtime deps are importable)
 echo "== Installing project dependencies =="
 install_python_packages -e ".[full]"
