@@ -107,44 +107,48 @@ export default function AgentStatusBar() {
         </span>
       </div>
       <div className="flex shrink-0 self-stretch items-center gap-2 px-4">
-        {stoppableVisible && (
-          <button
-            type="button"
-            aria-label="停止所有 Agent"
-            disabled={stopping}
-            onClick={() =>
-              void stopAllAgents()
-                .then(() => message.success("已停止所有 Agent 活动"))
-                .catch((error) => message.error((error as Error).message))
-            }
-            className="inline-flex items-center gap-1 rounded-full border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-0.5 text-[11px] font-semibold text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/20 disabled:cursor-wait disabled:opacity-60"
-            title={
-              session?.status === "INTERRUPT_REQUESTED"
-                ? "停止请求已发送，点击再次停止"
-                : "立即停止当前项目的主 Agent、子 Agent 与未完成任务"
-            }
-          >
-            <Square className="h-2.5 w-2.5 fill-current" />
-            {stopping ? "正在停止" : "停止"}
-          </button>
-        )}
-        {open && waitingInput && (
-          <button
-            onClick={() => setOpen(true)}
-            className="animate-pulse rounded-full border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-warning)]"
-            title="打开 Agent 浮层继续对话"
-          >
-            继续输入
-          </button>
-        )}
-        {open && pendingCount > 0 && (
-          <button
-            onClick={openReview}
-            className="rounded-full border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-accent)]"
-            title="打开审阅/决策处理待审、需复核与 Agent 改动"
-          >
-            待处理 {pendingCount}
-          </button>
+        {open && (stoppableVisible || waitingInput || pendingCount > 0) && (
+          <div className="flex items-center gap-2 self-stretch border-l border-[var(--color-border)] pl-3">
+            {stoppableVisible && (
+              <button
+                type="button"
+                aria-label="停止所有 Agent"
+                disabled={stopping}
+                onClick={() =>
+                  void stopAllAgents()
+                    .then(() => message.success("已停止所有 Agent 活动"))
+                    .catch((error) => message.error((error as Error).message))
+                }
+                className="inline-flex items-center gap-1 rounded-full border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-0.5 text-[11px] font-semibold text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/20 disabled:cursor-wait disabled:opacity-60"
+                title={
+                  session?.status === "INTERRUPT_REQUESTED"
+                    ? "停止请求已发送，点击再次停止"
+                    : "立即停止当前项目的主 Agent、子 Agent 与未完成任务"
+                }
+              >
+                <Square className="h-2.5 w-2.5 fill-current" />
+                {stopping ? "正在停止" : "停止"}
+              </button>
+            )}
+            {waitingInput && (
+              <button
+                onClick={() => setOpen(true)}
+                className="animate-pulse rounded-full border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-warning)]"
+                title="打开 Agent 浮层继续对话"
+              >
+                继续输入
+              </button>
+            )}
+            {pendingCount > 0 && (
+              <button
+                onClick={openReview}
+                className="rounded-full border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-accent)]"
+                title="打开审阅/决策处理待审、需复核与 Agent 改动"
+              >
+                待处理 {pendingCount}
+              </button>
+            )}
+          </div>
         )}
         <button
           onClick={() => setOpen(!open)}

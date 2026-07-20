@@ -709,7 +709,7 @@ export default function AiEditWorkbench({
       : -1;
 
   const shouldShowProgressBar =
-    planTaskRunning ||
+    thinkingRunning ||
     executeTaskRunning ||
     autoExecute ||
     completionFlash ||
@@ -1171,19 +1171,21 @@ export default function AiEditWorkbench({
         (() => {
           const isDone = completionFlash || reloading || changedClips.size > 0;
           const isPlanPhase =
-            planTaskRunning &&
+            thinkingRunning &&
             !executeTaskRunning &&
             !agentDockPostExecute &&
             !isDone;
-          const progressLabel = executeTaskRunning
-            ? executeTaskProgress != null && executeTaskProgress > 0
-              ? `AI 执行剪接 ${Math.round(executeTaskProgress * 100)}%`
-              : "AI 执行剪接…"
-            : agentDockPostExecute
-            ? "AI 确认成果中…"
-            : isDone
-            ? "完成"
-            : "AI 生成方案中…";
+          const executePercent = Math.round((executeTaskProgress ?? 0) * 100);
+          const executeLabel =
+            executeTaskRunning && executePercent > 0
+              ? `AI 执行 ${executePercent}%`
+              : agentDockPostExecute
+              ? "AI 确认成果中…"
+              : isDone
+              ? "完成"
+              : "AI 执行";
+          const executeActive =
+            executeTaskRunning || agentDockPostExecute || isDone;
           const executeFill =
             isDone || agentDockPostExecute
               ? 100
@@ -1193,21 +1195,41 @@ export default function AiEditWorkbench({
           return (
             <div className="shrink-0 border-b border-[var(--color-border)] px-5 py-2.5">
               <div className="mb-1.5 flex items-center justify-between">
-                <span
-                  className={`flex items-center gap-1.5 text-[11px] font-semibold transition-colors ${
-                    isDone
-                      ? "text-[var(--color-success)]"
-                      : "text-[var(--color-accent)]"
-                  }`}
-                >
-                  {isDone ? (
-                    <Check className="h-3 w-3" />
-                  ) : executeTaskRunning ? (
-                    <Zap className="h-3 w-3 animate-pulse" />
-                  ) : (
-                    <Sparkles className="h-3 w-3 animate-pulse" />
-                  )}
-                  {progressLabel}
+                <span className="flex items-center gap-3 text-[11px] font-semibold">
+                  <span
+                    className={`flex items-center gap-1.5 transition-colors ${
+                      isPlanPhase
+                        ? "text-[var(--color-accent)]"
+                        : "text-[var(--color-text-tertiary)]"
+                    }`}
+                  >
+                    {isPlanPhase ? (
+                      <Sparkles className="h-3 w-3 animate-pulse" />
+                    ) : (
+                      <Check className="h-3 w-3" />
+                    )}
+                    {isPlanPhase ? "AI 思考中" : "AI 思考"}
+                  </span>
+                  <span
+                    className={`flex items-center gap-1.5 transition-colors ${
+                      isDone
+                        ? "text-[var(--color-success)]"
+                        : executeActive
+                        ? "text-[var(--color-accent)]"
+                        : "text-[var(--color-text-tertiary)]"
+                    }`}
+                  >
+                    {isDone ? (
+                      <Check className="h-3 w-3" />
+                    ) : (
+                      <Zap
+                        className={`h-3 w-3 ${
+                          executeActive ? "animate-pulse" : ""
+                        }`}
+                      />
+                    )}
+                    {executeLabel}
+                  </span>
                 </span>
               </div>
               <div className="relative h-1.5 overflow-hidden rounded-full bg-[var(--color-bg-primary)]">
@@ -1266,7 +1288,7 @@ export default function AiEditWorkbench({
                     {panel?.title ?? `片段 ${processingClipIndex + 1}`}
                   </span>
                   <span className="text-[var(--color-text-tertiary)]">
-                    处理中…
+                    处理中
                   </span>
                 </div>
               );

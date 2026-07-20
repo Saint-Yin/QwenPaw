@@ -90,6 +90,17 @@ def test_model_config_is_single_file_native_and_idempotent(
         "CREATOR_MODEL_CONFIG_PATH",
         str((tmp_path / "config" / "model_config.json").resolve()),
     )
+
+    async def _no_connectivity_probe(_data: ModelConfigData) -> None:
+        return None
+
+    # The endpoint probes every enabled model over the network; the fixture
+    # uses reserved example.test URLs, so keep this test offline-safe.
+    monkeypatch.setattr(
+        model_routes,
+        "_validate_model_connectivity",
+        _no_connectivity_probe,
+    )
     app = FastAPI()
     app.add_exception_handler(CreatorError, creator_error_handler)
     app.include_router(router)
