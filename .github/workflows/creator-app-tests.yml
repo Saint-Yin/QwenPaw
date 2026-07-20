@@ -72,6 +72,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify toolchain matches lockfile
+        # npm ci occasionally crashes ("Exit handler never called") while
+        # still exiting 0, leaving a broken node_modules behind. Fail fast
+        # with the actual installed versions instead of confusing tool
+        # errors in later steps.
+        run: |
+          node_modules/.bin/tsc --version
+          node_modules/.bin/vitest --version
+          npm ls typescript vitest vite
+
       - name: Type check
         run: npm run typecheck
 
