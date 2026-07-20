@@ -100,6 +100,7 @@ class _ProjectTask:
     epoch: int
     task: asyncio.Task[None]
     superseded: bool = False
+    interrupting: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,6 +249,15 @@ class FileCreatorAgentRuntime:
             self.notify(project_id)
             return False
         handle.superseded = superseded
+        if handle.interrupting:
+            # The durable INTERRUPT_REQUESTED status stays visible until the
+            # cancellation cleanup persists the terminal session state, so the
+            # dispatcher polls this path again.  Re-cancelling the task here
+            # would abort that cleanup and leave the Session interrupted
+            # forever; the first cancellation already owns the shutdown.
+            self.notify(project_id)
+            return True
+        handle.interrupting = True
         # Revoke in a worker because an already-started local publication holds
         # this lock until its atomic commit finishes.
         await asyncio.to_thread(

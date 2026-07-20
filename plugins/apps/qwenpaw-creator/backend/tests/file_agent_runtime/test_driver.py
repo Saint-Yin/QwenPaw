@@ -1451,7 +1451,12 @@ def test_durable_interrupt_stops_remote_owner_without_restarting_message(
 
         await asyncio.wait_for(cancelled.wait(), timeout=2.0)
         await owner.wait_until_idle(PROJECT_ID)
-        await asyncio.sleep(0.05)
+        await _wait_for(
+            lambda: services.sessions.get_project_session(
+                PROJECT_ID,
+            ).status.value
+            == "CANCELLED",
+        )
         session = services.sessions.get_project_session(PROJECT_ID)
         runs = owner.runs.list(PROJECT_ID)
         await non_owner.stop()
