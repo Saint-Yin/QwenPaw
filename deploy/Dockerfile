@@ -9,8 +9,6 @@ FROM ${NODE_IMAGE} AS console-builder
 WORKDIR /app
 COPY console /app/console
 RUN cd /app/console && npm ci --include=dev && npm run build
-COPY plugins/apps/qwenpaw-creator/ui /app/creator-ui
-RUN cd /app/creator-ui && npm ci --include=dev && npm run build
 
 # Alias for uv binary so COPY --from can reference a build-arg image.
 FROM ${UV_IMAGE} AS uv-src
@@ -94,14 +92,12 @@ ENV PATH="/app/venv/bin:$PATH"
 
 COPY pyproject.toml setup.py README.md ./
 COPY src ./src
-COPY plugins/apps/qwenpaw-creator ./plugins/apps/qwenpaw-creator
-COPY --from=console-builder /app/creator-ui/dist/ ./plugins/apps/qwenpaw-creator/ui/dist/
 COPY website/public/docs/ ./src/qwenpaw/docs/
 # Inject console dist from build stage (repo does not commit dist).
 COPY --from=console-builder /app/console/dist/ ./src/qwenpaw/console/
 # Speed up Python package installation with uv.
 COPY --from=uv-src /uv /bin/uv
-RUN uv pip install --no-cache-dir . && rm -rf ./build ./plugins
+RUN uv pip install --no-cache-dir . && rm -rf ./build
 
 
 # QwenPaw app port (default 8088). Override at runtime with -e QWENPAW_PORT=3000.

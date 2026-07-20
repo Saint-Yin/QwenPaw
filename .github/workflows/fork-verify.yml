@@ -26,14 +26,12 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Set up Node (for frontend builds)
+      - name: Set up Node (for console build)
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: |
-            console/package-lock.json
-            plugins/apps/qwenpaw-creator/ui/package-lock.json
+          cache-dependency-path: console/package-lock.json
 
       - name: Build console frontend
         run: |
@@ -44,11 +42,6 @@ jobs:
           rm -rf src/qwenpaw/console/*
           mkdir -p src/qwenpaw/console
           cp -R console/dist/* src/qwenpaw/console/
-
-      - name: Build bundled Creator frontend
-        run: |
-          npm --prefix plugins/apps/qwenpaw-creator/ui ci
-          npm --prefix plugins/apps/qwenpaw-creator/ui run build
 
       - name: Bundle docs into package
         run: |

@@ -128,15 +128,6 @@ if (Test-PythonImport "import dotenv") {
 
 Write-Host ""
 
-Write-Host "== Building bundled Creator frontend ==" -ForegroundColor Yellow
-$CreatorUiDir = Join-Path $REPO_ROOT "plugins\apps\qwenpaw-creator\ui"
-npm --prefix $CreatorUiDir ci
-Assert-LastExit "Creator npm ci failed"
-npm --prefix $CreatorUiDir run build
-Assert-LastExit "Creator npm run build failed"
-Write-Host "Creator frontend built" -ForegroundColor Green
-Write-Host ""
-
 # Install project dependencies (ensures ALL runtime deps are importable)
 Write-Host "== Installing project dependencies ==" -ForegroundColor Yellow
 Install-PythonPackages -Packages @("-e", ".[full]")

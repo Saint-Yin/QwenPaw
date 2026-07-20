@@ -18,7 +18,6 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from ...plugins.local_source import resolve_local_plugin_source
 from ..utils import schedule_agent_reload
 
 logger = logging.getLogger(__name__)
@@ -81,60 +80,6 @@ def _list_plugins_from_disk() -> list[dict]:
             },
         )
     return result
-
-
-def _log_safe(value: object) -> str:
-    """Neutralise CR/LF so request-derived values cannot forge log lines."""
-    return str(value).replace("\r", "\\r").replace("\n", "\\n")
-
-
-def _resolve_local_install_path(source: str) -> Path:
-    """Resolve a request-supplied local install path within allowed roots.
-
-    Local installs are restricted to well-known roots (home, temp,
-    working and plugins directories) so the endpoint cannot be used to
-    probe arbitrary filesystem locations.
-
-    Args:
-        source: Local filesystem path from the install request body
-
-    Returns:
-        The resolved plugin source directory
-
-    Raises:
-        HTTPException: If the path escapes the allowed roots or does
-            not exist
-    """
-    from ...config.utils import get_plugins_dir
-
-    candidate = Path(source).resolve()
-    home_root = Path.home().resolve()
-    temp_root = Path(tempfile.gettempdir()).resolve()
-    # macOS resolves /tmp/... to /private/tmp/..., which lives outside
-    # tempfile.gettempdir() (/var/folders/...), so allow it explicitly.
-    system_tmp = Path("/tmp").resolve()  # nosec B108 - allowlist root only
-    work_root = Path.cwd().resolve()
-    plugins_root = get_plugins_dir().resolve()
-    if not (
-        candidate.is_relative_to(home_root)
-        or candidate.is_relative_to(temp_root)
-        or candidate.is_relative_to(system_tmp)
-        or candidate.is_relative_to(work_root)
-        or candidate.is_relative_to(plugins_root)
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Local plugin source must be under the home, temp, "
-                "working or plugins directory."
-            ),
-        )
-    if not candidate.exists():
-        raise HTTPException(
-            status_code=400,
-            detail=f"Path not found: {source}",
-        )
-    return candidate
 
 
 def _safe_extract_zip(
@@ -379,8 +324,7 @@ def _remove_plugin_tools_from_agents(plugin_id: str, meta: dict) -> None:
                 )
     except Exception as exc:
         logger.warning(
-            f"Tool removal from agents skipped for "
-            f"'{_log_safe(plugin_id)}': {exc}",
+            f"Tool removal from agents skipped for '{plugin_id}': {exc}",
         )
 
 
@@ -433,8 +377,8 @@ def _post_unload_cleanup(
                 provider_manager.unregister_plugin_provider(pid)
             except Exception as exc:
                 logger.warning(
-                    f"Could not unregister provider '{_log_safe(pid)}' "
-                    f"for plugin '{_log_safe(plugin_id)}': {exc}",
+                    f"Could not unregister provider '{pid}' "
+                    f"for plugin '{plugin_id}': {exc}",
                 )
 
     # ── Control commands ─────────────────────────────────────────────────
@@ -462,8 +406,7 @@ def _post_unload_cleanup(
                     )
         except Exception as exc:
             logger.warning(
-                f"Command cleanup skipped for plugin "
-                f"'{_log_safe(plugin_id)}': {exc}",
+                f"Command cleanup skipped for plugin '{plugin_id}': {exc}",
             )
 
 
@@ -561,42 +504,6 @@ class InstallPluginRequest(BaseModel):
     force: bool = False
 
 
-async def _force_unload_existing_plugin(
-    request: Request,
-    loader,
-    source_path: Path,
-) -> None:
-    """Unload a previously loaded plugin with the same manifest id.
-
-    Reads ``plugin.json`` under ``source_path`` and, when a plugin with
-    that id is currently loaded, unloads it (keeping its files) and
-    cleans up its runtime registrations so ``load_plugin_from_path``
-    can proceed without a conflict.
-
-    Args:
-        request: FastAPI request (for ``app.state`` access)
-        loader: The active plugin loader
-        source_path: Directory containing the new plugin source
-    """
-    manifest_path = source_path / "plugin.json"
-    if not manifest_path.exists():
-        return
-    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-    existing_id = raw.get("id")
-    if not existing_id or loader.get_loaded_plugin(existing_id) is None:
-        return
-    logger.info(
-        f"Force-reinstall: unloading '{_log_safe(existing_id)}'"
-        " before re-installing",
-    )
-    provider_ids, command_names = _collect_plugin_runtime_ids(
-        loader.registry,
-        existing_id,
-    )
-    await loader.unload_plugin(existing_id, delete_files=False)
-    _post_unload_cleanup(request, existing_id, provider_ids, command_names)
-
-
 @router.post(
     "/install",
     summary="Install plugin from path or URL",
@@ -628,21 +535,11 @@ async def install_plugin(
     temp_dir: Optional[Path] = None
 
     try:
-        try:
-            source_path = resolve_local_plugin_source(source)
-        except (FileNotFoundError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        if source_path is not None:
-            logger.info(
-                "Installing plugin from QwenPaw source: %s",
-                source_path,
-            )
-        elif is_url:
+        if is_url:
             # Download and extract the zip archive
             temp_dir = Path(tempfile.mkdtemp())
             zip_path = temp_dir / "plugin.zip"
-            logger.info(f"Downloading plugin from {_log_safe(source)}")
+            logger.info(f"Downloading plugin from {source}")
             await _async_download(source, zip_path)
 
             with zipfile.ZipFile(zip_path, "r") as zf:
@@ -650,14 +547,46 @@ async def install_plugin(
             zip_path.unlink(missing_ok=True)
             source_path = _find_plugin_dir(temp_dir)
         else:
-            source_path = _resolve_local_install_path(source)
+            source_path = Path(source).resolve()
+            if not source_path.exists():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Path not found: {source}",
+                )
 
         from ...config.utils import get_plugins_dir
 
         # Force-reinstall: unload the existing plugin first so that
         # load_plugin_from_path can proceed without a conflict.
         if body.force:
-            await _force_unload_existing_plugin(request, loader, source_path)
+            manifest_path = source_path / "plugin.json"
+            if manifest_path.exists():
+                raw = json.loads(
+                    manifest_path.read_text(encoding="utf-8"),
+                )
+                existing_id = raw.get("id")
+                if (
+                    existing_id
+                    and loader.get_loaded_plugin(existing_id) is not None
+                ):
+                    logger.info(
+                        f"Force-reinstall: unloading '{existing_id}'"
+                        " before re-installing",
+                    )
+                    _f_pids, _f_cmds = _collect_plugin_runtime_ids(
+                        loader.registry,
+                        existing_id,
+                    )
+                    await loader.unload_plugin(
+                        existing_id,
+                        delete_files=False,
+                    )
+                    _post_unload_cleanup(
+                        request,
+                        existing_id,
+                        _f_pids,
+                        _f_cmds,
+                    )
 
         record = await loader.load_plugin_from_path(
             source_path=source_path,
@@ -739,7 +668,34 @@ async def upload_plugin(
 
         # Force-reinstall: unload existing plugin before re-installing
         if force:
-            await _force_unload_existing_plugin(request, loader, source_path)
+            manifest_path = source_path / "plugin.json"
+            if manifest_path.exists():
+                raw = json.loads(
+                    manifest_path.read_text(encoding="utf-8"),
+                )
+                existing_id = raw.get("id")
+                if (
+                    existing_id
+                    and loader.get_loaded_plugin(existing_id) is not None
+                ):
+                    logger.info(
+                        f"Force-reinstall: unloading '{existing_id}'"
+                        " before re-installing",
+                    )
+                    _u_pids, _u_cmds = _collect_plugin_runtime_ids(
+                        loader.registry,
+                        existing_id,
+                    )
+                    await loader.unload_plugin(
+                        existing_id,
+                        delete_files=False,
+                    )
+                    _post_unload_cleanup(
+                        request,
+                        existing_id,
+                        _u_pids,
+                        _u_cmds,
+                    )
 
         record = await loader.load_plugin_from_path(
             source_path=source_path,
@@ -815,7 +771,7 @@ async def uninstall_plugin(plugin_id: str, request: Request):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         logger.error(
-            f"Plugin uninstall failed for '{_log_safe(plugin_id)}': {exc}",
+            f"Plugin uninstall failed for '{plugin_id}': {exc}",
             exc_info=True,
         )
         raise HTTPException(

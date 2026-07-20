@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -82,23 +81,6 @@ def _requirement_name(requirement: str) -> str:
     return re.sub(r"[-_.]+", "-", name.strip()).casefold()
 
 
-def _literal_string_tuple(path: Path, name: str) -> tuple[str, ...]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        if not any(
-            isinstance(target, ast.Name) and target.id == name
-            for target in node.targets
-        ):
-            continue
-        value = ast.literal_eval(node.value)
-        assert isinstance(value, tuple)
-        assert all(isinstance(item, str) for item in value)
-        return value
-    raise AssertionError(f"{name} is not a literal tuple in {path}")
-
-
 def _sql_import_violations(paths: set[Path]) -> list[str]:
     violations: list[str] = []
     for path in sorted(paths):
@@ -145,7 +127,6 @@ def _run_sql_blocked(
     script: str,
     *,
     data_root: Path,
-    creator_root: Path = PLUGIN_ROOT,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["CREATOR_DATA_ROOT"] = str(data_root)
@@ -159,8 +140,8 @@ def _run_sql_blocked(
     environment["PYTHONPATH"] = os.pathsep.join(
         (
             str(QWENPAW_ROOT / "src"),
-            str(creator_root / "backend"),
-            str(creator_root),
+            str(PLUGIN_ROOT / "backend"),
+            str(PLUGIN_ROOT),
         ),
     )
     return subprocess.run(
@@ -320,128 +301,3 @@ def test_all_creator_executable_modules_are_sql_free() -> None:
     }
     assert python_files
     assert _sql_import_violations(python_files) == []
-
-
-def test_desktop_payload_excludes_sql_runtime() -> None:
-    runtime_paths = _literal_string_tuple(
-        QWENPAW_ROOT / "scripts" / "pack-tauri" / "qwenpaw.spec",
-        "CREATOR_RUNTIME_PATHS",
-    )
-
-    forbidden_payload_roots = {
-        "backend/alembic.ini",
-        "backend/migrations",
-        "backend/api",
-        "backend/models",
-        "backend/services",
-        "backend/utils",
-    }
-    assert forbidden_payload_roots.isdisjoint(runtime_paths)
-    assert {
-        "backend/api/router.py",
-        "backend/api/project_routes.py",
-        "backend/api/project_file_routes.py",
-        "backend/api/file_asset_routes.py",
-        "backend/api/file_command_routes.py",
-        "backend/api/file_session_routes.py",
-        "backend/api/file_source_intelligence_routes.py",
-        "backend/api/file_execution_routes.py",
-        "backend/api/file_media_routes.py",
-        "backend/api/file_view_routes.py",
-        "backend/api/model_routes.py",
-        "backend/services/project_files",
-        "backend/services/file_agent_runtime",
-        "backend/services/runtime_files",
-        "backend/services/source_analysis",
-        "backend/services/storage_root.py",
-    }.issubset(runtime_paths)
-
-    selected_python: set[Path] = set()
-    for relative in runtime_paths:
-        selected = PLUGIN_ROOT / relative
-        if selected.is_file() and selected.suffix == ".py":
-            selected_python.add(selected)
-        elif selected.is_dir():
-            selected_python.update(selected.rglob("*.py"))
-    assert selected_python
-
-    assert _sql_import_violations(selected_python) == []
-
-
-def test_materialized_distribution_payload_starts_without_sql(
-    tmp_path: Path,
-) -> None:
-    runtime_paths = _literal_string_tuple(
-        QWENPAW_ROOT / "scripts" / "pack-tauri" / "qwenpaw.spec",
-        "CREATOR_RUNTIME_PATHS",
-    )
-    payload_root = tmp_path / "installed" / "qwenpaw-creator"
-    for relative in runtime_paths:
-        source = PLUGIN_ROOT / relative
-        target = payload_root / relative
-        if relative == "ui/dist" and not source.exists():
-            continue
-        assert source.exists(), relative
-        if source.is_dir():
-            shutil.copytree(
-                source,
-                target,
-                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
-            )
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
-
-    result = _run_sql_blocked(
-        f"""
-        import asyncio
-        import importlib
-        import importlib.abc
-        from pathlib import Path
-        import sys
-
-        blocked = {SQL_MODULES!r}
-
-        class SqlImportBlocker(importlib.abc.MetaPathFinder):
-            def find_spec(self, fullname, path=None, target=None):
-                if fullname.split('.', 1)[0] in blocked:
-                    raise ImportError(f"blocked SQL module: {{fullname}}")
-                return None
-
-        sys.meta_path.insert(0, SqlImportBlocker())
-
-        import api.router
-        import main
-
-        backend_root = Path({str(payload_root / "backend")!r})
-        payload_modules = []
-        for path in sorted(backend_root.rglob("*.py")):
-            if "__pycache__" in path.parts:
-                continue
-            relative = path.relative_to(backend_root)
-            if relative.name == "__init__.py":
-                parts = relative.parts[:-1]
-            else:
-                parts = (*relative.parts[:-1], relative.stem)
-            if not parts:
-                continue
-            module = ".".join(parts)
-            importlib.import_module(module)
-            payload_modules.append(module)
-        assert payload_modules
-
-        async def startup():
-            await main._startup()
-            assert main._file_services is not None
-            await main._shutdown()
-
-        asyncio.run(startup())
-        assert not [
-            name for name in sys.modules if name.split('.', 1)[0] in blocked
-        ]
-        """,
-        data_root=tmp_path / "distribution-data",
-        creator_root=payload_root,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert not (tmp_path / "distribution-data" / "creator.sqlite3").exists()

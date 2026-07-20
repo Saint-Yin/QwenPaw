@@ -30,32 +30,12 @@ if sys.platform == "darwin":
 else:
     codesign_identity = None
 
-
 def collect_tree(source_dir, target_dir):
     return [
-        (
-            str(path),
-            str(Path(target_dir) / path.relative_to(source_dir).parent),
-        )
+        (str(path), str(Path(target_dir) / path.relative_to(source_dir).parent))
         for path in source_dir.rglob("*")
         if path.is_file()
-        and "__pycache__" not in path.relative_to(source_dir).parts
-        and path.suffix not in {".pyc", ".pyo"}
     ]
-
-
-def collect_selected_tree(source_root, target_root, relative_paths):
-    collected = []
-    for relative in relative_paths:
-        source = source_root / relative
-        target = Path(target_root) / relative
-        if source.is_dir():
-            collected += collect_tree(source, str(target))
-        elif source.is_file():
-            collected.append((str(source), str(target.parent)))
-        else:
-            raise SystemExit(f"required runtime path not found: {source}")
-    return collected
 
 
 # Match the legacy desktop package: the FastAPI backend serves the web console
@@ -81,61 +61,6 @@ datas = [
     (str(SRC / src), dst) for src, dst in _data_dirs if (SRC / src).is_dir()
 ]
 datas += collect_tree(CONSOLE_DIST, "qwenpaw/console")
-
-CREATOR_SOURCE = REPO_ROOT / "plugins" / "apps" / "qwenpaw-creator"
-CREATOR_RUNTIME_PATHS = (
-    "__init__.py",
-    "backend/main.py",
-    "plugin.json",
-    "requirements.txt",
-    "backend/api/__init__.py",
-    "backend/api/dependencies.py",
-    "backend/api/file_asset_routes.py",
-    "backend/api/file_command_routes.py",
-    "backend/api/file_execution_routes.py",
-    "backend/api/file_media_routes.py",
-    "backend/api/file_session_routes.py",
-    "backend/api/file_source_intelligence_routes.py",
-    "backend/api/file_view_routes.py",
-    "backend/api/model_routes.py",
-    "backend/api/project_file_routes.py",
-    "backend/api/project_routes.py",
-    "backend/api/router.py",
-    "backend/domain",
-    "backend/models/__init__.py",
-    "backend/models/asr_model.py",
-    "backend/models/concurrency.py",
-    "backend/models/config.py",
-    "backend/models/dashscope_multimodal.py",
-    "backend/models/image",
-    "backend/models/media_transport.py",
-    "backend/models/model_capability_cache.py",
-    "backend/models/native_content.py",
-    "backend/models/vlm_model.py",
-    "backend/models/video_model.py",
-    "backend/schemas",
-    "backend/services/__init__.py",
-    "backend/services/file_agent_runtime",
-    "backend/services/media_files",
-    "backend/services/project_files",
-    "backend/services/runtime_files",
-    "backend/services/specialist_tools.py",
-    "backend/services/source_analysis",
-    "backend/services/storage_root.py",
-    "backend/utils/__init__.py",
-    "backend/utils/env.py",
-    "backend/utils/exceptions.py",
-    "backend/utils/logger.py",
-    "backend/utils/paths.py",
-    "backend/utils/remote_download.py",
-    "backend/utils/retry.py",
-    "ui/dist",
-)
-datas += collect_selected_tree(
-    CREATOR_SOURCE,
-    "qwenpaw/_bundled_plugins/apps/qwenpaw-creator",
-    CREATOR_RUNTIME_PATHS,
-)
 
 # Include reme package data files (configs, tool yamls, etc.)
 datas += collect_data_files("reme")
@@ -243,7 +168,6 @@ a = Analysis(
 )
 
 pyz = PYZ(a.pure)
-
 
 def script_entry(file_name):
     for item in a.scripts:

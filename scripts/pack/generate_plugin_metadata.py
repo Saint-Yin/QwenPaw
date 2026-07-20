@@ -10,7 +10,6 @@ Layout produced under ``--dist``::
     dist/plugins/
         bundle/<plugin_id>/<id>-<version>.zip
         tool/<plugin_id>/<id>-<version>.zip
-        app/<plugin_id>/<id>-<version>.zip
         index.json
 
 Each plugin is stored under its own directory on the CDN
@@ -39,7 +38,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-KIND_DIRS = ("bundle", "tool", "app", "apps")
+KIND_DIRS = ("bundle", "tool", "apps")
 
 EXCLUDE_PATTERNS = (
     "__pycache__",
