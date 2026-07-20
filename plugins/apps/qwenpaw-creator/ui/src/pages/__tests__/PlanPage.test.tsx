@@ -298,7 +298,9 @@ describe("PlanPage origin/main fidelity", () => {
     fireEvent.click(await screen.findByRole("button", { name: /最终合成/ }));
     expect(await screen.findByText("01 Unit 1")).toBeInTheDocument();
     expect(screen.getByText("单元成片")).toBeInTheDocument();
-    expect(screen.getByText(/已选 1 段/)).toBeInTheDocument();
+    // The auto-selection lands in a follow-up effect render, so wait for it
+    // instead of asserting synchronously (flaky on slow CI runners).
+    expect(await screen.findByText(/已选 1 段/)).toBeInTheDocument();
   });
 
   it("retains completed task feedback for five seconds with the origin close action", async () => {
