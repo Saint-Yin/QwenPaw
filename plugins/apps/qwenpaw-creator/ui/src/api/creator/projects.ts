@@ -146,8 +146,12 @@ export async function getProjectSnapshot(
 export function listProjects(
   limit = 100,
   offset = 0,
+  sortBy: "updated_at" | "created_at" | "name" = "updated_at",
+  sortOrder: "asc" | "desc" = "desc",
 ): Promise<ProjectListResponse> {
-  return creatorRequest(`/projects?limit=${limit}&offset=${offset}`);
+  return creatorRequest(
+    `/projects?limit=${limit}&offset=${offset}&sort_by=${sortBy}&sort_order=${sortOrder}`,
+  );
 }
 
 export function createProject(

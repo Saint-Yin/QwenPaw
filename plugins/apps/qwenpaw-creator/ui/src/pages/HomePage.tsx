@@ -1,6 +1,14 @@
 import { useEffect, useState, useCallback, memo } from "react";
 import { Modal, message } from "antd";
-import { Plus, Trash2, ExternalLink, Film, Clock3 } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  ExternalLink,
+  Film,
+  Clock3,
+  ArrowUp,
+  ArrowDown,
+} from "lucide-react";
 import type { ProjectSummary } from "@/contracts/creator";
 import { deleteProject, listProjects } from "@/api/creator";
 import { useRouter } from "@/routing/navigation";
@@ -97,22 +105,35 @@ const ProjectCard = memo(function ProjectCard({
   );
 });
 
+type SortField = "updated_at" | "created_at" | "name";
+
+const SORT_OPTIONS: { value: SortField; label: string }[] = [
+  { value: "updated_at", label: "按更新时间" },
+  { value: "created_at", label: "按创建时间" },
+  { value: "name", label: "按项目名称" },
+];
+
 export default function HomePage() {
   const router = useRouter();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [composerOpen, setComposerOpen] = useState(false);
+  const [sortBy, setSortBy] = useState<SortField>("updated_at");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
-  const fetchProjects = useCallback(async () => {
-    try {
-      const data = await listProjects();
-      setProjects(data.items || []);
-    } catch {
-      message.error("加载项目列表失败");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const fetchProjects = useCallback(
+    async (sort: SortField = sortBy, order: "asc" | "desc" = sortOrder) => {
+      try {
+        const data = await listProjects(100, 0, sort, order);
+        setProjects(data.items || []);
+      } catch {
+        message.error("加载项目列表失败");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [sortBy, sortOrder],
+  );
 
   useEffect(() => {
     void fetchProjects();
@@ -147,6 +168,21 @@ export default function HomePage() {
     [fetchProjects],
   );
 
+  const handleSortChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const value = e.target.value as SortField;
+      setSortBy(value);
+      fetchProjects(value, sortOrder);
+    },
+    [fetchProjects, sortOrder],
+  );
+
+  const handleSortOrderToggle = useCallback(() => {
+    const newOrder = sortOrder === "asc" ? "desc" : "asc";
+    setSortOrder(newOrder);
+    fetchProjects(sortBy, newOrder);
+  }, [fetchProjects, sortBy, sortOrder]);
+
   const formatDate = useCallback((dateStr: string) => {
     const date = new Date(dateStr);
     return date.toLocaleDateString("zh-CN", {
@@ -179,10 +215,34 @@ export default function HomePage() {
       <main className="page-container py-4">
         <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[rgba(255,255,255,0.5)] p-4">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
+            <div className="flex items-center gap-3">
               <h1 className="text-xl font-semibold text-[var(--color-text-primary)]">
                 我的项目
               </h1>
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={sortBy}
+                  onChange={handleSortChange}
+                  className="cursor-pointer rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1 text-sm text-[var(--color-text-secondary)] outline-none focus:border-[var(--color-accent)]"
+                >
+                  {SORT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleSortOrderToggle}
+                  className="cursor-pointer rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-1 text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+                  title={sortOrder === "asc" ? "升序" : "降序"}
+                >
+                  {sortOrder === "asc" ? (
+                    <ArrowUp className="h-4 w-4" />
+                  ) : (
+                    <ArrowDown className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
             </div>
             <button
               onClick={() => setComposerOpen(true)}

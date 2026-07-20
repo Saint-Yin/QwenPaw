@@ -13,7 +13,7 @@ store.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import APIRouter, Depends, Header, Query, Response, status
@@ -187,10 +187,12 @@ def _existing_bootstrap(
 async def list_projects(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    sort_by: Literal["updated_at", "created_at", "name"] = Query("updated_at"),
+    sort_order: Literal["asc", "desc"] = Query("desc"),
     services: CreatorFileServices = Depends(project_file_services),
 ) -> dict[str, Any]:
     try:
-        records = await asyncio.to_thread(services.projects.list)
+        records = await asyncio.to_thread(services.projects.list, sort_by, sort_order)
     except (ProjectIntegrityError, ProjectStoreError) as exc:
         raise StorageIntegrityError(str(exc)) from exc
     page = records[offset : offset + limit]

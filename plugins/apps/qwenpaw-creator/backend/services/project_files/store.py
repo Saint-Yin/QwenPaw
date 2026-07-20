@@ -264,8 +264,15 @@ class ProjectStore:
             self._atomic_write(project_root, payload)
         return _snapshot(candidate)
 
-    def list(self) -> list[ProjectSummary]:
-        """List valid Projects in deterministic id order.
+    def list(
+        self,
+        sort_by: str = "updated_at",
+        sort_order: str = "desc",
+    ) -> list[ProjectSummary]:
+        """List valid Projects sorted by the requested field and order.
+
+        Supported *sort_by* values: ``updated_at`` (default), ``created_at``,
+        and ``name``. *sort_order* accepts ``asc`` or ``desc`` (default).
 
         Incomplete directories without ``project.json`` and internal deletion
         tombstones are ignored. A discovered but corrupt Project is surfaced as
@@ -308,6 +315,13 @@ class ProjectStore:
                     etag=snapshot.etag,
                 ),
             )
+        reverse = sort_order == "desc"
+        if sort_by == "name":
+            summaries.sort(key=lambda s: s.name.lower(), reverse=reverse)
+        elif sort_by == "created_at":
+            summaries.sort(key=lambda s: s.created_at, reverse=reverse)
+        else:
+            summaries.sort(key=lambda s: s.updated_at, reverse=reverse)
         return summaries
 
     def discover_project_ids(self) -> tuple[str, ...]:
