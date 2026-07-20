@@ -826,12 +826,15 @@ def test_r2v_materialize_heartbeat_covers_stage_publish_and_state_cas(
     )
 
     async def scenario():
+        # The claim window must stay wide enough that CI scheduler stalls
+        # cannot outlive a heartbeat interval (claim/4) and let the second
+        # worker steal the live claim mid-stage.
         first = FileR2VExecutionService(
             services,
             provider=provider,
             poll_interval_seconds=0.01,
-            materialize_timeout_seconds=0.1,
-            materialize_claim_seconds=0.15,
+            materialize_timeout_seconds=0.6,
+            materialize_claim_seconds=0.9,
         )
         dispatch = await first.dispatch(
             project_id="project-1",
@@ -840,16 +843,16 @@ def test_r2v_materialize_heartbeat_covers_stage_publish_and_state_cas(
             idempotency_key="materialize-full-critical-section",
         )
         assert await asyncio.to_thread(entered.wait, 2)
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(1.2)
         second = FileR2VExecutionService(
             services,
             provider=provider,
             poll_interval_seconds=0.01,
-            materialize_timeout_seconds=0.1,
-            materialize_claim_seconds=0.15,
+            materialize_timeout_seconds=0.6,
+            materialize_claim_seconds=0.9,
         )
         second.start_task("project-1", dispatch.task_id)
-        await asyncio.sleep(0.08)
+        await asyncio.sleep(0.35)
         assert stage_calls == 1
         release.set()
         task = await first.wait_for_task(
