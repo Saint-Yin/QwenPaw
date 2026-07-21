@@ -703,7 +703,9 @@ def test_outer_vlm_commit_resolves_remote_cache_media_metadata(
     assert resolved[6].duration_ms == 3_502_567
 
 
-def test_long_video_commit_requires_fine_shots_and_precise_semantics() -> None:
+def test_long_video_commit_accepts_natural_shots_and_requires_precise_semantics() -> (
+    None
+):
     media = SourceMediaMetadata(
         mediaKind="video",
         mediaType="video/mp4",
@@ -712,9 +714,13 @@ def test_long_video_commit_requires_fine_shots_and_precise_semantics() -> None:
         height=360,
     )
 
-    def payload(shot_count: int, precise_semantic_count: int):
+    def payload(
+        duration_ms: int,
+        shot_count: int,
+        precise_semantic_count: int,
+    ):
         boundaries = [
-            round(index * 600_000 / shot_count) for index in range(shot_count + 1)
+            round(index * duration_ms / shot_count) for index in range(shot_count + 1)
         ]
         shots = [
             {
@@ -741,7 +747,7 @@ def test_long_video_commit_requires_fine_shots_and_precise_semantics() -> None:
         semantics.append(
             {
                 "startMs": 0,
-                "endMs": 600_000,
+                "endMs": duration_ms,
                 "text": "全局镜头特征",
                 "tags": ["global", "camera"],
                 "confidence": 0.8,
@@ -756,11 +762,27 @@ def test_long_video_commit_requires_fine_shots_and_precise_semantics() -> None:
             },
         )
 
-    with pytest.raises(ValidationError, match="至少需要 7 个连续 shots"):
-        SourceMediaAnalysisService._assert_agent_ranges(payload(6, 4), media)
     with pytest.raises(ValidationError, match="至少需要 4 条"):
-        SourceMediaAnalysisService._assert_agent_ranges(payload(7, 3), media)
-    assert SourceMediaAnalysisService._assert_agent_ranges(payload(7, 4), media) == 1.0
+        SourceMediaAnalysisService._assert_agent_ranges(
+            payload(600_000, 6, 3),
+            media,
+        )
+    assert (
+        SourceMediaAnalysisService._assert_agent_ranges(
+            payload(600_000, 6, 4),
+            media,
+        )
+        == 1.0
+    )
+
+    long_media = media.model_copy(update={"duration_ms": 3_502_567})
+    assert (
+        SourceMediaAnalysisService._assert_agent_ranges(
+            payload(3_502_567, 21, 6),
+            long_media,
+        )
+        == 1.0
+    )
 
 
 def test_analyze_endpoint_rejects_removed_inner_vlm_path(

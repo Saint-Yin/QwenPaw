@@ -115,7 +115,9 @@ def test_source_prompt_requires_outer_vlm_timeline_and_controlled_commit() -> No
     assert "不使用等长时间网格生成 shots" in prompt
     assert "先按真实场景和主要行为形成第一层自然分段" in prompt
     assert "ceil(durationMs / 90000)" in prompt
-    assert "只细分其中持续时间较长且确实存在微状态变化的区间" in prompt
+    assert "作为建议目标数量" in prompt
+    assert "最终数量以真实可见边界为准" in prompt
+    assert "画面状态连续稳定时保留自然长段" in prompt
     assert "大量边界同时落在整分钟、半分钟或其他固定刻度" in prompt
     assert "主体与可见外观；动作/状态及其阶段" in prompt
     assert "接近/准备 → 动作发生 → 动作完成或离开" in prompt

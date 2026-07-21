@@ -582,13 +582,6 @@ class SourceMediaAnalysisService:
                 "视频 shots 时间线覆盖不足 90%，必须记录开头、过渡、静止/黑屏和结尾",
             )
         if duration_ms >= 600_000:
-            minimum_shots = math.ceil(duration_ms / 90_000)
-            if len(payload.shots) < minimum_shots:
-                raise ValidationError(
-                    "长视频素材理解粒度不足："
-                    f"{duration_ms}ms 至少需要 {minimum_shots} 个连续 shots，"
-                    f"当前仅 {len(payload.shots)} 个",
-                )
             minimum_precise_semantics = min(
                 12,
                 max(4, math.ceil(duration_ms / 600_000)),

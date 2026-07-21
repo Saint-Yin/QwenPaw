@@ -47,7 +47,7 @@ FILE_AGENT_PROMPT_SPECS = {
         _spec(
             "source_intelligence_agent.system",
             "source_intelligence_agent.system.txt",
-            "5b1a1799b7df0f189ffd7017f7cd30e85a3f047067baba9e24f659d216b05fc3",
+            "6d63a36abf16ca4311beb0212a1754226fa806ad9b0ae0d450745d6b2fcbe139",
             "project_id",
             "workspace_schema",
         ),
