@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Literal
@@ -33,6 +34,17 @@ router = APIRouter(tags=["media-files"], route_class=CreatorErrorRoute)
 
 
 _STREAM_CHUNK_BYTES = 64 * 1024
+
+
+def _inline_content_disposition(name: str, media_type: str = "") -> str:
+    """Append a media-type extension for names without one, then inline."""
+
+    original = Path(str(name or "media")).name or "media"
+    if media_type and not Path(original).suffix:
+        ext = mimetypes.guess_extension(media_type.split(";")[0].strip())
+        if ext:
+            original = f"{original}{ext}"
+    return inline_content_disposition(original)
 
 
 def _response_range(
@@ -119,7 +131,7 @@ def _media_response(
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Length": str(length),
-        "Content-Disposition": inline_content_disposition(name),
+        "Content-Disposition": _inline_content_disposition(name, media_type),
         "ETag": etag,
         "Cache-Control": cache_control,
     }
