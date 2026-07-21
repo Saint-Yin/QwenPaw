@@ -134,13 +134,16 @@ def _etag_header(etag: str) -> str:
     return f'"{etag}"'
 
 
+def _semantic_etag(value: str) -> str:
+    """Reduce HTTP entity-tag forms (weak prefix, quotes) to the raw tag."""
+
+    return value.strip().removeprefix("W/").strip().strip('"')
+
+
 def _etag_matches(header: str | None, etag: str) -> bool:
     if not header:
         return False
-    return any(
-        item.strip().removeprefix("W/").strip('"') == etag
-        for item in header.split(",")
-    )
+    return any(_semantic_etag(item) == etag for item in header.split(","))
 
 
 def _project_headers(
@@ -482,7 +485,9 @@ def _build_patch_candidate(
         raise CasConflictError("baseGeneration 超前于当前 Project")
     if (
         request.base_generation == current.generation
-        and request.base_etag != current.etag
+        # The frontend echoes the HTTP ETag header, so accept the quoted
+        # entity-tag form alongside the raw semantic tag.
+        and _semantic_etag(request.base_etag) != current.etag
     ):
         raise CasConflictError("相同 generation 的 Project ETag 不匹配")
     active_blocks = services.blocks(project_id).list_active(

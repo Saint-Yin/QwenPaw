@@ -126,6 +126,46 @@ def test_project_snapshot_etag_patch_and_disjoint_stale_merge(
     )
 
 
+def test_patch_accepts_the_quoted_http_entity_tag_as_base_etag(
+    tmp_path,
+) -> None:
+    app, _services, _base = _app(tmp_path)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            snapshot = await client.get("/projects/project-1/project")
+            # The frontend prefers the HTTP ETag header, which carries the
+            # quoted entity-tag form, and echoes it back as baseEtag.
+            patched = await client.patch(
+                "/projects/project-1/project",
+                headers={"Idempotency-Key": "command-quoted-etag"},
+                json={
+                    "clientCommandId": "command-quoted-etag",
+                    "editSessionId": "edit-quoted",
+                    "baseGeneration": snapshot.json()["generation"],
+                    "baseEtag": snapshot.headers["etag"],
+                    "operations": [
+                        {
+                            "op": "replace",
+                            "path": "/name",
+                            "value": "Quoted base name",
+                            "expectedValueHash": hash_json_value("Initial"),
+                        },
+                    ],
+                },
+            )
+        return snapshot, patched
+
+    snapshot, patched = _run(scenario())
+    assert snapshot.headers["etag"].startswith('"')
+    assert patched.status_code == 200
+    assert patched.json()["project"]["name"] == "Quoted base name"
+
+
 def test_same_field_stale_patch_returns_cas_conflict(tmp_path) -> None:
     app, _services, base = _app(tmp_path)
 
