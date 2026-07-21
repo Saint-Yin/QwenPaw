@@ -99,8 +99,17 @@ def value_at(document: Any, pointer: str, *, missing: Any = MISSING) -> Any:
 
 
 def canonical_json_bytes(value: Any) -> bytes:
+    def normalize_numbers(obj: Any) -> Any:
+        if isinstance(obj, float) and obj.is_integer():
+            return int(obj)
+        if isinstance(obj, dict):
+            return {k: normalize_numbers(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [normalize_numbers(v) for v in obj]
+        return obj
+
     return json.dumps(
-        value,
+        normalize_numbers(value),
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
