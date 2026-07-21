@@ -148,7 +148,9 @@ def _create_project(tmp_path, *, initial_goal: str | None):
             conversation_id=CONVERSATION_ID,
             initial_goal=initial_goal,
             goal_id=GOAL_ID if initial_goal is not None else None,
-            initial_message_id="message-initial" if initial_goal is not None else None,
+            initial_message_id="message-initial"
+            if initial_goal is not None
+            else None,
             initial_client_message_id=(
                 "client-initial" if initial_goal is not None else None
             ),
@@ -346,7 +348,9 @@ def test_creator_agent_can_call_ground_prompt_context_tool(
 
     async def callback(messages, tools):
         nonlocal turn
-        assert "ground_prompt_context" in {item["function"]["name"] for item in tools}
+        assert "ground_prompt_context" in {
+            item["function"]["name"] for item in tools
+        }
         turn += 1
         if turn == 1:
             return AgentModelTurn(
@@ -478,7 +482,10 @@ def test_grounding_visual_promotion_is_idempotent(tmp_path) -> None:
     assert replay["promoted_count"] == 1
     assert replay["issues"] == []
     assert replay_project.generation == first_generation
-    assert replay_project.assets.files_by_id[file_id].created_at == first_created_at
+    assert (
+        replay_project.assets.files_by_id[file_id].created_at
+        == first_created_at
+    )
 
 
 def test_stream_persistence_failure_is_not_reported_as_a_model_failure(
@@ -522,7 +529,9 @@ def test_stream_persistence_failure_is_not_reported_as_a_model_failure(
     assert session.error is not None
     assert session.error["code"] == "STREAM_PERSISTENCE_FAILED"
     assert session.error["retryable"] is True
-    failed = [event for event in events if event.event_type == "agent.run.failed"]
+    failed = [
+        event for event in events if event.event_type == "agent.run.failed"
+    ]
     assert failed[-1].payload["error"]["code"] == "STREAM_PERSISTENCE_FAILED"
 
 
@@ -543,9 +552,13 @@ def test_parent_authors_timeline_elements_without_planning_specialists(
             "delegate_to_agent",
         }
         delegate = next(
-            item for item in tools if item["function"]["name"] == "delegate_to_agent"
+            item
+            for item in tools
+            if item["function"]["name"] == "delegate_to_agent"
         )
-        roles = delegate["function"]["parameters"]["properties"]["role"]["enum"]
+        roles = delegate["function"]["parameters"]["properties"]["role"][
+            "enum"
+        ]
         assert roles == [
             "source_intelligence_agent",
             "visual_development_agent",
@@ -652,7 +665,9 @@ def test_parent_authors_timeline_elements_without_planning_specialists(
         return project, specialist_runs, events
 
     project, specialist_runs, events = asyncio.run(scenario())
-    element = project.project.timelines.items["timeline:main"].elements_by_id["r2v-1"]
+    element = project.project.timelines.items["timeline:main"].elements_by_id[
+        "r2v-1"
+    ]
     assert element.creation.type == "r2v"
     assert element.span.duration_tick == 15_000
     assert specialist_runs == []
@@ -671,7 +686,9 @@ def test_source_intelligence_receives_every_user_media_part_directly(
 
     async def parent_callback(messages, tools):
         nonlocal parent_turn
-        assert "delegate_to_agent" in {item["function"]["name"] for item in tools}
+        assert "delegate_to_agent" in {
+            item["function"]["name"] for item in tools
+        }
         parent_turn += 1
         if parent_turn == 1:
             return AgentModelTurn(
@@ -864,7 +881,9 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
         nonlocal parent_turn, read_intelligence
         parent_turn += 1
         if parent_turn == 1:
-            assert f"asset-version:{asset_version_id}" in messages[-1]["content"]
+            assert (
+                f"asset-version:{asset_version_id}" in messages[-1]["content"]
+            )
             return AgentModelTurn(
                 tool_calls=(
                     AgentToolCall(
@@ -876,7 +895,9 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
             )
         if parent_turn == 2:
             observed = json.loads(messages[-1]["content"])
-            source = observed["project"]["sources"]["sources"]["items"][source_id]
+            source = observed["project"]["sources"]["sources"]["items"][
+                source_id
+            ]
             assert source["selected_asset_version_id"] == asset_version_id
             return AgentModelTurn(
                 tool_calls=(
@@ -905,12 +926,14 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
             )
         if parent_turn == 4:
             observed = json.loads(messages[-1]["content"])
-            source = observed["project"]["sources"]["sources"]["items"][source_id]
+            source = observed["project"]["sources"]["sources"]["items"][
+                source_id
+            ]
             intelligence_id = source["current_intelligence_version_id"]
             assert intelligence_id
-            file_id = observed["project"]["assets"]["intelligence_versions_by_id"][
-                intelligence_id
-            ]["file_id"]
+            file_id = observed["project"]["assets"][
+                "intelligence_versions_by_id"
+            ][intelligence_id]["file_id"]
             return AgentModelTurn(
                 tool_calls=(
                     AgentToolCall(
@@ -1140,12 +1163,16 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
 
     project, specialist_runs = asyncio.run(scenario())
     assert read_intelligence is True
-    element = project.timelines.items["timeline:main"].elements_by_id["edit-source"]
+    element = project.timelines.items["timeline:main"].elements_by_id[
+        "edit-source"
+    ]
     assert element.render_source is not None
     assert element.render_source.version_id == asset_version_id
     assert element.creation.source_intelligence_version_id is not None
     assert (
-        project.sources.sources.items[source_id].current_intelligence_version_id
+        project.sources.sources.items[
+            source_id
+        ].current_intelligence_version_id
         is not None
     )
     assert {item.role.value for item in specialist_runs} == {
@@ -1376,6 +1403,188 @@ def test_interrupt_returns_before_slow_task_cleanup_finishes(tmp_path) -> None:
     assert interrupted is True
     assert still_active is True
     assert session.status.value == "CANCELLED"
+
+
+def test_specialist_cancel_emits_terminal_event(tmp_path) -> None:
+    """A specialist run cancelled mid-flight (RUNNING_MODEL) must emit a
+    terminal ``subagent.failed`` event.
+    """
+
+    async def scenario():
+        services, _snapshot = _create_project(tmp_path, initial_goal="生成角色图")
+        specialist_started = asyncio.Event()
+        cancel_entered = asyncio.Event()
+
+        async def callback(messages, tools):
+            names = {item["function"]["name"] for item in tools}
+            if "delegate_to_agent" in names:
+                return AgentModelTurn(
+                    tool_calls=(
+                        AgentToolCall(
+                            call_id="delegate-visual",
+                            name="delegate_to_agent",
+                            arguments={
+                                "role": "visual_development_agent",
+                                "target_refs": ["project:assets"],
+                                "task": "整体视觉",
+                            },
+                        ),
+                    ),
+                )
+            # Specialist turn: block forever until the parent is interrupted.
+            specialist_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancel_entered.set()
+                raise
+
+        driver = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(callback),
+            poll_interval_seconds=0.01,
+        )
+        await driver.start()
+        driver.notify(PROJECT_ID)
+        await asyncio.wait_for(specialist_started.wait(), timeout=2.0)
+        interrupted = await driver.interrupt(PROJECT_ID, reason="test-stop")
+        await driver.wait_until_idle(PROJECT_ID)
+        specialist_runs = driver.executions.list_specialist_runs(PROJECT_ID)
+        events = services.sessions.list_events(PROJECT_ID, SESSION_ID)
+        await driver.stop()
+        return interrupted, specialist_runs, events, cancel_entered
+
+    interrupted, specialist_runs, events, cancel_entered = asyncio.run(
+        scenario(),
+    )
+
+    assert interrupted is True
+    assert (
+        cancel_entered.is_set()
+    ), "CancelledError never reached the specialist coroutine"
+    assert len(specialist_runs) == 1
+    assert specialist_runs[0].status.value == "CANCELLED"
+    terminal = [
+        item
+        for item in events
+        if item.event_type.startswith("subagent.")
+        and item.event_type
+        in {"subagent.failed", "subagent.cancelled", "subagent.completed"}
+    ]
+    assert terminal, (
+        "no terminal subagent event emitted on cancel; events="
+        f"{[e.event_type for e in events if e.event_type.startswith('subagent.')]}"
+    )
+    cancelled_event = terminal[-1]
+    assert cancelled_event.event_type == "subagent.failed"
+    assert cancelled_event.payload.get("cancelled") is True
+
+
+def test_specialist_cancel_while_waiting_runtime_emits_terminal_event(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A specialist run cancelled while WAITING_RUNTIME (a long-running tool
+    mid-invoke) must still emit a terminal ``subagent.failed`` event.
+
+    Regression companion to the RUNNING_MODEL case: the run reaches the
+    cancel-except only after the invoke-finally bridges WAITING_RUNTIME back to
+    RUNNING_MODEL, so the on-disk transition succeeds — but the terminal event
+    was still missing.  Locks in that the event fires on this path too.
+    """
+    import services.file_agent_runtime.driver as driver_module
+    from models.config import EXECUTION_AUTHORIZATION_ALLOW_ALL
+
+    monkeypatch.setattr(
+        driver_module,
+        "get_execution_authorization_mode",
+        lambda: EXECUTION_AUTHORIZATION_ALLOW_ALL,
+    )
+
+    async def scenario():
+        services, _snapshot = _create_project(tmp_path, initial_goal="生成角色图")
+        invoke_started = asyncio.Event()
+        cancel_entered = asyncio.Event()
+
+        async def callback(messages, tools):
+            names = {item["function"]["name"] for item in tools}
+            if "delegate_to_agent" in names:
+                return AgentModelTurn(
+                    tool_calls=(
+                        AgentToolCall(
+                            call_id="delegate-visual",
+                            name="delegate_to_agent",
+                            arguments={
+                                "role": "visual_development_agent",
+                                "target_refs": ["project:assets"],
+                                "task": "整体视觉",
+                            },
+                        ),
+                    ),
+                )
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id="gen-1",
+                        name="image_generation",
+                        arguments={
+                            "projectId": PROJECT_ID,
+                            "targetRef": "asset:hero",
+                            "arguments": {"prompt": "hero"},
+                        },
+                    ),
+                ),
+            )
+
+        async def blocking_invoke(**_kwargs):
+            invoke_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancel_entered.set()
+                raise
+
+        driver = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(callback),
+            poll_interval_seconds=0.01,
+        )
+        driver.specialist_tools.invoke = blocking_invoke  # type: ignore[method-assign]
+        await driver.start()
+        driver.notify(PROJECT_ID)
+        await asyncio.wait_for(invoke_started.wait(), timeout=2.0)
+        interrupted = await driver.interrupt(PROJECT_ID, reason="test-stop")
+        await driver.wait_until_idle(PROJECT_ID)
+        specialist_runs = driver.executions.list_specialist_runs(PROJECT_ID)
+        events = services.sessions.list_events(PROJECT_ID, SESSION_ID)
+        await driver.stop()
+        return interrupted, specialist_runs, events, cancel_entered
+
+    interrupted, specialist_runs, events, cancel_entered = asyncio.run(
+        scenario(),
+    )
+
+    assert interrupted is True
+    assert (
+        cancel_entered.is_set()
+    ), "CancelledError never reached the specialist invoke"
+    assert len(specialist_runs) == 1
+    assert specialist_runs[0].status.value == "CANCELLED"
+    terminal = [
+        item
+        for item in events
+        if item.event_type.startswith("subagent.")
+        and item.event_type
+        in {"subagent.failed", "subagent.cancelled", "subagent.completed"}
+    ]
+    assert terminal, (
+        "no terminal subagent event emitted on cancel while WAITING_RUNTIME; "
+        "events="
+        f"{[e.event_type for e in events if e.event_type.startswith('subagent.')]}"
+    )
+    cancelled_event = terminal[-1]
+    assert cancelled_event.event_type == "subagent.failed"
+    assert cancelled_event.payload.get("cancelled") is True
 
 
 def test_redundant_supersede_preserves_pending_replacement_message(
@@ -1703,7 +1912,9 @@ def test_missing_model_configuration_persists_session_error(tmp_path) -> None:
     assert run.status is AgentRunStatus.FAILED
 
 
-def test_failed_run_is_not_relaunched_after_restart_or_notify(tmp_path) -> None:
+def test_failed_run_is_not_relaunched_after_restart_or_notify(
+    tmp_path,
+) -> None:
     """A failed request is a durable input boundary.
 
     Neither a process restart (which discards the in-memory blocked-head
