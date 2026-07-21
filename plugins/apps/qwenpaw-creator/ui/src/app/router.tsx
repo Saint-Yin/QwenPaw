@@ -16,12 +16,6 @@ const HomePage = lazy(() =>
 const PlanPage = lazy(() =>
   loadWithChunkRecovery(() => import("@/pages/PlanPage")),
 );
-const UnitWorkbenchPage = lazy(() =>
-  loadWithChunkRecovery(() => import("@/pages/UnitWorkbenchPage")),
-);
-const SectionComposePage = lazy(() =>
-  loadWithChunkRecovery(() => import("@/pages/SectionComposePage")),
-);
 const AssetsPage = lazy(() =>
   loadWithChunkRecovery(() => import("@/pages/AssetsPage")),
 );
@@ -36,8 +30,6 @@ function suspended(
 export const FORMAL_CREATOR_ROUTES = [
   "/",
   "/project/:id/plan",
-  "/project/:id/plan/unit/:unitId/workbench",
-  "/project/:id/plan/section/:sectionId",
   "/project/:id/assets",
 ] as const;
 
@@ -99,16 +91,6 @@ export const CREATOR_ROUTE_OBJECTS: RouteObject[] = [
             id: "project-plan",
             path: "plan",
             element: suspended(<PlanPage />),
-          },
-          {
-            id: "project-unit-workbench",
-            path: "plan/unit/:unitId/workbench",
-            element: suspended(<UnitWorkbenchPage />, "editor"),
-          },
-          {
-            id: "project-section-compose",
-            path: "plan/section/:sectionId",
-            element: suspended(<SectionComposePage />, "editor"),
           },
           {
             id: "project-assets",

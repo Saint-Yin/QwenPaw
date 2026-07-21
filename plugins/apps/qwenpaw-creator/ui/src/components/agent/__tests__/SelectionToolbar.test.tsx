@@ -12,9 +12,8 @@ describe("SelectionToolbar project locator", () => {
   });
 
   it("opens for a Creator field and keeps its semantic locator and exact project.json path", async () => {
-    const field = "unit:u1/editPlan/storyboard/panel:panel-1/description";
-    const path =
-      "/production/units_by_id/u1/plan/storyboard/items/panel-1/description";
+    const field = "element:r2v-1/label";
+    const path = "/timelines/items/timeline:main/elements_by_id/r2v-1/label";
     const { container } = render(
       <>
         <p
@@ -48,7 +47,7 @@ describe("SelectionToolbar project locator", () => {
 
     expect(useAgentDockUiStore.getState().selection).toMatchObject({
       text: "源视频关键帧",
-      ref: "unit:u1",
+      ref: "element:r2v-1",
       field,
       path,
       label: "VLM 分镜 1 · 描述",

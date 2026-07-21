@@ -2,12 +2,7 @@ import { create } from "zustand";
 import type { RefSearchItem } from "@/contracts/creator";
 import type { SelectionAttachment } from "./agentDockUiStore";
 
-export type CreatorPanel =
-  | "plan"
-  | "workbench"
-  | "assets"
-  | "compose"
-  | "other";
+export type CreatorPanel = "plan" | "assets" | "other";
 
 interface CreatorInteractionState {
   panel: CreatorPanel;

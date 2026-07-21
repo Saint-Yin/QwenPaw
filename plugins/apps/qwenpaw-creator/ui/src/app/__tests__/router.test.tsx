@@ -9,23 +9,16 @@ function terminalRouteId(path: string): string | undefined {
 }
 
 describe("Creator hash router", () => {
-  it("registers the five formal Creator page paths", () => {
+  it("registers only the Project, Timeline/Element Plan, and Assets page paths", () => {
     expect(FORMAL_CREATOR_ROUTES).toEqual([
       "/",
       "/project/:id/plan",
-      "/project/:id/plan/unit/:unitId/workbench",
-      "/project/:id/plan/section/:sectionId",
       "/project/:id/assets",
     ]);
     expect(terminalRouteId("/")).toBe("home");
     expect(terminalRouteId("/project/p1/plan")).toBe("project-plan");
-    expect(terminalRouteId("/project/p1/plan/unit/u1/workbench")).toBe(
-      "project-unit-workbench",
-    );
-    expect(terminalRouteId("/project/p1/plan/section/s1")).toBe(
-      "project-section-compose",
-    );
     expect(terminalRouteId("/project/p1/assets")).toBe("project-assets");
+    expect(terminalRouteId("/project/p1/unknown")).toBe("project-not-found");
   });
 
   it("keeps /project/:id as the sole project default entry", () => {
@@ -40,15 +33,5 @@ describe("Creator hash router", () => {
     expect(normalizeCreatorRoute("project/p1/plan")).toBeNull();
     expect(normalizeCreatorRoute("//example.com/project/p1/plan")).toBeNull();
     expect(normalizeCreatorRoute("/project/p1/plan#other")).toBeNull();
-  });
-
-  it.each([
-    "/project/p1/script",
-    "/project/p1/video",
-    "/project/p1/edit/episode-1",
-    "/project/p1/canvas",
-    "/project/p1/canvas/asset-canvas",
-  ])("does not register or redirect removed route %s", (path) => {
-    expect(terminalRouteId(path)).toBe("project-not-found");
   });
 });

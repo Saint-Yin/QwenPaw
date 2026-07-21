@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
-"""Page object for the retained origin/main Plan and Compose surfaces."""
-from __future__ import annotations
+"""Page object for the schema-v2 Timeline/Element Plan surface."""
 
-import re
+from __future__ import annotations
 
 from playwright.sync_api import Locator, Page
 
@@ -12,55 +11,42 @@ class PlanPage:
     def __init__(self, page: Page):
         self.page = page
 
-    def open(self, project_id: str):
+    def open(self, project_id: str) -> "PlanPage":
         self.page.goto(f"/#/project/{project_id}/plan")
         self.page.get_by_role("heading", name="视频方案", exact=True).wait_for()
+        self.page.locator("[data-timeline-panel]").wait_for()
         return self
 
-    def section_card(self, section_id: str) -> Locator:
-        return self.page.locator(
-            f"[data-creator-module='section-card'][data-creator-module-id='{section_id}']",
+    def element_list_item(self, element_id: str) -> Locator:
+        return self.page.locator(f"[data-element-list-item='{element_id}']")
+
+    def element_block(self, element_id: str) -> Locator:
+        return self.page.locator(f"[data-element-block='{element_id}']")
+
+    def element_detail(self, element_id: str) -> Locator:
+        return self.page.locator(f"[data-element-detail='{element_id}']")
+
+    def select_element(self, element_id: str) -> "PlanPage":
+        self.element_list_item(element_id).click()
+        self.element_detail(element_id).wait_for()
+        return self
+
+    def collapse_timeline(self) -> "PlanPage":
+        self.page.get_by_role("button", name="折叠", exact=True).click()
+        return self
+
+    def select_timeline_fraction(self, fraction: float) -> "PlanPage":
+        chart = self.page.locator("[data-timeline-chart]")
+        box = chart.bounding_box()
+        if box is None:
+            raise AssertionError("Timeline chart is not visible")
+        chart.click(
+            position={"x": box["width"] * fraction, "y": box["height"] - 18},
         )
-
-    def select_section(self, section_id: str):
-        self.section_card(section_id).click()
         return self
 
-    def select_unit(self, unit_id: str):
-        self.page.goto(
-            f"{self.page.url.split('#')[0]}#/project/"
-            f"{self._project_id()}/plan?unit={unit_id}",
-        )
-        return self
-
-    def add_section(self):
-        self.page.get_by_role("button", name="添加结构段", exact=True).click()
-        return self
-
-    def plan_units(self):
-        self.page.get_by_role("button", name="Agent 规划任务", exact=True).click()
-        return self
-
-    def open_script_generator(self):
-        self.page.get_by_role("button", name="生成结构", exact=True).click()
-        self.page.get_by_text("从主题生成剧本", exact=True).wait_for()
-        return self
-
-    def open_final_compose(self):
-        self.page.get_by_role("button", name="最终合成", exact=True).click()
-        self.page.get_by_text("最终剪辑视频合成", exact=True).wait_for()
-        return self
-
-    def open_section_compose(self, project_id: str, section_id: str):
-        self.page.goto(f"/#/project/{project_id}/plan/section/{section_id}")
-        self.page.get_by_role(
-            "heading",
-            name=re.compile(r"拼接与预览："),
-        ).wait_for()
-        return self
-
-    def _project_id(self) -> str:
-        match = re.search(r"/project/([^/]+)/plan", self.page.url)
-        if not match:
-            raise AssertionError(f"当前不是 Plan URL：{self.page.url}")
-        return match.group(1)
+    def open_video_preview(self) -> Locator:
+        self.page.get_by_role("button", name="视频预览", exact=True).click()
+        preview = self.page.locator("[data-timeline-video-preview]")
+        preview.wait_for()
+        return preview

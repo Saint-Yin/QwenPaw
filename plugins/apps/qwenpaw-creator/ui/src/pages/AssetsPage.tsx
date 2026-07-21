@@ -1,1090 +1,651 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Dropdown, Input, message, Modal, Tabs } from "antd";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Button, Input, message, Modal, Tabs } from "antd";
 import {
-  PlusOutlined,
-  SearchOutlined,
-  UploadOutlined,
-} from "@ant-design/icons";
-import { Boxes, Paperclip, Sparkles } from "lucide-react";
-import type {
-  AssetDetailView,
-  AssetLibraryView,
-  IngestItemView,
-  PresentationAssetView,
-} from "@/contracts/creator";
+  Box,
+  FileText,
+  Film,
+  Image as ImageIcon,
+  Link2,
+  Music2,
+  Paperclip,
+  Search,
+  Sparkles,
+  Upload,
+} from "lucide-react";
 import {
   getArtifactVersionMediaUrl,
-  getAssetContentUrl,
+  getAssetVersionMediaUrl,
   ingestAssetFile,
   ingestAssetValue,
 } from "@/api/creator";
+import type {
+  ArtifactVersionDocument,
+  ProjectDocument,
+  SourceAssetVersionDocument,
+  VisualEntityDocument,
+} from "@/contracts/creator";
 import { navigate, useParams, useSearchParams } from "@/routing/navigation";
-import {
-  presentationOf,
-  useWorkspaceViewStore,
-} from "@/store/workspaceViewStore";
-import { useCreatorSessionStore } from "@/store/creatorSessionStore";
-import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
+import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
-import { useNavigationStore } from "@/store/navigationStore";
-import { useCreatorCommand } from "@/hooks/useCreatorCommand";
-import { taskErrorMessage, taskProgressPercent } from "@/lib/taskPresentation";
-import PageSkeleton from "@/components/PageSkeleton";
-import EmptyState from "@/components/EmptyState";
-import AssetCard, {
-  type AssetDisplayItem,
-} from "@/components/assets/AssetCard";
-import AssetInspector from "@/components/assets/AssetInspector";
-import AssetDetailPanel, {
-  type ReferenceImageOption,
-} from "@/components/AssetDetailPanel";
+import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
+import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
+import AssetMediaPreview from "@/components/assets/AssetMediaPreview";
 import PageLoadError from "@/components/PageLoadError";
+import PageSkeleton from "@/components/PageSkeleton";
 
-type AssetFilterKey =
+type FilterKey =
   | "all"
-  | "upload"
-  | "subject_ref"
-  | "env_ref"
-  | "brand_constraint"
-  | "understanding"
-  | "generated"
-  | "storyboard_image"
-  | "generated_video"
-  | "planned";
-
-const FILTERS: Array<{
-  key: AssetFilterKey;
-  label: string;
-  divider?: boolean;
-}> = [
-  { key: "all", label: "全部资产" },
-  { key: "upload", label: "用户上传" },
-  { key: "subject_ref", label: "主体参考" },
-  { key: "env_ref", label: "环境参考" },
-  { key: "brand_constraint", label: "品牌约束" },
-  { key: "understanding", label: "理解资产" },
-  { key: "generated", label: "生成资产" },
-  { key: "storyboard_image", label: "分镜图", divider: true },
-  { key: "generated_video", label: "影片片段" },
-  { key: "planned", label: "待完善资产", divider: true },
-];
-
-type DetailKind = AssetDetailView["kind"];
-type DetailAssetItem = AssetDetailView;
-
-const DETAIL_TAB: Record<
-  DetailKind,
-  "characters" | "scenes" | "props" | "materials"
-> = {
-  character: "characters",
-  scene: "scenes",
-  prop: "props",
-  material: "materials",
+  | "source"
+  | "artifact"
+  | "visual"
+  | "image"
+  | "video"
+  | "audio";
+type AssetItem = {
+  id: string;
+  ref: string;
+  kind: "source" | "artifact" | "visual";
+  name: string;
+  description: string;
+  mediaKind: string;
+  mediaType: string;
+  previewUrl?: string;
+  createdAt?: string;
+  stale?: boolean;
+  durationSeconds?: number | null;
+  checksum?: string;
+  ownerRef?: string;
+  provenanceRefs: string[];
+  metadata: Record<string, unknown>;
+  raw:
+    | SourceAssetVersionDocument
+    | ArtifactVersionDocument
+    | VisualEntityDocument;
 };
 
-function scenarioCategoryLabel(key: AssetFilterKey, scenario?: string): string {
-  if (key === "subject_ref")
-    return scenario === "short_drama"
-      ? "角色"
-      : scenario === "video_edit"
-      ? "主体素材"
-      : "主体参考";
-  if (key === "env_ref")
-    return scenario === "short_drama"
-      ? "场景"
-      : scenario === "video_edit"
-      ? "场景素材"
-      : "环境参考";
-  return FILTERS.find((item) => item.key === key)?.label || key;
+const FILTERS: Array<{ key: FilterKey; label: string }> = [
+  { key: "all", label: "全部" },
+  { key: "source", label: "来源素材" },
+  { key: "artifact", label: "生成产物" },
+  { key: "visual", label: "视觉设定" },
+  { key: "image", label: "图片" },
+  { key: "video", label: "视频" },
+  { key: "audio", label: "音频" },
+];
+
+function fileMedia(
+  project: ProjectDocument,
+  fileId: string | null,
+): { kind: string; type: string } {
+  const type = fileId
+    ? project.assets.files_by_id[fileId]?.media_type || ""
+    : "";
+  const kind = type.startsWith("image/")
+    ? "image"
+    : type.startsWith("video/")
+    ? "video"
+    : type.startsWith("audio/")
+    ? "audio"
+    : type.startsWith("text/")
+    ? "text"
+    : "other";
+  return { kind, type };
 }
 
-function detailKindOf(asset: AssetDisplayItem): DetailKind | null {
-  return asset.detail?.kind ?? null;
+function artifactMedia(
+  project: ProjectDocument,
+  artifact: ArtifactVersionDocument,
+): { kind: string; type: string } {
+  const file = fileMedia(project, artifact.file_id);
+  if (file.kind !== "other") return file;
+  const hint = `${artifact.kind} ${artifact.name}`.toLocaleLowerCase();
+  if (hint.includes("video") || hint.includes("render"))
+    return { kind: "video", type: file.type };
+  if (hint.includes("audio")) return { kind: "audio", type: file.type };
+  if (hint.includes("image") || hint.includes("storyboard"))
+    return { kind: "image", type: file.type };
+  return file;
 }
 
-function replacePromptConfig(
-  asset: DetailAssetItem,
-  promptIndex: number,
-  prompt: string,
-  referenceImageUrls: string[],
-): DetailAssetItem {
-  const prompts = [...(asset.prompts || [])];
-  const references = [...asset.referenceImageRefs];
-  prompts[promptIndex] = prompt;
-  references[promptIndex] = referenceImageUrls;
-  return { ...asset, prompts, referenceImageRefs: references };
+function assetItems(project: ProjectDocument): AssetItem[] {
+  const sources = Object.values(project.assets.source_versions_by_id).map(
+    (source): AssetItem => ({
+      id: source.version_id,
+      ref: `asset-version:${source.version_id}`,
+      kind: "source",
+      name: source.name || source.version_id,
+      description: String(
+        source.metadata.description ||
+          source.metadata.user_notes ||
+          "用户导入的来源素材",
+      ),
+      mediaKind: source.media_kind,
+      mediaType: source.media_type,
+      previewUrl: ["image", "video", "audio"].includes(source.media_kind)
+        ? getAssetVersionMediaUrl(source.version_id)
+        : undefined,
+      createdAt: source.created_at,
+      durationSeconds: source.duration_seconds,
+      checksum: source.checksum,
+      provenanceRefs: source.provenance_refs,
+      metadata: source.metadata,
+      raw: source,
+    }),
+  );
+  const artifacts = Object.values(project.assets.artifact_versions_by_id).map(
+    (artifact): AssetItem => {
+      const media = artifactMedia(project, artifact);
+      return {
+        id: artifact.version_id,
+        ref: `artifact-version:${artifact.version_id}`,
+        kind: "artifact",
+        name: artifact.name || artifact.version_id,
+        description: artifact.stale
+          ? artifact.stale_reason || "该产物依赖的 Project 内容已经变化"
+          : `${artifact.kind} · generation ${artifact.based_on_generation}`,
+        mediaKind: media.kind,
+        mediaType: media.type,
+        previewUrl: ["image", "video", "audio"].includes(media.kind)
+          ? getArtifactVersionMediaUrl(artifact.version_id)
+          : undefined,
+        createdAt: artifact.created_at,
+        stale: artifact.stale,
+        durationSeconds: artifact.duration_seconds,
+        checksum: artifact.checksum,
+        ownerRef: artifact.owner_ref,
+        provenanceRefs: artifact.provenance_refs,
+        metadata: artifact.metadata,
+        raw: artifact,
+      };
+    },
+  );
+  const visuals = project.visual.entities.order
+    .map((entityId) => project.visual.entities.items[entityId])
+    .filter(Boolean)
+    .map((entity): AssetItem => {
+      const artifact = entity.selected_artifact_version_id
+        ? project.assets.artifact_versions_by_id[
+            entity.selected_artifact_version_id
+          ]
+        : undefined;
+      const media = artifact
+        ? artifactMedia(project, artifact)
+        : { kind: "image", type: "" };
+      return {
+        id: entity.entity_id,
+        ref: `visual-entity:${entity.entity_id}`,
+        kind: "visual",
+        name: entity.name,
+        description:
+          entity.description || entity.continuity || `${entity.kind} 视觉设定`,
+        mediaKind: media.kind,
+        mediaType: media.type,
+        previewUrl: artifact
+          ? getArtifactVersionMediaUrl(artifact.version_id)
+          : undefined,
+        stale: artifact?.stale,
+        ownerRef: artifact?.owner_ref,
+        provenanceRefs: [],
+        metadata: {
+          kind: entity.kind,
+          continuity: entity.continuity,
+          variants: entity.variants.order.length,
+          selected_artifact_version_id: entity.selected_artifact_version_id,
+        },
+        raw: entity,
+      };
+    });
+  return [...visuals, ...sources, ...artifacts].sort(
+    (left, right) =>
+      (right.createdAt || "").localeCompare(left.createdAt || "") ||
+      left.name.localeCompare(right.name),
+  );
 }
 
-function useDebouncedValue(value: string, delay: number): string {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebounced(value), delay);
-    return () => window.clearTimeout(timer);
-  }, [delay, value]);
-  return debounced;
+function kindLabel(item: AssetItem): string {
+  if (item.kind === "source") return "来源";
+  if (item.kind === "artifact") return "产物";
+  const entity = item.raw as VisualEntityDocument;
+  return entity.kind === "character"
+    ? "角色"
+    : entity.kind === "scene"
+    ? "场景"
+    : "道具";
 }
 
-function refIdentity(
-  sourceRef: string | null | undefined,
-  scheme: "asset" | "artifact",
-): { id: string; versionId: string } | null {
-  const prefix = `${scheme}://`;
-  if (!sourceRef?.startsWith(prefix)) return null;
-  const [id, versionId] = sourceRef.slice(prefix.length).split("@", 2);
-  return id && versionId ? { id, versionId } : null;
+function mediaIcon(kind: string) {
+  if (kind === "video") return Film;
+  if (kind === "audio") return Music2;
+  if (kind === "image") return ImageIcon;
+  if (kind === "text" || kind === "document") return FileText;
+  return Box;
 }
 
-function normalizedMediaType(item: PresentationAssetView): string {
-  const raw = String(
-    item.mediaType || item.generatedKind || "",
-  ).toLocaleLowerCase();
-  if (
-    item.generatedKind === "storyboard_image" ||
-    raw.startsWith("image/") ||
-    raw.includes("image") ||
-    raw.includes("storyboard")
-  )
-    return "image";
-  if (
-    item.generatedKind === "unit_video" ||
-    item.generatedKind === "section_video" ||
-    raw.startsWith("video/") ||
-    raw.includes("video")
-  )
-    return "video";
-  if (raw.startsWith("audio/") || raw.includes("audio")) return "audio";
-  if (raw.startsWith("text/")) return "text";
-  if (raw === "url") return "url";
-  if (raw.includes("document") || raw.includes("pdf")) return "doc";
-  return raw || "other";
-}
-
-function toDisplay(
-  projectId: string,
-  item: PresentationAssetView,
-  ingestItems: IngestItemView[],
-): AssetDisplayItem {
-  const selectedDetailVersionId = item.detail?.images[0]?.id;
-  const sourceIdentity = refIdentity(item.sourceRef, "asset");
-  const artifactIdentity = refIdentity(item.sourceRef, "artifact");
-  const artifactVersionId =
-    item.artifactVersionId ||
-    artifactIdentity?.versionId ||
-    (item.sourceRef?.startsWith("artifact://")
-      ? selectedDetailVersionId
-      : undefined);
-  const assetVersionId =
-    item.assetVersionId ||
-    sourceIdentity?.versionId ||
-    (item.sourceRef?.startsWith("asset://")
-      ? selectedDetailVersionId
-      : undefined);
-  const versionId =
-    assetVersionId || artifactVersionId || item.uiLocator.versionId;
-  const isUpload = item.category === "upload";
-  const mediaType = normalizedMediaType(item);
-  const previewable = mediaType === "image" || mediaType === "video";
-  const ingestItem = isUpload
-    ? ingestItems.find(
-        (entry) =>
-          (assetVersionId && entry.assetVersionId === assetVersionId) ||
-          (!assetVersionId &&
-            entry.assetId === (sourceIdentity?.id || item.id)),
-      )
-    : undefined;
-  const previewCandidate = !previewable
-    ? undefined
-    : artifactVersionId
-    ? getArtifactVersionMediaUrl(artifactVersionId)
-    : assetVersionId
-    ? getAssetContentUrl(
-        projectId,
-        sourceIdentity?.id || item.id,
-        assetVersionId,
-      )
-    : item.thumbnailUrl || item.url || undefined;
-  const previewState =
-    item.existence === "planned"
-      ? "planned"
-      : ingestItem && ingestItem.status !== "SUCCEEDED"
-      ? ingestItem.status === "QUEUED" || ingestItem.status === "RUNNING"
-        ? "processing"
-        : "failed"
-      : previewCandidate
-      ? "ready"
-      : "unavailable";
-  const previewUrl = previewState === "ready" ? previewCandidate : undefined;
-  const detail = item.detail
-    ? {
-        ...item.detail,
-        primaryUrl: previewUrl || item.detail.primaryUrl,
-        images: item.detail.images.map((image) => ({
-          ...image,
-          url:
-            image.id === artifactVersionId
-              ? getArtifactVersionMediaUrl(image.id)
-              : image.id === assetVersionId
-              ? getAssetContentUrl(
-                  projectId,
-                  sourceIdentity?.id || item.id,
-                  image.id,
-                )
-              : image.url,
-        })),
-      }
-    : undefined;
-  return {
-    id: item.id,
-    versionId,
-    name: item.name,
-    category: item.category,
-    mediaType,
-    previewUrl,
-    previewState,
-    sourceUrl: item.url || undefined,
-    sourceRef: item.sourceRef || `asset:${item.id}`,
-    sourceLine: item.sourceDescription || item.description || "",
-    status: item.presentationStatus,
-    planned: item.existence === "planned",
-    referenceCount: item.referenceCount,
-    checksum: item.checksum,
-    durationSeconds: item.durationSeconds,
-    content: item.description,
-    userNotes: item.userNotes,
-    targetVersion: item.targetVersion || undefined,
-    generatedKind: item.generatedKind,
-    ownerRef: item.ownerRef,
-    kind: item.category === "upload" ? "source" : "visual",
-    visualKind:
-      item.detail?.kind === "material" ? undefined : item.detail?.kind,
-    detail,
-  };
-}
-
-function matchesFilter(
-  asset: AssetDisplayItem,
-  filter: AssetFilterKey,
-): boolean {
-  if (filter === "all") return true;
-  if (filter === "planned") return asset.planned;
-  if (filter === "storyboard_image")
-    return asset.generatedKind === "storyboard_image";
-  if (filter === "generated_video")
-    return (
-      asset.generatedKind === "unit_video" ||
-      asset.generatedKind === "section_video"
-    );
-  return asset.category === filter;
+function displayValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
+  if (value === null || value === undefined) return "—";
+  return JSON.stringify(value);
 }
 
 export default function AssetsPage() {
   const { id = "" } = useParams();
   const query = useSearchParams();
-  const locatorAssetId = query.get("select") || query.get("asset");
-  const locatorVersionId = query.get("version");
-  const reviewMode = query.get("review") === "1";
-  const reviewPulse = query.get("reviewPulse");
-  const reviewFocusRequest = useNavigationStore((state) => state.reviewFocus);
-  const envelope = useWorkspaceViewStore((state) => state.assets);
-  const headerEnvelope = useWorkspaceViewStore((state) => state.header);
-  const load = useWorkspaceViewStore((state) => state.loadAssets);
-  const view = presentationOf(envelope);
-  const header = presentationOf(headerEnvelope);
-  const error = useWorkspaceViewStore((state) => state.errors.assets);
-  const events = useCreatorSessionStore((state) => state.events);
-  const tasks = useCreatorTaskViewStore((state) => state.tasks);
-  const [filter, setFilter] = useState<AssetFilterKey>("all");
-  const [searchText, setSearchText] = useState("");
-  const debouncedSearch = useDebouncedValue(searchText, 300);
-  const [selectedId, setSelectedId] = useState<string | null>(locatorAssetId);
-  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(
-    locatorVersionId,
+  const project = useProjectSnapshotStore((state) =>
+    state.projectId === id ? state.project : null,
   );
-  const [supplementOpen, setSupplementOpen] = useState(false);
-  const [detail, setDetail] = useState<{
-    assetId: string;
-    kind: DetailKind;
-  } | null>(null);
-  const [detailOverrides, setDetailOverrides] = useState<
-    Record<string, DetailAssetItem>
-  >({});
-  const [generatingId, setGeneratingId] = useState<string | null>(null);
-  const [flashId, setFlashId] = useState<string | null>(null);
-  const reviewTimersRef = useRef<number[]>([]);
-  const lastAssetEvent = [...events]
-    .reverse()
-    .find(
-      (event) =>
-        event.type.startsWith("task.") ||
-        event.type.startsWith("task_") ||
-        event.type === "workspace.head_changed",
-    )?.seq;
-  const reload = useCallback(() => load(id), [id, load]);
-  const { submit, submitting } = useCreatorCommand(id, envelope, reload);
-
-  useEffect(() => {
-    void load(id).catch(() => undefined);
-  }, [id, lastAssetEvent, load]);
-  useEffect(() => {
-    if (!locatorAssetId) return;
-    setSelectedId(locatorAssetId);
-    setSelectedVersionId(locatorVersionId);
-  }, [locatorAssetId, locatorVersionId]);
-  useEffect(
-    () =>
-      useCreatorInteractionStore
-        .getState()
-        .select(selectedId ? `asset:${selectedId}` : null),
-    [selectedId],
+  const syncStatus = useProjectSnapshotStore((state) => state.syncStatus);
+  const syncError = useProjectSnapshotStore((state) => state.syncError);
+  const pollOnce = useProjectSnapshotStore((state) => state.pollOnce);
+  const refreshTasks = useCreatorTaskViewStore((state) => state.refresh);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [filter, setFilter] = useState<FilterKey>("all");
+  const [search, setSearch] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [inputKind, setInputKind] = useState<"url" | "text">("url");
+  const [inputName, setInputName] = useState("");
+  const [inputValue, setInputValue] = useState("");
+  const selectedId = query.get("asset");
+  const allItems = useMemo(
+    () => (project ? assetItems(project) : []),
+    [project],
   );
-
-  const triggerAssetReviewFlash = useCallback((assetId: string) => {
-    reviewTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-    // Mark the business target immediately. Cross-page navigation can mount
-    // this page before its asset grid has loaded, and a delayed state write
-    // would otherwise be cancelled by the first route/query reconciliation.
-    setFlashId(assetId);
-    const scrollTimer = window.setTimeout(() => {
-      document
-        .querySelector(
-          `[data-creator-module="asset-card"][data-creator-module-id="${CSS.escape(
-            assetId,
-          )}"]`,
-        )
-        ?.scrollIntoView({ behavior: "smooth", block: "center" });
-    }, 200);
-    const clearTimer = window.setTimeout(() => setFlashId(null), 2600);
-    reviewTimersRef.current = [scrollTimer, clearTimer];
-  }, []);
-  useEffect(() => {
-    const requestedAssetId =
-      reviewFocusRequest?.path === `/project/${id}/assets` &&
-      reviewFocusRequest.query.review === "1"
-        ? reviewFocusRequest.query.asset
-        : null;
-    const assetId = requestedAssetId || (reviewMode ? locatorAssetId : null);
-    if (!assetId) {
-      setFlashId(null);
-      return;
-    }
-    triggerAssetReviewFlash(assetId);
-    return () => {
-      reviewTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-      reviewTimersRef.current = [];
-    };
-  }, [
-    id,
-    locatorAssetId,
-    reviewFocusRequest,
-    reviewMode,
-    reviewPulse,
-    triggerAssetReviewFlash,
-  ]);
-
-  if (error && !view)
-    return <PageLoadError message={error} retry={() => void load(id)} />;
-  if (!view || !envelope) return <PageSkeleton type="grid" />;
-
-  const assets = view.presentationAssets.map((item) =>
-    toDisplay(id, item, view.ingestItems),
-  );
-  const selectedAsset =
-    assets.find(
-      (asset) =>
-        asset.id === selectedId &&
-        (!selectedVersionId || asset.versionId === selectedVersionId),
-    ) ||
-    assets.find((asset) => asset.id === selectedId) ||
-    null;
-  const normalizedSearch = debouncedSearch.trim().toLocaleLowerCase();
-  const visibleAssets = assets.filter(
-    (asset) =>
-      matchesFilter(asset, filter) &&
-      (!normalizedSearch ||
-        `${asset.name} ${asset.content || ""}`
+  const items = useMemo(() => {
+    const needle = search.trim().toLocaleLowerCase();
+    return allItems.filter((item) => {
+      const filterMatch =
+        filter === "all" || filter === item.kind || filter === item.mediaKind;
+      const searchMatch =
+        !needle ||
+        `${item.name} ${item.description} ${item.ref}`
           .toLocaleLowerCase()
-          .includes(normalizedSearch)),
-  );
-  const filterItems = FILTERS.map((item) => ({
-    ...item,
-    label: scenarioCategoryLabel(item.key, header?.scenario),
-    count: assets.filter((asset) => matchesFilter(asset, item.key)).length,
-  }));
-  const activeIngest = view.ingestItems.find(
-    (item) => item.status === "RUNNING" || item.status === "QUEUED",
-  );
-  const latestFailedIngestTask = [...tasks]
-    .filter(
-      (task) =>
-        (task.kind === "asset_ingest" || task.kind === "asset_import") &&
-        task.status === "FAILED",
-    )
-    .sort(
-      (left, right) =>
-        Date.parse(right.updatedAt || right.createdAt || "") -
-        Date.parse(left.updatedAt || left.createdAt || ""),
-    )[0];
-  const latestFailedIngest =
-    (latestFailedIngestTask
-      ? view.ingestItems.find(
-          (item) =>
-            item.taskId === latestFailedIngestTask.id &&
-            item.status === "FAILED",
-        )
-      : undefined) ||
-    [...view.ingestItems].reverse().find((item) => item.status === "FAILED");
-  const latestCacheFailedIngest = [...view.ingestItems]
-    .reverse()
-    .find((item) => item.status === "CACHE_FAILED");
-  const ingestNotice =
-    activeIngest || latestCacheFailedIngest || latestFailedIngest;
-  const activeIngestPercent = taskProgressPercent(activeIngest?.progress);
-  const detailDisplayAsset = detail
-    ? assets.find((asset) => asset.id === detail.assetId) || null
-    : null;
-  const detailAsset =
-    detail && detailDisplayAsset?.detail
-      ? detailOverrides[detail.assetId] || detailDisplayAsset.detail
-      : null;
-  const referenceImageOptions: ReferenceImageOption[] = assets
-    .filter((asset) => asset.mediaType === "image" || asset.visualKind)
-    .map((asset) => ({
-      value: asset.sourceRef,
-      url: asset.previewUrl,
-      label: asset.name,
-      available: Boolean(asset.previewUrl),
-    }));
+          .includes(needle);
+      return filterMatch && searchMatch;
+    });
+  }, [allItems, filter, search]);
+  const selected = allItems.find((item) => item.id === selectedId) || null;
 
-  const updateDetailOverride = (next: DetailAssetItem) => {
-    setDetailOverrides((current) => ({ ...current, [next.id]: next }));
-  };
+  useEffect(() => {
+    useCreatorInteractionStore.getState().select(selected?.ref || null);
+  }, [selected?.ref]);
 
-  const generateAsset = async (asset: AssetDisplayItem) => {
-    setGeneratingId(asset.id);
-    try {
-      await submit(
-        "GENERATE_ASSET",
-        `asset:${asset.id}`,
-        {},
-        asset.targetVersion,
-      );
-    } finally {
-      setGeneratingId(null);
-    }
-  };
-  const deleteAsset = async (asset: AssetDisplayItem) => {
-    if (asset.kind === "source") {
-      const attached = view.attachedSources.find(
-        (item) => item.sourceRef === asset.sourceRef,
-      );
-      if (attached)
-        await submit(
-          "DETACH_SOURCE_ASSETS",
-          "project:assets",
-          { assetVersionRefs: [asset.sourceRef] },
-          view.targetVersion,
-        );
-      else
-        await submit(
-          "SUPPLEMENT_ASSET",
-          `asset:${asset.id}`,
-          { operation: "delete", assetVersionRef: asset.sourceRef },
-          asset.targetVersion,
-        );
-    } else {
-      await submit(
-        "SUPPLEMENT_ASSET",
-        `asset:${asset.id}`,
-        { operation: "delete" },
-        asset.targetVersion,
-      );
-    }
-    setSelectedId(null);
-  };
-  const createManualAsset = (
-    assetKind: "character" | "scene" | "prop" | "material",
-  ) => {
-    const name =
-      assetKind === "character"
-        ? "新角色"
-        : assetKind === "scene"
-        ? "新场景"
-        : assetKind === "prop"
-        ? "新道具"
-        : "新素材";
-    void submit(
-      "SUPPLEMENT_ASSET",
-      "project:assets",
-      { operation: "create", assetKind, name },
-      view.targetVersion,
+  const selectItem = (item: AssetItem | null) => {
+    navigate(
+      item
+        ? `/project/${id}/assets?asset=${encodeURIComponent(item.id)}`
+        : `/project/${id}/assets`,
     );
   };
-
-  return (
-    <div className="flex h-full min-h-0">
-      <aside
-        aria-label="资产分类"
-        className="flex w-52 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-card)]/40"
-      >
-        <div className="border-b border-[var(--color-border)] p-3">
-          <Input
-            prefix={
-              <SearchOutlined className="text-[var(--color-text-tertiary)]" />
-            }
-            placeholder="搜索资产..."
-            value={searchText}
-            onChange={(event) => setSearchText(event.target.value)}
-            allowClear
-            size="small"
-            className="!rounded-lg"
-          />
-        </div>
-        <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
-          {filterItems.map((item) => (
-            <div key={item.key}>
-              {item.divider && (
-                <div className="mx-1 my-2 border-t border-[var(--color-border)]" />
-              )}
-              <button
-                aria-label={`${item.label} ${item.count}`}
-                onClick={() => setFilter(item.key)}
-                className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                  filter === item.key
-                    ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                    : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)]"
-                }`}
-              >
-                <span className="flex items-center gap-1.5">
-                  {item.key === "planned" && <Sparkles className="h-3 w-3" />}
-                  {item.label}
-                </span>
-                <span
-                  className={`rounded px-1.5 py-px text-[10px] ${
-                    filter === item.key
-                      ? "bg-[var(--color-accent)]/12 text-[var(--color-accent)]"
-                      : "bg-[var(--color-bg-secondary)] text-[var(--color-text-tertiary)]"
-                  }`}
-                >
-                  {item.count}
-                </span>
-              </button>
-            </div>
-          ))}
-        </nav>
-      </aside>
-
-      <main
-        data-testid="asset-grid-column"
-        className="flex min-w-0 flex-1 flex-col"
-      >
-        <div className="flex items-center justify-between gap-2 border-b border-[var(--color-border)] px-4 py-2.5">
-          <h1 className="text-sm font-semibold text-[var(--color-text-primary)]">
-            资产库
-            <span className="ml-2 text-xs font-normal text-[var(--color-text-tertiary)]">
-              {visibleAssets.length} / {assets.length}
-            </span>
-          </h1>
-          <div className="flex items-center gap-2">
-            <Button
-              size="small"
-              icon={<Paperclip className="h-3 w-3" />}
-              onClick={() => setSupplementOpen(true)}
-              className="!flex !items-center !gap-1 !text-xs"
-            >
-              补充资料
-            </Button>
-            <Dropdown
-              menu={{
-                items: [
-                  { key: "character", label: "新建角色（主体参考）" },
-                  { key: "scene", label: "新建场景（环境参考）" },
-                  { key: "prop", label: "新建道具（主体参考）" },
-                  { key: "material", label: "新建素材" },
-                ],
-                onClick: ({ key }) =>
-                  createManualAsset(
-                    key as "character" | "scene" | "prop" | "material",
-                  ),
-              }}
-            >
-              <Button size="small" icon={<PlusOutlined />} className="!text-xs">
-                新建
-              </Button>
-            </Dropdown>
-            <Button
-              size="small"
-              loading={submitting}
-              onClick={() =>
-                void submit(
-                  "GENERATE_ASSET",
-                  "project:assets",
-                  { scope: "all" },
-                  view.targetVersion,
-                )
-              }
-              className="!text-xs"
-            >
-              AI 生成所有资产描述
-            </Button>
-          </div>
-        </div>
-
-        {ingestNotice && (
-          <div className="border-b border-[var(--color-border)] bg-[var(--color-bg-card)]/60 px-4 py-2 text-xs text-[var(--color-text-secondary)]">
-            {activeIngest
-              ? `正在入库「${activeIngest.name}」${
-                  activeIngestPercent != null
-                    ? ` · ${activeIngestPercent}%`
-                    : ""
-                }`
-              : latestCacheFailedIngest
-              ? `本地缓存失败，公网素材仍可用于模型 · 「${
-                  latestCacheFailedIngest.name
-                }」${
-                  latestCacheFailedIngest.error
-                    ? `：${latestCacheFailedIngest.error}`
-                    : ""
-                }`
-              : `入库失败「${latestFailedIngest!.name}」 · ${taskErrorMessage(
-                  latestFailedIngestTask?.error ?? latestFailedIngest!.error,
-                  "素材入库失败",
-                )}`}
-          </div>
-        )}
-
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          {visibleAssets.length === 0 ? (
-            debouncedSearch || filter !== "all" ? (
-              <EmptyState
-                icon={Boxes}
-                title="没有匹配的资产"
-                description={
-                  debouncedSearch
-                    ? `未找到包含"${debouncedSearch}"的资产`
-                    : "当前分类下暂无资产"
-                }
-              />
-            ) : (
-              <EmptyState
-                icon={Boxes}
-                title="资产库还是空的"
-                description="通过补充资料上传素材，或让 AI 根据视频方案规划资产"
-                actionText="补充资料"
-                onAction={() => setSupplementOpen(true)}
-              />
-            )
-          ) : (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-              {visibleAssets.map((asset) => (
-                <AssetCard
-                  key={`${asset.id}:${asset.versionId || asset.sourceRef}:${
-                    reviewMode && locatorAssetId === asset.id
-                      ? reviewPulse || "review"
-                      : ""
-                  }`}
-                  asset={asset}
-                  selected={
-                    selectedAsset?.id === asset.id &&
-                    (!selectedVersionId ||
-                      selectedAsset.versionId === asset.versionId)
-                  }
-                  onSelect={(item) => {
-                    setSelectedId(item.id);
-                    setSelectedVersionId(item.versionId || null);
-                    setDetail(null);
-                    if (
-                      (query.get("select") || query.get("asset")) &&
-                      (query.get("select") || query.get("asset")) !== item.id
-                    )
-                      navigate(`/project/${id}/assets`, true);
-                  }}
-                  onGenerate={asset.planned ? generateAsset : undefined}
-                  generating={generatingId === asset.id}
-                  flashing={
-                    flashId === asset.id ||
-                    (reviewMode && locatorAssetId === asset.id)
-                  }
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      </main>
-
-      {selectedAsset && (
-        <aside className="w-80 shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-card)]/40">
-          <AssetInspector
-            projectId={id}
-            asset={selectedAsset}
-            view={view}
-            onEditDetail={
-              detailKindOf(selectedAsset)
-                ? (asset) => {
-                    const kind = detailKindOf(asset);
-                    if (kind) setDetail({ assetId: asset.id, kind });
-                  }
-                : undefined
-            }
-            onDelete={deleteAsset}
-          />
-        </aside>
-      )}
-
-      <AssetDetailPanel
-        open={Boolean(detail && detailAsset)}
-        onClose={() => setDetail(null)}
-        asset={detailAsset}
-        assetType={detail ? DETAIL_TAB[detail.kind] : "characters"}
-        projectId={id}
-        referenceImageOptions={referenceImageOptions}
-        onNameChange={(asset, name) => {
-          updateDetailOverride({ ...asset, name } as DetailAssetItem);
-          const display = assets.find((item) => item.id === asset.id);
-          void submit(
-            "SUPPLEMENT_ASSET",
-            `asset:${asset.id}`,
-            { field: "name", value: name },
-            display?.targetVersion,
-          );
-        }}
-        onPromptConfigChange={(
-          asset,
-          promptIndex,
-          prompt,
-          referenceImageUrls,
-        ) => {
-          updateDetailOverride(
-            replacePromptConfig(asset, promptIndex, prompt, referenceImageUrls),
-          );
-          const display = assets.find((item) => item.id === asset.id);
-          void submit(
-            "SUPPLEMENT_ASSET",
-            `asset:${asset.id}`,
-            { field: "promptConfig", promptIndex, prompt, referenceImageUrls },
-            display?.targetVersion,
-          );
-        }}
-        onGeneratePrompt={async (
-          asset,
-          promptIndex,
-          prompt,
-          referenceImageUrls,
-        ) => {
-          updateDetailOverride(
-            replacePromptConfig(asset, promptIndex, prompt, referenceImageUrls),
-          );
-          const display = assets.find((item) => item.id === asset.id);
-          await submit(
-            "GENERATE_ASSET",
-            `asset:${asset.id}`,
-            { promptIndex, prompt, referenceImageUrls },
-            display?.targetVersion,
-          );
-        }}
-        onUploadImage={async (asset, index, file) => {
-          const localUrl = URL.createObjectURL(file);
-          const images = [...asset.images];
-          const current = images[index];
-          images[index] = current
-            ? { ...current, url: localUrl }
-            : {
-                id: `${asset.id}-image-${index}`,
-                name: file.name.replace(/\.[^.]+$/, ""),
-                url: localUrl,
-                description: file.name,
-                facetKind:
-                  asset.kind === "character" ? "front_anchor" : "unknown",
-              };
-          const next: DetailAssetItem = {
-            ...asset,
-            mediaType: "image",
-            primaryUrl: index === 0 ? localUrl : asset.primaryUrl,
-            images,
-          };
-          updateDetailOverride(next);
-          const accepted = await ingestAssetFile(id, file, "NONE");
-          const display = assets.find((item) => item.id === asset.id);
-          await submit(
-            "SUPPLEMENT_ASSET",
-            `asset:${asset.id}`,
-            {
-              field: "image",
-              promptIndex: index,
-              assetId: accepted.assetId,
-              assetVersionId: accepted.assetVersionId,
-            },
-            display?.targetVersion,
-          );
-        }}
-        onUploadReference={async (_asset, file) => {
-          await ingestAssetFile(id, file, "ATTACH_SOURCE");
-          await load(id);
-          message.success("参考图已上传为用户上传资产");
-        }}
-        onAddAppearance={async (asset, refDescription, prompt, imageUrl) => {
-          const next: DetailAssetItem = {
-            ...asset,
-            images: [
-              ...asset.images,
-              {
-                id: `facet-${Date.now()}`,
-                name: refDescription,
-                url: imageUrl,
-                description: prompt,
-                facetKind:
-                  asset.kind === "character" ? "front_anchor" : "unknown",
-              },
-            ],
-            refsNeeded: [...asset.refsNeeded, refDescription],
-            prompts: [...asset.prompts, prompt],
-            referenceImageRefs: [...asset.referenceImageRefs, []],
-          };
-          updateDetailOverride(next);
-          const display = assets.find((item) => item.id === asset.id);
-          await submit(
-            "SUPPLEMENT_ASSET",
-            `asset:${asset.id}`,
-            { field: "appearance", refDescription, prompt, imageUrl },
-            display?.targetVersion,
-          );
-        }}
-        onGenerateAppearancePrompt={async (asset, refDescription) => {
-          const display = assets.find((item) => item.id === asset.id);
-          await submit(
-            "SUPPLEMENT_ASSET",
-            `asset:${asset.id}`,
-            { field: "appearancePrompt", refDescription },
-            display?.targetVersion,
-          );
-          return `${asset.name}，${refDescription}`;
-        }}
-        onGenerateAppearanceImage={async (asset, prompt) => {
-          const display = assets.find((item) => item.id === asset.id);
-          await submit(
-            "GENERATE_ASSET",
-            `asset:${asset.id}`,
-            { prompt, purpose: "appearance" },
-            display?.targetVersion,
-          );
-          const latest = presentationOf(
-            useWorkspaceViewStore.getState().assets,
-          );
-          return (
-            latest?.visualAssets.find((item) => item.id === asset.id)?.url ||
-            latest?.visualAssets.find((item) => item.id === asset.id)
-              ?.thumbnailUrl ||
-            display?.previewUrl ||
-            ""
-          );
-        }}
-        onDeleteAppearance={async (asset, index) => {
-          const next: DetailAssetItem = {
-            ...asset,
-            images: asset.images.filter((_, itemIndex) => itemIndex !== index),
-            refsNeeded: asset.refsNeeded.filter(
-              (_, itemIndex) => itemIndex !== index,
-            ),
-            prompts: asset.prompts.filter(
-              (_, itemIndex) => itemIndex !== index,
-            ),
-            referenceImageRefs: asset.referenceImageRefs.filter(
-              (_, itemIndex) => itemIndex !== index,
-            ),
-          };
-          updateDetailOverride(next);
-          const display = assets.find((item) => item.id === asset.id);
-          await submit(
-            "SUPPLEMENT_ASSET",
-            `asset:${asset.id}`,
-            { field: "appearance", action: "removeFacet", promptIndex: index },
-            display?.targetVersion,
-          );
-        }}
-      />
-      <SupplementDialog
-        open={supplementOpen}
-        projectId={id}
-        onClose={() => setSupplementOpen(false)}
-        onAdded={() => void load(id)}
-      />
-    </div>
-  );
-}
-
-function SupplementDialog({
-  open,
-  projectId,
-  onClose,
-  onAdded,
-}: {
-  open: boolean;
-  projectId: string;
-  onClose: () => void;
-  onAdded: () => void;
-}) {
-  const [submitting, setSubmitting] = useState(false);
-  const [urlValue, setUrlValue] = useState("");
-  const [urlName, setUrlName] = useState("");
-  const [textName, setTextName] = useState("");
-  const [textContent, setTextContent] = useState("");
-  const submitFiles = async (files: FileList) => {
-    setSubmitting(true);
-    let succeeded = 0;
-    for (const file of Array.from(files)) {
-      try {
-        await ingestAssetFile(projectId, file, "ATTACH_SOURCE");
-        succeeded += 1;
-      } catch (error) {
-        message.error(`「${file.name}」上传失败：${(error as Error).message}`);
-      }
-    }
-    setSubmitting(false);
-    if (succeeded > 0) {
-      message.success(`已入库 ${succeeded} 个文件`);
-      onAdded();
-      onClose();
+  const openAgent = (item?: AssetItem) => {
+    useCreatorInteractionStore.getState().select(item?.ref || null);
+    useAgentDockUiStore.getState().setOpen(true);
+    useAgentDockUiStore.getState().setTab("conversation");
+    useAgentDockUiStore
+      .getState()
+      .setDraft(
+        item
+          ? `请检查并完善「${item.name}」(${item.ref})，先读取 Project 中的现状和引用关系再行动。`
+          : "请检查当前 Project 的来源素材、生成产物和视觉设定，并说明下一步需要补充或生成什么。",
+      );
+  };
+  const refreshAfterIngest = async () => {
+    await Promise.allSettled([pollOnce(id), refreshTasks(id)]);
+  };
+  const uploadFile = async (file: File) => {
+    setUploading(true);
+    try {
+      await ingestAssetFile(id, file, "ATTACH_SOURCE");
+      message.success("素材已提交，入库完成后会自动出现在这里");
+      await refreshAfterIngest();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "上传失败");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
-  const submitValue = async (kind: "url" | "text") => {
-    const value = kind === "url" ? urlValue.trim() : textContent.trim();
-    if (!value) return;
-    setSubmitting(true);
+  const addValue = async () => {
+    if (!inputName.trim() || !inputValue.trim()) {
+      message.warning("请填写名称和内容");
+      return;
+    }
+    setUploading(true);
     try {
-      const accepted = await ingestAssetValue(projectId, {
-        kind,
-        name:
-          (kind === "url" ? urlName : textName).trim() ||
-          (kind === "url" ? value : "文本资料"),
-        value,
+      await ingestAssetValue(id, {
+        kind: inputKind,
+        name: inputName.trim(),
+        value: inputValue.trim(),
         postIngestAction: "ATTACH_SOURCE",
       });
-      if (accepted.status === "SUCCEEDED") {
-        message.success(kind === "url" ? "链接已入库" : "文本资料已入库");
-      } else if (
-        accepted.status === "FAILED" ||
-        accepted.status === "CANCELLED" ||
-        accepted.status === "QUARANTINED"
-      ) {
-        message.error(
-          taskErrorMessage(
-            accepted.error,
-            kind === "url" ? "链接入库失败" : "文本资料入库失败",
-          ),
-        );
-      } else {
-        message.info(
-          kind === "url" ? "链接已接收，正在入库" : "文本资料已接收，正在入库",
-        );
-      }
-      if (kind === "url") {
-        setUrlValue("");
-        setUrlName("");
-      } else {
-        setTextName("");
-        setTextContent("");
-      }
-      onAdded();
-      onClose();
+      message.success(
+        inputKind === "url" ? "链接已提交入库" : "文本素材已提交入库",
+      );
+      setAddOpen(false);
+      setInputName("");
+      setInputValue("");
+      await refreshAfterIngest();
     } catch (error) {
-      message.error((error as Error).message || "入库失败");
+      message.error(error instanceof Error ? error.message : "添加失败");
     } finally {
-      setSubmitting(false);
+      setUploading(false);
     }
   };
+
+  if (!project) {
+    if (syncStatus === "invalid" || syncStatus === "not_found") {
+      return (
+        <PageLoadError
+          message={syncError || "Project 无法读取"}
+          retry={() => void pollOnce(id)}
+        />
+      );
+    }
+    return <PageSkeleton type="grid" />;
+  }
+
   return (
-    <Modal
-      open={open}
-      onCancel={onClose}
-      footer={null}
-      title="补充资料"
-      width={480}
-      destroyOnHidden
-    >
-      <p className="mb-3 text-xs text-[var(--color-text-secondary)]">
-        追加的资料会进入资产库「用户上传」分类，与新建项目时的入库路径一致。
-      </p>
-      <Tabs
-        size="small"
-        items={[
-          {
-            key: "file",
-            label: "文件",
-            children: (
-              <label className="flex h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--color-border)] text-xs text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-accent)]">
-                <UploadOutlined className="text-lg text-[var(--color-text-tertiary)]" />
-                点击选择文件（支持多选：图片 / 视频 / 音频 / 文档）
-                <input
-                  type="file"
-                  multiple
-                  hidden
-                  disabled={submitting}
-                  onChange={(event) => {
-                    if (event.target.files?.length)
-                      void submitFiles(event.target.files);
-                    event.target.value = "";
-                  }}
-                />
-              </label>
-            ),
-          },
-          {
-            key: "url",
-            label: "链接",
-            children: (
-              <div className="space-y-2">
-                <Input
-                  value={urlName}
-                  onChange={(event) => setUrlName(event.target.value)}
-                  placeholder="名称（可选）"
-                />
-                <Input
-                  value={urlValue}
-                  onChange={(event) => setUrlValue(event.target.value)}
-                  placeholder="https://…"
-                  onPressEnter={() => void submitValue("url")}
-                />
-                <Button
-                  type="primary"
-                  block
-                  loading={submitting}
-                  disabled={!urlValue.trim()}
-                  onClick={() => void submitValue("url")}
-                >
-                  入库
-                </Button>
+    <div className="flex h-full min-h-0 flex-col bg-[var(--color-bg-layout)]">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]/70 px-5 py-3 backdrop-blur">
+        <div>
+          <h2 className="text-base font-semibold text-[var(--color-text-primary)]">
+            素材与产物
+          </h2>
+          <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">
+            Project 中的来源版本、生成产物与视觉设定；Element 只通过稳定 ID
+            引用它们。
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void uploadFile(file);
+            }}
+          />
+          <Button
+            size="small"
+            icon={<Link2 className="h-3.5 w-3.5" />}
+            onClick={() => setAddOpen(true)}
+          >
+            添加链接或文本
+          </Button>
+          <Button
+            size="small"
+            loading={uploading}
+            icon={<Upload className="h-3.5 w-3.5" />}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            上传素材
+          </Button>
+          <Button
+            size="small"
+            type="primary"
+            icon={<Sparkles className="h-3.5 w-3.5" />}
+            onClick={() => openAgent()}
+          >
+            Agent 整理
+          </Button>
+        </div>
+      </header>
+
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)] px-5 py-2.5">
+        <div className="flex flex-wrap gap-1">
+          {FILTERS.map((candidate) => (
+            <button
+              key={candidate.key}
+              type="button"
+              onClick={() => setFilter(candidate.key)}
+              className={`rounded-full px-3 py-1 text-xs transition ${
+                filter === candidate.key
+                  ? "bg-[var(--color-accent)] text-white"
+                  : "border border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] hover:border-[var(--color-accent)]/50"
+              }`}
+            >
+              {candidate.label}
+            </button>
+          ))}
+        </div>
+        <div className="ml-auto flex w-56 items-center rounded-lg border border-[var(--color-border)] bg-white px-2.5">
+          <Search className="h-3.5 w-3.5 text-[var(--color-text-tertiary)]" />
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="搜索名称或 ID"
+            className="min-w-0 flex-1 border-0 bg-transparent px-2 py-1.5 text-xs outline-none"
+          />
+        </div>
+        <span className="text-[11px] text-[var(--color-text-tertiary)]">
+          {items.length} 项
+        </span>
+      </div>
+
+      <main className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_340px] gap-4 overflow-hidden p-4">
+        <section className="min-h-0 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3">
+          {items.length > 0 ? (
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-3">
+              {items.map((item) => {
+                const Icon = mediaIcon(item.mediaKind);
+                return (
+                  <button
+                    key={`${item.kind}:${item.id}`}
+                    type="button"
+                    data-creator-module="asset-card"
+                    data-creator-module-id={item.id}
+                    onClick={() => selectItem(item)}
+                    className={`group overflow-hidden rounded-xl border bg-[var(--color-bg-card)] text-left transition ${
+                      selected?.id === item.id
+                        ? "border-[var(--color-accent)] shadow-[0_0_0_1px_var(--color-accent)]"
+                        : "border-[var(--color-border)] hover:border-[var(--color-border-strong)] hover:shadow-sm"
+                    }`}
+                  >
+                    <div className="relative flex h-32 items-center justify-center overflow-hidden bg-[var(--color-bg-secondary)]">
+                      <AssetMediaPreview
+                        name={item.name}
+                        mediaType={item.mediaKind}
+                        previewUrl={item.previewUrl}
+                        state={item.previewUrl ? "ready" : "unavailable"}
+                        mediaClassName="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+                        placeholderClassName="flex flex-col items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]"
+                      />
+                      {!item.previewUrl && (
+                        <Icon className="pointer-events-none absolute h-6 w-6 -translate-y-3 text-[var(--color-text-tertiary)]" />
+                      )}
+                      <span className="absolute left-2 top-2 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                        {kindLabel(item)}
+                      </span>
+                      {item.stale && (
+                        <span className="absolute right-2 top-2 rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                          过期
+                        </span>
+                      )}
+                    </div>
+                    <div className="p-3">
+                      <h3 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
+                        {item.name}
+                      </h3>
+                      <p className="mt-1 line-clamp-2 min-h-8 text-[11px] leading-4 text-[var(--color-text-secondary)]">
+                        {item.description}
+                      </p>
+                      <p className="mt-2 truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">
+                        {item.id}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex h-full min-h-64 flex-col items-center justify-center text-center text-[var(--color-text-tertiary)]">
+              <Paperclip className="mb-3 h-8 w-8 opacity-50" />
+              <p className="text-sm font-medium text-[var(--color-text-secondary)]">
+                当前筛选下没有素材
+              </p>
+              <p className="mt-1 text-xs">
+                上传来源素材，或让 Agent 根据 Timeline 生成产物。
+              </p>
+            </div>
+          )}
+        </section>
+
+        <aside className="min-h-0 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)]">
+          {selected ? (
+            <div>
+              <div className="flex aspect-video items-center justify-center overflow-hidden bg-black">
+                {selected.mediaKind === "audio" && selected.previewUrl ? (
+                  <audio
+                    src={selected.previewUrl}
+                    controls
+                    className="w-[86%]"
+                  />
+                ) : (
+                  <AssetMediaPreview
+                    name={selected.name}
+                    mediaType={selected.mediaKind}
+                    previewUrl={selected.previewUrl}
+                    state={selected.previewUrl ? "ready" : "unavailable"}
+                    controls
+                    mediaClassName="h-full w-full object-contain"
+                    placeholderClassName="text-xs text-white/55"
+                  />
+                )}
               </div>
-            ),
-          },
-          {
-            key: "text",
-            label: "文本",
-            children: (
-              <div className="space-y-2">
-                <Input
-                  value={textName}
-                  onChange={(event) => setTextName(event.target.value)}
-                  placeholder="名称（如：品牌约束）"
-                />
-                <Input.TextArea
-                  value={textContent}
-                  onChange={(event) => setTextContent(event.target.value)}
-                  autoSize={{ minRows: 4, maxRows: 12 }}
-                  placeholder="粘贴文本资料…"
-                />
-                <Button
-                  type="primary"
-                  block
-                  loading={submitting}
-                  disabled={!textContent.trim()}
-                  onClick={() => void submitValue("text")}
-                >
-                  入库
-                </Button>
+              <div className="space-y-4 p-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[var(--color-accent)]">
+                      {kindLabel(selected)}
+                    </span>
+                    {selected.stale && (
+                      <span className="text-[10px] font-semibold text-amber-600">
+                        已过期
+                      </span>
+                    )}
+                  </div>
+                  <h3 className="mt-2 text-base font-semibold text-[var(--color-text-primary)]">
+                    {selected.name}
+                  </h3>
+                  <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-[var(--color-text-secondary)]">
+                    {selected.description}
+                  </p>
+                </div>
+                <dl className="space-y-2 text-xs">
+                  {[
+                    ["引用", selected.ref],
+                    ["媒体", selected.mediaType || selected.mediaKind],
+                    [
+                      "时长",
+                      selected.durationSeconds == null
+                        ? "—"
+                        : `${selected.durationSeconds.toFixed(2)}s`,
+                    ],
+                    ["Owner", selected.ownerRef || "—"],
+                    [
+                      "创建时间",
+                      selected.createdAt
+                        ? new Date(selected.createdAt).toLocaleString("zh-CN")
+                        : "—",
+                    ],
+                    ["Checksum", selected.checksum || "—"],
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      className="grid grid-cols-[64px_minmax(0,1fr)] gap-2"
+                    >
+                      <dt className="text-[var(--color-text-tertiary)]">
+                        {label}
+                      </dt>
+                      <dd className="break-all font-mono text-[11px] text-[var(--color-text-secondary)]">
+                        {value}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+                {Object.keys(selected.metadata).length > 0 && (
+                  <details className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3 text-xs">
+                    <summary className="cursor-pointer font-semibold text-[var(--color-text-secondary)]">
+                      元数据
+                    </summary>
+                    <dl className="mt-2 space-y-1.5">
+                      {Object.entries(selected.metadata).map(([key, value]) => (
+                        <div
+                          key={key}
+                          className="grid grid-cols-[100px_minmax(0,1fr)] gap-2"
+                        >
+                          <dt className="truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">
+                            {key}
+                          </dt>
+                          <dd className="break-all text-[11px] text-[var(--color-text-secondary)]">
+                            {displayValue(value)}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </details>
+                )}
+                <div className="flex gap-2">
+                  <Button
+                    className="flex-1"
+                    icon={<Sparkles className="h-3.5 w-3.5" />}
+                    onClick={() => openAgent(selected)}
+                  >
+                    交给 Agent
+                  </Button>
+                  <Button onClick={() => selectItem(null)}>关闭</Button>
+                </div>
               </div>
-            ),
-          },
-        ]}
-      />
-    </Modal>
+            </div>
+          ) : (
+            <div className="flex h-full min-h-64 flex-col items-center justify-center px-8 text-center">
+              <Box className="mb-3 h-8 w-8 text-[var(--color-text-tertiary)] opacity-50" />
+              <p className="text-sm font-medium text-[var(--color-text-secondary)]">
+                选择一项查看详情
+              </p>
+              <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
+                这里显示 Project 内实际保存的版本、引用与产物状态。
+              </p>
+            </div>
+          )}
+        </aside>
+      </main>
+
+      <Modal
+        title="添加来源素材"
+        open={addOpen}
+        confirmLoading={uploading}
+        okText="提交入库"
+        cancelText="取消"
+        onOk={() => void addValue()}
+        onCancel={() => setAddOpen(false)}
+      >
+        <Tabs
+          activeKey={inputKind}
+          onChange={(key) => setInputKind(key as "url" | "text")}
+          items={[
+            { key: "url", label: "链接" },
+            { key: "text", label: "文本" },
+          ]}
+        />
+        <div className="space-y-3">
+          <Input
+            value={inputName}
+            onChange={(event) => setInputName(event.target.value)}
+            placeholder="素材名称"
+          />
+          <Input.TextArea
+            value={inputValue}
+            onChange={(event) => setInputValue(event.target.value)}
+            autoSize={{ minRows: inputKind === "url" ? 2 : 6, maxRows: 10 }}
+            placeholder={
+              inputKind === "url" ? "https://…" : "粘贴脚本、要求或其他文本素材"
+            }
+          />
+        </div>
+      </Modal>
+    </div>
   );
 }

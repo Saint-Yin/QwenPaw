@@ -26,7 +26,7 @@ def _project_response() -> dict:
         "projectId": "project-demo",
         "creatorSessionId": "session-demo",
         "conversationId": "conversation-demo",
-        "approvedRevisionId": "revision-demo",
+        "projectSnapshotId": "snapshot-demo",
         "header": {},
     }
 

@@ -619,7 +619,7 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
               pendingEvents.push(event);
               // Initial SSE replay can contain hundreds of durable events.  Fold
               // one animation frame into one Zustand commit so refresh does not
-              // remount/reload the workbench once per historical event.
+              // remount/reload the active Timeline page once per historical event.
               if (flushTimer == null)
                 flushTimer = window.setTimeout(flushEvents, 16);
             },

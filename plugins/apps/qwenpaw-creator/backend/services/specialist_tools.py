@@ -308,12 +308,6 @@ class FileSpecialistToolRegistry:
         admitted_target_refs: Sequence[str],
     ) -> tuple[dict[str, Any], ...]:
         project_tools = list(agent_project_tool_manifest())
-        if role is SpecialistRole.REVIEW_CONSISTENCY:
-            project_tools = [
-                item
-                for item in project_tools
-                if item["function"]["name"] != "jq_project"
-            ]
         business_tools = [
             spec.manifest(role=role, admitted_target_refs=admitted_target_refs)
             for spec in _SPECS

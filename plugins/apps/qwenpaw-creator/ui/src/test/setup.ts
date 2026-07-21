@@ -31,6 +31,12 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => undefined;
 }
 
+if (!Element.prototype.setPointerCapture) {
+  Element.prototype.setPointerCapture = () => undefined;
+  Element.prototype.releasePointerCapture = () => undefined;
+  Element.prototype.hasPointerCapture = () => false;
+}
+
 class TestEventSource {
   static instances: TestEventSource[] = [];
   static readonly CLOSED = 2;

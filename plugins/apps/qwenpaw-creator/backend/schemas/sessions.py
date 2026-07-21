@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from .common import ContentPart, StrictModel
-from .views import AgentStatusBarView
+from .status import AgentStatusBarView
 
 
 CreatorSessionStatus = Literal[
@@ -27,10 +27,6 @@ class CreatorSessionView(StrictModel):
     id: str
     project_id: str = Field(alias="projectId")
     status: CreatorSessionStatus
-    active_transaction_id: str | None = Field(
-        None,
-        alias="activeTransactionId",
-    )
     active_goal_id: str | None = Field(None, alias="activeGoalId")
     last_message_seq: int = Field(alias="lastMessageSeq", ge=0)
     last_consumed_message_seq: int = Field(

@@ -9,7 +9,6 @@ from .enums import (
     SpecialistRole,
     SpecialistRunStatus,
     TransactionStatus,
-    UiPhase,
 )
 
 __all__ = [
@@ -20,5 +19,4 @@ __all__ = [
     "SpecialistRole",
     "SpecialistRunStatus",
     "TransactionStatus",
-    "UiPhase",
 ]

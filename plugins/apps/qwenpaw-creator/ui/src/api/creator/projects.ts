@@ -2,6 +2,8 @@ import type {
   ProjectCreateRequest,
   ProjectCreateResponse,
   ProjectListResponse,
+  ProjectPatchRequest,
+  ProjectPatchResponse,
   ProjectServerSyncStatus,
   ProjectSnapshotEnvelope,
   ProjectSnapshotPollResult,
@@ -168,5 +170,46 @@ export function deleteProject(projectId: string): Promise<void> {
   return creatorRequest(`/projects/${encodeURIComponent(projectId)}`, {
     method: "DELETE",
     headers: { "Idempotency-Key": newClientId("delete-project") },
+  });
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJson);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, sortJson(child)]),
+    );
+  }
+  return value;
+}
+
+async function sha256(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return `sha256:${Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+/** Match backend services.project_files.json_pointer.hash_json_value. */
+export function hashProjectValue(
+  value: unknown,
+  missing = false,
+): Promise<string> {
+  return sha256(missing ? "MISSING" : JSON.stringify(sortJson(value)));
+}
+
+export function patchProject(
+  projectId: string,
+  request: ProjectPatchRequest,
+): Promise<ProjectPatchResponse> {
+  return creatorRequest(`/projects/${encodeURIComponent(projectId)}/project`, {
+    method: "PATCH",
+    headers: { "Idempotency-Key": request.clientCommandId },
+    body: jsonBody(request),
   });
 }

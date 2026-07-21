@@ -1,5 +1,11 @@
 import { create } from "zustand";
-import { CreatorHttpError, getProjectSnapshot } from "@/api/creator";
+import {
+  CreatorHttpError,
+  getProjectSnapshot,
+  hashProjectValue,
+  newClientId,
+  patchProject,
+} from "@/api/creator";
 import type {
   ProjectDocument,
   ProjectServerSyncStatus,
@@ -43,13 +49,28 @@ export interface ProjectSnapshotState {
   consecutiveFailures: number;
   issuedRequestSequence: number;
   appliedRequestSequence: number;
+  patching: boolean;
+  patchError: string | null;
   reset: (projectId?: string | null) => void;
   pollOnce: (projectId: string) => Promise<void>;
+  patch: (
+    projectId: string,
+    operations: ProjectEditOperation[],
+  ) => Promise<void>;
   startPolling: (
     projectId: string,
     options?: Partial<ProjectSnapshotPollOptions>,
   ) => () => void;
   stopPolling: (projectId?: string) => void;
+}
+
+export interface ProjectEditOperation {
+  op: "add" | "replace" | "remove";
+  path: string;
+  before?: unknown;
+  value?: unknown;
+  /** add operations target a field that is absent from the base document. */
+  missingBefore?: boolean;
 }
 
 interface RequestToken {
@@ -80,6 +101,8 @@ const snapshotBase = (projectId: string | null = null) => ({
   consecutiveFailures: 0,
   issuedRequestSequence: 0,
   appliedRequestSequence: 0,
+  patching: false,
+  patchError: null,
 });
 
 function isPageVisible(): boolean {
@@ -310,6 +333,64 @@ export const useProjectSnapshotStore = create<ProjectSnapshotState>(
       return request;
     };
 
+    const patch = async (projectId: string, edits: ProjectEditOperation[]) => {
+      ensureProject(projectId);
+      const state = get();
+      if (!state.project || state.generation === null || !state.etag) {
+        throw new Error("Project 快照尚未加载");
+      }
+      if (!edits.length) return;
+      set({ patching: true, patchError: null });
+      try {
+        const operations = await Promise.all(
+          edits.map(async (edit) => ({
+            op: edit.op,
+            path: edit.path,
+            ...(edit.op === "remove" ? {} : { value: edit.value }),
+            expectedValueHash: await hashProjectValue(
+              edit.before,
+              edit.missingBefore === true,
+            ),
+          })),
+        );
+        const clientCommandId = newClientId("project-patch");
+        const response = await patchProject(projectId, {
+          clientCommandId,
+          editSessionId: `frontend:${projectId}`,
+          baseGeneration: state.generation,
+          baseEtag: state.etag,
+          operations,
+        });
+        set((current) => {
+          if (current.projectId !== projectId) return {};
+          if (
+            current.generation !== null &&
+            current.generation > response.generation
+          ) {
+            return { patching: false };
+          }
+          return {
+            project: response.project,
+            generation: response.generation,
+            etag: response.etag,
+            syncStatus: "healthy",
+            syncError: null,
+            lastGoodAt: new Date().toISOString(),
+            patching: false,
+            patchError: null,
+          };
+        });
+      } catch (error) {
+        const message = errorMessage(error);
+        set((current) =>
+          current.projectId === projectId
+            ? { patching: false, patchError: message }
+            : {},
+        );
+        throw error;
+      }
+    };
+
     const schedule = (active: PollController) => {
       if (controller !== active || active.runPending) return;
       if (active.timer !== null) window.clearTimeout(active.timer);
@@ -358,6 +439,7 @@ export const useProjectSnapshotStore = create<ProjectSnapshotState>(
         set(snapshotBase(projectId));
       },
       pollOnce,
+      patch,
       startPolling: (projectId, overrides = {}) => {
         stopController();
         ensureProject(projectId);

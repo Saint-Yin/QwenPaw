@@ -5,7 +5,7 @@ import { interruptCreator } from "@/api/creator";
 import type { CreatorEvent, SpecialistRunView } from "@/contracts/creator";
 import { useCreatorSessionStore } from "@/store/creatorSessionStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
-import { useReviewManifestStore } from "@/store/reviewManifestStore";
+import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationStore";
 import { isTechnicalControlText } from "@/lib/creatorMessagePresentation";
 import {
   authorizationApprovalPayload,
@@ -258,11 +258,9 @@ export default function AgentEventFeed() {
   const events = useCreatorSessionStore((state) => state.events);
   const session = useCreatorSessionStore((state) => state.session);
   const projectId = taskProjectId ?? session?.projectId ?? null;
-  const authorizations = useReviewManifestStore(
-    (state) => state.authorizations,
-  );
-  const approve = useReviewManifestStore((state) => state.approveAuthorization);
-  const decline = useReviewManifestStore((state) => state.declineAuthorization);
+  const authorizations = useExecutionAuthorizationStore((state) => state.items);
+  const approve = useExecutionAuthorizationStore((state) => state.approve);
+  const decline = useExecutionAuthorizationStore((state) => state.decline);
   const [busy, setBusy] = useState(false);
   const pendingAuthorizations = authorizations.filter(
     (authorization) => authorization.status === "PENDING",
@@ -278,12 +276,13 @@ export default function AgentEventFeed() {
       task.kind === "r2v_generation" &&
       (task.status === "QUEUED" || task.status === "RUNNING"),
   );
-  const failedUnitRuns = runs.flatMap((run) => {
+  const failedTargetRuns = runs.flatMap((run) => {
     if (!["FAILED", "BLOCKED"].includes(run.status)) return [];
-    const unitRefs = run.targetRefs.filter((targetRef) =>
-      targetRef.startsWith("unit:"),
+    const targetRefs = run.targetRefs.filter(
+      (targetRef) =>
+        targetRef.startsWith("element:") || targetRef.startsWith("timeline:"),
     );
-    return unitRefs.length > 0 ? [{ run, unitRefs }] : [];
+    return targetRefs.length > 0 ? [{ run, targetRefs }] : [];
   });
   const visibleEvents = useMemo(
     () =>
@@ -401,15 +400,15 @@ export default function AgentEventFeed() {
           </ul>
         )}
 
-        {failedUnitRuns.length > 0 && (
+        {failedTargetRuns.length > 0 && (
           <div className="mt-2 rounded-md border border-[var(--color-danger)]/25 bg-[var(--color-danger-soft)] p-2 text-[11px] leading-4">
             <b className="text-[var(--color-danger)]">
-              {failedUnitRuns.length} 个单元失败（可在工作台单独重试）
+              {failedTargetRuns.length} 个 Timeline/Element 任务失败
             </b>
             <ul className="mt-1 space-y-0.5 text-[var(--color-text-secondary)]">
-              {failedUnitRuns.slice(0, 3).map(({ run, unitRefs }) => (
+              {failedTargetRuns.slice(0, 3).map(({ run, targetRefs }) => (
                 <li key={run.id} className="truncate">
-                  {unitRefs.join("、")}：{run.finalSummaryText || run.status}
+                  {targetRefs.join("、")}：{run.finalSummaryText || run.status}
                 </li>
               ))}
             </ul>

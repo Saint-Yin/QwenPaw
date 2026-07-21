@@ -79,5 +79,5 @@ class ProjectCreateResponse(StrictModel):
     project_id: str = Field(alias="projectId")
     creator_session_id: str = Field(alias="creatorSessionId")
     conversation_id: str = Field(alias="conversationId")
-    approved_revision_id: str = Field(alias="approvedRevisionId")
+    project_snapshot_id: str = Field(alias="projectSnapshotId")
     header: dict = Field(default_factory=dict)

@@ -3,7 +3,6 @@ import { Outlet } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import { useParams, usePathname, useRouter } from "@/routing/navigation";
 import type { FileProjectReviewOperation } from "@/contracts/creator";
-import { useWorkspaceViewStore } from "@/store/workspaceViewStore";
 import { useCreatorSessionStore } from "@/store/creatorSessionStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
 import {
@@ -14,7 +13,7 @@ import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useNavigationStore } from "@/store/navigationStore";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { useFileProjectReviewStore } from "@/store/fileProjectReviewStore";
-import { useReviewManifestStore } from "@/store/reviewManifestStore";
+import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationStore";
 import TopNav from "./TopNav";
 import AgentStatusBar from "./AgentStatusBar";
 import ReturnBanner from "@/components/creator/ReturnBanner";
@@ -69,10 +68,10 @@ function reviewIdsFromEvent(data: Record<string, unknown>): string[] {
   );
 }
 
-function reviewClipTargets(
+function reviewElementTargets(
   operations: FileProjectReviewOperation[],
-): Array<{ unitId: string; clipIds: string[] }> {
-  const byUnit = new Map<string, Set<string>>();
+): string[] {
+  const elementIds = new Set<string>();
   operations.forEach((operation) => {
     if (operation.decision !== "PENDING" || !operation.json_pointer) return;
     const tokens = operation.json_pointer
@@ -80,23 +79,16 @@ function reviewClipTargets(
       .split("/")
       .map((token) => token.replace(/~1/g, "/").replace(/~0/g, "~"));
     if (
-      tokens[0] !== "production" ||
-      tokens[1] !== "units_by_id" ||
-      tokens[3] !== "plan" ||
-      tokens[4] !== "timeline" ||
-      tokens[5] !== "items" ||
+      tokens[0] !== "timelines" ||
+      tokens[1] !== "items" ||
       !tokens[2] ||
-      !tokens[6]
+      tokens[3] !== "elements_by_id" ||
+      !tokens[4]
     )
       return;
-    const clipIds = byUnit.get(tokens[2]) ?? new Set<string>();
-    clipIds.add(tokens[6]);
-    byUnit.set(tokens[2], clipIds);
+    elementIds.add(tokens[4]);
   });
-  return [...byUnit].map(([unitId, clipIds]) => ({
-    unitId,
-    clipIds: [...clipIds],
-  }));
+  return [...elementIds];
 }
 
 function LayoutSkeleton() {
@@ -120,13 +112,6 @@ export default function ProjectLayout() {
   const { id = "" } = useParams();
   const pathname = usePathname();
   const router = useRouter();
-  const header = useWorkspaceViewStore((state) => state.header);
-  const loadHeader = useWorkspaceViewStore((state) => state.loadHeader);
-  const loadPlan = useWorkspaceViewStore((state) => state.loadPlan);
-  const loadWorkbench = useWorkspaceViewStore((state) => state.loadWorkbench);
-  const revalidateLoadedViews = useWorkspaceViewStore(
-    (state) => state.revalidateLoaded,
-  );
   const bootstrap = useCreatorSessionStore((state) => state.bootstrap);
   const refreshSession = useCreatorSessionStore(
     (state) => state.refreshSession,
@@ -144,6 +129,7 @@ export default function ProjectLayout() {
   const startProjectSnapshotPolling = useProjectSnapshotStore(
     (state) => state.startPolling,
   );
+  const projectSnapshot = useProjectSnapshotStore((state) => state.project);
   const snapshotRevision = useProjectSnapshotStore(
     useShallow((state) => ({
       projectId: state.projectId,
@@ -163,51 +149,16 @@ export default function ProjectLayout() {
     ready: boolean;
   } | null>(null);
   const lastConsumedEvent = useRef(0);
-  const lastSnapshotRevision = useRef<{
-    projectId: string;
-    generation: number;
-    etag: string;
-  } | null>(null);
 
   useEffect(() => {
-    lastSnapshotRevision.current = null;
     setPendingReviewNavigation(null);
   }, [id]);
 
   useEffect(() => {
     if (!id) return;
-    // Project snapshot is the new shared domain authority.  Legacy page Views
-    // remain mounted during the migration, while this poller provides one
-    // generation-aware source for all future selectors.
+    // Project snapshot is the shared domain authority for every Creator page.
     return startProjectSnapshotPolling(id);
   }, [id, startProjectSnapshotPolling]);
-
-  useEffect(() => {
-    if (
-      !id ||
-      snapshotRevision.projectId !== id ||
-      snapshotRevision.generation === null ||
-      !snapshotRevision.etag
-    )
-      return;
-    const current = {
-      projectId: id,
-      generation: snapshotRevision.generation,
-      etag: snapshotRevision.etag,
-    };
-    const previous = lastSnapshotRevision.current;
-    lastSnapshotRevision.current = current;
-    // The first successful Snapshot and the initial route Views are loaded in
-    // parallel.  Treat that Snapshot as the baseline so it does not duplicate
-    // the first-frame Header/Plan requests.
-    if (!previous || previous.projectId !== id) return;
-    if (
-      previous.generation === current.generation &&
-      previous.etag === current.etag
-    )
-      return;
-    void revalidateLoadedViews(id).catch(() => undefined);
-  }, [id, revalidateLoadedViews, snapshotRevision]);
 
   useEffect(() => {
     if (!id) return;
@@ -221,21 +172,20 @@ export default function ProjectLayout() {
 
   useEffect(() => {
     if (!id) return;
-    const reviewStore = useReviewManifestStore.getState();
-    reviewStore.bindFileProject(id);
+    const authorizationStore = useExecutionAuthorizationStore.getState();
+    authorizationStore.bindProject(id);
     const poll = () => {
-      void useReviewManifestStore
+      void useExecutionAuthorizationStore
         .getState()
-        .loadFileAuthorizations(id)
+        .load(id)
         .catch(() => undefined);
     };
     poll();
     const timer = window.setInterval(poll, 1_000);
     return () => {
       window.clearInterval(timer);
-      const current = useReviewManifestStore.getState();
-      if (current.projectId === id && current.transactionId === null)
-        current.reset();
+      const current = useExecutionAuthorizationStore.getState();
+      if (current.projectId === id) current.reset();
     };
   }, [id]);
 
@@ -252,14 +202,9 @@ export default function ProjectLayout() {
       useAgentDockUiStore.getState().reset();
       useNavigationStore.getState().clear();
     }
-    void Promise.all([
-      loadHeader(id),
-      loadPlan(id),
-      bootstrap(id),
-      refreshTasks(id),
-    ]).catch(() => undefined);
+    void Promise.all([bootstrap(id), refreshTasks(id)]).catch(() => undefined);
     return () => disconnect();
-  }, [bootstrap, disconnect, id, loadHeader, loadPlan, refreshTasks]);
+  }, [bootstrap, disconnect, id, refreshTasks]);
 
   useEffect(() => {
     if (
@@ -271,7 +216,7 @@ export default function ProjectLayout() {
       return;
     // Runtime Tasks are file-native and no longer emit the legacy bridge's
     // in-process progress callbacks to the browser.  Poll their durable heads
-    // so both AgentDock tools and direct workbench commands expose QUEUED /
+    // so AgentDock and Timeline surfaces expose QUEUED /
     // RUNNING progress while the blocking command request is still active.
     const timer = window.setInterval(() => {
       void refreshTasks(id).catch(() => undefined);
@@ -281,8 +226,7 @@ export default function ProjectLayout() {
 
   useEffect(() => {
     let panel: CreatorPanel = "other";
-    if (pathname.includes("/workbench")) panel = "workbench";
-    else if (pathname.includes("/plan")) panel = "plan";
+    if (pathname.includes("/plan")) panel = "plan";
     else if (pathname.includes("/assets")) panel = "assets";
     useCreatorInteractionStore.getState().setPanel(panel);
   }, [pathname]);
@@ -296,15 +240,6 @@ export default function ProjectLayout() {
     pendingEvents.forEach((event) =>
       useCreatorTaskViewStore.getState().consumeEvent(event),
     );
-    if (
-      pendingEvents.some(
-        (event) =>
-          event.type === "workspace.head_changed" ||
-          event.type === "workspace.manual_edit_committed",
-      )
-    ) {
-      void loadHeader(id);
-    }
     const completedReviewIds = pendingEvents
       .filter((event) => event.type === "agent.run.completed")
       .flatMap((event) => reviewIdsFromEvent(event.data));
@@ -352,7 +287,7 @@ export default function ProjectLayout() {
     // useFileProjectReviewStore.  Runtime events can refresh Session/Task
     // projections, but must never be interpreted as legacy Transaction IDs or
     // trigger requests to the removed Transaction/Review API.
-  }, [events, id, loadHeader, refreshSession, refreshTasks]);
+  }, [events, id, refreshSession, refreshTasks]);
 
   useEffect(() => {
     if (
@@ -362,27 +297,18 @@ export default function ProjectLayout() {
     )
       return;
     setPendingReviewNavigation(null);
-    const targets = reviewClipTargets(activeFileReview.operations);
+    const targets = reviewElementTargets(activeFileReview.operations);
     if (!targets.length) return;
     const [primary] = targets;
-    void loadWorkbench(id, primary.unitId)
-      .then(() => {
-        const workspace = useWorkspaceViewStore.getState();
-        targets.forEach(({ unitId, clipIds }) => {
-          workspace.setClipHighlights(unitId, clipIds);
-        });
-        const targetPath = `/project/${id}/plan/unit/${encodeURIComponent(
-          primary.unitId,
-        )}/workbench`;
-        if (!pathname.startsWith(targetPath)) router.push(targetPath);
-      })
-      .catch(() => undefined);
+    useCreatorInteractionStore.getState().select(`element:${primary}`);
+    const targetPath = `/project/${id}/plan?element=${encodeURIComponent(
+      primary,
+    )}&review=1`;
+    router.push(targetPath);
   }, [
     activeFileReview,
     fileReviewSyncStatus,
     id,
-    loadWorkbench,
-    pathname,
     pendingReviewNavigation,
     router,
   ]);
@@ -392,7 +318,7 @@ export default function ProjectLayout() {
   // available.  Transient background Header/Session failures keep the last
   // authoritative shell mounted so AgentDock and the active editor do not
   // disappear while the durable SSE connection catches up.
-  if (!header) {
+  if (!projectSnapshot || snapshotRevision.projectId !== id) {
     return <LayoutSkeleton />;
   }
 

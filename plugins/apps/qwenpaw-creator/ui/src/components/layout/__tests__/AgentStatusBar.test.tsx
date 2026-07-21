@@ -1,4 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import AgentStatusBar from "@/components/layout/AgentStatusBar";
 import type { CreatorSessionStatus, TaskStatus } from "@/contracts/creator";
@@ -19,7 +26,7 @@ function setSession(status: CreatorSessionStatus) {
     },
     agentStatusBar: {
       progress: {
-        phase: "story_planning",
+        phase: "visual_development",
         label: "正在制作",
         sourceEventSeq: 1,
         updatedAt: "now",
@@ -37,7 +44,7 @@ function task(id: string, status: TaskStatus) {
     transactionId: "tx1",
     specialistRunId: "run1",
     kind: "r2v_generation" as const,
-    targetRef: `unit:${id}`,
+    targetRef: `element:${id}`,
     status,
     progress: null,
     resultRefs: [],
@@ -61,29 +68,41 @@ describe("AgentStatusBar origin/main state projection", () => {
     expect(screen.queryByText("镜头生成中")).not.toBeInTheDocument();
   });
 
-  it("hides status controls and their separator while the AgentDock is closed", () => {
+  it("keeps the global hard-stop available while the AgentDock is closed", () => {
     setSession("RUNNING");
-    useAgentDockUiStore.getState().setOpen(false);
-    render(<AgentStatusBar />);
+    const { container } = render(<AgentStatusBar />);
+    // Apply the state after mount as well so late cleanup from a previously
+    // mounted Project shell cannot race this isolated projection assertion.
+    act(() => useAgentDockUiStore.getState().setOpen(false));
 
-    const statusBar = document.querySelector("[data-agent-status-bar]")!;
+    const statusBar = container.querySelector("[data-agent-status-bar]")!;
     expect(
-      screen.getByRole("button", { name: "打开 Agent" }),
+      within(statusBar as HTMLElement).getByRole("button", {
+        name: "打开 Agent",
+      }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "停止所有 Agent" }),
-    ).not.toBeInTheDocument();
+      within(statusBar as HTMLElement).getByRole("button", {
+        name: "停止所有 Agent",
+      }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("端到端生产中")).not.toBeInTheDocument();
     expect(screen.queryByText("执行中")).not.toBeInTheDocument();
     expect(screen.queryByText("镜头生成中")).not.toBeInTheDocument();
     expect(statusBar.querySelector(".border-l")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "打开 Agent" }));
+    fireEvent.click(
+      within(statusBar as HTMLElement).getByRole("button", {
+        name: "打开 Agent",
+      }),
+    );
     expect(useAgentDockUiStore.getState().open).toBe(true);
     expect(
-      screen.getByRole("button", { name: "停止所有 Agent" }),
+      within(statusBar as HTMLElement).getByRole("button", {
+        name: "停止所有 Agent",
+      }),
     ).toBeInTheDocument();
-    expect(statusBar.querySelector(".border-l")).toBeInTheDocument();
+    expect(statusBar.querySelector(".border-l")).not.toBeInTheDocument();
   });
 
   it("exposes a global stop control and interrupts the whole Creator Session", async () => {

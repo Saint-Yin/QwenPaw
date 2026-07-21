@@ -9,7 +9,7 @@ import {
 import { useNavigationStore } from "@/store/navigationStore";
 
 const PATH = "/project/p1/plan";
-const FIELD = "unit:unit-1/storyText";
+const FIELD = "element:element-1/label";
 
 function Harness({
   field = FIELD,
@@ -27,7 +27,9 @@ function MultiFieldHarness() {
   return (
     <>
       <div data-creator-field={FIELD}>原文 A</div>
-      <div data-creator-field="unit:unit-1/videoPrompt">原文 B</div>
+      <div data-creator-field="element:element-1/creation/video_prompt">
+        原文 B
+      </div>
     </>
   );
 }
@@ -104,7 +106,7 @@ describe("useReviewFieldFocus", () => {
     act(() => {
       useNavigationStore.getState().setReviewFocus({
         path: PATH,
-        ref: "unit:unit-1",
+        ref: "element:element-1",
         query: { review: "1", field: FIELD, reviewPulse: "2" },
       });
     });
@@ -113,7 +115,7 @@ describe("useReviewFieldFocus", () => {
     act(() => {
       useNavigationStore.getState().setReviewFocus({
         path: PATH,
-        ref: "unit:unit-1",
+        ref: "element:element-1",
         query: { review: "1", field: FIELD, reviewPulse: "3" },
       });
     });
@@ -140,17 +142,17 @@ describe("useReviewFieldFocus", () => {
       `[data-creator-field="${FIELD}"]`,
     )!;
     const second = container.querySelector<HTMLElement>(
-      '[data-creator-field="unit:unit-1/videoPrompt"]',
+      '[data-creator-field="element:element-1/creation/video_prompt"]',
     )!;
     expect(first).toHaveClass("review-flash");
 
     act(() => {
       useNavigationStore.getState().setReviewFocus({
         path: PATH,
-        ref: "unit:unit-1",
+        ref: "element:element-1",
         query: {
           review: "1",
-          field: "unit:unit-1/videoPrompt",
+          field: "element:element-1/creation/video_prompt",
           reviewPulse: "2",
         },
       });

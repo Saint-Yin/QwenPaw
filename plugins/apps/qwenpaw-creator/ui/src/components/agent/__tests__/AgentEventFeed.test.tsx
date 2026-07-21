@@ -19,16 +19,16 @@ describe("AgentEventFeed", () => {
           role: "r2v_generation_director",
           displayName: "R2V 生成导演",
           status: "WAITING_RUNTIME",
-          targetRefs: ["unit:u1"],
+          targetRefs: ["element:r2v-1"],
           taskRefs: ["task-video"],
           metadata: {},
         },
         {
           id: "run-story",
-          role: "story_planning_agent",
+          role: "visual_development_agent",
           displayName: "故事规划",
           status: "RUNNING_MODEL",
-          targetRefs: ["section:s2"],
+          targetRefs: ["timeline:main"],
           taskRefs: [],
           metadata: {},
         },
@@ -37,10 +37,10 @@ describe("AgentEventFeed", () => {
     render(<AgentEventFeed />);
     expect(screen.getByText("端到端生产")).toBeInTheDocument();
     expect(
-      screen.getByText(/R2V 生成导演 · unit:u1 · WAITING_RUNTIME/),
+      screen.getByText(/R2V 生成导演 · element:r2v-1 · WAITING_RUNTIME/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/故事规划 · section:s2 · RUNNING_MODEL/),
+      screen.getByText(/故事规划 · timeline:main · RUNNING_MODEL/),
     ).toBeInTheDocument();
     expect(screen.getByText("后台等待中")).toBeInTheDocument();
     expect(screen.queryByText("继续轮询")).not.toBeInTheDocument();
@@ -61,8 +61,8 @@ describe("AgentEventFeed", () => {
           at: "now",
           data: {
             summary: "先完成故事规划",
-            steps: ["拆分 Section", "规划 Unit"],
-            scope: ["section:s1"],
+            steps: ["建立 Element", "安排重叠关系"],
+            scope: ["timeline:main"],
           },
         },
         {
@@ -84,7 +84,7 @@ describe("AgentEventFeed", () => {
           data: {
             parentActionId: "a1",
             runId: "r1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "m1",
             deltaIndex: 0,
             delta: "实时正文",
@@ -100,7 +100,7 @@ describe("AgentEventFeed", () => {
           data: {
             parentActionId: "a1",
             runId: "r1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             toolCallId: "t1",
             tool: "read_file",
             deltaIndex: 0,
@@ -117,7 +117,7 @@ describe("AgentEventFeed", () => {
           data: {
             parentActionId: "a1",
             runId: "r1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "m1",
             text: "[SUCCESS]\n不应出现在全局事件流",
           },
@@ -132,7 +132,7 @@ describe("AgentEventFeed", () => {
           data: {
             parentActionId: "a1",
             runId: "r1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             toolCallId: "t1",
             tool: "read_file",
           },
@@ -147,7 +147,7 @@ describe("AgentEventFeed", () => {
           data: {
             parentActionId: "a1",
             runId: "r1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             toolCallId: "t1",
             tool: "read_file",
             result: { text: "机器结果" },
@@ -189,7 +189,7 @@ describe("AgentEventFeed", () => {
     expect(
       screen.queryByText("执行计划：先完成故事规划"),
     ).not.toBeInTheDocument();
-    expect(screen.queryByText("拆分 Section")).not.toBeInTheDocument();
+    expect(screen.queryByText("建立 Element")).not.toBeInTheDocument();
     expect(screen.queryByText("delegate_to_agent")).not.toBeInTheDocument();
     expect(screen.queryByText("实时正文")).not.toBeInTheDocument();
     expect(screen.queryByText(/不应出现在全局事件流/)).not.toBeInTheDocument();
@@ -291,7 +291,7 @@ describe("AgentEventFeed", () => {
           data: {
             parentActionId: "delegate-action-1",
             runId: "run-story",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             roleDisplayName: "故事规划",
           },
         },
@@ -306,12 +306,12 @@ describe("AgentEventFeed", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("does not report superseded, cancelled, or non-unit runs as failed production units", () => {
+  it("does not report superseded, cancelled, or project-level runs as failed Timeline targets", () => {
     useCreatorTaskViewStore.setState({
       runs: [
         {
           id: "run-stale-plan",
-          role: "story_planning_agent",
+          role: "visual_development_agent",
           displayName: "故事规划",
           status: "STALE",
           targetRefs: ["project:plan"],
@@ -319,20 +319,20 @@ describe("AgentEventFeed", () => {
           metadata: {},
         },
         {
-          id: "run-cancelled-unit",
+          id: "run-cancelled-element",
           role: "r2v_generation_director",
           displayName: "R2V 生成导演",
           status: "CANCELLED",
-          targetRefs: ["unit:u-cancelled"],
+          targetRefs: ["element:cancelled"],
           taskRefs: [],
           metadata: {},
         },
         {
-          id: "run-failed-section",
-          role: "unit_planning_routing_agent",
-          displayName: "Unit 规划",
+          id: "run-failed-project",
+          role: "visual_development_agent",
+          displayName: "视觉开发",
           status: "FAILED",
-          targetRefs: ["section:s1"],
+          targetRefs: ["project:assets"],
           taskRefs: [],
           metadata: {},
         },
@@ -345,10 +345,10 @@ describe("AgentEventFeed", () => {
       screen.getByText(/故事规划 · project:plan · 已被替换/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/R2V 生成导演 · unit:u-cancelled · 已取消/),
+      screen.getByText(/R2V 生成导演 · element:cancelled · 已取消/),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText(/个单元失败（可在工作台单独重试）/),
+      screen.queryByText(/个 Timeline\/Element 任务失败/),
     ).not.toBeInTheDocument();
   });
 
@@ -357,7 +357,7 @@ describe("AgentEventFeed", () => {
       runs: [
         {
           id: "run-stale-plan",
-          role: "story_planning_agent",
+          role: "visual_development_agent",
           displayName: "故事规划",
           status: "STALE",
           targetRefs: ["project:plan"],
@@ -374,40 +374,40 @@ describe("AgentEventFeed", () => {
     expect(screen.queryByText("执行中")).not.toBeInTheDocument();
   });
 
-  it("reports only genuinely failed or blocked unit-targeted runs in the retry banner", () => {
+  it("reports only genuinely failed or blocked Timeline/Element runs", () => {
     useCreatorTaskViewStore.setState({
       runs: [
         {
-          id: "run-failed-unit",
+          id: "run-failed-timeline",
           role: "ai_editing_director",
           displayName: "AI 剪辑导演",
           status: "FAILED",
-          targetRefs: ["unit:u1", "artifact:preview"],
+          targetRefs: ["timeline:main", "artifact:preview"],
           finalSummaryText: "剪辑失败",
           taskRefs: [],
           metadata: {},
         },
         {
-          id: "run-blocked-unit",
+          id: "run-blocked-element",
           role: "r2v_generation_director",
           displayName: "R2V 生成导演",
           status: "BLOCKED",
-          targetRefs: ["unit:u2"],
+          targetRefs: ["element:r2v-2"],
           taskRefs: [],
           metadata: {},
         },
         {
-          id: "run-stale-unit",
+          id: "run-stale-element",
           role: "r2v_generation_director",
           displayName: "R2V 生成导演",
           status: "STALE",
-          targetRefs: ["unit:u3"],
+          targetRefs: ["element:r2v-3"],
           taskRefs: [],
           metadata: {},
         },
         {
           id: "run-failed-project",
-          role: "story_planning_agent",
+          role: "visual_development_agent",
           displayName: "故事规划",
           status: "FAILED",
           targetRefs: ["project:plan"],
@@ -420,14 +420,14 @@ describe("AgentEventFeed", () => {
     render(<AgentEventFeed />);
 
     expect(
-      screen.getByText("2 个单元失败（可在工作台单独重试）"),
+      screen.getByText("2 个 Timeline/Element 任务失败"),
     ).toBeInTheDocument();
-    expect(screen.getByText("unit:u1：剪辑失败")).toBeInTheDocument();
-    expect(screen.getByText("unit:u2：BLOCKED")).toBeInTheDocument();
+    expect(screen.getByText("timeline:main：剪辑失败")).toBeInTheDocument();
+    expect(screen.getByText("element:r2v-2：BLOCKED")).toBeInTheDocument();
     expect(
       screen.queryByText(/artifact:preview：剪辑失败/),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("project:plan：FAILED")).not.toBeInTheDocument();
-    expect(screen.queryByText("unit:u3：STALE")).not.toBeInTheDocument();
+    expect(screen.queryByText("element:r2v-3：STALE")).not.toBeInTheDocument();
   });
 });

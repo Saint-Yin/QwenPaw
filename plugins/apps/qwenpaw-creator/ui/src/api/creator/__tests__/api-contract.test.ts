@@ -3,24 +3,62 @@ import { installMockFetch } from "@/test/mockFetch";
 import {
   createAssetImport,
   createProject,
-  decideReviewGroup,
+  decideFileProjectReview,
+  patchProject,
   sendCreatorMessage,
   saveModelConfig,
-  submitCreatorCommand,
   testModelConnection,
 } from "@/api/creator";
 
 describe("new Creator API contract", () => {
-  it("uses only project/session/command/review routes with stable idempotency ids", async () => {
+  it("uses Project Patch and file Review routes with stable idempotency ids", async () => {
     const { calls } = installMockFetch([
       {
-        match: "/projects/p1/transactions/tx1/review/groups/g1/decision",
-        response: { json: { group: {}, manifest: {} } },
+        match: "/projects/p1/runtime/reviews/review-1/decisions",
+        response: {
+          json: {
+            review_id: "review-1",
+            round_id: "round-1",
+            request_id: "request-1",
+            request_message_seq: 1,
+            interrupted_run_id: "run-1",
+            baseline_generation: 1,
+            baseline_etag: "base",
+            candidate_generation: 2,
+            candidate_etag: "candidate",
+            decision_token: "token-2",
+            status: "RESOLVED",
+            operations: [
+              {
+                kind: "update",
+                json_pointer: "/name",
+                file_id: null,
+                target_ref: "project:p1",
+                before_hash: "before",
+                after_hash: "after",
+                before: "P",
+                after: "新名称",
+                operation_id: "operation-1",
+                ui_locator: { path: "/project/p1/plan" },
+                decision: "ACCEPTED",
+              },
+            ],
+            created_at: "now",
+            updated_at: "now",
+          },
+        },
       },
       {
-        match: "/projects/p1/commands",
+        match: "/projects/p1/project",
+        method: "PATCH",
         response: {
-          json: { commandId: "cmd", status: "APPLIED", eventSeq: 1 },
+          json: {
+            projectId: "p1",
+            generation: 2,
+            etag: "etag-2",
+            changedPointers: ["/name"],
+            project: {},
+          },
         },
       },
       {
@@ -43,7 +81,7 @@ describe("new Creator API contract", () => {
             projectId: "p1",
             creatorSessionId: "s1",
             conversationId: "c1",
-            approvedRevisionId: "r1",
+            projectSnapshotId: "snapshot-1",
             header: {},
           },
         },
@@ -61,29 +99,38 @@ describe("new Creator API contract", () => {
       conversationId: "c1",
       message: "目标",
     });
-    await submitCreatorCommand("p1", {
-      clientCommandId: "command-key",
-      type: "SET_UNIT_TEXT",
-      targetRef: "unit:u1",
-      arguments: { field: "storyText", value: "新文本" },
-      expectedTargetVersions: [{ ref: "unit:u1", objectVersion: "ov1" }],
+    await patchProject("p1", {
+      clientCommandId: "patch-key",
+      editSessionId: "edit-1",
+      baseGeneration: 1,
+      baseEtag: "etag-1",
+      operations: [
+        {
+          op: "replace",
+          path: "/name",
+          value: "新名称",
+          expectedValueHash: "sha256:old",
+        },
+      ],
     });
-    await decideReviewGroup("p1", "tx1", "g1", {
+    await decideFileProjectReview("p1", "review-1", {
+      decisionId: "decision-key",
       decisionToken: "token-1",
-      decision: "ACCEPT",
+      decisions: [{ operation_id: "operation-1", decision: "ACCEPT" }],
     });
     expect(calls.map((call) => [call.method, call.url])).toEqual([
       ["POST", "/api/qwenpaw-creator/projects"],
       ["POST", "/api/qwenpaw-creator/projects/p1/messages"],
-      ["POST", "/api/qwenpaw-creator/projects/p1/commands"],
+      ["PATCH", "/api/qwenpaw-creator/projects/p1/project"],
       [
-        "PUT",
-        "/api/qwenpaw-creator/projects/p1/transactions/tx1/review/groups/g1/decision",
+        "POST",
+        "/api/qwenpaw-creator/projects/p1/runtime/reviews/review-1/decisions",
       ],
     ]);
     expect(calls[0].headers["idempotency-key"]).toBe("project-key");
     expect(calls[1].headers["idempotency-key"]).toBe("message-key");
-    expect(calls[2].headers["idempotency-key"]).toBe("command-key");
+    expect(calls[2].headers["idempotency-key"]).toBe("patch-key");
+    expect(calls[3].headers["idempotency-key"]).toBe("decision-key");
     expect(
       calls.every((call) =>
         call.url.startsWith("/api/qwenpaw-creator/projects"),

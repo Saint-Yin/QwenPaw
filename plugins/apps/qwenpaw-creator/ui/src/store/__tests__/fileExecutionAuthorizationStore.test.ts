@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { installMockFetch } from "@/test/mockFetch";
-import { useReviewManifestStore } from "@/store/reviewManifestStore";
+import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationStore";
 
 const pending = {
   id: "authorization-1",
   transactionId: "round-1",
   specialistRunId: "run-1",
   executionRequestId: "request-1",
-  targetRef: "asset:hero",
-  scope: { operation: "image_generation" },
+  targetRef: "element:hero",
+  scope: { operation: "r2v_generation" },
   status: "PENDING" as const,
   authorizationToken: "token-1",
   provider: "creator-image",
@@ -19,7 +19,7 @@ const pending = {
 };
 
 describe("file execution authorization polling", () => {
-  beforeEach(() => useReviewManifestStore.getState().reset());
+  beforeEach(() => useExecutionAuthorizationStore.getState().reset());
 
   it("uses project-level file routes without a SQL transaction", async () => {
     const { calls } = installMockFetch([
@@ -33,18 +33,16 @@ describe("file execution authorization polling", () => {
       },
     ]);
 
-    await useReviewManifestStore.getState().loadFileAuthorizations("p1");
-    await useReviewManifestStore
-      .getState()
-      .approveAuthorization("authorization-1", {
-        authorizationToken: "token-1",
-        provider: "creator-image",
-        model: "configured-image-model",
-        maxCost: 0,
-        maxCandidates: 1,
-      });
+    await useExecutionAuthorizationStore.getState().load("p1");
+    await useExecutionAuthorizationStore.getState().approve("authorization-1", {
+      authorizationToken: "token-1",
+      provider: "creator-image",
+      model: "configured-image-model",
+      maxCost: 0,
+      maxCandidates: 1,
+    });
 
-    expect(useReviewManifestStore.getState().authorizations[0].status).toBe(
+    expect(useExecutionAuthorizationStore.getState().items[0].status).toBe(
       "APPROVED",
     );
     expect(calls.some((call) => call.url.includes("/transactions/"))).toBe(

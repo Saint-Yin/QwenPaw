@@ -1,17 +1,9 @@
-import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-  useState,
-} from "react";
+import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import type {
   ClipboardEvent as ReactClipboardEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
 } from "react";
-import { searchRefs } from "@/api/creator";
-import type { RefSearchItem } from "@/contracts/creator";
 import type { SelectionAttachment } from "@/store/agentDockUiStore";
 
 export interface MentionRef {
@@ -32,11 +24,6 @@ export interface MentionInputHandle {
   clearMentions: () => void;
   focus: () => void;
   setText: (text: string) => void;
-  prefillMention: (
-    lead: string,
-    mention: MentionRef | null,
-    trail: string,
-  ) => void;
 }
 
 interface MentionInputProps {
@@ -49,12 +36,6 @@ interface MentionInputProps {
   onMentionNavigate?: (direction: 1 | -1) => void;
   onMentionConfirm?: () => void;
   onMentionClose?: () => void;
-  /** Compatibility props for consumers that still let the input own ref lookup. */
-  projectId?: string;
-  value?: string;
-  selection?: SelectionAttachment | null;
-  onSelectionChange?: (selection: SelectionAttachment | null) => void;
-  onAddRef?: (ref: RefSearchItem) => void;
 }
 
 // Kept as complete literals so Tailwind includes classes injected into the editor DOM.
@@ -106,6 +87,15 @@ function createSelectionPill(selection: SelectionAttachment): HTMLSpanElement {
 }
 
 function selectionFromElement(element: HTMLElement): SelectionAttachment {
+  if (element.dataset.selectionRef) {
+    try {
+      return JSON.parse(
+        decodeURIComponent(element.dataset.selectionRef),
+      ) as SelectionAttachment;
+    } catch {
+      // Fall through to the legacy attributes so copied old selections remain usable.
+    }
+  }
   return {
     text: element.dataset.selText ?? "",
     ref: element.dataset.selRef ?? null,
@@ -169,11 +159,6 @@ const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
       onMentionNavigate,
       onMentionConfirm,
       onMentionClose,
-      projectId,
-      value,
-      selection,
-      onSelectionChange,
-      onAddRef,
     },
     ref,
   ) {
@@ -181,8 +166,6 @@ const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
     const savedRange = useRef<Range | null>(null);
     const composing = useRef(false);
     const [empty, setEmpty] = useState(true);
-    const [localQuery, setLocalQuery] = useState<string | null>(null);
-    const [suggestions, setSuggestions] = useState<RefSearchItem[]>([]);
 
     const refresh = () => {
       const editor = editorRef.current;
@@ -215,7 +198,6 @@ const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
         !selectionState.isCollapsed
       ) {
         onQueryChange?.(null);
-        setLocalQuery(null);
         return;
       }
       const range = selectionState.getRangeAt(0);
@@ -225,49 +207,13 @@ const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
         node.nodeType !== Node.TEXT_NODE
       ) {
         onQueryChange?.(null);
-        setLocalQuery(null);
         return;
       }
       const before = (node.textContent ?? "").slice(0, range.startOffset);
       const match = /@([^\s@]*)$/.exec(before);
       const next = match ? match[1] : null;
       onQueryChange?.(next);
-      setLocalQuery(projectId && !onQueryChange ? next : null);
     };
-
-    useEffect(() => {
-      if (!projectId || localQuery === null || !onAddRef) return;
-      let cancelled = false;
-      const timer = window.setTimeout(() => {
-        void searchRefs(projectId, localQuery)
-          .then((result) => {
-            if (!cancelled) setSuggestions(result.items);
-          })
-          .catch(() => {
-            if (!cancelled) setSuggestions([]);
-          });
-      }, 120);
-      return () => {
-        cancelled = true;
-        window.clearTimeout(timer);
-      };
-    }, [localQuery, onAddRef, projectId]);
-
-    // Compatibility controlled mode. AgentDock itself uses the imperative rich-text API.
-    useEffect(() => {
-      if (value === undefined && !selection) return;
-      const editor = editorRef.current;
-      if (!editor || document.activeElement === editor) return;
-      editor.innerHTML = "";
-      if (selection) {
-        editor.append(
-          createSelectionPill(selection),
-          document.createTextNode("\u00a0"),
-        );
-      }
-      if (value) editor.append(document.createTextNode(value));
-      setEmpty(!value && !selection);
-    }, [selection, value]);
 
     const currentInsertionRange = (): Range | null => {
       const editor = editorRef.current;
@@ -369,15 +315,12 @@ const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
           if (!restored) return;
           if (index) fragment.append(document.createTextNode("\u00a0"));
           fragment.append(createSelectionPill(restored));
-          onSelectionChange?.(restored);
         });
       return fragment.childNodes.length ? fragment : null;
     };
 
     const handleCopy = (event: ReactClipboardEvent<HTMLDivElement>) => {
       const pills = selectedSelectionPills();
-      if (!pills.length && selection)
-        pills.push(createSelectionPill(selection));
       if (!pills.length) return;
       const selections = pills.map(selectionFromElement);
       const wrapper = document.createElement("div");
@@ -415,7 +358,6 @@ const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
       );
       if (pill && editorRef.current?.contains(pill)) {
         pill.remove();
-        onSelectionChange?.(null);
         refresh();
       }
       saveRange();
@@ -454,8 +396,6 @@ const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
         selectionState?.addRange(after);
         savedRange.current = after.cloneRange();
         onQueryChange?.(null);
-        setLocalQuery(null);
-        setSuggestions([]);
         refresh();
       },
       insertSelection: (selectionValue) => {
@@ -470,14 +410,12 @@ const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
       clear: () => {
         if (editorRef.current) editorRef.current.innerHTML = "";
         savedRange.current = null;
-        setSuggestions([]);
         refresh();
       },
       clearMentions: () => {
         editorRef.current
           ?.querySelectorAll("[data-ref], [data-sel]")
           .forEach((element) => element.remove());
-        onSelectionChange?.(null);
         refresh();
       },
       focus: () => editorRef.current?.focus(),
@@ -495,29 +433,11 @@ const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
         savedRange.current = range.cloneRange();
         refresh();
       },
-      prefillMention: (lead, mention, trail) => {
-        const editor = editorRef.current;
-        if (!editor) return;
-        editor.innerHTML = "";
-        if (lead) editor.append(document.createTextNode(lead));
-        if (mention) editor.append(createMentionPill(mention));
-        editor.append(document.createTextNode(trail || "\u00a0"));
-        editor.focus();
-        const range = document.createRange();
-        range.selectNodeContents(editor);
-        range.collapse(false);
-        const selectionState = window.getSelection();
-        selectionState?.removeAllRanges();
-        selectionState?.addRange(range);
-        savedRange.current = range.cloneRange();
-        refresh();
-      },
     }));
 
     const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
       if (event.nativeEvent.isComposing || composing.current) return;
-      const autocompleteOpen = mentionOpen || suggestions.length > 0;
-      if (autocompleteOpen && mentionOpen) {
+      if (mentionOpen) {
         if (event.key === "ArrowDown") {
           event.preventDefault();
           onMentionNavigate?.(1);
@@ -583,30 +503,6 @@ const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
           <span className="pointer-events-none absolute left-2.5 top-1.5 text-xs leading-6 text-[var(--color-text-tertiary)]">
             {placeholder}
           </span>
-        )}
-        {suggestions.length > 0 && onAddRef && (
-          <div className="absolute bottom-full left-0 right-0 z-20 mb-1 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] shadow-lg">
-            {suggestions.map((item) => (
-              <button
-                key={item.ref}
-                type="button"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  onAddRef(item);
-                  setSuggestions([]);
-                  setLocalQuery(null);
-                }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-[var(--color-accent-soft)]"
-              >
-                <span className="rounded bg-[var(--color-bg-secondary)] px-1 text-[10px] text-[var(--color-text-tertiary)]">
-                  {item.type}
-                </span>
-                <span className="truncate text-[var(--color-text-primary)]">
-                  {item.name}
-                </span>
-              </button>
-            ))}
-          </div>
         )}
       </div>
     );

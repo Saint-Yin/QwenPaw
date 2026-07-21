@@ -16,8 +16,7 @@ export interface ProjectCreateResponse {
   projectId: string;
   creatorSessionId: string;
   conversationId: string;
-  /** Compatibility name for the initial project.json snapshot; not a SQL revision. */
-  approvedRevisionId: string;
+  projectSnapshotId: string;
   header: ProjectCreateHeader;
 }
 
@@ -47,18 +46,4 @@ export interface ProjectListResponse {
   items: ProjectSummary[];
   limit: number;
   offset: number;
-}
-
-export interface ProjectHeaderView extends ProjectCreateHeader {
-  /** Read-only TopNav presentation of the original project goal. */
-  masterScript: string;
-  platform: string;
-  language: string;
-  targetDuration: number | null;
-  resolvedRefs: [];
-  relations: [];
-  readiness: { ready: boolean };
-  blockers: string[];
-  targetVersion: string;
-  uiLocator: Record<string, string>;
 }

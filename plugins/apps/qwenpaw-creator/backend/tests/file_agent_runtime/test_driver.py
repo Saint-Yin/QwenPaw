@@ -65,7 +65,7 @@ def test_message_text_includes_exact_project_json_selection_locator() -> None:
         content_parts=[{"type": "text", "text": "修改这段描述"}],
         metadata={
             "context": {
-                "panel": "workbench",
+                "panel": "plan",
                 "selection": {
                     "ref": "element:edit-1",
                     "field": "element:edit-1/creation/reason",

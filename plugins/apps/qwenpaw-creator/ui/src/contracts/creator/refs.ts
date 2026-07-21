@@ -1,7 +1,7 @@
 export interface RefSearchItem {
   ref: string;
   name: string;
-  type: "section" | "unit" | "asset" | "artifact";
+  type: "element" | "timeline" | "asset" | "artifact";
   version?: string;
   thumbnailUrl?: string;
   url?: string;

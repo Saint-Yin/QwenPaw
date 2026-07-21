@@ -10,6 +10,46 @@ export type CreatorSessionStatus =
   | "CANCELLED"
   | "ERROR";
 
+export type CreatorProgressPhase =
+  | "source_ingest"
+  | "source_intelligence"
+  | "creative_strategy"
+  | "visual_development"
+  | "timeline_edit"
+  | "timeline_render"
+  | "post_production"
+  | "review"
+  | "completed";
+
+export interface CreatorTaskProgress {
+  goalId?: string | null;
+  phase: CreatorProgressPhase;
+  label: string;
+  latestMilestone?: string | null;
+  completed?: number | null;
+  total?: number | null;
+  timelineId?: string | null;
+  elementId?: string | null;
+  sourceEventSeq: number;
+  updatedAt: string;
+}
+
+export interface AgentStatusBadge {
+  kind: string;
+  label: string;
+  count?: number | null;
+  actionTarget?: string | null;
+}
+
+export interface AgentStatusBarView {
+  progress: CreatorTaskProgress;
+  activity?: {
+    runningTaskCount?: number;
+    [key: string]: unknown;
+  } | null;
+  badges: AgentStatusBadge[];
+}
+
 export type CreatorContentPart =
   | { type: "text"; text: string }
   | {
@@ -30,7 +70,6 @@ export interface CreatorSessionView {
   id: string;
   projectId: string;
   status: CreatorSessionStatus;
-  activeTransactionId?: string;
   activeGoalId?: string;
   lastMessageSeq: number;
   lastConsumedMessageSeq: number;
@@ -66,7 +105,7 @@ export interface MessagePage {
 
 export interface CreatorSessionResponse {
   session: CreatorSessionView;
-  agentStatusBar: import("./views").AgentStatusBarView;
+  agentStatusBar: AgentStatusBarView;
 }
 
 export interface SendCreatorMessageRequest {

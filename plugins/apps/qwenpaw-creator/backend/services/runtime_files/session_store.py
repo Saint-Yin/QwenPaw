@@ -2138,7 +2138,7 @@ class ProjectRuntimeSessionStore:
         """Shared-lock variant of :meth:`_project_lock` for read-only paths.
 
         Both the lifecycle and the runtime lock are taken as ``LOCK_SH`` so
-        concurrent readers (e.g. workbench polling) never block each other;
+        concurrent readers (for example Plan polling) never block each other;
         they only wait for a writer, which holds the lock for a single short
         durable transition.  Callers must not mutate any file under this lock.
         """

@@ -1,421 +1,304 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { ComposeView, PlanView } from "@/contracts/creator";
 import PlanPage from "@/pages/PlanPage";
 import { NavigationRuntime } from "@/routing/navigation";
-import {
-  selectPlanDetail,
-  selectPlanTerms,
-  selectPlanTotalDuration,
-} from "@/selectors/planViewSelectors";
-import {
-  composeView,
-  envelope,
-  headerView,
-  planView,
-} from "@/test/creatorFixtures";
-import { installMockFetch } from "@/test/mockFetch";
-import { useWorkspaceViewStore } from "@/store/workspaceViewStore";
-import { useCreatorSessionStore } from "@/store/creatorSessionStore";
+import { useAgentDockUiStore } from "@/store/agentDockUiStore";
+import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
+import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
+import { projectDocument } from "@/test/creatorFixtures";
+import { installMockFetch } from "@/test/mockFetch";
+import type { ProjectDocument } from "@/contracts/creator";
 
-const fidelityPlan: PlanView = {
-  ...planView,
-  sections: [
-    {
-      ...planView.sections[0],
-      units: [
-        {
-          ...planView.sections[0].units[0],
-          storyboardPrompt: "雪夜公路，电影感构图",
-          storyboardImageUrl: "/creator/media/artifacts/storyboard-v1",
-          videoPrompt: "汽车沿公路稳定驶过",
-        },
-      ],
-    },
-  ],
-};
+function cloneProject(): ProjectDocument {
+  return structuredClone(projectDocument);
+}
 
-const finalView: ComposeView = {
-  ...composeView,
-  kind: "final",
-  sectionId: undefined,
-  sectionNumber: undefined,
-  sectionTitle: undefined,
-  sections: [{ id: "s1", number: 1, title: "开场" }],
-  candidates: [
-    {
-      ...composeView.candidates[0],
-      id: "section-v1",
-      name: "开场",
-      artifactVersionId: "section-v1",
-      ownerRef: "project://section/s1",
-      sourceRef: "artifact://section-slot@section-v1",
-      slotId: "section-slot",
-      kind: "section_video",
-      uiLocator: {
-        page: "section-compose",
-        sectionId: "s1",
-        versionId: "section-v1",
-      },
-    },
-  ],
-  selections: [],
-  targetVersion: "ov-final",
-  uiLocator: { page: "final-compose" },
-};
+function seedProject(project = cloneProject()) {
+  useProjectSnapshotStore.getState().reset("p1");
+  useProjectSnapshotStore.setState({
+    projectId: "p1",
+    project,
+    generation: project.generation,
+    etag: '"sha256:g3"',
+    syncStatus: "healthy",
+    syncError: null,
+    lastGoodAt: "2026-07-20T00:02:00Z",
+  });
+}
 
-describe("PlanPage origin/main fidelity", () => {
+function renderPage(entry = "/project/p1/plan") {
+  return render(
+    <MemoryRouter initialEntries={[entry]}>
+      <NavigationRuntime />
+      <Routes>
+        <Route path="/project/:id/plan" element={<PlanPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+function installTimelineRect(chart: Element) {
+  Object.defineProperty(chart, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1000,
+      bottom: 280,
+      width: 1000,
+      height: 280,
+      toJSON: () => ({}),
+    }),
+  });
+}
+
+describe("PlanPage Timeline/Element frontend", () => {
   beforeEach(() => {
-    useWorkspaceViewStore.getState().reset();
-    useWorkspaceViewStore.setState({
-      header: envelope({ ...headerView, scenario: "general" }),
-    });
-    useCreatorSessionStore.setState({ events: [] });
+    useProjectSnapshotStore.getState().reset();
     useCreatorTaskViewStore.getState().reset();
+    useCreatorInteractionStore.getState().reset();
+    useAgentDockUiStore.getState().reset();
+    seedProject();
   });
 
-  it("derives the real detail selection, duration, and origin scenario terms through plan selectors", () => {
-    expect(selectPlanDetail(fidelityPlan, undefined, "u1")).toMatchObject({
-      selectedSection: { id: "s1" },
-      selectedUnit: { id: "u1" },
-      detailOpen: true,
-    });
-    expect(selectPlanTotalDuration(fidelityPlan)).toBe(6);
-    expect(selectPlanTerms("short_drama")).toEqual({
-      structure: "剧本大纲",
-      section: "集",
-      unit: "Clip",
-    });
-    expect(selectPlanTerms("video_edit")).toEqual({
-      structure: "剪辑方案",
-      section: "剪辑段",
-      unit: "剪辑片段",
-    });
-    expect(selectPlanTerms("general")).toEqual({
-      structure: "视频结构",
-      section: "Section",
-      unit: "生成单元",
-    });
-  });
+  it("renders the canonical Timeline as overlapping display lanes and a start-sorted Element list", () => {
+    const { container } = renderPage("/project/p1/plan?element=r2v-window");
 
-  it("renders an actionable initialization surface when the Project has no structure", async () => {
-    installMockFetch([
-      {
-        match: "/projects/p1/plan",
-        response: { json: envelope({ ...planView, sections: [] }) },
-      },
-    ]);
-    render(
-      <MemoryRouter initialEntries={["/project/p1/plan"]}>
-        <NavigationRuntime />
-        <Routes>
-          <Route path="/project/:id/plan" element={<PlanPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-    expect(await screen.findByText("还没有视频结构")).toBeInTheDocument();
+    expect(screen.getByText("视频方案")).toBeInTheDocument();
+    expect(screen.getAllByText("20s").length).toBeGreaterThan(0);
+    expect(screen.getByText("16:9")).toBeInTheDocument();
+    expect(screen.getByText("6 Elements")).toBeInTheDocument();
+    expect(screen.getByText(/5 层/)).toHaveTextContent("可上下滚动");
     expect(
-      screen.getByRole("button", { name: "生成结构" }),
+      container.querySelector('[class~="max-h-[216px]"]'),
     ).toBeInTheDocument();
+    expect(screen.getAllByText("午饭名场面").length).toBeGreaterThan(0);
+    expect(screen.getByText("分镜 Prompt")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("暖色餐厅窗外的橘猫")).toBeInTheDocument();
+
+    const listItems = [
+      ...container.querySelectorAll("[data-element-list-item]"),
+    ];
     expect(
-      screen.getByRole("button", { name: "导入剧本" }),
+      listItems
+        .map((item) => item.getAttribute("data-element-list-item"))
+        .slice(0, 3),
+    ).toEqual(["edit-opening", "audio-bgm", "overlay-title"]);
+  });
+
+  it("keeps an empty Timeline actionable through Element creation", () => {
+    const project = cloneProject();
+    project.timelines.items["timeline:main"].elements_by_id = {};
+    seedProject(project);
+    renderPage();
+
+    expect(screen.getByText("时间轴尚无 Element")).toBeInTheDocument();
+    expect(screen.getByText("还没有 Element")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "添加 Element" }),
     ).toBeInTheDocument();
   });
 
-  it("keeps the origin toolbar, cards, 36/64 detail layout, and retained R2V fields", async () => {
-    installMockFetch([
-      {
-        match: "/projects/p1/plan",
-        response: { json: envelope(fidelityPlan) },
-      },
-    ]);
-    const { container } = render(
-      <MemoryRouter initialEntries={["/project/p1/plan"]}>
-        <NavigationRuntime />
-        <Routes>
-          <Route path="/project/:id/plan" element={<PlanPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-    expect(await screen.findByText("视频方案")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /添加结构段/ })).toHaveClass(
-      "!text-xs",
-    );
-    expect(screen.getByRole("button", { name: /最终合成/ })).toHaveClass(
-      "!text-xs",
-    );
-    expect(screen.getByRole("button", { name: /Agent 规划任务/ })).toHaveClass(
-      "!text-xs",
+  it("shows every active Element when a collapsed point is selected and can attach that point to AgentDock", () => {
+    const { container } = renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "折叠" }));
+    const chart = container.querySelector("[data-timeline-chart]")!;
+    installTimelineRect(chart);
+
+    // 7.5s of a 20s Timeline. This point contains five overlapping Elements.
+    const x = 68 + ((1000 - 68) * 7.5) / 20;
+    fireEvent.pointerDown(chart, { pointerId: 1, clientX: x });
+    fireEvent.pointerUp(chart, { pointerId: 1, clientX: x });
+
+    expect(screen.getByText("该时刻 5 个 Element：")).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: "晨光到午后的转场" }).length,
+    ).toBeGreaterThanOrEqual(2);
+    fireEvent.click(screen.getByRole("button", { name: "添加到对话" }));
+    expect(useAgentDockUiStore.getState().selection).toMatchObject({
+      kind: "timeline_point",
+      timelineId: "timeline:main",
+      startTick: 7500,
+      endTick: 7500,
+    });
+    expect(useAgentDockUiStore.getState().selection?.elementIds).toHaveLength(
+      5,
     );
     expect(
-      screen.getByText(
-        "先以视频结构组织整支片子，再从具体生成单元进入制作工作台。",
-      ),
-    ).toBeInTheDocument();
-    const card = container.querySelector(
-      '[data-creator-module="section-card"]',
-    );
-    expect(card).toHaveClass(
-      "rounded-xl",
-      "border",
-      "bg-[var(--color-bg-card)]",
-      "p-4",
-    );
-    fireEvent.click(screen.getByText("开场"));
+      screen.queryByRole("button", { name: "添加到对话" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps collapsed point candidates clickable and scrolls the Element list to the chosen item", async () => {
+    const { container } = renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "折叠" }));
+    const chart = container.querySelector("[data-timeline-chart]")!;
+    installTimelineRect(chart);
+    const x = 68 + ((1000 - 68) * 7.5) / 20;
+    fireEvent.pointerDown(chart, { pointerId: 3, clientX: x });
+    fireEvent.pointerUp(chart, { pointerId: 3, clientX: x });
+
+    const list = container.querySelector(
+      "[data-element-list]",
+    ) as HTMLDivElement;
+    const item = container.querySelector(
+      '[data-element-list-item="transition"]',
+    ) as HTMLButtonElement;
+    Object.defineProperty(list, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        left: 0,
+        right: 300,
+        top: 0,
+        bottom: 120,
+        width: 300,
+        height: 120,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }),
+    });
+    Object.defineProperty(item, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        left: 0,
+        right: 300,
+        top: 420,
+        bottom: 500,
+        width: 300,
+        height: 80,
+        x: 0,
+        y: 420,
+        toJSON: () => ({}),
+      }),
+    });
+
+    const candidate = screen
+      .getAllByRole("button", { name: "晨光到午后的转场" })
+      .find((button) => !button.hasAttribute("data-element-block"))!;
+    fireEvent.mouseDown(candidate);
+    fireEvent.click(candidate);
+
     await waitFor(() =>
       expect(
-        screen.getByText("Section定义整体叙事与约束，不直接进入制作工作台。"),
+        screen.getByRole("heading", { name: "晨光到午后的转场" }),
       ).toBeInTheDocument(),
     );
-    const split = container.querySelector('[style*="minmax(0,36fr)"]');
-    expect(split).toHaveStyle({
-      gridTemplateColumns: "minmax(0,36fr) minmax(0,64fr)",
-    });
-    fireEvent.click(screen.getAllByText("01 Unit 1")[0]);
-    await waitFor(() =>
-      expect(screen.getByText("分镜 Prompt")).toBeInTheDocument(),
-    );
-    expect(screen.getByText("雪夜公路，电影感构图")).toBeInTheDocument();
-    expect(screen.getByAltText("分镜图")).toHaveClass(
-      "w-full",
-      "rounded-lg",
-      "border",
-    );
-    expect(screen.getByText("视频 Prompt")).toBeInTheDocument();
+    expect(list.scrollTop).toBeGreaterThan(0);
   });
 
-  it("submits Agent planning through the PLAN_UNITS semantic command only", async () => {
+  it("supports a dragged time range, then clears the range UI after adding it to the conversation", () => {
+    const { container } = renderPage();
+    const chart = container.querySelector("[data-timeline-chart]")!;
+    installTimelineRect(chart);
+    const x1 = 68 + ((1000 - 68) * 2) / 20;
+    const x2 = 68 + ((1000 - 68) * 9) / 20;
+
+    fireEvent.pointerDown(chart, { pointerId: 2, clientX: x1 });
+    fireEvent.pointerMove(chart, { pointerId: 2, clientX: x2 });
+    fireEvent.pointerUp(chart, { pointerId: 2, clientX: x2 });
+    fireEvent.click(screen.getByRole("button", { name: "添加到对话" }));
+
+    expect(useAgentDockUiStore.getState().selection).toMatchObject({
+      kind: "timeline_range",
+      timelineId: "timeline:main",
+      startTick: 2000,
+      endTick: 9000,
+    });
+    expect(
+      screen.queryByRole("button", { name: "添加到对话" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens a large aspect-ratio-aware preview backed by the selected final Timeline artifact", () => {
+    const { container } = renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "视频预览" }));
+
+    const preview = container.querySelector(
+      "[data-timeline-video-preview]",
+    ) as HTMLElement;
+    expect(preview).toBeInTheDocument();
+    expect(preview).toHaveClass("min-h-[380px]");
+    expect(preview.style.aspectRatio).toBe("16 / 9");
+    expect(preview.querySelector("video")).toHaveAttribute(
+      "src",
+      "/api/creator/media/artifacts/final-v1",
+    );
+    expect(screen.queryByText("Timeline 组合预览")).not.toBeInTheDocument();
+  });
+
+  it("uses the main Agent for Timeline and Element actions instead of posting a legacy command", () => {
+    const { calls } = installMockFetch([]);
+    renderPage("/project/p1/plan?element=r2v-window");
+
+    fireEvent.click(screen.getByRole("button", { name: "Agent 规划" }));
+    expect(useCreatorInteractionStore.getState().selectedRef).toBe(
+      "timeline:timeline:main",
+    );
+    expect(useAgentDockUiStore.getState().draft).toContain(
+      "用带时间范围、位置、层级和产生方式的 Element",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "在 Agent 中修改" }));
+    expect(useCreatorInteractionStore.getState().selectedRef).toBe(
+      "element:r2v-window",
+    );
+    expect(useAgentDockUiStore.getState().draft).toContain("午饭名场面");
+    expect(calls.some((call) => call.url.includes("/commands"))).toBe(false);
+  });
+
+  it("commits detail edits through the schema-v2 Project CAS Patch endpoint", async () => {
+    const updated = cloneProject();
+    updated.generation = 4;
+    updated.timelines.items["timeline:main"].elements_by_id[
+      "r2v-window"
+    ].label = "新的午饭名场面";
     const { calls } = installMockFetch([
       {
-        match: "/commands",
+        match: "/projects/p1/project",
+        method: "PATCH",
         response: {
-          json: { commandId: "cmd-plan", status: "QUEUED", eventSeq: 7 },
+          json: {
+            projectId: "p1",
+            generation: 4,
+            etag: '"sha256:g4"',
+            changedPointers: [
+              "/timelines/items/timeline:main/elements_by_id/r2v-window/label",
+            ],
+            project: updated,
+          },
         },
       },
-      {
-        match: "/projects/p1/plan",
-        response: { json: envelope(fidelityPlan) },
-      },
     ]);
-    render(
-      <MemoryRouter initialEntries={["/project/p1/plan"]}>
-        <NavigationRuntime />
-        <Routes>
-          <Route path="/project/:id/plan" element={<PlanPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-    fireEvent.click(
-      await screen.findByRole("button", { name: /Agent 规划任务/ }),
-    );
+    renderPage("/project/p1/plan?element=r2v-window");
+
+    const name = screen.getByDisplayValue("午饭名场面");
+    fireEvent.change(name, { target: { value: "新的午饭名场面" } });
+    fireEvent.blur(name);
     await waitFor(() =>
-      expect(calls.some((call) => call.url.includes("/commands"))).toBe(true),
+      expect(calls.some((call) => call.method === "PATCH")).toBe(true),
     );
-    const command = calls.find((call) => call.url.includes("/commands"))!;
-    expect(command.method).toBe("POST");
-    expect(command.body).toMatchObject({
-      type: "PLAN_UNITS",
-      targetRef: "project:plan",
-      arguments: {},
-      expectedTargetVersions: [
-        { ref: "project:plan", objectVersion: fidelityPlan.targetVersion },
-      ],
-    });
-    expect(calls.some((call) => call.url.includes("/messages"))).toBe(false);
-  });
-
-  it("opens the origin 960px Final Compose modal with section grouping and transition controls", async () => {
-    installMockFetch([
-      {
-        match: "/projects/p1/post/final",
-        response: { json: envelope(finalView) },
-      },
-      {
-        match: "/projects/p1/plan",
-        response: { json: envelope(fidelityPlan) },
-      },
-    ]);
-    const { container } = render(
-      <MemoryRouter initialEntries={["/project/p1/plan"]}>
-        <NavigationRuntime />
-        <Routes>
-          <Route path="/project/:id/plan" element={<PlanPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-    fireEvent.click(await screen.findByRole("button", { name: /最终合成/ }));
-    expect(await screen.findByText("最终剪辑视频合成")).toBeInTheDocument();
-    expect(screen.getByText("可选成片（按结构段分组）")).toBeInTheDocument();
-    expect(screen.getByText("合成顺序（从上到下）")).toBeInTheDocument();
-    expect(screen.getByText("拼接点平滑")).toBeInTheDocument();
-    expect(container.ownerDocument.querySelector(".ant-modal")).toHaveStyle({
-      width: "960px",
-    });
-  });
-
-  it("keeps the origin Unit-video fallback and labels it as 单元成片", async () => {
-    const unitFinalView: ComposeView = {
-      ...finalView,
-      candidates: [
+    const request = calls.find((call) => call.method === "PATCH")!;
+    expect(request.url).toContain("/projects/p1/project");
+    expect(request.body).toMatchObject({
+      baseGeneration: 3,
+      baseEtag: '"sha256:g3"',
+      editSessionId: "frontend:p1",
+      operations: [
         {
-          ...finalView.candidates[0],
-          id: "unit-v1",
-          name: "Unit 1 video",
-          artifactVersionId: "unit-v1",
-          ownerRef: "project://unit/u1",
-          sourceRef: "artifact://unit-slot@unit-v1",
-          slotId: "unit-slot",
-          kind: "unit_video",
-          sourceKind: "unit",
-          sectionId: "s1",
-          uiLocator: { page: "workbench", unitId: "u1", versionId: "unit-v1" },
-        },
-      ],
-      selections: [],
-      blockers: [],
-      readiness: { ready: true },
-    };
-    installMockFetch([
-      {
-        match: "/projects/p1/post/final",
-        response: { json: envelope(unitFinalView) },
-      },
-      {
-        match: "/projects/p1/plan",
-        response: { json: envelope(fidelityPlan) },
-      },
-    ]);
-    render(
-      <MemoryRouter initialEntries={["/project/p1/plan"]}>
-        <NavigationRuntime />
-        <Routes>
-          <Route path="/project/:id/plan" element={<PlanPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-    fireEvent.click(await screen.findByRole("button", { name: /最终合成/ }));
-    expect(await screen.findByText("01 Unit 1")).toBeInTheDocument();
-    expect(screen.getByText("单元成片")).toBeInTheDocument();
-    // The auto-selection lands in a follow-up effect render, so wait for it
-    // instead of asserting synchronously (flaky on slow CI runners).
-    expect(await screen.findByText(/已选 1 段/)).toBeInTheDocument();
-  });
-
-  it("retains completed task feedback for five seconds with the origin close action", async () => {
-    useCreatorTaskViewStore.setState({
-      projectId: "p1",
-      tasks: [
-        {
-          id: "task-done",
-          projectId: "p1",
-          transactionId: null,
-          specialistRunId: null,
-          kind: "asset_ingest",
-          targetRef: "project:p1",
-          status: "SUCCEEDED",
-          progress: 1,
-          resultRefs: [],
-          result: { summary: "素材已入库" },
-          error: null,
-          updatedAt: new Date().toISOString(),
+          op: "replace",
+          path: "/timelines/items/timeline:main/elements_by_id/r2v-window/label",
+          value: "新的午饭名场面",
         },
       ],
     });
-    installMockFetch([
-      {
-        match: "/projects/p1/plan",
-        response: { json: envelope(fidelityPlan) },
-      },
-    ]);
-    render(
-      <MemoryRouter initialEntries={["/project/p1/plan"]}>
-        <NavigationRuntime />
-        <Routes>
-          <Route path="/project/:id/plan" element={<PlanPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-    expect(await screen.findByText("附件入库中")).toBeInTheDocument();
-    expect(screen.getByText("素材已入库")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
-    expect(screen.queryByText("素材已入库")).not.toBeInTheDocument();
-  });
-
-  it("renders measurable asset ingest progress as a percentage", async () => {
-    useCreatorTaskViewStore.setState({
-      projectId: "p1",
-      tasks: [
-        {
-          id: "task-running",
-          projectId: "p1",
-          transactionId: null,
-          specialistRunId: null,
-          kind: "asset_ingest",
-          targetRef: "project:p1",
-          status: "RUNNING",
-          progress: 0.42,
-          resultRefs: [],
-          result: null,
-          error: null,
-          updatedAt: new Date().toISOString(),
-        },
-      ],
-    });
-    installMockFetch([
-      {
-        match: "/projects/p1/plan",
-        response: { json: envelope(fidelityPlan) },
-      },
-    ]);
-    render(
-      <MemoryRouter initialEntries={["/project/p1/plan"]}>
-        <NavigationRuntime />
-        <Routes>
-          <Route path="/project/:id/plan" element={<PlanPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-    expect(await screen.findByText("进度 42%")).toBeInTheDocument();
-  });
-
-  it("does not invent percentage progress for opaque provider tasks", async () => {
-    useCreatorTaskViewStore.setState({
-      projectId: "p1",
-      tasks: [
-        {
-          id: "task-image",
-          projectId: "p1",
-          transactionId: "tx1",
-          specialistRunId: "run1",
-          kind: "image_generation",
-          targetRef: "project:assets",
-          status: "RUNNING",
-          progress: 0,
-          resultRefs: [],
-          result: null,
-          error: null,
-          updatedAt: new Date().toISOString(),
-        },
-      ],
-    });
-    installMockFetch([
-      {
-        match: "/projects/p1/plan",
-        response: { json: envelope(fidelityPlan) },
-      },
-    ]);
-    render(
-      <MemoryRouter initialEntries={["/project/p1/plan"]}>
-        <NavigationRuntime />
-        <Routes>
-          <Route path="/project/:id/plan" element={<PlanPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-    expect(await screen.findByText("图片生成中")).toBeInTheDocument();
-    expect(screen.getByText("处理中…")).toBeInTheDocument();
-    expect(screen.queryByText("进度 0%")).not.toBeInTheDocument();
+    expect(
+      useProjectSnapshotStore.getState().project?.timelines.items[
+        "timeline:main"
+      ].elements_by_id["r2v-window"].label,
+    ).toBe("新的午饭名场面");
   });
 });

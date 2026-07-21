@@ -1,8 +1,6 @@
 import { act, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useCreatorSessionStore } from "@/store/creatorSessionStore";
-import { presentationOf } from "@/store/workspaceViewStore";
-import { envelope } from "@/test/creatorFixtures";
 import { installMockFetch } from "@/test/mockFetch";
 
 describe("bounded frontend caches", () => {
@@ -71,7 +69,7 @@ describe("bounded frontend caches", () => {
           data: {
             parentActionId: "delegate-1",
             runId: "run-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             toolCallId: "tool-1",
             tool: "generate_video",
             state: "started",
@@ -120,7 +118,7 @@ describe("bounded frontend caches", () => {
           data: {
             actionId: "delegate-1",
             tool: "delegate_to_agent",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
           },
         },
         {
@@ -133,7 +131,7 @@ describe("bounded frontend caches", () => {
           data: {
             parentActionId: "delegate-1",
             runId: "run-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "message-1",
             toolCallId: "tool-1",
             tool: "read_project_file",
@@ -167,7 +165,7 @@ describe("bounded frontend caches", () => {
           data: {
             parentActionId: "delegate-1",
             runId: "run-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "message-1",
             toolCallId: "tool-1",
             tool: "read_project_file",
@@ -186,7 +184,7 @@ describe("bounded frontend caches", () => {
           data: {
             parentActionId: "delegate-1",
             runId: "run-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "message-1",
             toolCallId: "tool-1",
             tool: "read_project_file",
@@ -205,7 +203,7 @@ describe("bounded frontend caches", () => {
           data: {
             parentActionId: "delegate-1",
             runId: "run-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "message-1",
             toolCallId: "tool-1",
             tool: "read_project_file",
@@ -283,22 +281,6 @@ describe("bounded frontend caches", () => {
     });
   });
 
-  it("unwraps ReviewPresentationView without creating another content authority", () => {
-    const view = { value: "candidate" };
-    const wrapped = envelope(
-      {
-        presentationVersion: "pv",
-        reviewRevisionId: "rr",
-        approvedRevisionId: "r1",
-        view,
-        origins: {},
-        targetVersions: {},
-      },
-      { uiPhase: "waiting_review" },
-    );
-    expect(presentationOf(wrapped)).toBe(view);
-  });
-
   it("bootstraps canonical DTOs and replays the durable named SSE log after refresh", async () => {
     installMockFetch([
       {
@@ -348,7 +330,7 @@ describe("bounded frontend caches", () => {
             },
             agentStatusBar: {
               progress: {
-                phase: "unit_production",
+                phase: "timeline_edit",
                 label: "执行中",
                 sourceEventSeq: 7,
                 updatedAt: "now",
@@ -399,7 +381,7 @@ describe("bounded frontend caches", () => {
         data: {
           parentActionId: "delegate-1",
           runId: "run-1",
-          role: "story_planning_agent",
+          role: "visual_development_agent",
           messageId: "sub-message-1",
           deltaIndex: 0,
           delta: "实时输出",
@@ -450,7 +432,7 @@ describe("bounded frontend caches", () => {
             },
             agentStatusBar: {
               progress: {
-                phase: "unit_production",
+                phase: "timeline_edit",
                 label: "执行中",
                 sourceEventSeq: 7,
                 updatedAt: "now",
@@ -544,7 +526,7 @@ describe("bounded frontend caches", () => {
             },
             agentStatusBar: {
               progress: {
-                phase: "unit_production",
+                phase: "timeline_edit",
                 label: "执行中",
                 sourceEventSeq: 307,
                 updatedAt: "now",
@@ -590,7 +572,7 @@ describe("bounded frontend caches", () => {
 
   it("does not confuse a concrete Task progress number with AgentStatusBar progress", () => {
     const progress = {
-      phase: "unit_production" as const,
+      phase: "timeline_edit" as const,
       label: "执行中",
       sourceEventSeq: 1,
       updatedAt: "now",
@@ -1165,10 +1147,10 @@ describe("bounded frontend caches", () => {
           data: {
             actionId: "delegate-action",
             tool: "delegate_to_agent",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             roleDisplayName: "故事规划",
-            delegationText: "请完善第一幕冲突。",
-            targetRefs: ["section:s1"],
+            delegationText: "请完善开场冲突。",
+            targetRefs: ["timeline:main"],
           },
         },
         {
@@ -1194,10 +1176,10 @@ describe("bounded frontend caches", () => {
           data: {
             parentActionId: "delegate-action",
             runId: "run-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             roleDisplayName: "故事规划",
-            delegationText: "请完善第一幕冲突。",
-            targetRefs: ["section:s1"],
+            delegationText: "请完善开场冲突。",
+            targetRefs: ["timeline:main"],
           },
         },
         {
@@ -1210,7 +1192,7 @@ describe("bounded frontend caches", () => {
           data: {
             parentActionId: "delegate-action",
             runId: "run-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "sub-message-1",
             deltaIndex: 1,
             delta: "处理中",
@@ -1226,7 +1208,7 @@ describe("bounded frontend caches", () => {
           data: {
             parentActionId: "delegate-action",
             runId: "run-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "sub-message-1",
             deltaIndex: 0,
             delta: "[SUCCESS]\n",
@@ -1242,7 +1224,7 @@ describe("bounded frontend caches", () => {
           data: {
             parentActionId: "delegate-action",
             runId: "run-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "sub-message-1",
             deltaIndex: 1,
             delta: "不应重复",
@@ -1258,7 +1240,7 @@ describe("bounded frontend caches", () => {
           data: {
             parentActionId: "delegate-action",
             runId: "run-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             toolCallId: "nested-tool-1",
             tool: "read_project_file",
             arguments: { path: "story/outline.md" },
@@ -1275,7 +1257,7 @@ describe("bounded frontend caches", () => {
           data: {
             parentActionId: "delegate-action",
             runId: "run-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             toolCallId: "nested-tool-1",
             tool: "read_project_file",
             result: { summary: "读取完成" },
@@ -1292,7 +1274,7 @@ describe("bounded frontend caches", () => {
           data: {
             parentActionId: "delegate-action",
             runId: "run-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "sub-message-1",
             text: "[SUCCESS]\n## 已完成\n\n第一幕冲突已完善。",
             finishReason: "stop",
@@ -1306,10 +1288,10 @@ describe("bounded frontend caches", () => {
     expect(activity).toMatchObject({
       parentActionId: "delegate-action",
       runId: "run-1",
-      role: "story_planning_agent",
+      role: "visual_development_agent",
       roleDisplayName: "故事规划",
-      delegationText: "请完善第一幕冲突。",
-      targetRefs: ["section:s1"],
+      delegationText: "请完善开场冲突。",
+      targetRefs: ["timeline:main"],
       completed: false,
     });
     expect(activity.messages["run-1:sub-message-1"]).toMatchObject({
@@ -1334,7 +1316,7 @@ describe("bounded frontend caches", () => {
         data: {
           parentActionId: "delegate-action",
           runId: "run-1",
-          role: "story_planning_agent",
+          role: "visual_development_agent",
           marker: "SUCCESS",
           status: "SUCCEEDED",
           summaryText: "第一幕冲突已完善。",
@@ -1360,7 +1342,7 @@ describe("bounded frontend caches", () => {
         data: {
           parentActionId: "delegate-action",
           runId: "run-1",
-          role: "story_planning_agent",
+          role: "visual_development_agent",
           count: 1,
         },
       }),
@@ -1394,8 +1376,8 @@ describe("bounded frontend caches", () => {
             tool: "delegate_to_agent",
             role: "ai_editing_director",
             roleDisplayName: "AI 剪辑导演",
-            delegationText: "剪辑 unit:u001",
-            targetRefs: ["unit:u001"],
+            delegationText: "剪辑主时间轴",
+            targetRefs: ["timeline:main"],
           },
         },
         {
@@ -1445,7 +1427,7 @@ describe("bounded frontend caches", () => {
           data: {
             parentActionId: "delegate-crash",
             runId: "run-crash",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "message-before-crash",
             deltaIndex: 0,
             delta: "崩溃前的部分输出",
@@ -1461,7 +1443,7 @@ describe("bounded frontend caches", () => {
           data: {
             parentActionId: "delegate-crash",
             runId: "run-crash",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "message-after-recovery",
             deltaIndex: 0,
             delta: "恢复后的输出",
@@ -1491,7 +1473,7 @@ describe("bounded frontend caches", () => {
         data: {
           parentActionId: "delegate-crash",
           runId: "run-crash",
-          role: "story_planning_agent",
+          role: "visual_development_agent",
           status: "FAILED",
           summaryText: "恢复后已安全收口。",
         },

@@ -5,7 +5,6 @@ import { ArrowUpOutlined, CloseOutlined } from "@ant-design/icons";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  CircleCheck,
   Eraser,
   History,
   Info,
@@ -13,16 +12,14 @@ import {
   MessageSquare,
   Plus,
   Sparkles,
-  Undo2,
 } from "lucide-react";
-import { searchRefs } from "@/api/creator";
 import { getAssetVersionMediaUrl, getGeneratedMediaUrl } from "@/api/creator";
 import type {
   CreatorContentPart,
   CreatorMessage,
+  ProjectDocument,
   RefSearchItem,
 } from "@/contracts/creator";
-import { navigateToLocator } from "@/routing/locators";
 import { useParams } from "@/routing/navigation";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
@@ -33,12 +30,10 @@ import {
   type SubagentStreamTool,
 } from "@/store/creatorSessionStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
-import { useReviewManifestStore } from "@/store/reviewManifestStore";
+import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationStore";
 import { useFileProjectReviewStore } from "@/store/fileProjectReviewStore";
-import {
-  presentationOf,
-  useWorkspaceViewStore,
-} from "@/store/workspaceViewStore";
+import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
+import { selectPrimaryTimeline } from "@/selectors/timelineElementSelectors";
 import {
   actionAwareConversationContent,
   actionEnvelopeFromStreamText,
@@ -50,15 +45,8 @@ import {
   type ToolCallPresentation,
 } from "@/lib/creatorMessagePresentation";
 import AgentDecisionCenter from "./AgentDecisionCenter";
-import { reviewFieldMatchesOperation } from "./ReviewFieldText";
-import { resolveReviewNavigationTarget } from "./reviewNavigation";
-import { presentPendingReviewGroups } from "./reviewPresentation";
 import AgentEventFeed from "./AgentEventFeed";
-import MentionInput, {
-  type MentionInputHandle,
-  type MentionRef,
-} from "./MentionInput";
-import RunReviewPanel from "./RunReviewPanel";
+import MentionInput, { type MentionInputHandle } from "./MentionInput";
 import FileProjectReviewPanel from "./FileProjectReviewPanel";
 
 interface DockSize {
@@ -1003,27 +991,76 @@ function eventSummary(data: Record<string, unknown>): string {
   return "";
 }
 
+function projectRefItems(
+  project: ProjectDocument | null,
+  query: string,
+  limit = 6,
+): RefSearchItem[] {
+  if (!project) return [];
+  const timeline = selectPrimaryTimeline(project);
+  const needle = query.trim().toLocaleLowerCase();
+  const items: RefSearchItem[] = [];
+  if (timeline) {
+    items.push({
+      ref: `timeline:${timeline.timeline_id}`,
+      name: "主时间轴",
+      type: "timeline",
+      uiLocator: { page: "plan" },
+    });
+    Object.values(timeline.elements_by_id).forEach((element) =>
+      items.push({
+        ref: `element:${element.element_id}`,
+        name: element.label || element.element_id,
+        type: "element",
+        uiLocator: { page: "element", elementId: element.element_id },
+      }),
+    );
+  }
+  Object.values(project.assets.source_versions_by_id).forEach((version) =>
+    items.push({
+      ref: `asset-version:${version.version_id}`,
+      name: version.name,
+      type: "asset",
+      version: version.version_id,
+      uiLocator: { page: "assets", assetId: version.version_id },
+    }),
+  );
+  Object.values(project.assets.artifact_versions_by_id).forEach((version) =>
+    items.push({
+      ref: `artifact-version:${version.version_id}`,
+      name: version.name,
+      type: "artifact",
+      version: version.version_id,
+      uiLocator: { page: "assets", assetId: version.version_id },
+    }),
+  );
+  return items
+    .filter(
+      (item) =>
+        !needle ||
+        `${item.name} ${item.ref}`.toLocaleLowerCase().includes(needle),
+    )
+    .slice(0, limit);
+}
+
 function WorkspacePanel() {
   const session = useCreatorSessionStore((state) => state.session);
   const status = useCreatorSessionStore((state) => state.agentStatusBar);
   const events = useCreatorSessionStore((state) => state.events);
   const runs = useCreatorTaskViewStore((state) => state.runs);
   const tasks = useCreatorTaskViewStore((state) => state.tasks);
-  const planEnvelope = useWorkspaceViewStore((state) => state.plan);
-  const assetsEnvelope = useWorkspaceViewStore((state) => state.assets);
-  const plan = presentationOf(planEnvelope);
-  const assets = presentationOf(assetsEnvelope);
-  const materialCount = assets
-    ? assets.attachedSources.length +
-      assets.availableAssets.length +
-      assets.visualAssets.length
+  const project = useProjectSnapshotStore((state) => state.project);
+  const timeline = selectPrimaryTimeline(project);
+  const sourceCount = project
+    ? Object.keys(project.assets.source_versions_by_id).length
     : 0;
-  const relations = plan?.relations ?? [];
-  const nodeRefs = new Set(
-    relations
-      .flatMap((relation) => [relation.from, relation.to])
-      .filter(Boolean),
-  );
+  const artifactCount = project
+    ? Object.keys(project.assets.artifact_versions_by_id).length
+    : 0;
+  const materialCount = sourceCount + artifactCount;
+  const elementCount = timeline
+    ? Object.keys(timeline.elements_by_id).length
+    : 0;
   const recentWrites = events
     .filter(
       (event) =>
@@ -1062,18 +1099,15 @@ function WorkspacePanel() {
           素材事实（{materialCount}）
         </p>
         <div className="mt-0.5 flex flex-wrap gap-1">
-          {!assets ? (
+          {!project ? (
             <span className="text-[var(--color-text-tertiary)]">暂无素材</span>
           ) : (
             <>
               <span className="rounded bg-[var(--color-bg-secondary)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-secondary)]">
-                已加入: {assets.attachedSources.length}
+                源素材: {sourceCount}
               </span>
               <span className="rounded bg-[var(--color-bg-secondary)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-secondary)]">
-                素材库: {assets.availableAssets.length}
-              </span>
-              <span className="rounded bg-[var(--color-bg-secondary)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-secondary)]">
-                视觉资产: {assets.visualAssets.length}
+                生成产物: {artifactCount}
               </span>
             </>
           )}
@@ -1082,10 +1116,10 @@ function WorkspacePanel() {
 
       <div>
         <p className="font-semibold text-[var(--color-text-secondary)]">
-          依赖图
+          Timeline
         </p>
         <p className="text-[var(--color-text-tertiary)]">
-          {nodeRefs.size} 节点 · {relations.length} 依赖
+          {timeline?.timeline_id || "—"} · {elementCount} Elements
         </p>
       </div>
 
@@ -1164,19 +1198,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   const setSelectionAttachment = useAgentDockUiStore(
     (state) => state.setSelection,
   );
-  const setReviewContext = useAgentDockUiStore(
-    (state) => state.setReviewContext,
-  );
-  const reviewContext = useAgentDockUiStore((state) => state.reviewContext);
-  const reviewRevisionHandoff = useAgentDockUiStore(
-    (state) => state.reviewRevisionHandoff,
-  );
-  const markReviewRevisionPrepared = useAgentDockUiStore(
-    (state) => state.markReviewRevisionPrepared,
-  );
-  const clearReviewRevisionHandoff = useAgentDockUiStore(
-    (state) => state.clearReviewRevisionHandoff,
-  );
 
   const session = useCreatorSessionStore((state) => state.session);
   const agentStatusBar = useCreatorSessionStore(
@@ -1208,10 +1229,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
 
   const runs = useCreatorTaskViewStore((state) => state.runs);
   const tasks = useCreatorTaskViewStore((state) => state.tasks);
-  const manifest = useReviewManifestStore((state) => state.manifest);
-  const authorizations = useReviewManifestStore(
-    (state) => state.authorizations,
-  );
+  const authorizations = useExecutionAuthorizationStore((state) => state.items);
   const fileReview = useFileProjectReviewStore((state) =>
     state.projectId === projectId ? state.review : null,
   );
@@ -1222,10 +1240,10 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   const interactionPanel = useCreatorInteractionStore((state) => state.panel);
   const extraRefs = useCreatorInteractionStore((state) => state.extraRefs);
 
-  const planEnvelope = useWorkspaceViewStore((state) => state.plan);
-  const assetsEnvelope = useWorkspaceViewStore((state) => state.assets);
-  const plan = presentationOf(planEnvelope);
-  const assets = presentationOf(assetsEnvelope);
+  const project = useProjectSnapshotStore((state) =>
+    state.projectId === projectId ? state.project : null,
+  );
+  const timeline = selectPrimaryTimeline(project);
 
   const streaming = Boolean(
     session &&
@@ -1246,7 +1264,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickBottom = useRef(true);
   const previousPendingAuthorizationCount = useRef(0);
-  const lastOpenedReviewManifestId = useRef<string | null>(null);
   const lastOpenedFileReviewToken = useRef<string | null>(null);
   const resizeRef = useRef<{
     startX: number;
@@ -1348,60 +1365,52 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
     };
     if (selectedRef) {
       let item: RefSearchItem | null = null;
-      if (selectedRef.startsWith("section:")) {
-        const section = plan?.sections.find(
-          (candidate) => candidate.id === selectedRef.slice("section:".length),
-        );
-        if (section)
+      if (selectedRef.startsWith("element:")) {
+        const elementId = selectedRef.slice("element:".length);
+        const element = timeline?.elements_by_id[elementId];
+        if (element)
           item = {
             ref: selectedRef,
-            name: section.title,
-            type: "section",
-            uiLocator: section.uiLocator,
+            name: element.label || elementId,
+            type: "element",
+            uiLocator: { page: "element", elementId },
           };
-      } else if (selectedRef.startsWith("unit:")) {
-        const unitId = selectedRef.slice("unit:".length);
-        const unit = plan?.sections
-          .flatMap((section) => section.units)
-          .find((candidate) => candidate.id === unitId);
-        if (unit)
-          item = {
-            ref: selectedRef,
-            name: unit.title || `Unit ${unit.number}`,
-            type: "unit",
-            uiLocator: unit.uiLocator,
-          };
-      } else if (selectedRef.startsWith("asset:")) {
-        const assetId = selectedRef.slice("asset:".length);
-        const source = assets?.attachedSources.find(
-          (candidate) => candidate.assetId === assetId,
-        );
-        const visual = assets?.visualAssets.find(
-          (candidate) => candidate.id === assetId,
-        );
+      } else if (selectedRef.startsWith("timeline:")) {
+        item = {
+          ref: selectedRef,
+          name: "主时间轴",
+          type: "timeline",
+          uiLocator: { page: "plan" },
+        };
+      } else if (selectedRef.startsWith("asset-version:")) {
+        const versionId = selectedRef.slice("asset-version:".length);
+        const source = project?.assets.source_versions_by_id[versionId];
         if (source)
           item = {
             ref: selectedRef,
             name: source.name,
             type: "asset",
-            uiLocator: source.uiLocator,
+            uiLocator: { page: "assets", assetId: versionId },
           };
-        else if (visual)
+      } else if (selectedRef.startsWith("artifact-version:")) {
+        const versionId = selectedRef.slice("artifact-version:".length);
+        const artifact = project?.assets.artifact_versions_by_id[versionId];
+        if (artifact)
           item = {
             ref: selectedRef,
-            name: visual.name,
-            type: "asset",
-            uiLocator: visual.uiLocator,
+            name: artifact.name,
+            type: "artifact",
+            uiLocator: { page: "assets", assetId: versionId },
           };
       }
       add(
         item ?? {
           ref: selectedRef,
           name: fallbackRefName(selectedRef),
-          type: selectedRef.startsWith("unit:")
-            ? "unit"
-            : selectedRef.startsWith("section:")
-            ? "section"
+          type: selectedRef.startsWith("element:")
+            ? "element"
+            : selectedRef.startsWith("timeline:")
+            ? "timeline"
             : "asset",
           uiLocator: {},
         },
@@ -1409,19 +1418,12 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
     }
     extraRefs.forEach(add);
     return chips;
-  }, [assets, extraRefs, plan, removedContextRefs, selectedRef]);
+  }, [extraRefs, project, removedContextRefs, selectedRef, timeline]);
   const visibleChips = useMemo(
     () => contextChips.filter((chip) => !inlineRefs.includes(chip.ref)),
     [contextChips, inlineRefs],
   );
 
-  const pendingDecisionCount =
-    manifest?.decisionGroups.filter((group) => group.decision === "PENDING")
-      .length ?? 0;
-  const pendingChangePresentations = useMemo(
-    () => presentPendingReviewGroups(manifest, plan, assets),
-    [assets, manifest, plan],
-  );
   const pendingAuthorizationCount = authorizations.filter(
     (item) => item.status === "PENDING",
   ).length;
@@ -1437,7 +1439,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
       )
       .reduce((total, badge) => total + (badge.count ?? 1), 0) ?? 0;
   const decisionCount = Math.max(
-    pendingDecisionCount + pendingAuthorizationCount + pendingFileReviewCount,
+    pendingAuthorizationCount + pendingFileReviewCount,
     backendBadgeCount,
   );
   const hasUrgentDecision = pendingAuthorizationCount > 0;
@@ -1453,16 +1455,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
       setTab("review");
     }
   }, [pendingAuthorizationCount, setTab]);
-
-  useEffect(() => {
-    if (!manifest || pendingDecisionCount === 0) return;
-    if (lastOpenedReviewManifestId.current === manifest.id) return;
-    lastOpenedReviewManifestId.current = manifest.id;
-    // A sealed Review Manifest is the product boundary between creation and
-    // user review. Bring every new review round into view immediately; this
-    // covers text changes as well as generated image/video versions.
-    setTab("review");
-  }, [manifest, pendingDecisionCount, setTab]);
 
   useEffect(() => {
     if (!fileReview || pendingFileReviewCount === 0) return;
@@ -1540,51 +1532,20 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   }, [draft, open, showDecisions]);
 
   useEffect(() => {
-    if (
-      !open ||
-      showDecisions ||
-      !reviewRevisionHandoff ||
-      reviewRevisionHandoff.prepared
-    )
-      return;
-    const mention: MentionRef | null = reviewRevisionHandoff.targetRef
-      ? {
-          ref: reviewRevisionHandoff.targetRef,
-          name: reviewRevisionHandoff.title,
-          type: reviewRevisionHandoff.targetRef.split(":")[0] || "object",
-        }
-      : null;
-    inputRef.current?.prefillMention(
-      "请修改 ",
-      mention,
-      "，以下是修改要求：\n",
-    );
-    setCanSend(true);
-    markReviewRevisionPrepared();
-    const timer = window.setTimeout(() => inputRef.current?.focus(), 40);
-    return () => window.clearTimeout(timer);
-  }, [markReviewRevisionPrepared, open, reviewRevisionHandoff, showDecisions]);
-
-  useEffect(() => {
     if (mentionQuery === null || !projectId) {
       setMentionOptions([]);
       return;
     }
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void searchRefs(projectId, mentionQuery, [], 6)
-        .then((result) => {
-          if (!cancelled) setMentionOptions(result.items);
-        })
-        .catch(() => {
-          if (!cancelled) setMentionOptions([]);
-        });
+      if (!cancelled)
+        setMentionOptions(projectRefItems(project, mentionQuery, 6));
     }, 100);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [mentionQuery, projectId]);
+  }, [mentionQuery, project, projectId]);
 
   useEffect(() => {
     setMentionIndex(0);
@@ -1715,89 +1676,28 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
       ]),
     ];
     const submittedExtraRefs = extraRefs;
-    let pending: Promise<unknown>;
     try {
-      if (session?.status === "PENDING_REVIEW" && !fileReview && manifest) {
-        const selection = content.selections[0]?.field
-          ? {
-              field: content.selections[0].field,
-              text: content.selections[0].text,
-            }
-          : reviewRevisionHandoff?.selection;
-        if (reviewRevisionHandoff) {
-          pending = useReviewManifestStore
-            .getState()
-            .decide(reviewRevisionHandoff.groupId, {
-              decisionToken: reviewRevisionHandoff.decisionToken,
-              decision: "REVISE",
-              instruction: text,
-              selection,
-            });
-        } else {
-          const pendingGroups =
-            manifest?.decisionGroups.filter(
-              (group) => group.decision === "PENDING",
-            ) ?? [];
-          const explicitTarget = reviewContext
-            ? pendingGroups.find((group) => group.id === reviewContext.groupId)
-            : null;
-          const contextualRefs = new Set(
-            [selectedRef, ...content.refs.map((item) => item.ref)].filter(
-              (value): value is string => Boolean(value),
-            ),
-          );
-          const contextualFields = new Set(
-            [
-              editingField,
-              ...content.selections.map((item) => item.field),
-            ].filter((value): value is string => Boolean(value)),
-          );
-          const contextualMatches = pendingGroups.filter((group) => {
-            const operationIds = new Set(group.operationIds);
-            return manifest?.operations.some(
-              (operation) =>
-                operationIds.has(operation.id) &&
-                (contextualRefs.has(operation.targetRef) ||
-                  [...contextualFields].some((field) =>
-                    reviewFieldMatchesOperation(field, operation),
-                  )),
-            );
-          });
-          const target =
-            explicitTarget ??
-            (contextualMatches.length === 1 ? contextualMatches[0] : null) ??
-            (pendingGroups.length === 1 ? pendingGroups[0] : null);
-          if (!target) {
-            message.error("请先在审阅 / 决策中心选择要评论的待审项");
-            return;
-          }
-          pending = useReviewManifestStore
-            .getState()
-            .comment(target.id, text, selection);
-        }
-      } else {
-        pending = sendMessage({
-          message: text,
-          context: {
-            panel: interactionPanel,
-            selected: selectedRef ? { ref: selectedRef } : undefined,
-            editingField,
-            selection: content.selections[0]
-              ? {
-                  field: content.selections[0].field,
-                  path: content.selections[0].path,
-                  ref: content.selections[0].ref,
-                  label: content.selections[0].label,
-                  text: content.selections[0].text,
-                  start: content.selections[0].start,
-                  end: content.selections[0].end,
-                }
-              : undefined,
-            selections: content.selections,
-            extraRefs: allRefs,
-          },
-        });
-      }
+      const pending = sendMessage({
+        message: text,
+        context: {
+          panel: interactionPanel,
+          selected: selectedRef ? { ref: selectedRef } : undefined,
+          editingField,
+          selection: content.selections[0]
+            ? {
+                field: content.selections[0].field,
+                path: content.selections[0].path,
+                ref: content.selections[0].ref,
+                label: content.selections[0].label,
+                text: content.selections[0].text,
+                start: content.selections[0].start,
+                end: content.selections[0].end,
+              }
+            : undefined,
+          selections: content.selections,
+          extraRefs: allRefs,
+        },
+      });
       inputRef.current?.clear();
       setCanSend(false);
       setInlineRefs([]);
@@ -1805,7 +1705,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
       setMentionQuery(null);
       useCreatorInteractionStore.getState().setExtraRefs([]);
       await pending;
-      if (reviewRevisionHandoff) clearReviewRevisionHandoff();
     } catch (error) {
       if (!inputRef.current?.getContent().text.trim()) {
         inputRef.current?.setText(text);
@@ -1814,83 +1713,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
         useCreatorInteractionStore.getState().setExtraRefs(submittedExtraRefs);
       }
       message.error((error as Error).message);
-    }
-  };
-
-  const viewChangeGroup = (groupId: string) => {
-    const group = manifest?.decisionGroups.find((item) => item.id === groupId);
-    if (!group || !manifest) {
-      setTab("review");
-      return;
-    }
-    const target = resolveReviewNavigationTarget({
-      group,
-      operations: manifest.operations,
-      mediaComparisons: manifest.mediaComparisons,
-      integrationPreviews: manifest.integrationPreviews,
-    });
-    if (!target) {
-      setTab("review");
-      return;
-    }
-    setReviewContext({
-      groupId: group.id,
-      decisionToken: group.decisionToken,
-      title: group.title,
-      targetRef: target.targetRef,
-    });
-    setOpen(false);
-    navigateToLocator(projectId, target.locator, {
-      description: "Agent 改动汇总",
-      review: true,
-      field: target.field,
-    });
-  };
-
-  const acceptChangeGroup = async (groupId: string) => {
-    const group = useReviewManifestStore
-      .getState()
-      .manifest?.decisionGroups.find(
-        (item) => item.id === groupId && item.decision === "PENDING",
-      );
-    if (!group) return;
-    try {
-      await useReviewManifestStore.getState().decide(group.id, {
-        decisionToken: group.decisionToken,
-        decision: "ACCEPT",
-      });
-      message.success("已接受这处修改");
-    } catch (error) {
-      message.error((error as Error).message);
-      throw error;
-    }
-  };
-
-  const undoChangeGroup = async (groupId: string) => {
-    const group = useReviewManifestStore
-      .getState()
-      .manifest?.decisionGroups.find(
-        (item) => item.id === groupId && item.decision === "PENDING",
-      );
-    if (!group) return;
-    try {
-      await useReviewManifestStore.getState().decide(group.id, {
-        decisionToken: group.decisionToken,
-        decision: "REJECT",
-      });
-      message.success("已撤销这处修改");
-    } catch (error) {
-      message.error((error as Error).message);
-      throw error;
-    }
-  };
-
-  const acceptAllChanges = async () => {
-    try {
-      for (const item of pendingChangePresentations)
-        await acceptChangeGroup(item.group.id);
-    } catch {
-      // The failing item already surfaced its backend message; keep remaining items pending.
     }
   };
 
@@ -2065,9 +1887,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
           {showWorkspace && (
             <div className="max-h-56 overflow-y-auto border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)]/40 px-4 py-3">
               <WorkspacePanel />
-              <div className="mt-3 border-t border-[var(--color-border)] pt-3">
-                <RunReviewPanel projectId={projectId} />
-              </div>
             </div>
           )}
 
@@ -2151,10 +1970,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                 {fileReview ? (
                   <FileProjectReviewPanel projectId={projectId} />
                 ) : (
-                  <AgentDecisionCenter
-                    projectId={projectId}
-                    onViewReview={viewChangeGroup}
-                  />
+                  <AgentDecisionCenter projectId={projectId} />
                 )}
               </div>
             </div>
@@ -2268,66 +2084,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                   </button>
                 )}
               </div>
-
-              {pendingChangePresentations.length > 0 && (
-                <div className="border-t border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] px-4 py-2">
-                  <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-accent)]">
-                      <Sparkles className="h-3.5 w-3.5" />
-                      本轮 Agent 改动（{pendingChangePresentations.length}）
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => void acceptAllChanges()}
-                      className="rounded px-1.5 py-0.5 text-[11px] font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent)]/10"
-                    >
-                      接受全部
-                    </button>
-                  </div>
-                  <div className="mt-1.5 max-h-36 space-y-1 overflow-y-auto">
-                    {pendingChangePresentations.map((item) => (
-                      <div
-                        key={item.group.id}
-                        className="flex items-center justify-between gap-2 rounded-md bg-[var(--color-bg-card)] px-2 py-1"
-                      >
-                        <span
-                          className="min-w-0 flex-1 line-clamp-2 text-[11px] leading-4 text-[var(--color-text-secondary)]"
-                          title={item.title}
-                        >
-                          {item.title}
-                        </span>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void acceptChangeGroup(item.group.id)
-                            }
-                            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-[var(--color-accent)] hover:bg-[var(--color-accent)]/10"
-                          >
-                            <CircleCheck className="h-3 w-3" />
-                            接受
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => viewChangeGroup(item.group.id)}
-                            className="rounded px-1.5 py-0.5 text-[11px] text-[var(--color-accent)] hover:underline"
-                          >
-                            查看
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void undoChangeGroup(item.group.id)}
-                            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)]"
-                          >
-                            <Undo2 className="h-3 w-3" />
-                            撤销
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
 
               <div
                 data-agent-composer

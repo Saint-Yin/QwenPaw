@@ -1,363 +1,62 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Form, Input, InputNumber, message, Modal, Upload } from "antd";
-import {
-  PlusOutlined,
-  ScissorOutlined,
-  UploadOutlined,
-} from "@ant-design/icons";
-import { LayoutList, Sparkles } from "lucide-react";
-import type { SectionView } from "@/contracts/creator";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Button, message } from "antd";
+import { Film, Plus, Scissors, Sparkles } from "lucide-react";
 import { navigate, useParams, useSearchParams } from "@/routing/navigation";
-import {
-  selectPlanDetail,
-  selectPlanTerms,
-  selectPlanTotalDuration,
-} from "@/selectors/planViewSelectors";
-import {
-  presentationOf,
-  useWorkspaceViewStore,
-} from "@/store/workspaceViewStore";
-import { useCreatorSessionStore } from "@/store/creatorSessionStore";
-import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
+import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
-import { useNavigationStore } from "@/store/navigationStore";
-import { useCreatorCommand } from "@/hooks/useCreatorCommand";
-import { taskProgressPercent } from "@/lib/taskPresentation";
-import { useReviewFieldFocus } from "@/routing/reviewFocus";
-import { ReviewFocusPulseProvider } from "@/components/agent/ReviewFieldText";
-import PageSkeleton from "@/components/PageSkeleton";
-import EmptyState from "@/components/EmptyState";
-import PlanCard from "@/components/plan/PlanCard";
-import SectionDetail from "@/components/plan/SectionDetail";
-import UnitDetail from "@/components/plan/UnitDetail";
-import FinalComposePanel from "@/components/plan/FinalComposePanel";
-import PageLoadError from "@/components/PageLoadError";
+import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
+import { useAgentDockUiStore } from "@/store/agentDockUiStore";
+import {
+  selectPrimaryTimeline,
+  timelineEndTick,
+} from "@/selectors/timelineElementSelectors";
 import { projectJsonPointer } from "@/lib/projectJsonPointer";
+import { useReviewFieldFocus } from "@/routing/reviewFocus";
+import TimelineCanvas from "@/components/timeline/TimelineCanvas";
+import ElementList from "@/components/timeline/ElementList";
+import ElementDetail from "@/components/timeline/ElementDetail";
+import PageSkeleton from "@/components/PageSkeleton";
+import PageLoadError from "@/components/PageLoadError";
+import type { TimelineElementDocument } from "@/contracts/creator";
 
-interface ScriptConfig {
-  theme: string;
-  episodeCount: number;
-  durationSeconds: number;
-  durationHint: string;
-  style?: string;
-}
-
-type ScriptFormValues = Omit<ScriptConfig, "durationHint">;
-
-const TASK_TITLES = {
-  asset_ingest: "附件入库中",
-  asset_import: "素材导入中",
-  source_intelligence: "素材理解中",
-  image_generation: "图片生成中",
-  r2v_generation: "视频生成中",
-  ai_edit_plan: "AI 剪辑规划中",
-  ai_edit_execute: "AI 剪辑执行中",
-  compose: "视频合成中",
-} as const;
-
-const TASK_KINDS_WITH_MEASURABLE_PROGRESS = new Set<keyof typeof TASK_TITLES>([
-  "asset_ingest",
-  "asset_import",
-]);
-
-function taskUpdatedAt(value?: string): number {
-  const timestamp = value ? Date.parse(value) : Number.NaN;
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-function taskDetail(task: {
-  kind: keyof typeof TASK_TITLES;
-  status: string;
-  progress: number | null;
-  result?: Record<string, unknown> | null;
-  error?: Record<string, unknown> | null;
-}): string {
-  if (task.status === "RUNNING" || task.status === "QUEUED") {
-    if (!TASK_KINDS_WITH_MEASURABLE_PROGRESS.has(task.kind)) return "处理中…";
-    const percent = taskProgressPercent(task.progress);
-    return percent == null ? "处理中…" : `进度 ${percent}%`;
-  }
-  if (task.status === "SUCCEEDED") {
-    const summary = task.result?.summary;
-    return typeof summary === "string" && summary ? summary : "已完成";
-  }
-  const detail = task.error?.message || task.error?.detail || task.error?.code;
-  return typeof detail === "string" && detail ? detail : "任务失败";
-}
-
-function ScriptGeneratePanel({
-  visible,
-  onClose,
-  onGenerate,
-  loading,
-  initialTheme,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  onGenerate: (config: ScriptConfig) => void;
-  loading: boolean;
-  initialTheme?: string;
-}) {
-  const [form] = Form.useForm<ScriptFormValues>();
-  useEffect(() => {
-    if (visible) form.setFieldsValue({ theme: initialTheme || "" });
-  }, [form, initialTheme, visible]);
-  const handleClose = () => {
-    if (loading) return;
-    form.resetFields();
-    onClose();
-  };
-  const handleSubmit = () => {
-    void form
-      .validateFields()
-      .then((values) =>
-        onGenerate({
-          ...values,
-          durationHint: `${values.durationSeconds}秒`,
-        }),
-      )
-      .catch(() => undefined);
-  };
-  return (
-    <Modal
-      title="从主题生成剧本"
-      open={visible}
-      onCancel={handleClose}
-      width={640}
-      maskClosable={!loading}
-      footer={
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <Button
-            onClick={handleClose}
-            disabled={loading}
-            className="!rounded-lg"
-          >
-            取消
-          </Button>
-          <Button
-            type="primary"
-            onClick={handleSubmit}
-            loading={loading}
-            className="!rounded-lg"
-          >
-            开始生成
-          </Button>
-        </div>
-      }
-    >
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={{ episodeCount: 1, durationSeconds: 60 }}
-      >
-        <Form.Item
-          label="故事主题和想法"
-          name="theme"
-          rules={[{ required: true, message: "请输入原始大剧本或故事主题" }]}
-        >
-          <Input.TextArea
-            rows={10}
-            placeholder="写下故事主题、核心人物、冲突或大概剧情，AI 会生成分集剧本。"
-            showCount
-          />
-        </Form.Item>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Form.Item
-            label="集数"
-            name="episodeCount"
-            rules={[{ required: true, message: "请输入集数" }]}
-          >
-            <InputNumber min={1} max={20} style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item
-            label="每集时长"
-            name="durationSeconds"
-            rules={[{ required: true, message: "请输入每集时长" }]}
-          >
-            <InputNumber
-              min={1}
-              precision={0}
-              addonAfter="秒"
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
-        </div>
-        <Form.Item
-          label="视觉风格"
-          name="style"
-          tooltip="例如：动漫风格、写实电影风、水彩手绘风等"
-        >
-          <Input placeholder="如：动漫风格" />
-        </Form.Item>
-      </Form>
-    </Modal>
-  );
-}
-
-function splitScript(
-  text: string,
-): Array<{ number: number; title: string; script: string }> {
-  const cnNumMap: Record<string, number> = {
-    一: 1,
-    二: 2,
-    三: 3,
-    四: 4,
-    五: 5,
-    六: 6,
-    七: 7,
-    八: 8,
-    九: 9,
-    十: 10,
-  };
-  const pattern = /第\s*([\d一二三四五六七八九十]+)\s*集[：:\s]*(.*)/g;
-  const matches: Array<{
-    number: number;
-    title: string;
-    startIdx: number;
-    headerEnd: number;
-  }> = [];
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text)) !== null) {
-    matches.push({
-      number:
-        Number.parseInt(match[1], 10) ||
-        cnNumMap[match[1]] ||
-        matches.length + 1,
-      title: match[2].trim() || `第${match[1]}集`,
-      startIdx: match.index,
-      headerEnd: pattern.lastIndex,
-    });
-  }
-  if (matches.length > 0)
-    return matches.map((item, index) => ({
-      number: item.number,
-      title: item.title,
-      script: text
-        .slice(item.headerEnd, matches[index + 1]?.startIdx ?? text.length)
-        .trim(),
-    }));
-  const parts = text.split(/\n\s*\n/).filter((item) => item.trim());
-  return (parts.length ? parts : [text]).map((item, index) => ({
-    number: index + 1,
-    title: parts.length === 1 ? "导入剧本" : `第${index + 1}集`,
-    script: item.trim(),
-  }));
-}
-
-function ScriptImportDialog({
-  visible,
-  onClose,
-  onImport,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  onImport: (text: string, sections: ReturnType<typeof splitScript>) => void;
-}) {
-  const [text, setText] = useState("");
-  const handleOk = () => {
-    if (!text.trim()) {
-      message.warning("请输入或上传剧本内容");
-      return;
-    }
-    const sections = splitScript(text);
-    onImport(text, sections);
-    setText("");
-    onClose();
-    message.success(`已导入 ${sections.length} 集剧本`);
-  };
-  return (
-    <Modal
-      title="导入剧本"
-      open={visible}
-      onCancel={onClose}
-      onOk={handleOk}
-      okText="导入"
-      cancelText="取消"
-      width={600}
-    >
-      <div className="space-y-4">
-        <p className="text-sm text-[var(--color-text-secondary)]">
-          粘贴文本或上传 .txt 文件，按“第X集”或空行拆分。
-        </p>
-        <Upload
-          accept=".txt,.text"
-          beforeUpload={(file) => {
-            const reader = new FileReader();
-            reader.onload = (event) =>
-              setText(String(event.target?.result || ""));
-            reader.readAsText(file);
-            return false;
-          }}
-          showUploadList={false}
-        >
-          <Button icon={<UploadOutlined />}>上传文本文件</Button>
-        </Upload>
-        <Input.TextArea
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          rows={12}
-          placeholder="在此粘贴剧本内容..."
-          className="!text-sm"
-        />
-        {text.trim() && (
-          <p className="text-xs text-[var(--color-text-tertiary)]">
-            预览：将拆分为 {splitScript(text).length} 集
-          </p>
-        )}
-      </div>
-    </Modal>
-  );
+function sec(tick: number, ticksPerSecond: number): string {
+  return (tick / ticksPerSecond).toFixed(1).replace(/\.0$/, "");
 }
 
 export default function PlanPage() {
   const { id = "" } = useParams();
   const query = useSearchParams();
-  const envelope = useWorkspaceViewStore((state) => state.plan);
-  const headerEnvelope = useWorkspaceViewStore((state) => state.header);
-  const load = useWorkspaceViewStore((state) => state.loadPlan);
-  const loadWorkbench = useWorkspaceViewStore((state) => state.loadWorkbench);
-  const workbenches = useWorkspaceViewStore((state) => state.workbenches);
-  const loading = useWorkspaceViewStore((state) => state.loading.plan);
-  const workspaceLoading = useWorkspaceViewStore((state) => state.loading);
-  const error = useWorkspaceViewStore((state) => state.errors.plan);
-  const workspaceErrors = useWorkspaceViewStore((state) => state.errors);
-  const events = useCreatorSessionStore((state) => state.events);
-  const creatorSession = useCreatorSessionStore((state) => state.session);
-  const view = presentationOf(envelope);
-  const header = presentationOf(headerEnvelope);
-  const [generatePanelVisible, setGeneratePanelVisible] = useState(false);
-  const [importVisible, setImportVisible] = useState(false);
-  const [finalComposeVisible, setFinalComposeVisible] = useState(
-    query.get("finalCompose") === "1",
+  const project = useProjectSnapshotStore((state) =>
+    state.projectId === id ? state.project : null,
   );
-  const [regeneratingSectionIds, setRegeneratingSectionIds] = useState<
-    Set<string>
-  >(new Set());
-  const listRef = useRef<HTMLDivElement>(null);
+  const syncStatus = useProjectSnapshotStore((state) => state.syncStatus);
+  const syncError = useProjectSnapshotStore((state) => state.syncError);
+  const requestInFlight = useProjectSnapshotStore(
+    (state) => state.requestInFlight,
+  );
+  const patching = useProjectSnapshotStore((state) => state.patching);
+  const patchProject = useProjectSnapshotStore((state) => state.patch);
+  const pollOnce = useProjectSnapshotStore((state) => state.pollOnce);
   const tasks = useCreatorTaskViewStore((state) => state.tasks);
-  const pendingRestore = useNavigationStore((state) => state.pendingRestore);
-  const selectedUnitId = query.get("unit") ?? undefined;
-  const selectedSectionId = query.get("section") ?? undefined;
+  const timeline = useMemo(() => selectPrimaryTimeline(project), [project]);
+  const selectedElementId = query.get("element");
+  const selectedElement =
+    selectedElementId && timeline
+      ? timeline.elements_by_id[selectedElementId] ?? null
+      : null;
+  const [playheadTick, setPlayheadTick] = useState(0);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const durationTick = timelineEndTick(timeline);
+  const displayDurationTick = timeline
+    ? durationTick ||
+      Math.round(
+        (project?.settings.target_duration_seconds || 10) *
+          timeline.ticks_per_second,
+      )
+    : 1;
   const reviewMode = query.get("review") === "1";
   const reviewField = query.get("field");
   const reviewPulse = query.get("reviewPulse");
-  const refresh = useCallback(() => load(id), [id, load]);
-  const { submit, submitting } = useCreatorCommand(id, envelope, refresh);
-  const lastWorkspaceSeq = [...events]
-    .reverse()
-    .find(
-      (event) =>
-        event.type === "workspace.head_changed" ||
-        event.type === "subagent.completed" ||
-        event.type === "agent.run.completed",
-    )?.seq;
-
-  useEffect(() => {
-    void load(id).catch(() => undefined);
-  }, [id, load, lastWorkspaceSeq]);
-  useEffect(() => {
-    setFinalComposeVisible(query.get("finalCompose") === "1");
-  }, [query]);
   useReviewFieldFocus({
     path: `/project/${id}/plan`,
     field: reviewField,
@@ -365,502 +64,254 @@ export default function PlanPage() {
     pulse: reviewPulse,
   });
 
-  // 与 origin/main 一致：跨上下文返回时恢复方案列表的滚动位置。
-  useEffect(() => {
-    if (!pendingRestore || pendingRestore.scrollTop == null || !listRef.current)
-      return;
-    listRef.current.scrollTop = pendingRestore.scrollTop;
-    useNavigationStore.getState().consumeRestore();
-  }, [pendingRestore, view?.sections.length]);
-
-  const { selectedSection, selectedUnit, detailOpen } = useMemo(
-    () => selectPlanDetail(view, selectedSectionId, selectedUnitId),
-    [selectedSectionId, selectedUnitId, view],
-  );
-  const selectedWorkbenchKey = selectedUnit
-    ? `workbench:${selectedUnit.id}`
-    : null;
-  const selectedEditWorkbench =
-    selectedUnit?.taskType === "edit"
-      ? workbenches[selectedUnit.id]
-      : undefined;
-  const selectedWorkbenchView = selectedEditWorkbench
-    ? presentationOf(selectedEditWorkbench)
-    : null;
-  const selectedEditWorkbenchView =
-    selectedWorkbenchView?.kind === "edit" ? selectedWorkbenchView : null;
-  useEffect(() => {
-    if (
-      !selectedUnit ||
-      selectedUnit.taskType !== "edit" ||
-      selectedEditWorkbench ||
-      !selectedWorkbenchKey ||
-      workspaceLoading[selectedWorkbenchKey] ||
-      workspaceErrors[selectedWorkbenchKey]
-    )
-      return;
-    void loadWorkbench(id, selectedUnit.id).catch(() => undefined);
-  }, [
-    id,
-    loadWorkbench,
-    selectedEditWorkbench,
-    selectedUnit,
-    selectedWorkbenchKey,
-    workspaceErrors,
-    workspaceLoading,
-  ]);
   useEffect(() => {
     useCreatorInteractionStore
       .getState()
-      .select(
-        selectedUnit
-          ? `unit:${selectedUnit.id}`
-          : selectedSection
-          ? `section:${selectedSection.id}`
-          : null,
-      );
-  }, [selectedSection, selectedUnit]);
-  const totalDuration = useMemo(() => selectPlanTotalDuration(view), [view]);
-  const terms = selectPlanTerms(header?.scenario);
-  const runningTask = useMemo(
-    () =>
-      [...tasks]
-        .filter((task) => task.status === "RUNNING" || task.status === "QUEUED")
-        .sort(
-          (left, right) =>
-            taskUpdatedAt(right.updatedAt) - taskUpdatedAt(left.updatedAt),
-        )[0],
-    [tasks],
-  );
-  const [taskClock, setTaskClock] = useState(0);
-  const [dismissedTaskId, setDismissedTaskId] = useState<string | null>(null);
-  const finishedTask = useMemo(
-    () =>
-      [...tasks]
-        .filter(
-          (task) =>
-            task.status !== "RUNNING" &&
-            task.status !== "QUEUED" &&
-            task.id !== dismissedTaskId &&
-            Date.now() - taskUpdatedAt(task.updatedAt) < 5000,
-        )
-        .sort(
-          (left, right) =>
-            taskUpdatedAt(right.updatedAt) - taskUpdatedAt(left.updatedAt),
-        )[0],
-    [dismissedTaskId, taskClock, tasks],
-  );
-  useEffect(() => {
-    if (!finishedTask) return undefined;
-    const remaining =
-      5000 - (Date.now() - taskUpdatedAt(finishedTask.updatedAt));
-    if (remaining <= 0) {
-      setTaskClock((value) => value + 1);
-      return undefined;
-    }
-    const timer = window.setTimeout(
-      () => setTaskClock((value) => value + 1),
-      remaining + 50,
-    );
-    return () => window.clearTimeout(timer);
-  }, [finishedTask]);
-  const activeTask = runningTask || finishedTask;
-  const taskActive = Boolean(runningTask);
-  const taskJustFinished = !runningTask && Boolean(finishedTask);
+      .select(selectedElement ? `element:${selectedElement.element_id}` : null);
+  }, [selectedElement]);
 
-  if (error && !view)
-    return <PageLoadError message={error} retry={() => void load(id)} />;
-  if (loading && !view) return <PageSkeleton type="list" />;
-  if (!view || !envelope) {
+  useEffect(() => {
+    if (
+      !selectedElement ||
+      (playheadTick >= selectedElement.span.start_tick &&
+        playheadTick <
+          selectedElement.span.start_tick + selectedElement.span.duration_tick)
+    )
+      return;
+    setPlayheadTick(selectedElement.span.start_tick);
+  }, [selectedElement]);
+
+  const base = `/project/${id}/plan`;
+  const selectElement = useCallback(
+    (elementId: string) => {
+      const element = timeline?.elements_by_id[elementId];
+      if (element) setPlayheadTick(element.span.start_tick);
+      navigate(
+        selectedElementId === elementId
+          ? base
+          : `${base}?element=${encodeURIComponent(elementId)}`,
+      );
+    },
+    [base, selectedElementId, timeline],
+  );
+
+  const focusAgent = useCallback((ref: string, prompt: string) => {
+    useCreatorInteractionStore.getState().select(ref);
+    useAgentDockUiStore.getState().setOpen(true);
+    useAgentDockUiStore.getState().setTab("conversation");
+    useAgentDockUiStore.getState().setDraft(prompt);
+  }, []);
+
+  if (!project) {
+    if (syncStatus === "invalid" || syncStatus === "not_found") {
+      return (
+        <PageLoadError
+          message={syncError || "Project 无法读取"}
+          retry={() => void pollOnce(id)}
+        />
+      );
+    }
+    return <PageSkeleton type="list" />;
+  }
+  if (!timeline) {
     return (
-      <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--color-bg-secondary)]">
-        <div className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]/60 px-5 py-3 backdrop-blur">
+      <PageLoadError
+        message="Project 中没有可用的 Timeline"
+        retry={() => void pollOnce(id)}
+      />
+    );
+  }
+
+  const patchValue = (path: string, before: unknown, value: unknown) =>
+    patchProject(id, [{ op: "replace", path, before, value }]);
+  const removeElement = async (element: TimelineElementDocument) => {
+    await patchProject(id, [
+      {
+        op: "remove",
+        path: projectJsonPointer(
+          "timelines",
+          "items",
+          timeline.timeline_id,
+          "elements_by_id",
+          element.element_id,
+        ),
+        before: element,
+      },
+    ]);
+    navigate(base);
+    message.success("Element 已删除");
+  };
+  const openElementAgent = (
+    element: TimelineElementDocument,
+    instruction?: string,
+  ) => {
+    focusAgent(
+      `element:${element.element_id}`,
+      instruction ||
+        `请修改 Element「${
+          element.label || element.element_id
+        }」，先读取现有内容并说明计划。`,
+    );
+  };
+  const timelineTargetRef = `timeline:${timeline.timeline_id}`;
+  const activeTask = tasks.find(
+    (task) => task.status === "RUNNING" || task.status === "QUEUED",
+  );
+
+  return (
+    <div
+      className={`flex min-h-full flex-col bg-[var(--color-bg-layout)] ${
+        previewOpen ? "overflow-y-auto" : "h-full overflow-hidden"
+      }`}
+    >
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]/60 px-5 py-3 backdrop-blur">
+        <div className="min-w-0">
           <h2 className="text-base font-semibold text-[var(--color-text-primary)]">
             视频方案
           </h2>
           <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">
-            先建立第一版视频结构，再逐步完善生成单元。
+            整支片子由时间线上的 Element
+            组成——可重叠、独立创作，并在同一成片中合成。
           </p>
-        </div>
-        {activeTask && (
-          <div className="flex shrink-0 items-center gap-3 border-b border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] px-5 py-2 text-xs text-[var(--color-accent)]">
-            <span
-              className={`h-1.5 w-1.5 shrink-0 rounded-full bg-current ${
-                taskActive ? "animate-pulse" : ""
-              }`}
-            />
-            <span className="min-w-0 shrink font-semibold">
-              {TASK_TITLES[activeTask.kind]}
-            </span>
-            <span className="min-w-0 flex-1 truncate text-[var(--color-text-secondary)]">
-              {taskDetail(activeTask)}
-            </span>
-            <span className="shrink-0 rounded-full bg-[var(--color-accent)]/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide">
-              {taskActive ? "进行中" : "已结束"}
-            </span>
-          </div>
-        )}
-        <div className="flex-1 overflow-auto">
-          <EmptyState
-            icon={LayoutList}
-            title="准备创建视频结构"
-            description="项目暂时还没有可展示的结构；可以重新加载，或在 AgentDock 中描述你想创建的内容。"
-            actionText="重新加载"
-            onAction={() => void load(id)}
-          />
-        </div>
-      </div>
-    );
-  }
-
-  const base = `/project/${id}/plan`;
-  const selectSection = (sectionId: string) =>
-    navigate(`${base}?section=${encodeURIComponent(sectionId)}`);
-  const selectUnit = (unitId: string) =>
-    navigate(`${base}?unit=${encodeURIComponent(unitId)}`);
-  const clearSelection = () => navigate(base);
-  const patchSection = (
-    section: SectionView,
-    field: "narrative" | "durationBudget" | "constraints" | "script",
-    value: string | number | string[],
-  ) =>
-    submit(
-      "SET_SECTION_TEXT",
-      `section:${section.id}`,
-      { field, value },
-      section.targetVersion,
-    );
-  const regenerateSection = async (section: SectionView) => {
-    setRegeneratingSectionIds((previous) => new Set(previous).add(section.id));
-    try {
-      await submit(
-        "PLAN_UNITS",
-        `section:${section.id}`,
-        { regenerate: true },
-        section.targetVersion,
-      );
-    } finally {
-      setRegeneratingSectionIds((previous) => {
-        const next = new Set(previous);
-        next.delete(section.id);
-        return next;
-      });
-    }
-  };
-  const creatorBusy =
-    creatorSession != null &&
-    ![
-      "IDLE",
-      "PENDING_REVIEW",
-      "WAITING_USER_INPUT",
-      "WAITING_EXECUTION_AUTH",
-      "CANCELLED",
-      "ERROR",
-    ].includes(creatorSession.status);
-  const requestAgentTaskPlan = () => {
-    const selectedSection = selectedSectionId
-      ? view.sections.find((section) => section.id === selectedSectionId)
-      : undefined;
-    return submit(
-      "PLAN_UNITS",
-      selectedSection ? `section:${selectedSection.id}` : "project:plan",
-      {},
-      selectedSection?.targetVersion ?? view.targetVersion,
-    );
-  };
-
-  return (
-    <ReviewFocusPulseProvider
-      field={reviewMode ? reviewField : null}
-      pulse={reviewPulse}
-    >
-      <div className="flex h-full flex-col overflow-hidden bg-[var(--color-bg-layout)]">
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]/60 px-5 py-3 backdrop-blur">
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold text-[var(--color-text-primary)]">
-              视频方案
-            </h2>
-            <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">
-              先以{terms.structure}组织整支片子，再从具体{terms.unit}
-              进入制作工作台。
-            </p>
-            {view.outline && (
-              <details className="mt-1 max-w-3xl text-xs text-[var(--color-text-secondary)]">
-                <summary className="cursor-pointer select-none text-[var(--color-accent)]">
-                  查看故事总纲与旁白
-                </summary>
-                <div
-                  data-creator-field="project:plan/outline"
-                  data-creator-path={projectJsonPointer("story", "outline")}
-                  data-creator-field-label="故事总纲与旁白"
-                  className="mt-2 max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 leading-5"
-                >
-                  {view.outline}
-                </div>
-              </details>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {totalDuration > 0 && (
-              <span className="rounded-full border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2.5 py-1 text-[11px] font-semibold text-[var(--color-text-secondary)]">
-                {totalDuration}s
-              </span>
-            )}
-            <span className="rounded-full border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2.5 py-1 text-[11px] font-semibold text-[var(--color-text-secondary)]">
-              {view.aspectRatio}
-            </span>
-            <Button
-              size="small"
-              icon={<PlusOutlined />}
-              disabled={submitting}
-              onClick={() =>
-                void submit(
-                  "CREATE_SECTION",
-                  "project:plan",
-                  {
-                    title: `结构段 ${view.sections.length + 1}`,
-                    afterSectionId: view.sections.at(-1)?.id,
-                  },
-                  view.targetVersion,
-                )
-              }
-              className="!text-xs"
-            >
-              添加结构段
-            </Button>
-            <Button
-              size="small"
-              icon={<ScissorOutlined />}
-              onClick={() => setFinalComposeVisible(true)}
-              className="!text-xs"
-            >
-              最终合成
-            </Button>
-            <Button
-              size="small"
-              icon={<Sparkles className="h-3 w-3" />}
-              onClick={() => void requestAgentTaskPlan()}
-              loading={creatorBusy}
-              className="!text-xs"
-            >
-              Agent 规划任务
-            </Button>
-          </div>
-        </div>
-
-        {activeTask && (
-          <div
-            className={`flex shrink-0 items-center gap-3 border-b px-5 py-2 text-xs transition-colors ${
-              taskJustFinished && activeTask.status !== "SUCCEEDED"
-                ? "border-[var(--color-danger)]/30 bg-[var(--color-danger-soft)] text-[var(--color-danger)]"
-                : taskJustFinished
-                ? "border-[var(--color-success)]/30 bg-[var(--color-success-soft)] text-[var(--color-success)]"
-                : "border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-            }`}
-          >
-            <span
-              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                taskActive ? "animate-pulse" : ""
-              } bg-current`}
-            />
-            <span className="min-w-0 shrink font-semibold">
-              {TASK_TITLES[activeTask.kind]}
-            </span>
-            <span className="min-w-0 flex-1 truncate text-[var(--color-text-secondary)]">
-              {taskDetail(activeTask)}
-            </span>
-            {taskActive ? (
-              <span className="shrink-0 rounded-full bg-[var(--color-accent)]/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide">
-                进行中
-              </span>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setDismissedTaskId(activeTask.id)}
-                className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide opacity-70 transition-opacity hover:opacity-100"
-                aria-label="关闭"
+          {(project.strategy.creative_brief ||
+            project.strategy.creative_direction) && (
+            <details className="mt-1 max-w-3xl text-xs text-[var(--color-text-secondary)]">
+              <summary className="w-fit cursor-pointer select-none text-[var(--color-accent)]">
+                查看创作总纲
+              </summary>
+              <div
+                data-creator-field="project:strategy/creative_brief"
+                data-creator-path={projectJsonPointer(
+                  "strategy",
+                  "creative_brief",
+                )}
+                data-creator-field-label="创作总纲"
+                className="mt-2 max-h-44 overflow-y-auto whitespace-pre-wrap rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 leading-5"
               >
-                ✕
-              </button>
-            )}
-          </div>
-        )}
-
-        {view.sections.length === 0 ? (
-          <div className="flex-1 overflow-auto">
-            <EmptyState
-              icon={LayoutList}
-              title="还没有视频结构"
-              description="用一句话描述目标生成第一版结构，或导入已有剧本"
-              actionText="生成结构"
-              onAction={() => setGeneratePanelVisible(true)}
-              extra={
-                <Button
-                  className="mt-3 !rounded-lg"
-                  onClick={() => setImportVisible(true)}
-                >
-                  导入剧本
-                </Button>
-              }
-            />
-          </div>
-        ) : (
-          <div
-            className="grid min-h-0 flex-1 gap-4 p-4 transition-[grid-template-columns] duration-300"
-            style={{
-              gridTemplateColumns: detailOpen
-                ? "minmax(0,36fr) minmax(0,64fr)"
-                : "minmax(0,1fr) 0fr",
-            }}
+                {project.strategy.creative_brief}
+                {project.strategy.creative_direction &&
+                  `\n\n创作方向：${project.strategy.creative_direction}`}
+              </div>
+            </details>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <span className="rounded-full border border-[var(--color-border)] bg-white px-2.5 py-1 text-[11px] font-semibold text-[var(--color-text-secondary)]">
+            {sec(durationTick, timeline.ticks_per_second)}s
+          </span>
+          <span className="rounded-full border border-[var(--color-border)] bg-white px-2.5 py-1 text-[11px] font-semibold text-[var(--color-text-secondary)]">
+            {project.settings.aspect_ratio}
+          </span>
+          <span className="rounded-full border border-[var(--color-border)] bg-white px-2.5 py-1 text-[11px] font-semibold text-[var(--color-text-secondary)]">
+            {Object.keys(timeline.elements_by_id).length} Elements
+          </span>
+          <Button
+            size="small"
+            icon={<Plus className="h-3.5 w-3.5" />}
+            onClick={() =>
+              focusAgent(
+                timelineTargetRef,
+                "请在当前 Timeline 中添加新的 Element。先根据项目目标判断类型、时间位置和持续时长，再写入 Project。",
+              )
+            }
           >
-            <div
-              ref={listRef}
-              className="min-h-0 space-y-3 overflow-y-auto pr-1"
-              data-plan-list
-            >
-              {view.sections.map((section) => (
-                <PlanCard
-                  key={section.id}
-                  section={section}
-                  terms={terms}
-                  isSingleUnit={
-                    section.units.length === 1 &&
-                    !section.narrative &&
-                    !section.constraints.length
-                  }
-                  selected={section.id === selectedSection?.id}
-                  selectedUnitId={selectedUnit?.id}
-                  uiPhase={envelope.uiPhase}
-                  activeUnitId={envelope.agentStatusBar.progress.unitId}
-                  onSelectSection={(sectionId) =>
-                    sectionId === selectedSectionId
-                      ? clearSelection()
-                      : selectSection(sectionId)
-                  }
-                  onSelectUnit={(unitId) =>
-                    unitId === selectedUnitId
-                      ? clearSelection()
-                      : selectUnit(unitId)
-                  }
-                />
-              ))}
-            </div>
-            <aside
-              className={`min-h-0 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] shadow-sm transition-opacity duration-300 ${
-                detailOpen ? "opacity-100" : "pointer-events-none opacity-0"
-              }`}
-            >
-              {selectedSection && selectedUnit ? (
-                <UnitDetail
-                  projectId={id}
-                  section={selectedSection}
-                  unit={selectedUnit}
-                  uiPhase={envelope.uiPhase}
-                  activeUnitId={envelope.agentStatusBar.progress.unitId}
-                  editWorkbench={selectedEditWorkbenchView}
-                  editWorkbenchLoading={
-                    selectedWorkbenchKey
-                      ? workspaceLoading[selectedWorkbenchKey]
-                      : false
-                  }
-                  editWorkbenchError={
-                    selectedWorkbenchKey
-                      ? workspaceErrors[selectedWorkbenchKey]
-                      : undefined
-                  }
-                  onDelete={() =>
-                    Modal.confirm({
-                      title: "确认删除",
-                      content: "删除后无法恢复，确定要删除该生成单元吗？",
-                      okText: "删除",
-                      okButtonProps: { danger: true },
-                      onOk: async () => {
-                        const result = await submit(
-                          "DELETE_UNIT",
-                          `unit:${selectedUnit.id}`,
-                          {},
-                          selectedUnit.targetVersion,
-                        );
-                        if (!result) throw new Error("删除命令未提交");
-                        navigate(base);
-                      },
-                    })
-                  }
-                />
-              ) : selectedSection ? (
-                <SectionDetail
-                  projectId={id}
-                  section={selectedSection}
-                  terms={terms}
-                  onPatch={(field, value) =>
-                    patchSection(selectedSection, field, value)
-                  }
-                  onSelectUnit={selectUnit}
-                  onRegenerateUnits={() => regenerateSection(selectedSection)}
-                  regenerating={regeneratingSectionIds.has(selectedSection.id)}
-                  onDelete={() =>
-                    Modal.confirm({
-                      title: "确认删除",
-                      content:
-                        "删除结构段会同时删除其下所有生成单元，确定要删除吗？",
-                      okText: "删除",
-                      okButtonProps: { danger: true },
-                      onOk: async () => {
-                        const result = await submit(
-                          "DELETE_SECTION",
-                          `section:${selectedSection.id}`,
-                          {},
-                          selectedSection.targetVersion,
-                        );
-                        if (!result) throw new Error("删除命令未提交");
-                        navigate(base);
-                      },
-                    })
-                  }
-                />
-              ) : null}
-            </aside>
-          </div>
-        )}
+            添加 Element
+          </Button>
+          <Button
+            size="small"
+            icon={<Scissors className="h-3.5 w-3.5" />}
+            onClick={() =>
+              focusAgent(
+                timelineTargetRef,
+                "请检查当前 Timeline 的所有 Element 和产物状态，满足条件后渲染最终成片。",
+              )
+            }
+          >
+            渲染 Timeline
+          </Button>
+          <Button
+            size="small"
+            type="primary"
+            icon={<Sparkles className="h-3.5 w-3.5" />}
+            onClick={() =>
+              focusAgent(
+                timelineTargetRef,
+                "请根据当前项目目标规划并完善整条 Timeline。用带时间范围、位置、层级和产生方式的 Element 表达全部内容。",
+              )
+            }
+          >
+            Agent 规划
+          </Button>
+        </div>
+      </header>
 
-        <ScriptGeneratePanel
-          visible={generatePanelVisible}
-          onClose={() => setGeneratePanelVisible(false)}
-          onGenerate={(config) => {
-            setGeneratePanelVisible(false);
-            void submit(
-              "GENERATE_SCRIPT",
-              "project:plan",
-              { ...config },
-              view.targetVersion,
-            );
-          }}
-          loading={submitting}
-          initialTheme={header?.masterScript}
+      {activeTask && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-accent)]/25 bg-[var(--color-accent-soft)] px-5 py-2 text-xs text-[var(--color-accent)]">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
+          <b>{activeTask.kind}</b>
+          <span className="min-w-0 flex-1 truncate text-[var(--color-text-secondary)]">
+            {activeTask.targetRef}
+          </span>
+          <span>
+            {activeTask.status === "RUNNING" ? "处理中…" : "等待执行"}
+          </span>
+        </div>
+      )}
+      {syncStatus === "degraded" && (
+        <div className="shrink-0 border-b border-[var(--color-warning)]/20 bg-[var(--color-warning-soft)] px-5 py-1.5 text-[11px] text-[var(--color-warning)]">
+          当前显示最后一次可用快照；后台同步暂时异常。
+          {syncError ? ` ${syncError}` : ""}
+        </div>
+      )}
+
+      <TimelineCanvas
+        project={project}
+        timeline={timeline}
+        durationTick={displayDurationTick}
+        playheadTick={Math.min(playheadTick, displayDurationTick)}
+        selectedElementId={selectedElementId}
+        previewOpen={previewOpen}
+        onPreviewOpenChange={setPreviewOpen}
+        onPlayheadChange={(tick) =>
+          setPlayheadTick(Math.max(0, Math.min(displayDurationTick, tick)))
+        }
+        onSelectElement={selectElement}
+      />
+
+      <main
+        className={`grid min-h-0 gap-4 p-4 ${
+          previewOpen
+            ? "h-[340px] shrink-0 grid-cols-[minmax(280px,36fr)_minmax(0,64fr)]"
+            : "flex-1 grid-cols-[minmax(280px,36fr)_minmax(0,64fr)]"
+        }`}
+      >
+        <ElementList
+          timeline={timeline}
+          playheadTick={playheadTick}
+          selectedElementId={selectedElementId}
+          tasks={tasks}
+          onSelect={selectElement}
         />
-        <ScriptImportDialog
-          visible={importVisible}
-          onClose={() => setImportVisible(false)}
-          onImport={(text, sections) =>
-            void submit(
-              "IMPORT_SCRIPT",
-              "project:plan",
-              { text, sections },
-              view.targetVersion,
-            )
-          }
+        <ElementDetail
+          project={project}
+          timeline={timeline}
+          element={selectedElement}
+          tasks={tasks}
+          patching={patching || requestInFlight}
+          onClose={() => navigate(base)}
+          onPatch={patchValue}
+          onDelete={removeElement}
+          onAgent={openElementAgent}
         />
-        <FinalComposePanel
-          projectId={id}
-          visible={finalComposeVisible}
-          onClose={() => {
-            setFinalComposeVisible(false);
-            if (query.get("finalCompose") === "1") navigate(base);
-          }}
-          focusVersion={query.get("version")}
-          focusPulse={reviewPulse}
-        />
-      </div>
-    </ReviewFocusPulseProvider>
+      </main>
+      {Object.keys(timeline.elements_by_id).length === 0 && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-8 flex justify-center">
+          <div className="flex items-center gap-2 rounded-full border border-[var(--color-border)] bg-white/92 px-4 py-2 text-xs text-[var(--color-text-secondary)] shadow-lg backdrop-blur">
+            <Film className="h-3.5 w-3.5 text-[var(--color-accent)]" />从
+            AgentDock 描述第一组画面，Agent 会直接创建 Element
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

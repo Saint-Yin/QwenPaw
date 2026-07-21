@@ -10,16 +10,8 @@ export function pathForLocator(
   switch (locator.page) {
     case "assets":
       return `/project/${projectId}/assets`;
-    case "workbench":
-      return `/project/${projectId}/plan/unit/${encodeURIComponent(
-        locator.unitId,
-      )}/workbench`;
-    case "section-compose":
-      return `/project/${projectId}/plan/section/${encodeURIComponent(
-        locator.sectionId,
-      )}`;
-    case "final-compose":
-      return `/project/${projectId}/plan?finalCompose=1`;
+    case "element":
+      return `/project/${projectId}/plan`;
     default:
       return `/project/${projectId}/plan`;
   }
@@ -37,10 +29,7 @@ export function navigateToLocator(
 ): void {
   const base = pathForLocator(projectId, locator);
   const params = new URLSearchParams();
-  if (locator.sectionId && locator.page === "plan")
-    params.set("section", locator.sectionId);
-  if (locator.unitId && locator.page === "plan")
-    params.set("unit", locator.unitId);
+  if (locator.elementId) params.set("element", locator.elementId);
   if (locator.assetId) params.set("asset", locator.assetId);
   if (locator.versionId) params.set("version", locator.versionId);
   if (locator.focus) params.set("focus", locator.focus);
@@ -60,7 +49,7 @@ export function navigateToLocator(
   useNavigationStore.getState().setExpectedPath(base.split("?")[0]);
   useNavigationStore.getState().setReviewFocus({
     path: base.split("?")[0],
-    ref: locator.assetId || locator.unitId || locator.sectionId || "",
+    ref: locator.assetId || locator.elementId || "",
     query: Object.fromEntries(params),
   });
   navigate(target);

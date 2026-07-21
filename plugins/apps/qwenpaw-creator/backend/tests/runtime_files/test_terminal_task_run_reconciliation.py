@@ -74,7 +74,7 @@ def _terminal_pair(
             project_id=PROJECT_ID,
             round_id=round_id,
             role=SpecialistRole.R2V_GENERATION_DIRECTOR,
-            target_refs=[f"unit:{suffix}"],
+            target_refs=[f"element:{suffix}"],
             input_generation=1,
             input_etag="sha256:input",
             caused_by_request_id=request_id,

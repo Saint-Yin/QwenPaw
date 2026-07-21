@@ -11,7 +11,7 @@ export interface SavedLocation {
   path: string;
   /** 来源描述，如 "资产库 / 产品主视觉" */
   description: string;
-  /** 选中对象标识（asset:xxx / unit:xxx / section:xxx） */
+  /** 选中对象标识（element:xxx / timeline:xxx / asset-version:xxx） */
   selectedRef?: string;
   /** 主滚动容器 scrollTop */
   scrollTop?: number;

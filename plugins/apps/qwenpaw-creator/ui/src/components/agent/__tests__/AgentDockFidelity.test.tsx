@@ -14,63 +14,9 @@ import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
 import { useCreatorSessionStore } from "@/store/creatorSessionStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
 import { useFileProjectReviewStore } from "@/store/fileProjectReviewStore";
-import { useReviewManifestStore } from "@/store/reviewManifestStore";
-import { useWorkspaceViewStore } from "@/store/workspaceViewStore";
+import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationStore";
 import { installMockFetch } from "@/test/mockFetch";
-import type {
-  FileProjectReviewRecord,
-  ReviewDecisionGroup,
-  ReviewManifest,
-  ReviewOperation,
-} from "@/contracts/creator";
-
-const reviewGroup: ReviewDecisionGroup = {
-  id: "g1",
-  title: "Unit 文案",
-  operationIds: ["op1"],
-  groupingReasons: ["硬依赖闭包"],
-  decisionToken: "token-1",
-  decision: "PENDING",
-};
-
-const reviewOperation: ReviewOperation = {
-  id: "op1",
-  decisionGroupId: "g1",
-  mutationIds: ["m1"],
-  kind: "update",
-  targetRef: "unit:u1",
-  artifactKind: "markdown",
-  path: "story/sections/s1/units/u1/narrative.md",
-  beforeVersionRef: "workspace-content://before@ov1",
-  afterVersionRef: "workspace-content://after@ov2",
-  causalRefs: [],
-  source: "user_direct",
-  actorRunIds: [],
-  triggerMessageSeqs: [1],
-  dependencyReasons: [],
-  uiLocator: { page: "workbench", unitId: "u1" },
-};
-
-function reviewManifest(
-  group: ReviewDecisionGroup = reviewGroup,
-): ReviewManifest {
-  return {
-    id: "review-1",
-    transactionId: "tx1",
-    reviewRound: 1,
-    baseRevisionId: "revision-a",
-    reviewRevisionId: "revision-b",
-    manifestToken: "manifest-token",
-    summary: "",
-    journalSeqRange: { fromExclusive: 0, toInclusive: 1 },
-    decisionGroups: [group],
-    operations: [reviewOperation],
-    createdArtifactVersionRefs: [],
-    mediaComparisons: [],
-    integrationPreviews: [],
-    createdAt: "2026-07-11T00:00:00Z",
-  };
-}
+import type { FileProjectReviewRecord } from "@/contracts/creator";
 
 function fileProjectReview(): FileProjectReviewRecord {
   return {
@@ -129,9 +75,8 @@ describe("AgentDock origin/main visible fidelity", () => {
     useAgentDockUiStore.getState().reset();
     useCreatorInteractionStore.getState().reset();
     useFileProjectReviewStore.getState().reset();
-    useReviewManifestStore.getState().reset();
+    useExecutionAuthorizationStore.getState().reset();
     useCreatorTaskViewStore.getState().reset();
-    useWorkspaceViewStore.getState().reset("p1");
     useCreatorSessionStore.getState().reset();
     useCreatorSessionStore.setState({
       projectId: "p1",
@@ -224,42 +169,15 @@ describe("AgentDock origin/main visible fidelity", () => {
     ).toHaveClass("min-h-[32px]", "max-h-24");
   });
 
-  it("automatically opens every newly sealed review round in the decision center", async () => {
-    useAgentDockUiStore.getState().setOpen(false);
-    renderDock();
-    expect(useAgentDockUiStore.getState().open).toBe(false);
-
-    act(() => {
-      useReviewManifestStore.setState({
-        projectId: "p1",
-        transactionId: "tx1",
-        manifest: reviewManifest(),
-      });
-    });
-
-    await waitFor(() => {
-      expect(useAgentDockUiStore.getState().open).toBe(true);
-      expect(useAgentDockUiStore.getState().tab).toBe("review");
-    });
-    expect(screen.getByText("Agent 改动")).toBeInTheDocument();
-    expect(
-      screen.getByLabelText("视频方案 / Unit 文案 / 正文"),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "接受" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "撤销" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "查看" })).toBeInTheDocument();
-  });
-
   it("opens the existing decision center when a production confirmation arrives live", async () => {
     useAgentDockUiStore.getState().setOpen(false);
     renderDock();
     expect(document.querySelector("[data-agent-dock]")).not.toBeInTheDocument();
 
     act(() =>
-      useReviewManifestStore.setState({
+      useExecutionAuthorizationStore.setState({
         projectId: "p1",
-        transactionId: "tx1",
-        authorizations: [
+        items: [
           {
             id: "auth-image-live",
             transactionId: "tx1",
@@ -575,7 +493,7 @@ describe("AgentDock origin/main visible fidelity", () => {
           content: [
             {
               type: "text",
-              text: '剪辑任务仍在运行。\n```json\n{"action":"yield_until_runtime_event","arguments":{"waitForRunIds":["run-video-1"],"reason":"等待 Source Intelligence 完成素材分析，以便 Runtime 投影 Section 和 Unit，然后委派 AI Editing Director 进行剪辑"}}\n```',
+              text: '剪辑任务仍在运行。\n```json\n{"action":"yield_until_runtime_event","arguments":{"waitForRunIds":["run-video-1"],"reason":"等待 Source Intelligence 完成素材分析，以便 Runtime 投影 Timeline 和 Element，然后委派 AI Editing Director 进行剪辑"}}\n```',
             },
           ],
           metadata: {
@@ -584,7 +502,7 @@ describe("AgentDock origin/main visible fidelity", () => {
               arguments: {
                 waitForRunIds: ["run-video-1"],
                 reason:
-                  "等待 Source Intelligence 完成素材分析，以便 Runtime 投影 Section 和 Unit，然后委派 AI Editing Director 进行剪辑",
+                  "等待 Source Intelligence 完成素材分析，以便 Runtime 投影 Timeline 和 Element，然后委派 AI Editing Director 进行剪辑",
               },
             },
           },
@@ -599,7 +517,7 @@ describe("AgentDock origin/main visible fidelity", () => {
     )!;
     expect(waiting).toHaveAttribute("data-expanded", "false");
     expect(waiting).toHaveTextContent(
-      "等待 Source Intelligence 完成素材分析，以便 Runtime 投影 Section 和 Unit，然后委派 AI Editing Director 进行剪辑中",
+      "等待 Source Intelligence 完成素材分析，以便 Runtime 投影 Timeline 和 Element，然后委派 AI Editing Director 进行剪辑中",
     );
     expect(waiting).not.toHaveTextContent("等待等待");
     fireEvent.click(within(waiting).getByRole("button", { name: "详情" }));
@@ -732,121 +650,29 @@ describe("AgentDock origin/main visible fidelity", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("mounts the origin run block and current-change summary in the conversation surface", () => {
+  it("mounts the origin run block with Timeline/Element targets", () => {
     useAgentDockUiStore.getState().setOpen(true);
     useCreatorTaskViewStore.setState({
       projectId: "p1",
       runs: [
         {
           id: "run-1",
-          role: "story_planning_agent",
+          role: "visual_development_agent",
           displayName: "故事规划",
           status: "SUCCEEDED",
-          targetRefs: ["unit:u1"],
+          targetRefs: ["timeline:main"],
           taskRefs: [],
           metadata: {},
         },
       ],
-    });
-    useReviewManifestStore.setState({
-      projectId: "p1",
-      transactionId: "tx1",
-      manifest: reviewManifest(),
     });
     renderDock();
     act(() => useAgentDockUiStore.getState().setTab("conversation"));
 
     expect(screen.getByText("端到端生产")).toBeInTheDocument();
     expect(
-      screen.getByText(/故事规划 · unit:u1 · SUCCEEDED/),
+      screen.getByText(/故事规划 · timeline:main · SUCCEEDED/),
     ).toBeInTheDocument();
-    expect(screen.getByText("本轮 Agent 改动（1）")).toBeInTheDocument();
-    expect(screen.getByText("视频方案 / Unit 文案 / 正文")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "接受全部" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "接受" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "撤销" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "查看" })).toBeInTheDocument();
-  });
-
-  it("does not expose a detached revise card for inline review items", async () => {
-    useCreatorSessionStore.setState((state) => ({
-      ...state,
-      session: {
-        ...state.session!,
-        status: "PENDING_REVIEW",
-        activeTransactionId: "tx1",
-      },
-    }));
-    useReviewManifestStore.setState({
-      projectId: "p1",
-      transactionId: "tx1",
-      manifest: reviewManifest(),
-    });
-    useAgentDockUiStore.getState().setTab("review");
-    renderDock();
-
-    expect(await screen.findByText("Agent 改动")).toBeInTheDocument();
-    expect(screen.getByText("Unit 文案")).toBeInTheDocument();
-    expect(screen.queryByText("要求修改")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "接受" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "撤销" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "查看" })).toBeInTheDocument();
-  });
-
-  it("routes ordinary PENDING_REVIEW input to a group comment without waking Creator", async () => {
-    const { calls } = installMockFetch([
-      {
-        match: "/comments",
-        response: {
-          json: {
-            commentId: "comment-1",
-            groupId: "g1",
-            text: "先记录这条意见",
-            createdAt: "now",
-          },
-        },
-      },
-    ]);
-    useCreatorSessionStore.setState((state) => ({
-      ...state,
-      session: {
-        ...state.session!,
-        status: "PENDING_REVIEW",
-        activeTransactionId: "tx1",
-      },
-    }));
-    useReviewManifestStore.setState({
-      projectId: "p1",
-      transactionId: "tx1",
-      manifest: reviewManifest(),
-    });
-    useAgentDockUiStore.getState().setReviewContext({
-      groupId: "g1",
-      decisionToken: "token-1",
-      title: "Unit 文案",
-      targetRef: "unit:u1",
-    });
-    useAgentDockUiStore.getState().setOpen(true);
-    renderDock();
-    act(() => useAgentDockUiStore.getState().setTab("conversation"));
-
-    const textbox = screen.getByRole("textbox", {
-      name: "输入修改意图，@ 可引用对象…",
-    });
-    textbox.textContent = "先记录这条意见";
-    fireEvent.input(textbox);
-    fireEvent.keyDown(textbox, { key: "Enter" });
-
-    await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith("/comments"))).toBe(true),
-    );
-    const commentCall = calls.find((call) => call.url.endsWith("/comments"))!;
-    expect(commentCall.body).toMatchObject({ text: "先记录这条意见" });
-    expect(commentCall.body).toHaveProperty("clientCommentId");
-    expect(calls.some((call) => call.url.endsWith("/messages"))).toBe(false);
-    expect(calls.some((call) => call.url.endsWith("/decision"))).toBe(false);
   });
 
   it("keeps file-native review feedback on the Session message API", async () => {
@@ -894,60 +720,7 @@ describe("AgentDock origin/main visible fidelity", () => {
         calls.some((call) => call.url.endsWith("/projects/p1/messages")),
       ).toBe(true),
     );
-    expect(calls.some((call) => call.url.includes("/transactions/"))).toBe(
-      false,
-    );
     expect(calls.some((call) => call.url.endsWith("/comments"))).toBe(false);
-  });
-
-  it("does not guess a comment target when multiple review groups are pending", () => {
-    const { calls } = installMockFetch([]);
-    const secondGroup: ReviewDecisionGroup = {
-      ...reviewGroup,
-      id: "g2",
-      title: "另一个待审项",
-      operationIds: ["op2"],
-      decisionToken: "token-2",
-    };
-    const secondOperation: ReviewOperation = {
-      ...reviewOperation,
-      id: "op2",
-      decisionGroupId: "g2",
-      targetRef: "unit:u2",
-      path: "story/sections/s1/units/u2/narrative.md",
-    };
-    useCreatorSessionStore.setState((state) => ({
-      ...state,
-      session: {
-        ...state.session!,
-        status: "PENDING_REVIEW",
-        activeTransactionId: "tx1",
-      },
-    }));
-    useReviewManifestStore.setState({
-      projectId: "p1",
-      transactionId: "tx1",
-      manifest: {
-        ...reviewManifest(),
-        decisionGroups: [reviewGroup, secondGroup],
-        operations: [reviewOperation, secondOperation],
-      },
-    });
-    useAgentDockUiStore.getState().setOpen(true);
-    renderDock();
-    act(() => useAgentDockUiStore.getState().setTab("conversation"));
-
-    const textbox = screen.getByRole("textbox", {
-      name: "输入修改意图，@ 可引用对象…",
-    });
-    textbox.textContent = "这条意见没有指定目标";
-    fireEvent.input(textbox);
-    fireEvent.keyDown(textbox, { key: "Enter" });
-
-    expect(calls.some((call) => call.url.endsWith("/comments"))).toBe(false);
-    expect(calls.some((call) => call.url.endsWith("/messages"))).toBe(false);
-    expect(calls.some((call) => call.url.endsWith("/decision"))).toBe(false);
-    expect(textbox.textContent).toBe("这条意见没有指定目标");
   });
 
   it("keeps real user authority, hides Runtime rows and renders the expandable origin tool card", () => {
@@ -1156,7 +929,7 @@ describe("AgentDock origin/main visible fidelity", () => {
           content: [
             {
               type: "text",
-              text: '我会请故事规划 Agent 完善第一幕。\n```json\n{"action":"tool_call","tool":"delegate_to_agent"}\n```',
+              text: '我会请视觉开发 Agent 完善开场视觉。\n```json\n{"action":"tool_call","tool":"delegate_to_agent"}\n```',
             },
           ],
           metadata: {
@@ -1165,9 +938,9 @@ describe("AgentDock origin/main visible fidelity", () => {
               action: "tool_call",
               tool: "delegate_to_agent",
               arguments: {
-                role: "story_planning_agent",
-                target_refs: ["section:s1"],
-                task: "请完善第一幕冲突，并说明改动结果。",
+                role: "visual_development_agent",
+                target_refs: ["project:assets"],
+                task: "请完善开场视觉，并说明改动结果。",
               },
             },
           },
@@ -1187,10 +960,10 @@ describe("AgentDock origin/main visible fidelity", () => {
           data: {
             actionId: "delegate-action",
             tool: "delegate_to_agent",
-            role: "story_planning_agent",
-            roleDisplayName: "故事规划",
-            delegationText: "请完善第一幕冲突，并说明改动结果。",
-            targetRefs: ["section:s1"],
+            role: "visual_development_agent",
+            roleDisplayName: "视觉开发",
+            delegationText: "请完善开场视觉，并说明改动结果。",
+            targetRefs: ["project:assets"],
           },
         },
         {
@@ -1203,7 +976,7 @@ describe("AgentDock origin/main visible fidelity", () => {
           data: {
             parentActionId: "delegate-action",
             runId: "run-story-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "sub-message-1",
             deltaIndex: 0,
             delta: "## 正在规划\n\n先梳理冲突。",
@@ -1219,10 +992,10 @@ describe("AgentDock origin/main visible fidelity", () => {
           data: {
             parentActionId: "delegate-action",
             runId: "run-story-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             toolCallId: "nested-tool-1",
             tool: "read_project_file",
-            arguments: { path: "story/outline.md" },
+            arguments: { projectId: "p1", fileId: "source-notes" },
             state: "started",
           },
         },
@@ -1236,7 +1009,7 @@ describe("AgentDock origin/main visible fidelity", () => {
           data: {
             parentActionId: "delegate-action",
             runId: "run-story-1",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             toolCallId: "nested-tool-1",
             tool: "read_project_file",
             result: { summary: "读取完成" },
@@ -1247,14 +1020,14 @@ describe("AgentDock origin/main visible fidelity", () => {
     );
     renderDock();
 
-    expect(screen.getByText(/▸\s+委派给 故事规划/)).toBeInTheDocument();
+    expect(screen.getByText(/▸\s+委派给 视觉开发/)).toBeInTheDocument();
     expect(
       document.querySelector('[data-agent-tool="delegate-action"]'),
     ).toHaveAttribute("data-expanded", "true");
     expect(
-      screen.getByText("请完善第一幕冲突，并说明改动结果。"),
+      screen.getByText("请完善开场视觉，并说明改动结果。"),
     ).toBeInTheDocument();
-    expect(screen.getByText("目标：section:s1")).toBeInTheDocument();
+    expect(screen.getByText("目标：project:assets")).toBeInTheDocument();
     expect(screen.getByText(/## 正在规划/)).toBeInTheDocument();
     expect(screen.getByText("SSE 实时输出中")).toBeInTheDocument();
     expect(screen.getByText("运行中")).toBeInTheDocument();
@@ -1295,7 +1068,7 @@ describe("AgentDock origin/main visible fidelity", () => {
         data: {
           parentActionId: "delegate-action",
           runId: "run-story-1",
-          role: "story_planning_agent",
+          role: "visual_development_agent",
           messageId: "sub-message-1",
           text: "[SUCCESS]\n## 已完成\n\n第一幕冲突已完善。",
           finishReason: "stop",
@@ -1323,7 +1096,7 @@ describe("AgentDock origin/main visible fidelity", () => {
     fireEvent.click(
       within(nestedTool as HTMLElement).getByRole("button", { name: "详情" }),
     );
-    expect(screen.getByText(/"path": "story\/outline.md"/)).toBeInTheDocument();
+    expect(screen.getByText(/"fileId": "source-notes"/)).toBeInTheDocument();
     expect(screen.getByText(/"summary": "读取完成"/)).toBeInTheDocument();
   });
 
@@ -1343,7 +1116,10 @@ describe("AgentDock origin/main visible fidelity", () => {
             parsedAction: {
               action: "tool_call",
               tool: "delegate_to_agent",
-              arguments: { role: "story_planning_agent", task: "读取故事文件" },
+              arguments: {
+                role: "visual_development_agent",
+                task: "读取故事文件",
+              },
             },
           },
           createdAt: "now",
@@ -1362,7 +1138,7 @@ describe("AgentDock origin/main visible fidelity", () => {
           data: {
             actionId: "delegate-native-tool",
             tool: "delegate_to_agent",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             roleDisplayName: "故事规划",
             delegationText: "读取故事文件",
           },
@@ -1377,7 +1153,7 @@ describe("AgentDock origin/main visible fidelity", () => {
           data: {
             parentActionId: "delegate-native-tool",
             runId: "run-native-tool",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "message-native-tool",
             toolCallId: "call-native-tool",
             tool: "read_project_file",
@@ -1410,7 +1186,7 @@ describe("AgentDock origin/main visible fidelity", () => {
         data: {
           parentActionId: "delegate-native-tool",
           runId: "run-native-tool",
-          role: "story_planning_agent",
+          role: "visual_development_agent",
           messageId: "message-native-tool",
           toolCallId: "call-native-tool",
           tool: "read_project_file",
@@ -1438,7 +1214,7 @@ describe("AgentDock origin/main visible fidelity", () => {
           data: {
             parentActionId: "delegate-native-tool",
             runId: "run-native-tool",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "message-native-tool",
             toolCallId: "call-native-tool",
             tool: "read_project_file",
@@ -1456,7 +1232,7 @@ describe("AgentDock origin/main visible fidelity", () => {
           data: {
             parentActionId: "delegate-native-tool",
             runId: "run-native-tool",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "message-native-tool",
             toolCallId: "call-native-tool",
             tool: "read_project_file",
@@ -1498,9 +1274,9 @@ describe("AgentDock origin/main visible fidelity", () => {
               action: "tool_call",
               tool: "delegate_to_agent",
               arguments: {
-                role: "story_planning_agent",
-                target_refs: ["section:s1"],
-                task: "读取故事文件",
+                role: "visual_development_agent",
+                target_refs: ["timeline:main"],
+                task: "读取项目文件",
               },
             },
           },
@@ -1520,10 +1296,10 @@ describe("AgentDock origin/main visible fidelity", () => {
           data: {
             actionId: "delegate-function",
             tool: "delegate_to_agent",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             roleDisplayName: "故事规划",
-            delegationText: "读取故事文件",
-            targetRefs: ["section:s1"],
+            delegationText: "读取项目文件",
+            targetRefs: ["timeline:main"],
           },
         },
         {
@@ -1536,7 +1312,7 @@ describe("AgentDock origin/main visible fidelity", () => {
           data: {
             parentActionId: "delegate-function",
             runId: "run-function",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "message-function",
             deltaIndex: 0,
             delta:
@@ -1568,7 +1344,7 @@ describe("AgentDock origin/main visible fidelity", () => {
         data: {
           parentActionId: "delegate-function",
           runId: "run-function",
-          role: "story_planning_agent",
+          role: "visual_development_agent",
           messageId: "message-function",
           deltaIndex: 1,
           delta: 'outline.md"}</parameter></function></tool_call>',
@@ -1591,7 +1367,7 @@ describe("AgentDock origin/main visible fidelity", () => {
           data: {
             parentActionId: "delegate-function",
             runId: "run-function",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             messageId: "message-function",
             text: '<function=read_project_file><parameter=arguments>{"path":"story/outline.md"}</parameter></function></tool_call>',
             finishReason: "tool_call",
@@ -1607,7 +1383,7 @@ describe("AgentDock origin/main visible fidelity", () => {
           data: {
             parentActionId: "delegate-function",
             runId: "run-function",
-            role: "story_planning_agent",
+            role: "visual_development_agent",
             toolCallId: "function-tool",
             tool: "read_project_file",
             arguments: { path: "story/outline.md" },
@@ -1690,7 +1466,7 @@ describe("AgentDock origin/main visible fidelity", () => {
         data: {
           parentActionId: "delegate-function",
           runId: "run-function",
-          role: "story_planning_agent",
+          role: "visual_development_agent",
           toolCallId: "function-tool",
           tool: "read_project_file",
           result: { lines: 800 },
@@ -1733,8 +1509,8 @@ describe("AgentDock origin/main visible fidelity", () => {
               tool: "delegate_to_agent",
               arguments: {
                 role: "ai_editing_director",
-                target_refs: ["unit:u1"],
-                task: "根据当前素材完成 Unit 1 的剪辑。",
+                target_refs: ["timeline:main"],
+                task: "根据当前素材完成主 Timeline 的剪辑。",
               },
             },
           },
@@ -1756,8 +1532,8 @@ describe("AgentDock origin/main visible fidelity", () => {
             tool: "delegate_to_agent",
             role: "ai_editing_director",
             roleDisplayName: "AI 剪辑导演",
-            delegationText: "根据当前素材完成 Unit 1 的剪辑。",
-            targetRefs: ["unit:u1"],
+            delegationText: "根据当前素材完成主 Timeline 的剪辑。",
+            targetRefs: ["timeline:main"],
           },
         },
         {
@@ -1785,8 +1561,8 @@ describe("AgentDock origin/main visible fidelity", () => {
             runId: "run-service-1",
             role: "ai_editing_director",
             roleDisplayName: "AI 剪辑导演",
-            delegationText: "根据当前素材完成 Unit 1 的剪辑。",
-            targetRefs: ["unit:u1"],
+            delegationText: "根据当前素材完成主 Timeline 的剪辑。",
+            targetRefs: ["timeline:main"],
           },
         },
       ]),
@@ -2037,8 +1813,8 @@ describe("AgentDock origin/main visible fidelity", () => {
             parsedAction: {
               action: "plan",
               summary: "先完成故事规划",
-              steps: ["1. 拆分 Section", "2、规划 Unit"],
-              scope: ["section:s1"],
+              steps: ["1. 建立 Element", "2、安排重叠关系"],
+              scope: ["timeline:main"],
             },
           },
           createdAt: "now",
@@ -2054,8 +1830,8 @@ describe("AgentDock origin/main visible fidelity", () => {
           at: "now",
           data: {
             summary: "先完成故事规划",
-            steps: ["1. 拆分 Section", "2、规划 Unit"],
-            scope: ["section:s1"],
+            steps: ["1. 建立 Element", "2、安排重叠关系"],
+            scope: ["timeline:main"],
           },
         },
       ],
@@ -2080,10 +1856,10 @@ describe("AgentDock origin/main visible fidelity", () => {
       "border-[var(--color-accent)]/30",
       "bg-[var(--color-accent-soft)]",
     );
-    expect(screen.getByText("拆分 Section")).toBeInTheDocument();
-    expect(screen.getByText("规划 Unit")).toBeInTheDocument();
-    expect(screen.queryByText("1. 拆分 Section")).not.toBeInTheDocument();
-    expect(screen.queryByText("2、规划 Unit")).not.toBeInTheDocument();
+    expect(screen.getByText("建立 Element")).toBeInTheDocument();
+    expect(screen.getByText("安排重叠关系")).toBeInTheDocument();
+    expect(screen.queryByText("1. 建立 Element")).not.toBeInTheDocument();
+    expect(screen.queryByText("2、安排重叠关系")).not.toBeInTheDocument();
     expect(screen.queryByText(/"action"/)).not.toBeInTheDocument();
     expect(
       responseFlow?.querySelector("[data-agent-thinking]"),

@@ -17,10 +17,6 @@ from services.file_agent_runtime.subagents import (
 from services.project_files.models import Project
 
 
-_INACTIVE_ROLE_NAMES = {
-    "story_planning_agent",
-    "review_consistency_agent",
-}
 _INACTIVE_STATE_WORDS = {
     "已取消",
     "已禁用",
@@ -53,9 +49,9 @@ def _active_prompt_texts() -> list[str]:
     return texts
 
 
-def test_active_prompts_do_not_describe_inactive_roles_or_states() -> None:
+def test_active_prompts_do_not_describe_inactive_states() -> None:
     combined = "\n".join(_active_prompt_texts())
-    for token in _INACTIVE_ROLE_NAMES | _INACTIVE_STATE_WORDS:
+    for token in _INACTIVE_STATE_WORDS:
         assert token not in combined
 
 

@@ -4,10 +4,7 @@
 """File-native Project lifecycle routes.
 
 ``project.json`` and its Project-local ``runtime/`` tree are the only durable
-authorities used here.  The compatibility response still exposes the legacy
-``approvedRevisionId`` field so existing clients can navigate after creation;
-the value names the initial Project snapshot and is not a second revision
-store.
+authorities used here.
 """
 
 from __future__ import annotations
@@ -78,7 +75,7 @@ def _stable_id(kind: str, identity: str) -> str:
     return f"{kind}-{uuid5(NAMESPACE_URL, f'qwenpaw-creator:{kind}:{identity}').hex}"
 
 
-def _compat_snapshot_id(project_id: str, generation: int = 0) -> str:
+def _project_snapshot_id(project_id: str, generation: int = 0) -> str:
     return f"project-snapshot-{uuid5(NAMESPACE_URL, f'{project_id}:{generation}').hex}"
 
 
@@ -159,13 +156,13 @@ def _existing_bootstrap(
         raise ConflictError("Project 已存在但缺少文件创建幂等记录")
     if create_metadata.get("requestHash") != request_hash:
         raise ConflictError("clientRequestId 已用于不同 Project payload")
-    approved_snapshot_id = create_metadata.get("approvedSnapshotId")
+    project_snapshot_id = create_metadata.get("projectSnapshotId")
     stored_response = create_metadata.get("response")
     if (
         session.session_id != expected_session_id
         or defaults[0].conversation_id != expected_conversation_id
-        or not isinstance(approved_snapshot_id, str)
-        or not approved_snapshot_id
+        or not isinstance(project_snapshot_id, str)
+        or not project_snapshot_id
     ):
         raise StorageIntegrityError("Project Runtime 创建记录与确定性身份不一致")
     try:
@@ -176,7 +173,7 @@ def _existing_bootstrap(
         response.project_id != project_id
         or response.creator_session_id != expected_session_id
         or response.conversation_id != expected_conversation_id
-        or response.approved_revision_id != approved_snapshot_id
+        or response.project_snapshot_id != project_snapshot_id
         or response.header.get("id") != project_id
     ):
         raise StorageIntegrityError("Project 创建响应快照身份不一致")
@@ -241,7 +238,7 @@ async def create_project(
     conversation_id = _stable_id("conversation", client_request_id)
     goal_id = _stable_id("goal", client_request_id)
     message_id = _stable_id("message", client_request_id)
-    approved_snapshot_id = _compat_snapshot_id(project_id)
+    project_snapshot_id = _project_snapshot_id(project_id)
     project = Project.new(
         project_id=project_id,
         name=request.name.strip(),
@@ -253,7 +250,7 @@ async def create_project(
         projectId=project_id,
         creatorSessionId=session_id,
         conversationId=conversation_id,
-        approvedRevisionId=approved_snapshot_id,
+        projectSnapshotId=project_snapshot_id,
         header=_header(project),
     )
 
@@ -276,7 +273,7 @@ async def create_project(
                         "projectCreate": {
                             "clientRequestId": client_request_id,
                             "requestHash": request_hash,
-                            "approvedSnapshotId": approved_snapshot_id,
+                            "projectSnapshotId": project_snapshot_id,
                             "response": initial_response.model_dump(
                                 mode="json",
                                 by_alias=True,

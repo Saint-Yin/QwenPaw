@@ -147,12 +147,6 @@ def _session_view(session: Any) -> dict[str, Any]:
         "projectId": session.project_id,
         "status": session.status.value,
         "activeGoalId": session.active_goal_id,
-        # A file-native Runtime run is the review/interrupt boundary that
-        # replaces the old SQL transaction identity in this compatibility DTO.
-        # File-native reviews are discovered from Runtime review records by
-        # FileProjectReviewPanel.  Exposing an Agent run as the legacy SQL-era
-        # transaction id would make the UI call removed transaction routes.
-        "activeTransactionId": None,
         "lastMessageSeq": session.last_message_seq,
         "lastEventSeq": session.last_event_seq,
         "lastConsumedMessageSeq": session.last_consumed_message_seq,

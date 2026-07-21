@@ -52,11 +52,9 @@ _TASK_PRESENTATION: dict[TaskKind, tuple[str, str]] = {
 
 _RUN_PRESENTATION: dict[SpecialistRole, tuple[str, str]] = {
     SpecialistRole.SOURCE_INTELLIGENCE: ("source_intelligence", "素材理解"),
-    SpecialistRole.STORY_PLANNING: ("story_planning", "故事策划"),
     SpecialistRole.VISUAL_DEVELOPMENT: ("visual_development", "视觉开发"),
     SpecialistRole.R2V_GENERATION_DIRECTOR: ("timeline_render", "视频生成"),
     SpecialistRole.AI_EDITING_DIRECTOR: ("timeline_edit", "AI 剪辑"),
-    SpecialistRole.REVIEW_CONSISTENCY: ("review", "一致性审阅"),
 }
 
 

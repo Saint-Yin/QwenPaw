@@ -206,7 +206,7 @@ def seed_one(
         "projectId": project_id,
         "creatorSessionId": project["creatorSessionId"],
         "conversationId": project["conversationId"],
-        "approvedRevisionId": project["approvedRevisionId"],
+        "projectSnapshotId": project["projectSnapshotId"],
         "assetVersionId": version_id,
         "messageSeq": accepted["messageSeq"],
         "appendState": accepted["appendState"],

@@ -26,11 +26,9 @@ class ShotFraming(StrEnum):
 
 class SpecialistRole(StrEnum):
     SOURCE_INTELLIGENCE = "source_intelligence_agent"
-    STORY_PLANNING = "story_planning_agent"
     VISUAL_DEVELOPMENT = "visual_development_agent"
     R2V_GENERATION_DIRECTOR = "r2v_generation_director"
     AI_EDITING_DIRECTOR = "ai_editing_director"
-    REVIEW_CONSISTENCY = "review_consistency_agent"
 
 
 class CreatorSessionStatus(StrEnum):
@@ -113,39 +111,10 @@ class TaskKind(StrEnum):
     COMPOSE = "compose"
 
 
-class ReviewDecision(StrEnum):
-    PENDING = "PENDING"
-    ACCEPTED_APPLIED = "ACCEPTED_APPLIED"
-    REJECTED = "REJECTED"
-    REVISION_REQUESTED = "REVISION_REQUESTED"
-    SUPERSEDED_BY_USER_EDIT = "SUPERSEDED_BY_USER_EDIT"
-    CARRIED_FORWARD_TO_NEXT_ROUND = "CARRIED_FORWARD_TO_NEXT_ROUND"
-
-
-class ReviewDecisionCommand(StrEnum):
-    ACCEPT = "ACCEPT"
-    REJECT = "REJECT"
-    REVISE = "REVISE"
-
-
-class UiPhase(StrEnum):
-    IDLE = "idle"
-    EXECUTING = "executing"
-    INTERRUPTING = "interrupting"
-    WAITING_INPUT = "waiting_input"
-    WAITING_AUTHORIZATION = "waiting_authorization"
-    FINALIZING = "finalizing"
-    WAITING_REVIEW = "waiting_review"
-    RESUMING = "resuming"
-    CANCELLED = "cancelled"
-    ERROR = "error"
-
-
 class CreatorProgressPhase(StrEnum):
     SOURCE_INGEST = "source_ingest"
     SOURCE_INTELLIGENCE = "source_intelligence"
     CREATIVE_STRATEGY = "creative_strategy"
-    STORY_PLANNING = "story_planning"
     VISUAL_DEVELOPMENT = "visual_development"
     TIMELINE_EDIT = "timeline_edit"
     TIMELINE_RENDER = "timeline_render"

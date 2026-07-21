@@ -1,11 +1,8 @@
 import { LeftOutlined } from "@ant-design/icons";
 import { Tooltip } from "antd";
 import { Images, LayoutList } from "lucide-react";
-import { Link, useParams, usePathname, useRouter } from "@/routing/navigation";
-import {
-  presentationOf,
-  useWorkspaceViewStore,
-} from "@/store/workspaceViewStore";
+import { Link, useParams, usePathname } from "@/routing/navigation";
+import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import Breadcrumb from "./Breadcrumb";
 import ModelBadges from "@/components/creator/ModelBadges";
 
@@ -21,15 +18,13 @@ function activeTabKey(routeSection: string): string {
 export default function TopNav() {
   const { id = "" } = useParams();
   const pathname = usePathname();
-  const router = useRouter();
-  const project = presentationOf(
-    useWorkspaceViewStore((state) => state.header),
-  );
+  const project = useProjectSnapshotStore((state) => state.project);
 
   if (!project) return null;
   const routeSection = pathname.split("/").filter(Boolean)[2] || "plan";
   const activeKey = activeTabKey(routeSection);
-  const masterScript = project.masterScript ?? "";
+  const masterScript =
+    project.strategy.creative_brief || project.description || "";
   const masterScriptPreview =
     masterScript.length > 20 ? `${masterScript.slice(0, 20)}…` : masterScript;
 
@@ -66,10 +61,9 @@ export default function TopNav() {
           const isActive = tab.key === activeKey;
           const Icon = tab.icon;
           return (
-            <button
+            <Link
               key={tab.key}
-              type="button"
-              onClick={() => router.push(`/project/${id}/${tab.key}`)}
+              href={`/project/${id}/${tab.key}`}
               className={`inline-flex h-[31px] items-center gap-1.5 rounded-full px-3 text-xs font-bold transition-colors md:px-4 ${
                 isActive
                   ? "bg-[var(--color-accent-soft)] text-[var(--color-text-primary)] shadow-[inset_0_0_0_1px_rgba(255,127,22,0.18)]"
@@ -78,7 +72,7 @@ export default function TopNav() {
             >
               <Icon className="h-3.5 w-3.5" />
               {tab.label}
-            </button>
+            </Link>
           );
         })}
       </nav>

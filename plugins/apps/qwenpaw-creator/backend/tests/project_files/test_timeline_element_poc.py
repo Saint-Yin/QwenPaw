@@ -33,7 +33,11 @@ from services.project_files.models import (
     TransitionCreation,
 )
 from services.runtime_files.models import ChangeOrigin, ReviewPolicy
+
+# pylint: disable=no-name-in-module
 from utils.paths import unique_task_work_path
+
+# pylint: enable=no-name-in-module
 
 
 pytestmark = pytest.mark.unit

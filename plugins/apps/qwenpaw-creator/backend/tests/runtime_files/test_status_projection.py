@@ -83,7 +83,7 @@ def test_idle_status_reuses_latest_durable_completion() -> None:
         run_id="run-1",
         project_id="project-1",
         round_id="round-1",
-        role=SpecialistRole.STORY_PLANNING,
+        role=SpecialistRole.VISUAL_DEVELOPMENT,
         status=SpecialistRunStatus.SUCCEEDED,
         target_refs=["timeline:timeline:main"],
         input_generation=0,
@@ -91,6 +91,6 @@ def test_idle_status_reuses_latest_durable_completion() -> None:
     )
     view = build_agent_status_bar(_session(), runs=[run])
 
-    assert view["progress"]["label"] == "故事策划已完成"
+    assert view["progress"]["label"] == "视觉开发已完成"
     assert view["progress"]["timelineId"] == "timeline:main"
     assert "activity" not in view

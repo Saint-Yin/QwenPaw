@@ -54,7 +54,7 @@ describe("creator task view refresh ordering", () => {
       items: [
         {
           id: "run-1",
-          role: "review_consistency_agent",
+          role: "ai_editing_director",
           displayName: "一致性质检 Agent",
           status: "SUCCEEDED",
           targetRefs: ["project:p1"],

@@ -5,7 +5,7 @@ import type {
   ExecutionAuthorizationApproval,
   ExecutionAuthorizationView,
 } from "@/contracts/creator";
-import { useReviewManifestStore } from "@/store/reviewManifestStore";
+import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationStore";
 
 const BUTTON_BASE =
   "rounded-md px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50";
@@ -41,8 +41,8 @@ export default function ExecutionAuthorizationCard({
 }: {
   authorization: ExecutionAuthorizationView;
 }) {
-  const approve = useReviewManifestStore((state) => state.approveAuthorization);
-  const decline = useReviewManifestStore((state) => state.declineAuthorization);
+  const approve = useExecutionAuthorizationStore((state) => state.approve);
+  const decline = useExecutionAuthorizationStore((state) => state.decline);
   const [busy, setBusy] = useState(false);
   if (authorization.status !== "PENDING") return null;
 

@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 from pydantic import Field
 
-from domain.enums import CreatorProgressPhase, UiPhase
+from domain.enums import CreatorProgressPhase
 
 from .common import StrictModel
-
-T = TypeVar("T")
 
 
 class CreatorTaskProgress(StrictModel):
@@ -36,22 +34,3 @@ class AgentStatusBarView(StrictModel):
     progress: CreatorTaskProgress
     activity: dict[str, Any] | None = None
     badges: list[AgentStatusBadge] = Field(default_factory=list)
-
-
-class ViewEnvelope(StrictModel, Generic[T]):
-    project_id: str = Field(alias="projectId")
-    approved_revision_id: str = Field(alias="approvedRevisionId")
-    working_branch_id: str | None = Field(None, alias="workingBranchId")
-    working_head: str | None = Field(None, alias="workingHead")
-    review_revision_id: str | None = Field(None, alias="reviewRevisionId")
-    active_transaction_id: str | None = Field(
-        None,
-        alias="activeTransactionId",
-    )
-    ui_phase: UiPhase = Field(alias="uiPhase")
-    manual_edit_overlay: dict[str, Any] | None = Field(
-        None,
-        alias="manualEditOverlay",
-    )
-    agent_status_bar: AgentStatusBarView = Field(alias="agentStatusBar")
-    view: T

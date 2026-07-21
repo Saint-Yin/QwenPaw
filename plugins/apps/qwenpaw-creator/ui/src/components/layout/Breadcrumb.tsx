@@ -5,89 +5,31 @@ import {
   usePathname,
   useSearchParams,
 } from "@/routing/navigation";
-import {
-  presentationOf,
-  useWorkspaceViewStore,
-} from "@/store/workspaceViewStore";
+import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
+import { selectPrimaryTimeline } from "@/selectors/timelineElementSelectors";
 
 interface Crumb {
   label: string;
   path?: string;
 }
 
-function unitDisplayName(unit: { number: number; title?: string }): string {
-  return `${String(unit.number).padStart(2, "0")} ${
-    unit.title || `生成单元 ${String(unit.number).padStart(2, "0")}`
-  }`;
-}
-
 export function useBreadcrumbs(): Crumb[] {
   const { id: projectId } = useParams();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const plan = presentationOf(useWorkspaceViewStore((state) => state.plan));
-  const assets = presentationOf(useWorkspaceViewStore((state) => state.assets));
+  const project = useProjectSnapshotStore((state) => state.project);
+  const timeline = selectPrimaryTimeline(project);
 
   if (!projectId) return [];
   const base = `/project/${projectId}`;
   const parts = pathname.split("/").filter(Boolean);
   const routeSection = parts[2] || "";
-  const findUnit = (unitId: string) => {
-    for (const section of plan?.sections || []) {
-      const unit = section.units.find((item) => item.id === unitId);
-      if (unit) return { section, unit };
-    }
-    return undefined;
-  };
-
   if (routeSection === "plan") {
     const crumbs: Crumb[] = [{ label: "视频方案", path: `${base}/plan` }];
-    if (parts[3] === "unit" && parts[4]) {
-      const located = findUnit(parts[4]);
-      if (located) {
-        crumbs.push({
-          label: `${String(located.section.number).padStart(2, "0")} ${
-            located.section.title
-          }`,
-          path: `${base}/plan?section=${encodeURIComponent(
-            located.section.id,
-          )}`,
-        });
-      }
-      crumbs.push({
-        label: located ? unitDisplayName(located.unit) : "生成单元",
-        path: `${base}/plan?unit=${encodeURIComponent(parts[4])}`,
-      });
-      crumbs.push({
-        label: searchParams.get("review") ? "深度审阅" : "制作工作台",
-      });
-      return crumbs;
-    }
-
-    const unitId = searchParams.get("unit");
-    const sectionId = searchParams.get("section");
-    if (unitId) {
-      const located = findUnit(unitId);
-      if (located) {
-        crumbs.push({
-          label: `${String(located.section.number).padStart(2, "0")} ${
-            located.section.title
-          }`,
-          path: `${base}/plan?section=${encodeURIComponent(
-            located.section.id,
-          )}`,
-        });
-      }
-      crumbs.push({
-        label: located ? unitDisplayName(located.unit) : "生成单元",
-      });
-    } else if (sectionId) {
-      const section = plan?.sections.find((item) => item.id === sectionId);
-      crumbs.push({
-        label: section
-          ? `${String(section.number).padStart(2, "0")} ${section.title}`
-          : "Section",
-      });
+    const elementId = searchParams.get("element");
+    if (elementId) {
+      const element = timeline?.elements_by_id[elementId];
+      crumbs.push({ label: element?.label || elementId });
     }
     return crumbs;
   }
@@ -96,13 +38,9 @@ export function useBreadcrumbs(): Crumb[] {
     const crumbs: Crumb[] = [{ label: "资产库", path: `${base}/assets` }];
     const selectedId = searchParams.get("select") || searchParams.get("asset");
     if (selectedId) {
-      const selected = [
-        ...(assets?.attachedSources || []),
-        ...(assets?.availableAssets || []),
-        ...(assets?.visualAssets || []),
-      ].find(
-        (item) => ("assetId" in item ? item.assetId : item.id) === selectedId,
-      );
+      const selected =
+        project?.assets.source_versions_by_id[selectedId] ??
+        project?.assets.artifact_versions_by_id[selectedId];
       if (selected) crumbs.push({ label: selected.name });
     }
     return crumbs;

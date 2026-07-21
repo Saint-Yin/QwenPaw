@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# flake8: noqa: E501
 # pylint: disable=arguments-out-of-order
 from __future__ import annotations
 
@@ -88,7 +89,7 @@ def test_field_blocks_conflict_on_ancestor_and_expire_by_ttl(tmp_path):
     )
     title = store.acquire(
         project_id="project-1",
-        json_pointer="/story/sections/section-1",
+        json_pointer="/timelines/items/timeline:main/elements_by_id/element-1",
         owner_kind="user",
         owner_id="browser-1",
         base_field_hash="sha256:before",
@@ -98,7 +99,7 @@ def test_field_blocks_conflict_on_ancestor_and_expire_by_ttl(tmp_path):
     with pytest.raises(FieldBlockConflictError) as caught:
         store.acquire(
             project_id="project-1",
-            json_pointer="/story/sections/section-1/title",
+            json_pointer="/timelines/items/timeline:main/elements_by_id/element-1/label",
             owner_kind="agent",
             owner_id="run-1",
             base_field_hash="sha256:before",
@@ -108,7 +109,7 @@ def test_field_blocks_conflict_on_ancestor_and_expire_by_ttl(tmp_path):
 
     sibling = store.acquire(
         project_id="project-1",
-        json_pointer="/story/sections/section-10/title",
+        json_pointer="/timelines/items/timeline:main/elements_by_id/element-10/label",
         owner_kind="agent",
         owner_id="run-1",
         base_field_hash="sha256:other",

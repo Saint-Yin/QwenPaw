@@ -14,7 +14,10 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+# pylint: disable=no-name-in-module
 from utils.logger import setup_logger
+
+# pylint: enable=no-name-in-module
 
 logger = setup_logger("services.media_files.overlay")
 

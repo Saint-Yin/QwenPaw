@@ -67,11 +67,9 @@ class ExecutionAuthorizationApprovalRequest(
 
 _ROLE_LABELS = {
     "source_intelligence_agent": "素材理解",
-    "story_planning_agent": "故事策划",
     "visual_development_agent": "视觉开发",
     "r2v_generation_director": "视频生成",
     "ai_editing_director": "AI 剪辑",
-    "review_consistency_agent": "一致性审阅",
 }
 
 
