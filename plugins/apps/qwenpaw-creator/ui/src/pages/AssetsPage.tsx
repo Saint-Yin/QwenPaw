@@ -107,6 +107,18 @@ function artifactMedia(
   return file;
 }
 
+// 同一份底层内容（checksum 相同）只保留一张卡片，排在前面的语义卡片
+// （如视觉实体）优先；不依赖任何归属命名约定。
+function dedupeByChecksum(items: AssetItem[]): AssetItem[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (!item.checksum) return true;
+    if (seen.has(item.checksum)) return false;
+    seen.add(item.checksum);
+    return true;
+  });
+}
+
 function assetItems(project: ProjectDocument): AssetItem[] {
   const sources = Object.values(project.assets.source_versions_by_id).map(
     (source): AssetItem => ({
@@ -184,6 +196,7 @@ function assetItems(project: ProjectDocument): AssetItem[] {
           ? getArtifactVersionMediaUrl(artifact.version_id)
           : undefined,
         stale: artifact?.stale,
+        checksum: artifact?.checksum,
         ownerRef: artifact?.owner_ref,
         provenanceRefs: [],
         metadata: {
@@ -195,7 +208,7 @@ function assetItems(project: ProjectDocument): AssetItem[] {
         raw: entity,
       };
     });
-  return [...visuals, ...sources, ...artifacts].sort(
+  return dedupeByChecksum([...visuals, ...sources, ...artifacts]).sort(
     (left, right) =>
       (right.createdAt || "").localeCompare(left.createdAt || "") ||
       left.name.localeCompare(right.name),
