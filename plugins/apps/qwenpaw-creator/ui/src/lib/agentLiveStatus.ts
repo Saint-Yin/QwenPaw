@@ -6,7 +6,11 @@ import type {
 } from "@/contracts/creator";
 import type { SubagentActivity } from "@/store/creatorSessionStore";
 import type { ToolCallPresentation } from "@/lib/creatorMessagePresentation";
-import { creatorRoleLabel, creatorTargetLabel, taskKindLabel } from "./creatorPresentation";
+import {
+  creatorRoleLabel,
+  creatorTargetLabel,
+  taskKindLabel,
+} from "./creatorPresentation";
 import { taskProgressPercent } from "./taskPresentation";
 
 // 与 AgentStatusBar/agentWorkingSelectors 一致的"Agent 正在工作"会话口径。
@@ -182,7 +186,15 @@ function activeMainToolLabel(
     if (call.status !== "started") continue;
     if (call.tool === "delegate_to_agent") {
       const activity = activities[call.actionId];
+      // Subagent still running → show its working label.
       if (activity && !activity.completed) return roleWorkingLabel(activity);
+      // Subagent already finished (incl. cancelled) → defer to the activity
+      // card, which renders the terminal state. Returning null here avoids
+      // showing "正在安排" for a delegation that has already ended, which
+      // would contradict the card's "已取消/已完成" status.
+      if (activity && activity.completed) return null;
+      // No subagent activity yet → the delegation was just issued; show a
+      // brief "正在安排" until the specialist reports in.
       const args = isRecord(call.arguments) ? call.arguments : undefined;
       const role = typeof args?.role === "string" ? args.role : "";
       return role
