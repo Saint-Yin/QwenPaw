@@ -66,9 +66,7 @@ function refOfField(field: string | null): string | null {
 }
 
 function shouldIgnoreSelectionIn(element: Element | null): boolean {
-  return Boolean(
-    element?.closest?.("[data-agent-dock], [data-agent-status-bar]"),
-  );
+  return Boolean(element?.closest?.("[data-agent-dock]"));
 }
 
 export default function SelectionToolbar() {

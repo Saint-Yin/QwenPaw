@@ -1,0 +1,325 @@
+import type {
+  AgentStatusBarView,
+  CreatorSessionView,
+  ProjectDocument,
+  TaskView,
+} from "@/contracts/creator";
+import type { SubagentActivity } from "@/store/creatorSessionStore";
+import type { ToolCallPresentation } from "@/lib/creatorMessagePresentation";
+import { creatorRoleLabel, creatorTargetLabel, taskKindLabel } from "./creatorPresentation";
+import { taskProgressPercent } from "./taskPresentation";
+
+// 与 AgentStatusBar/agentWorkingSelectors 一致的"Agent 正在工作"会话口径。
+const WORKING_SESSION_STATUSES = new Set([
+  "RUNNING",
+  "RESUMING",
+  "WAITING_RUNTIME",
+  "INTERRUPT_REQUESTED",
+]);
+
+const ACTIVE_TASK_STATUSES = new Set(["QUEUED", "RUNNING"]);
+
+export type AgentLiveState = "working" | "stopping" | "waiting" | "idle";
+
+export interface AgentLiveStatus {
+  state: AgentLiveState;
+  label: string;
+  /** 仅当存在可量化进度（如素材入库）时给出 0-100；否则为 null 不展示进度。 */
+  progressPercent: number | null;
+}
+
+export interface AgentLiveStatusInput {
+  session: CreatorSessionView | null;
+  agentStatusBar: AgentStatusBarView | null;
+  stopping: boolean;
+  hasQueuedInput: boolean;
+  subagentActivities: Record<string, SubagentActivity>;
+  toolCalls: ToolCallPresentation[];
+  tasks: TaskView[];
+  project: ProjectDocument | null;
+}
+
+// 工具名 → 进行时子状态文案。生成类工具（image/r2v）单独结合 targetRef 细化。
+const RUNNING_TOOL_LABELS: Record<string, string> = {
+  read_project: "正在查看项目…",
+  read_project_file: "正在阅读素材分析…",
+  jq_project: "正在修改项目…",
+  elements_at: "正在查看时间轴…",
+  ground_prompt_context: "正在核对画面上下文…",
+  analyze_source_media: "素材理解中…",
+  source_intelligence: "素材理解中…",
+  transcribe_source_audio: "素材音频转写中…",
+  commit_source_intelligence: "素材理解写入中…",
+  ai_edit: "剪辑执行中…",
+};
+
+// 角色 → 子状态文案：子 Agent 活跃但暂无具体工具输出时的进行时描述。
+const ROLE_WORKING_LABELS: Record<string, string> = {
+  source_intelligence_agent: "素材理解中…",
+  visual_development_agent: "画面设计中…",
+  v_generation_director: "视频生成中…",
+  ai_editing_director: "剪辑制作中…",
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toolTargetRef(
+  args: Record<string, unknown> | undefined,
+  fallbackRefs: string[] = [],
+): string {
+  const direct = args?.targetRef ?? args?.target_ref;
+  if (typeof direct === "string" && direct) return direct;
+  return fallbackRefs[0] ?? "";
+}
+
+/** 目标名过长时在名字内部截断，保留句尾的“分镜图/画面”等关键词。 */
+const MAX_TARGET_NAME_LENGTH = 10;
+
+function clampTargetName(name: string): string {
+  return name.length > MAX_TARGET_NAME_LENGTH
+    ? `${name.slice(0, MAX_TARGET_NAME_LENGTH - 1)}…`
+    : name;
+}
+
+/** 把 creatorTargetLabel 的兜底文案视为"未解析"，避免出现「时间线内容」分镜图。 */
+function resolvedTargetName(
+  ref: string,
+  project: ProjectDocument | null,
+): string | null {
+  if (!ref) return null;
+  const label = creatorTargetLabel(ref, project);
+  const fallbacks = new Set([
+    "当前项目",
+    "时间线内容",
+    "当前素材",
+    "素材版本",
+    "生成结果",
+    "素材文件",
+  ]);
+  return fallbacks.has(label) ? null : clampTargetName(label);
+}
+
+function imageGenerationLabel(
+  ref: string,
+  project: ProjectDocument | null,
+): string {
+  const name = resolvedTargetName(ref, project);
+  if (ref.startsWith("element:") || ref.startsWith("timeline:"))
+    return name ? `正在生成「${name}」分镜图…` : "正在生成分镜图…";
+  if (ref.startsWith("asset") || ref.startsWith("artifact"))
+    return name ? `正在生成「${name}」画面…` : "正在生成视觉资产…";
+  return "正在生成画面…";
+}
+
+function r2vGenerationLabel(
+  ref: string,
+  project: ProjectDocument | null,
+): string {
+  const name = resolvedTargetName(ref, project);
+  return name ? `正在生成「${name}」视频…` : "正在生成视频…";
+}
+
+function runningToolLabel(
+  tool: string,
+  args: Record<string, unknown> | undefined,
+  fallbackRefs: string[],
+  project: ProjectDocument | null,
+): string | null {
+  if (tool === "image_generation")
+    return imageGenerationLabel(toolTargetRef(args, fallbackRefs), project);
+  if (tool === "r2v_generation")
+    return r2vGenerationLabel(toolTargetRef(args, fallbackRefs), project);
+  return RUNNING_TOOL_LABELS[tool] ?? null;
+}
+
+function subagentRoleName(activity: SubagentActivity): string {
+  return activity.roleDisplayName || creatorRoleLabel(activity.role);
+}
+
+/** 角色级子状态：优先用预设文案，未知角色降级为「角色」工作中。 */
+function roleWorkingLabel(activity: SubagentActivity): string {
+  return (
+    ROLE_WORKING_LABELS[activity.role] ??
+    `「${subagentRoleName(activity)}」工作中…`
+  );
+}
+
+/** 未完成子 Agent 里最新一个仍在执行的工具（含所属活动的 targetRefs 兜底）。 */
+function activeSubagentToolLabel(
+  activities: Record<string, SubagentActivity>,
+  project: ProjectDocument | null,
+): string | null {
+  let latestSeq = -1;
+  let latestLabel: string | null = null;
+  Object.values(activities).forEach((activity) => {
+    if (activity.completed) return;
+    Object.values(activity.tools).forEach((tool) => {
+      if (tool.status !== "started" || tool.firstEventSeq <= latestSeq) return;
+      const label = runningToolLabel(
+        tool.tool,
+        tool.arguments,
+        activity.targetRefs,
+        project,
+      );
+      if (!label) return;
+      latestSeq = tool.firstEventSeq;
+      latestLabel = label;
+    });
+  });
+  return latestLabel;
+}
+
+/** 主 Agent 最新一个仍在执行的工具；delegate 交由角色文案表达。 */
+function activeMainToolLabel(
+  toolCalls: ToolCallPresentation[],
+  activities: Record<string, SubagentActivity>,
+  project: ProjectDocument | null,
+): string | null {
+  for (let index = toolCalls.length - 1; index >= 0; index -= 1) {
+    const call = toolCalls[index];
+    if (call.status !== "started") continue;
+    if (call.tool === "delegate_to_agent") {
+      const activity = activities[call.actionId];
+      if (activity && !activity.completed) return roleWorkingLabel(activity);
+      const args = isRecord(call.arguments) ? call.arguments : undefined;
+      const role = typeof args?.role === "string" ? args.role : "";
+      return role
+        ? `正在安排「${creatorRoleLabel(role)}」…`
+        : "正在安排专业制作…";
+    }
+    const label = runningToolLabel(call.tool, call.arguments, [], project);
+    if (label) return label;
+  }
+  return null;
+}
+
+/** 运行中的 Runtime 任务（素材入库/视频生成等长任务）。 */
+function activeTask(tasks: TaskView[]): TaskView | null {
+  const running = tasks.filter((task) => ACTIVE_TASK_STATUSES.has(task.status));
+  if (running.length === 0) return null;
+  return [...running].sort((left, right) =>
+    (left.updatedAt ?? "").localeCompare(right.updatedAt ?? ""),
+  )[running.length - 1];
+}
+
+function activeTaskLabel(
+  task: TaskView,
+  project: ProjectDocument | null,
+): string {
+  const name = resolvedTargetName(task.targetRef, project);
+  const kind = taskKindLabel(task.kind);
+  return name ? `「${name}」${kind}中…` : `${kind}中…`;
+}
+
+function firstIncompleteActivity(
+  activities: Record<string, SubagentActivity>,
+): SubagentActivity | null {
+  const pending = Object.values(activities)
+    .filter((activity) => !activity.completed)
+    .sort((left, right) => right.firstEventSeq - left.firstEventSeq);
+  return pending[0] ?? null;
+}
+
+/** 仅认可可量化进度：数值型任务进度（如素材入库），否则用后端 completed/total。 */
+function quantifiedProgressPercent(
+  tasks: TaskView[],
+  agentStatusBar: AgentStatusBarView | null,
+): number | null {
+  const measurable = tasks
+    .filter(
+      (task) =>
+        ACTIVE_TASK_STATUSES.has(task.status) &&
+        typeof task.progress === "number",
+    )
+    .sort((left, right) =>
+      (left.updatedAt ?? "").localeCompare(right.updatedAt ?? ""),
+    );
+  const latest = measurable[measurable.length - 1];
+  if (latest) return taskProgressPercent(latest.progress);
+  const completed = agentStatusBar?.progress.completed;
+  const total = agentStatusBar?.progress.total;
+  if (typeof completed === "number" && typeof total === "number" && total > 0)
+    return Math.max(0, Math.min(100, Math.round((completed / total) * 100)));
+  return null;
+}
+
+export function deriveAgentLiveStatus(
+  input: AgentLiveStatusInput,
+): AgentLiveStatus {
+  const {
+    session,
+    agentStatusBar,
+    stopping,
+    hasQueuedInput,
+    subagentActivities,
+    toolCalls,
+    tasks,
+    project,
+  } = input;
+
+  if (stopping || session?.status === "INTERRUPT_REQUESTED")
+    return {
+      state: "stopping",
+      label: "正在停止所有 Agent…",
+      progressPercent: null,
+    };
+
+  const runningTask = activeTask(tasks);
+  const working =
+    (agentStatusBar?.activity?.runningTaskCount ?? 0) > 0 ||
+    Boolean(session && WORKING_SESSION_STATUSES.has(session.status)) ||
+    Boolean(runningTask) ||
+    Object.values(subagentActivities).some((activity) => !activity.completed) ||
+    hasQueuedInput;
+
+  if (working) {
+    const progressPercent = quantifiedProgressPercent(tasks, agentStatusBar);
+    const label =
+      activeSubagentToolLabel(subagentActivities, project) ??
+      activeMainToolLabel(toolCalls, subagentActivities, project) ??
+      (runningTask ? activeTaskLabel(runningTask, project) : null) ??
+      (() => {
+        const activity = firstIncompleteActivity(subagentActivities);
+        return activity ? roleWorkingLabel(activity) : null;
+      })() ??
+      agentStatusBar?.progress.label ??
+      (hasQueuedInput && session?.status !== "RUNNING"
+        ? "指令已发出，等待响应…"
+        : "正在思考…");
+    return {
+      state: "working",
+      label,
+      progressPercent:
+        progressPercent != null && progressPercent < 100
+          ? progressPercent
+          : null,
+    };
+  }
+
+  if (session?.status === "WAITING_USER_INPUT")
+    return {
+      state: "waiting",
+      label: "等待补充信息，请继续输入。",
+      progressPercent: null,
+    };
+  if (session?.status === "WAITING_EXECUTION_AUTH")
+    return {
+      state: "waiting",
+      label: "等待执行确认。",
+      progressPercent: null,
+    };
+  if (session?.status === "PENDING_REVIEW")
+    return {
+      state: "waiting",
+      label: "等待审阅 Agent 改动。",
+      progressPercent: null,
+    };
+
+  return {
+    state: "idle",
+    label: "待命中，可随时输入修改意图。",
+    progressPercent: null,
+  };
+}

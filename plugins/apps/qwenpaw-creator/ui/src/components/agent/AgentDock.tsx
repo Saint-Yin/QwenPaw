@@ -1,16 +1,16 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { Button, message } from "antd";
-import { ArrowUpOutlined, CloseOutlined } from "@ant-design/icons";
+import { ArrowUpOutlined } from "@ant-design/icons";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Eraser,
-  History,
   Info,
   ListTodo,
   MessageSquare,
-  Plus,
+  PanelRightClose,
+  PanelRightOpen,
   Sparkles,
   Square,
 } from "lucide-react";
@@ -53,6 +53,7 @@ import {
   type CreatorActionEnvelope,
   type ToolCallPresentation,
 } from "@/lib/creatorMessagePresentation";
+import { deriveAgentLiveStatus } from "@/lib/agentLiveStatus";
 import AgentDecisionCenter from "./AgentDecisionCenter";
 import AgentEventFeed from "./AgentEventFeed";
 import MentionInput, { type MentionInputHandle } from "./MentionInput";
@@ -1004,12 +1005,6 @@ function PlanCard({ data }: { data: PlanPresentation }) {
   );
 }
 
-function safeConversationDate(raw: string): string {
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
-}
-
 const REF_TYPE_LABELS: Record<RefSearchItem["type"], string> = {
   timeline: "主时间轴",
   element: "时间线内容",
@@ -1252,10 +1247,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   const agentStatusBar = useCreatorSessionStore(
     (state) => state.agentStatusBar,
   );
-  const conversations = useCreatorSessionStore((state) => state.conversations);
-  const activeConversationId = useCreatorSessionStore(
-    (state) => state.activeConversationId,
-  );
   const messages = useCreatorSessionStore((state) => state.messages);
   const streamingAssistantMessages = useCreatorSessionStore(
     (state) => state.streamingAssistantMessages,
@@ -1264,12 +1255,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   const queued = useCreatorSessionStore((state) => state.queuedUi);
   const hasMoreMessages = useCreatorSessionStore(
     (state) => state.hasMoreMessages,
-  );
-  const newConversation = useCreatorSessionStore(
-    (state) => state.newConversation,
-  );
-  const openConversation = useCreatorSessionStore(
-    (state) => state.setConversation,
   );
   const loadOlderMessages = useCreatorSessionStore(
     (state) => state.loadOlderMessages,
@@ -1309,7 +1294,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
     Boolean(session && STOPPABLE_SESSION_STATUSES.includes(session.status));
   const showWorkspace = tab === "activity";
   const showDecisions = tab === "review";
-  const [showHistory, setShowHistory] = useState(false);
 
   const [removedContextRefs, setRemovedContextRefs] = useState<string[]>([]);
   const [canSend, setCanSend] = useState(false);
@@ -1409,6 +1393,31 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   const unanchoredToolCalls = useMemo(
     () => toolCalls.filter((call) => !call.anchorMessageId),
     [toolCalls],
+  );
+
+  // 输入框上方实时状态行：纯前端派生，不修改任何数据结构。
+  const liveStatus = useMemo(
+    () =>
+      deriveAgentLiveStatus({
+        session,
+        agentStatusBar,
+        stopping,
+        hasQueuedInput: queued.some((item) => item.state !== "failed"),
+        subagentActivities,
+        toolCalls,
+        tasks,
+        project,
+      }),
+    [
+      session,
+      agentStatusBar,
+      stopping,
+      queued,
+      subagentActivities,
+      toolCalls,
+      tasks,
+      project,
+    ],
   );
 
   const contextChips = useMemo(() => {
@@ -1645,16 +1654,10 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   const panelStyle: CSSProperties = { width, height };
 
   const toggleDecisions = () => {
-    setShowHistory(false);
     setTab(showDecisions ? "conversation" : "review");
   };
   const toggleWorkspace = () => {
-    setShowHistory(false);
     setTab(showWorkspace ? "conversation" : "activity");
-  };
-  const toggleHistory = () => {
-    setTab("conversation");
-    setShowHistory((value) => !value);
   };
 
   const handleScroll = () => {
@@ -1776,17 +1779,20 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
 
   return (
     <>
-      {!open && !sidebar && (
+      {!open && (
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="fixed bottom-5 right-5 z-40 flex h-11 w-11 items-center justify-center rounded-full bg-[var(--color-accent)] text-white shadow-lg transition-transform hover:scale-105"
+          data-agent-dock-handle
+          data-state={liveStatus.state}
+          className="fixed right-0 top-1/2 z-40 flex h-[76px] w-7 -translate-y-1/2 flex-col items-center justify-center rounded-l-xl border border-r-0 border-[var(--color-border)] bg-[var(--color-bg-card)]/92 text-[var(--color-text-tertiary)] shadow-lg backdrop-blur-xl transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
           aria-label="打开 Agent"
+          title="展开 Agent 面板"
         >
-          <Sparkles className="h-5 w-5" />
+          <PanelRightOpen className="h-3.5 w-3.5 shrink-0" />
           {decisionCount > 0 && (
             <span
-              className={`absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white ${
+              className={`absolute -left-2 -top-2 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white ${
                 hasUrgentDecision
                   ? "animate-pulse bg-[var(--color-warning)]"
                   : "bg-[var(--color-danger)]"
@@ -1845,20 +1851,14 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                 <b className="block truncate text-xs text-[var(--color-text-primary)]">
                   Creator Agent
                 </b>
-                <span className="block truncate text-[10px] text-[var(--color-text-tertiary)]">
-                  {contextChips.length > 0
-                    ? `已绑定 ${contextChips.length} 个上下文对象`
-                    : "未绑定上下文，作用于整个项目"}
-                </span>
+                {contextChips.length > 0 && (
+                  <span className="block truncate text-[10px] text-[var(--color-text-tertiary)]">
+                    已绑定 {contextChips.length} 个上下文对象
+                  </span>
+                )}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
-              {streaming && (
-                <span className="flex items-center gap-1 rounded-full bg-[var(--color-warning-soft)] px-2 py-0.5 text-[10px] font-semibold text-[var(--color-warning)]">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-warning)]" />
-                  输出中
-                </span>
-              )}
               <span className="relative inline-flex">
                 <Button
                   type="primary"
@@ -1886,37 +1886,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                   </span>
                 )}
               </span>
-              {!showDecisions && (
-                <>
-                  <Button
-                    type="text"
-                    size="small"
-                    disabled={streaming || orderedMessages.length === 0}
-                    icon={<Plus className="h-3.5 w-3.5" />}
-                    onClick={() =>
-                      void newConversation().catch((error) =>
-                        message.error((error as Error).message),
-                      )
-                    }
-                    title="新对话"
-                    aria-label="新对话"
-                  />
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={
-                      <History
-                        className={`h-3.5 w-3.5 ${
-                          showHistory ? "text-[var(--color-accent)]" : ""
-                        }`}
-                      />
-                    }
-                    onClick={toggleHistory}
-                    title="历史聊天"
-                    aria-label="历史聊天"
-                  />
-                </>
-              )}
               <Button
                 type="text"
                 size="small"
@@ -1934,10 +1903,10 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
               <Button
                 type="text"
                 size="small"
-                icon={<CloseOutlined />}
+                icon={<PanelRightClose className="h-3.5 w-3.5" />}
                 onClick={() => setOpen(false)}
-                title="关闭"
-                aria-label="关闭 Agent 面板"
+                title="收起 Agent 面板"
+                aria-label="收起 Agent 面板"
               />
             </div>
           </div>
@@ -1945,80 +1914,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
           {showWorkspace && (
             <div className="max-h-56 overflow-y-auto border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)]/40 px-4 py-3">
               <WorkspacePanel />
-            </div>
-          )}
-
-          {showHistory && (
-            <div className="max-h-56 overflow-y-auto border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)]/40 px-2 py-2">
-              {runs.length > 0 && (
-                <div className="mb-2 border-b border-[var(--color-border)] pb-2">
-                  <p className="px-2 pb-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-                    专业制作记录
-                  </p>
-                  <ul className="space-y-0.5">
-                    {runs.slice(0, 8).map((run) => (
-                      <li
-                        key={run.id}
-                        className="flex items-center gap-2 rounded-md px-2 py-1 text-[11px] text-[var(--color-text-secondary)]"
-                      >
-                        <Sparkles className="h-3 w-3 shrink-0 text-[var(--color-accent)]" />
-                        <span className="min-w-0 flex-1 truncate">
-                          {run.displayName} ·{" "}
-                          {run.targetRefs
-                            .map((ref) => creatorTargetLabel(ref, project))
-                            .join("、") || "当前项目"}
-                        </span>
-                        <span className="shrink-0 text-[9px] text-[var(--color-text-tertiary)]">
-                          {run.taskRefs.length} 项 ·{" "}
-                          {creatorStatusLabel(run.status)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {conversations.length === 0 ? (
-                <p className="px-2 py-3 text-center text-[11px] text-[var(--color-text-tertiary)]">
-                  暂无历史对话，发送消息后会自动保存。
-                </p>
-              ) : (
-                <ul className="space-y-0.5">
-                  {conversations.map((conversation) => {
-                    const active =
-                      conversation.conversationId === activeConversationId;
-                    return (
-                      <li key={conversation.conversationId}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void openConversation(conversation.conversationId)
-                              .then(() => setShowHistory(false))
-                              .catch((error) =>
-                                message.error((error as Error).message),
-                              );
-                          }}
-                          className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-accent-soft)] ${
-                            active ? "bg-[var(--color-accent-soft)]" : ""
-                          }`}
-                        >
-                          <History className="h-3 w-3 shrink-0 text-[var(--color-text-tertiary)]" />
-                          <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--color-text-primary)]">
-                            {conversation.title}
-                          </span>
-                          {active && (
-                            <span className="shrink-0 rounded bg-[var(--color-accent)] px-1 text-[9px] font-semibold text-white">
-                              当前
-                            </span>
-                          )}
-                          <span className="shrink-0 text-[9px] text-[var(--color-text-tertiary)]">
-                            {safeConversationDate(conversation.createdAt)}
-                          </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
             </div>
           )}
 
@@ -2147,6 +2042,43 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                 data-agent-composer
                 className="relative border-t border-[var(--color-border)] p-3"
               >
+                <div
+                  data-agent-live-status
+                  data-state={liveStatus.state}
+                  className="mb-2 flex items-center gap-2 text-[11px] leading-4"
+                >
+                  <span
+                    className="agent-live-dot"
+                    data-state={liveStatus.state}
+                  />
+                  <span
+                    className={`min-w-0 flex-1 truncate ${
+                      liveStatus.state === "working"
+                        ? "agent-live-shimmer font-medium"
+                        : liveStatus.state === "stopping"
+                        ? "font-medium text-[var(--color-danger)]"
+                        : "text-[var(--color-text-tertiary)]"
+                    }`}
+                  >
+                    {liveStatus.label}
+                  </span>
+                  {liveStatus.progressPercent != null && (
+                    <span
+                      data-agent-live-progress
+                      className="flex shrink-0 items-center gap-1.5"
+                    >
+                      <span className="h-1 w-16 overflow-hidden rounded-full bg-[var(--color-bg-secondary)]">
+                        <span
+                          className="block h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-500"
+                          style={{ width: `${liveStatus.progressPercent}%` }}
+                        />
+                      </span>
+                      <span className="tabular-nums text-[10px] text-[var(--color-text-secondary)]">
+                        {liveStatus.progressPercent}%
+                      </span>
+                    </span>
+                  )}
+                </div>
                 {visibleChips.length > 0 && (
                   <div className="mb-2 flex flex-wrap items-center gap-1">
                     {visibleChips.map((chip) => {

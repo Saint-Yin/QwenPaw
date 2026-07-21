@@ -15,7 +15,6 @@ import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { useFileProjectReviewStore } from "@/store/fileProjectReviewStore";
 import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationStore";
 import TopNav from "./TopNav";
-import AgentStatusBar from "./AgentStatusBar";
 import ReturnBanner from "@/components/creator/ReturnBanner";
 import { AgentDock, SelectionToolbar } from "@/components/agent";
 import PageSkeleton from "@/components/PageSkeleton";
@@ -96,11 +95,9 @@ function LayoutSkeleton() {
     <div
       data-project-shell
       data-top-nav-height="58"
-      data-agent-status-bar-height="42"
-      className="app-shell grid h-screen grid-rows-[58px_42px_minmax(0,1fr)]"
+      className="app-shell grid h-screen grid-rows-[58px_minmax(0,1fr)]"
     >
       <TopNav />
-      <AgentStatusBar />
       <main data-creator-workspace-root className="flex-1 overflow-hidden">
         <PageSkeleton type="list" />
       </main>
@@ -326,11 +323,9 @@ export default function ProjectLayout() {
     <div
       data-project-shell
       data-top-nav-height="58"
-      data-agent-status-bar-height="42"
-      className="app-shell grid h-screen grid-rows-[58px_42px_minmax(0,1fr)]"
+      className="app-shell grid h-screen grid-rows-[58px_minmax(0,1fr)]"
     >
       <TopNav />
-      <AgentStatusBar />
       <div className="flex min-h-0 overflow-hidden">
         <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           <ReturnBanner />

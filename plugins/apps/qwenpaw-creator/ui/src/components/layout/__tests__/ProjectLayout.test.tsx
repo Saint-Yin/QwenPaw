@@ -12,7 +12,6 @@ import type {
   FileProjectReviewRecord,
   ProjectDocument,
 } from "@/contracts/creator";
-import AgentStatusBar from "@/components/layout/AgentStatusBar";
 import ProjectLayout from "@/components/layout/ProjectLayout";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
@@ -159,7 +158,7 @@ describe("ProjectLayout schema-v2 visible shell", () => {
     seedProject();
   });
 
-  it("preserves the 58/42 shell and default-open 440px AgentDock beside the Element Plan", async () => {
+  it("preserves the 58px shell and default-open 440px AgentDock beside the Element Plan", async () => {
     const { calls } = installMockFetch(commonRoutes());
     const router = createMemoryRouter(CREATOR_ROUTE_OBJECTS, {
       initialEntries: ["/project/p1/plan"],
@@ -185,10 +184,11 @@ describe("ProjectLayout schema-v2 visible shell", () => {
 
     const shell = document.querySelector("[data-project-shell]")!;
     expect(shell).toHaveAttribute("data-top-nav-height", "58");
-    expect(shell).toHaveAttribute("data-agent-status-bar-height", "42");
-    expect(document.querySelector("[data-agent-status-bar]")).toHaveClass(
-      "h-[42px]",
-    );
+    // Agent 状态栏已整体移除，壳层不再保留 42px 行。
+    expect(shell).not.toHaveAttribute("data-agent-status-bar-height");
+    expect(
+      document.querySelector("[data-agent-status-bar]"),
+    ).not.toBeInTheDocument();
     const dock = document.querySelector("[data-agent-dock]")!;
     expect(useAgentDockUiStore.getState().open).toBe(true);
     expect(dock).toHaveAttribute("data-agent-dock-width", "440");
@@ -203,35 +203,6 @@ describe("ProjectLayout schema-v2 visible shell", () => {
     rendered.unmount();
     expect(useFileProjectReviewStore.getState().projectId).toBeNull();
     expect(useFileProjectReviewStore.getState().polling).toBe(false);
-  });
-
-  it("renders backend progress and badges without duplicating the activity label", () => {
-    useCreatorSessionStore.setState({
-      connected: true,
-      session: {
-        id: "s1",
-        projectId: "p1",
-        status: "RUNNING",
-        lastMessageSeq: 0,
-        lastConsumedMessageSeq: 0,
-        lastEventSeq: 5,
-      },
-      agentStatusBar: {
-        progress: {
-          phase: "review",
-          label: "后端聚合进度",
-          sourceEventSeq: 5,
-          updatedAt: "now",
-        },
-        activity: { label: "后端聚合活动", runningTaskCount: 2 },
-        badges: [{ kind: "review", label: "待处理 3", count: 3 }],
-      },
-    });
-    useCreatorTaskViewStore.setState({ runs: [], tasks: [] });
-    render(<AgentStatusBar />);
-    expect(screen.getByText(/后端聚合进度/)).toBeInTheDocument();
-    expect(screen.queryByText("后端聚合活动")).not.toBeInTheDocument();
-    expect(screen.getByText("待处理 3")).toBeInTheDocument();
   });
 
   it("keeps the active Outlet and AgentDock mounted during background snapshot sync and degradation", async () => {

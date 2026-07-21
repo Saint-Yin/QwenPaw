@@ -105,19 +105,20 @@ describe("AgentDock origin/main visible fidelity", () => {
     });
   });
 
-  it("matches the right-side closed trigger and exact 440x620 floating shell", async () => {
+  it("matches the right-edge handle trigger and exact 440x620 floating shell", async () => {
     useAgentDockUiStore.getState().setOpen(false);
     renderDock();
     const trigger = screen.getByRole("button", { name: "打开 Agent" });
+    expect(trigger).toHaveAttribute("data-agent-dock-handle");
+    expect(trigger).toHaveAttribute("data-state", "idle");
     expect(trigger).toHaveClass(
       "fixed",
-      "bottom-5",
-      "right-5",
-      "h-11",
-      "w-11",
-      "rounded-full",
+      "right-0",
+      "top-1/2",
+      "rounded-l-xl",
       "z-40",
     );
+    expect(trigger.querySelector(".agent-live-dot")).not.toBeInTheDocument();
 
     fireEvent.click(trigger);
     const dock = document.querySelector<HTMLElement>("[data-agent-dock]")!;
@@ -136,16 +137,20 @@ describe("AgentDock origin/main visible fidelity", () => {
       "backdrop-blur-xl",
     );
     expect(screen.getByText("Creator Agent")).toBeInTheDocument();
+    // 未绑定上下文时不再展示提示文案。
     expect(
-      screen.getByText("未绑定上下文，作用于整个项目"),
-    ).toBeInTheDocument();
+      screen.queryByText("未绑定上下文，作用于整个项目"),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "审阅与决策中心" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "新对话" })).toBeDisabled();
+    // 新对话与历史聊天入口已移除。
     expect(
-      screen.getByRole("button", { name: "历史聊天" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "新对话" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "历史聊天" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "工作区事实" }),
     ).toBeInTheDocument();
@@ -153,7 +158,7 @@ describe("AgentDock origin/main visible fidelity", () => {
       screen.queryByRole("button", { name: "最大化面板" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "关闭 Agent 面板" }),
+      screen.getByRole("button", { name: "收起 Agent 面板" }),
     ).toBeInTheDocument();
     expect(document.querySelector('[title="拖拽调整高度"]')).toHaveClass(
       "cursor-ns-resize",
@@ -203,18 +208,13 @@ describe("AgentDock origin/main visible fidelity", () => {
     expect(screen.getAllByText("生产确认").length).toBeGreaterThan(0);
   });
 
-  it("keeps history, workspace, decisions and close interactions without maximize controls", async () => {
+  it("keeps workspace, decisions and collapse interactions without maximize controls", async () => {
     useAgentDockUiStore.getState().setOpen(true);
     renderDock();
-
-    fireEvent.click(screen.getByRole("button", { name: "历史聊天" }));
-    expect(screen.getByText("默认对话")).toBeInTheDocument();
-    expect(screen.getByText("当前")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "工作区事实" }));
     expect(screen.getByText("任务上下文")).toBeInTheDocument();
     expect(screen.getByText("素材事实（0）")).toBeInTheDocument();
-    expect(screen.queryByText("当前")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "审阅与决策中心" }));
     expect(screen.getByText("暂无待处理的决策")).toBeInTheDocument();
@@ -234,7 +234,7 @@ describe("AgentDock origin/main visible fidelity", () => {
       document.querySelector('[title="拖拽调整高度"]'),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "关闭 Agent 面板" }));
+    fireEvent.click(screen.getByRole("button", { name: "收起 Agent 面板" }));
     expect(document.querySelector("[data-agent-dock]")).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "打开 Agent" }),
