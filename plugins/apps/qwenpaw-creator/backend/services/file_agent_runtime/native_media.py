@@ -17,7 +17,6 @@ from services.project_files.assets import AssetFileStore
 from services.project_files.facade import CreatorFileServices
 from services.runtime_files.models import CreatorMessageRecord
 
-
 _MEDIA_PART_TYPES = frozenset({"image_url", "video_url"})
 
 
@@ -55,6 +54,20 @@ def _safe_public_model_url(metadata: Mapping[str, Any]) -> str | None:
         ):
             return value
     return None
+
+
+def _source_video_sampling_fps(duration_seconds: float | None) -> float:
+    """Keep short-video detail while bounding long-video native sampling."""
+
+    if duration_seconds is None or duration_seconds <= 0:
+        return 0.5
+    if duration_seconds <= 120:
+        return 2.0
+    if duration_seconds <= 600:
+        return 1.0
+    if duration_seconds <= 1800:
+        return 0.5
+    return 0.2
 
 
 async def source_intelligence_content_parts(
@@ -122,9 +135,7 @@ async def source_intelligence_content_parts(
             )
         if version.media_kind not in {"image", "video"}:
             continue
-        part_type = (
-            "image_url" if version.media_kind == "image" else "video_url"
-        )
+        part_type = "image_url" if version.media_kind == "image" else "video_url"
         identity = (part_type, version_id)
         if identity in seen:
             continue
@@ -164,7 +175,9 @@ async def source_intelligence_content_parts(
             "checksum": version.checksum,
         }
         if part_type == "video_url":
-            native_payload["fps"] = 0.1
+            native_payload["fps"] = _source_video_sampling_fps(
+                version.duration_seconds,
+            )
         parts.append(
             {
                 "type": part_type,

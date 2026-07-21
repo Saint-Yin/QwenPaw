@@ -217,6 +217,86 @@ class SemanticIndexEntry(SourceEvidenceRecord):
         return self
 
 
+class SourceAgentShotInput(StrictModel):
+    """Visual shot facts authored by the outer Source Intelligence VLM."""
+
+    start_ms: int = Field(alias="startMs", strict=True, ge=0)
+    end_ms: int = Field(alias="endMs", strict=True, gt=0)
+    description: str = Field(min_length=1)
+    events: list[str] = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "SourceAgentShotInput":
+        if self.end_ms <= self.start_ms:
+            raise ValueError("shot endMs must be greater than startMs")
+        if any(not item.strip() for item in self.events):
+            raise ValueError("shot events cannot contain empty values")
+        return self
+
+
+class SourceAgentEntityInput(StrictModel):
+    """Entity facts authored by the outer Source Intelligence VLM."""
+
+    kind: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    description: str = ""
+    start_ms: int | None = Field(None, alias="startMs", strict=True, ge=0)
+    end_ms: int | None = Field(None, alias="endMs", strict=True, gt=0)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_optional_range(self) -> "SourceAgentEntityInput":
+        if (self.start_ms is None) != (self.end_ms is None):
+            raise ValueError("entity startMs/endMs must both be present or absent")
+        if self.start_ms is not None and self.end_ms <= self.start_ms:
+            raise ValueError("entity endMs must be greater than startMs")
+        return self
+
+
+class SourceAgentSemanticInput(StrictModel):
+    """Search/edit semantics authored by the outer Source Intelligence VLM."""
+
+    text: str = Field(min_length=1)
+    tags: list[str] = Field(min_length=1)
+    start_ms: int | None = Field(None, alias="startMs", strict=True, ge=0)
+    end_ms: int | None = Field(None, alias="endMs", strict=True, gt=0)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_optional_range(self) -> "SourceAgentSemanticInput":
+        if (self.start_ms is None) != (self.end_ms is None):
+            raise ValueError(
+                "semantic entry startMs/endMs must both be present or absent",
+            )
+        if self.start_ms is not None and self.end_ms <= self.start_ms:
+            raise ValueError("semantic entry endMs must be greater than startMs")
+        if any(not item.strip() for item in self.tags):
+            raise ValueError("semantic entry tags cannot contain empty values")
+        return self
+
+
+class SourceAgentModuleResultRefs(StrictModel):
+    """Opaque Runtime-owned modality results selected by the outer VLM."""
+
+    asr: str | None = None
+
+
+class SourceAgentIntelligenceInput(StrictModel):
+    """Exact structured payload submitted by the outer Source Intelligence VLM."""
+
+    summary: str = Field(min_length=1)
+    shots: list[SourceAgentShotInput]
+    entities: list[SourceAgentEntityInput]
+    semantic_entries: list[SourceAgentSemanticInput] = Field(
+        alias="semanticEntries",
+    )
+    module_result_refs: SourceAgentModuleResultRefs = Field(
+        default_factory=SourceAgentModuleResultRefs,
+        alias="moduleResultRefs",
+    )
+
+
 class SourceIntelligenceIndex(StrictModel):
     id: str
     asset_id: str = Field(alias="assetId")

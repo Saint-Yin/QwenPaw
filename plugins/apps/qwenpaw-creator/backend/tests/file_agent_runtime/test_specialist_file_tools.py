@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# flake8: noqa: E501
 from __future__ import annotations
 
 from domain.enums import SpecialistRole
@@ -45,13 +46,14 @@ def test_specialist_registry_owns_role_specific_media_tools(tmp_path) -> None:
     assert "image_generation" in visual
     assert {"image_generation", "r2v_generation"} <= r2v
     assert "ai_edit" in editing
-    assert "analyze_source_media" in source
+    assert "transcribe_source_audio" in source
+    assert "commit_source_intelligence" in source
     assert "jq_project" in source
     assert "r2v_generation" not in visual
     assert "image_generation" not in editing
 
 
-def test_source_analysis_tool_explains_single_transient_retry(
+def test_source_intelligence_tools_separate_modules_from_outer_vlm_commit(
     tmp_path,
 ) -> None:
     registry = FileSpecialistToolRegistry(
@@ -61,20 +63,27 @@ def test_source_analysis_tool_explains_single_transient_retry(
         SpecialistRole.SOURCE_INTELLIGENCE,
         admitted_target_refs=["asset:source-1"],
     )
-    tool = next(
+    commit = next(
         item
         for item in manifest
-        if item["function"]["name"] == "analyze_source_media"
+        if item["function"]["name"] == "commit_source_intelligence"
+    )["function"]
+    asr = next(
+        item
+        for item in manifest
+        if item["function"]["name"] == "transcribe_source_audio"
     )["function"]
 
-    assert "首次分析使用 force=false" in tool["description"]
-    assert "ReadTimeout" in tool["description"]
-    assert "重试一次" in tool["description"]
-    force = tool["parameters"]["properties"]["arguments"]["properties"][
-        "force"
-    ]
-    assert force["default"] is False
-    assert "同一失败最多重试一次" in force["description"]
+    assert "不会再次调用 VLM" in commit["description"]
+    arguments = commit["parameters"]["properties"]["arguments"]
+    assert set(arguments["required"]) == {
+        "summary",
+        "shots",
+        "entities",
+        "semanticEntries",
+    }
+    assert "startMs" in arguments["properties"]["shots"]["items"]["properties"]
+    assert "opaque resultRef" in asr["description"]
 
 
 def test_project_assets_scope_admits_image_asset_children(tmp_path) -> None:
@@ -86,9 +95,7 @@ def test_project_assets_scope_admits_image_asset_children(tmp_path) -> None:
         admitted_target_refs=["project:assets"],
     )
     tool = next(
-        item
-        for item in manifest
-        if item["function"]["name"] == "image_generation"
+        item for item in manifest if item["function"]["name"] == "image_generation"
     )["function"]
     target = tool["parameters"]["properties"]["targetRef"]
     spec = registry.spec_for(
@@ -136,9 +143,7 @@ def test_project_assets_scope_does_not_expand_for_r2v_image_tool(
     )
 
 
-def test_ai_edit_rules_are_dynamic_specialist_prompt_not_runtime_state() -> (
-    None
-):
+def test_ai_edit_rules_are_dynamic_specialist_prompt_not_runtime_state() -> None:
     project = Project.new(project_id="project-1", name="Interview")
     project.settings.content_type = "interview"
     project.settings.target_duration_seconds = 90

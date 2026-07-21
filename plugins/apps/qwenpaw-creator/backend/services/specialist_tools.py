@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# flake8: noqa: E501
 """File-native toolkits owned by Creator specialists.
 
 The Agent runtime consumes this registry as a generic AgentScope tool surface.
@@ -29,7 +30,7 @@ from services.project_files.agent_tools import (
     agent_project_tool_manifest,
 )
 from services.project_files.facade import CreatorFileServices
-from services.source_analysis import source_analysis_service
+from services.source_analysis import SourceAgentToolContext, source_analysis_service
 
 
 class SpecialistToolWait(StrEnum):
@@ -107,9 +108,9 @@ class SpecialistToolSpec:
                     )
                 else:
                     target["enum"] = list(targets)
-                    target[
-                        "description"
-                    ] = "必须逐字使用本 SpecialistRun 已准入的 targetRef。"
+                    target["description"] = (
+                        "必须逐字使用本 SpecialistRun 已准入的 targetRef。"
+                    )
         return value
 
 
@@ -199,35 +200,122 @@ _R2V_ARGUMENTS = _arguments_schema(
     ("prompt", "durationSeconds", "ratio", "resolution", "watermark"),
 )
 
+_SOURCE_SHOT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "startMs": {"type": "integer", "minimum": 0},
+        "endMs": {"type": "integer", "minimum": 1},
+        "description": {"type": "string", "minLength": 1},
+        "events": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "minItems": 1,
+        },
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+    "required": ["startMs", "endMs", "description", "events", "confidence"],
+    "additionalProperties": False,
+}
+
+_SOURCE_ENTITY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "description": {"type": "string"},
+        "startMs": {"type": "integer", "minimum": 0},
+        "endMs": {"type": "integer", "minimum": 1},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+    "required": ["kind", "label", "description", "confidence"],
+    "additionalProperties": False,
+}
+
+_SOURCE_SEMANTIC_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string", "minLength": 1},
+        "tags": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "minItems": 1,
+        },
+        "startMs": {"type": "integer", "minimum": 0},
+        "endMs": {"type": "integer", "minimum": 1},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+    "required": ["text", "tags", "confidence"],
+    "additionalProperties": False,
+}
+
+_SOURCE_COMMIT_ARGUMENTS = _arguments_schema(
+    {
+        "summary": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "外层 VLM 基于原生媒体形成的详尽全局理解，覆盖主体、场景、动作、"
+                "镜头语言、风格、质量变化、异常与不确定内容。"
+            ),
+        },
+        "shots": {
+            "type": "array",
+            "items": _SOURCE_SHOT_SCHEMA,
+            "description": (
+                "视频必须覆盖至少 90% 完整时间线；图片和音频传空数组。"
+                "每段使用整数毫秒半开区间 [startMs,endMs)。"
+            ),
+        },
+        "entities": {
+            "type": "array",
+            "items": _SOURCE_ENTITY_SCHEMA,
+            "description": "主体、人物、动物、物体、场景元素及其可观察特征。",
+        },
+        "semanticEntries": {
+            "type": "array",
+            "items": _SOURCE_SEMANTIC_SCHEMA,
+            "description": (
+                "可检索、可剪辑的事件级与细节级语义。视频/音频每条必须含时间范围；"
+                "图片不得填写时间范围。"
+            ),
+        },
+        "moduleResultRefs": {
+            "type": "object",
+            "properties": {
+                "asr": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "transcribe_source_audio 返回的 opaque resultRef。",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    ("summary", "shots", "entities", "semanticEntries"),
+)
+
 _SPECS = (
     SpecialistToolSpec(
-        name="analyze_source_media",
+        name="transcribe_source_audio",
         description=(
-            "分析已入库的本地文件或公网 URL 源素材，并把结构化理解写入文件索引。"
-            "首次分析使用 force=false；只有已有结果需要明确重做，或上一次调用因 "
-            "ReadTimeout 等瞬时模型请求错误且没有产生新结果时，才使用 force=true "
-            "重试一次。成功后重新读取 Project；失败时不得伪造素材理解关联。"
+            "对当前 exact 视频/音频 Source 调用独立 ASR 模块。返回的 transcript 是"
+            "工具权威结果，并附带 opaque resultRef；最终提交时只引用 resultRef，"
+            "不要重写或伪造 transcript。ASR 未配置时返回 available=false。"
         ),
         roles=frozenset({SpecialistRole.SOURCE_INTELLIGENCE}),
-        parameters=_tool_schema(
-            _arguments_schema(
-                {
-                    "force": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": (
-                            "首次分析为 false。仅在用户明确要求重新分析，或上一次调用"
-                            "因瞬时模型请求错误失败且未产生新结果时改为 true；同一失败"
-                            "最多重试一次。"
-                        ),
-                    },
-                },
-                (),
-            ),
-        ),
+        parameters=_tool_schema(_arguments_schema({}, ())),
         long_running=True,
-        wait=SpecialistToolWait.TASK,
-        provider_kind="vlm",
+        provider_kind="asr",
+    ),
+    SpecialistToolSpec(
+        name="commit_source_intelligence",
+        description=(
+            "把当前外层素材理解 VLM 自己生成的详尽结构化理解写入不可变 Source "
+            "Intelligence 文件。工具不会再次调用 VLM；它只校验时间范围、合并已引用"
+            "的 ASR 模块结果、注入真实版本/provenance，并更新 ProjectSource 关联。"
+        ),
+        roles=frozenset({SpecialistRole.SOURCE_INTELLIGENCE}),
+        parameters=_tool_schema(_SOURCE_COMMIT_ARGUMENTS),
     ),
     SpecialistToolSpec(
         name="image_generation",
@@ -313,17 +401,12 @@ class FileSpecialistToolRegistry:
             for spec in _SPECS
             if role in spec.roles
         ]
-        names = [
-            item["function"]["name"]
-            for item in (*project_tools, *business_tools)
-        ]
+        names = [item["function"]["name"] for item in (*project_tools, *business_tools)]
         if len(names) != len(set(names)):
             raise RuntimeError(
                 "Specialist tool manifest contains duplicate names",
             )
-        return tuple(
-            deepcopy(item) for item in (*project_tools, *business_tools)
-        )
+        return tuple(deepcopy(item) for item in (*project_tools, *business_tools))
 
     async def invoke(
         self,
@@ -335,6 +418,7 @@ class FileSpecialistToolRegistry:
         admitted_target_refs: Sequence[str],
         project_tools: AgentProjectTools,
         idempotency_key: str,
+        context: SourceAgentToolContext | None = None,
     ) -> SpecialistToolResult:
         if name in _PROJECT_TOOL_NAMES:
             payload = await asyncio.to_thread(
@@ -365,23 +449,33 @@ class FileSpecialistToolRegistry:
         if not isinstance(payload, Mapping):
             raise ValidationError("Specialist tool arguments 必须是 object")
 
-        if name == "analyze_source_media":
-            dispatch = await source_analysis_service(self.services).dispatch(
+        if name in {"transcribe_source_audio", "commit_source_intelligence"}:
+            if context is None:
+                raise ValidationError(
+                    f"{name} requires Runtime-owned outer VLM context",
+                )
+
+        if name == "transcribe_source_audio":
+            result = await source_analysis_service(
+                self.services,
+            ).transcribe_source_audio(
+                project_id=project_id,
+                target_ref=target_ref,
+                context=context,
+            )
+            return SpecialistToolResult(payload=dict(result))
+
+        if name == "commit_source_intelligence":
+            result = await source_analysis_service(
+                self.services,
+            ).commit_agent_intelligence(
                 project_id=project_id,
                 target_ref=target_ref,
                 command_id=idempotency_key,
                 arguments=payload,
-                start=True,
+                context=context,
             )
-            return SpecialistToolResult(
-                payload={
-                    "ok": True,
-                    "status": dispatch.task.status.value,
-                    "taskId": dispatch.task.task_id,
-                    "analysisRef": dispatch.job.intelligence_ref,
-                },
-                task_id=dispatch.task.task_id,
-            )
+            return SpecialistToolResult(payload=dict(result))
 
         if name == "image_generation":
             command = (

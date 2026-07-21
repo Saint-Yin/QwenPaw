@@ -42,7 +42,6 @@ from services.source_analysis import (
 )
 from services.specialist_tools import SpecialistToolResult
 
-
 pytestmark = pytest.mark.unit
 
 
@@ -149,9 +148,7 @@ def _create_project(tmp_path, *, initial_goal: str | None):
             conversation_id=CONVERSATION_ID,
             initial_goal=initial_goal,
             goal_id=GOAL_ID if initial_goal is not None else None,
-            initial_message_id="message-initial"
-            if initial_goal is not None
-            else None,
+            initial_message_id="message-initial" if initial_goal is not None else None,
             initial_client_message_id=(
                 "client-initial" if initial_goal is not None else None
             ),
@@ -349,9 +346,7 @@ def test_creator_agent_can_call_ground_prompt_context_tool(
 
     async def callback(messages, tools):
         nonlocal turn
-        assert "ground_prompt_context" in {
-            item["function"]["name"] for item in tools
-        }
+        assert "ground_prompt_context" in {item["function"]["name"] for item in tools}
         turn += 1
         if turn == 1:
             return AgentModelTurn(
@@ -483,10 +478,7 @@ def test_grounding_visual_promotion_is_idempotent(tmp_path) -> None:
     assert replay["promoted_count"] == 1
     assert replay["issues"] == []
     assert replay_project.generation == first_generation
-    assert (
-        replay_project.assets.files_by_id[file_id].created_at
-        == first_created_at
-    )
+    assert replay_project.assets.files_by_id[file_id].created_at == first_created_at
 
 
 def test_stream_persistence_failure_is_not_reported_as_a_model_failure(
@@ -530,9 +522,7 @@ def test_stream_persistence_failure_is_not_reported_as_a_model_failure(
     assert session.error is not None
     assert session.error["code"] == "STREAM_PERSISTENCE_FAILED"
     assert session.error["retryable"] is True
-    failed = [
-        event for event in events if event.event_type == "agent.run.failed"
-    ]
+    failed = [event for event in events if event.event_type == "agent.run.failed"]
     assert failed[-1].payload["error"]["code"] == "STREAM_PERSISTENCE_FAILED"
 
 
@@ -553,13 +543,9 @@ def test_parent_authors_timeline_elements_without_planning_specialists(
             "delegate_to_agent",
         }
         delegate = next(
-            item
-            for item in tools
-            if item["function"]["name"] == "delegate_to_agent"
+            item for item in tools if item["function"]["name"] == "delegate_to_agent"
         )
-        roles = delegate["function"]["parameters"]["properties"]["role"][
-            "enum"
-        ]
+        roles = delegate["function"]["parameters"]["properties"]["role"]["enum"]
         assert roles == [
             "source_intelligence_agent",
             "visual_development_agent",
@@ -666,9 +652,7 @@ def test_parent_authors_timeline_elements_without_planning_specialists(
         return project, specialist_runs, events
 
     project, specialist_runs, events = asyncio.run(scenario())
-    element = project.project.timelines.items["timeline:main"].elements_by_id[
-        "r2v-1"
-    ]
+    element = project.project.timelines.items["timeline:main"].elements_by_id["r2v-1"]
     assert element.creation.type == "r2v"
     assert element.span.duration_tick == 15_000
     assert specialist_runs == []
@@ -685,9 +669,7 @@ def test_source_intelligence_receives_every_user_media_part_directly(
 
     async def parent_callback(messages, tools):
         nonlocal parent_turn
-        assert "delegate_to_agent" in {
-            item["function"]["name"] for item in tools
-        }
+        assert "delegate_to_agent" in {item["function"]["name"] for item in tools}
         parent_turn += 1
         if parent_turn == 1:
             return AgentModelTurn(
@@ -706,7 +688,7 @@ def test_source_intelligence_receives_every_user_media_part_directly(
         return AgentModelTurn(content="素材理解 Agent 已收到原生素材。")
 
     async def source_callback(messages, tools):
-        assert "analyze_source_media" in {
+        assert "commit_source_intelligence" in {
             item["function"]["name"] for item in tools
         }
         content = messages[1]["content"]
@@ -780,9 +762,7 @@ def test_source_intelligence_receives_every_user_media_part_directly(
     assert specialist_runs[0].status.value == "FAILED"
     assert "current_intelligence_version_id" in (
         specialist_runs[0].final_summary_text or ""
-    ) or "exactly one ProjectSource" in (
-        specialist_runs[0].final_summary_text or ""
-    )
+    ) or "exactly one ProjectSource" in (specialist_runs[0].final_summary_text or "")
 
 
 def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
@@ -853,6 +833,16 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
         "services.file_agent_runtime.native_media.upload_local_file_to_dashscope_temp",
         fake_model_upload,
     )
+    monkeypatch.setattr(
+        "services.source_analysis.service._probe_media",
+        lambda _path, version: SourceMediaMetadata(
+            mediaKind=version.media_kind,
+            mediaType=version.media_type,
+            durationMs=5000,
+            width=1920,
+            height=1080,
+        ),
+    )
 
     parent_turn = 0
     source_turn = 0
@@ -865,9 +855,7 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
         nonlocal parent_turn, read_intelligence
         parent_turn += 1
         if parent_turn == 1:
-            assert (
-                f"asset-version:{asset_version_id}" in messages[-1]["content"]
-            )
+            assert f"asset-version:{asset_version_id}" in messages[-1]["content"]
             return AgentModelTurn(
                 tool_calls=(
                     AgentToolCall(
@@ -879,9 +867,7 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
             )
         if parent_turn == 2:
             observed = json.loads(messages[-1]["content"])
-            source = observed["project"]["sources"]["sources"]["items"][
-                source_id
-            ]
+            source = observed["project"]["sources"]["sources"]["items"][source_id]
             assert source["selected_asset_version_id"] == asset_version_id
             return AgentModelTurn(
                 tool_calls=(
@@ -910,14 +896,12 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
             )
         if parent_turn == 4:
             observed = json.loads(messages[-1]["content"])
-            source = observed["project"]["sources"]["sources"]["items"][
-                source_id
-            ]
+            source = observed["project"]["sources"]["sources"]["items"][source_id]
             intelligence_id = source["current_intelligence_version_id"]
             assert intelligence_id
-            file_id = observed["project"]["assets"][
-                "intelligence_versions_by_id"
-            ][intelligence_id]["file_id"]
+            file_id = observed["project"]["assets"]["intelligence_versions_by_id"][
+                intelligence_id
+            ]["file_id"]
             return AgentModelTurn(
                 tool_calls=(
                     AgentToolCall(
@@ -1003,17 +987,50 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
         nonlocal source_turn
         source_turn += 1
         names = {item["function"]["name"] for item in tools}
-        assert "analyze_source_media" in names
+        assert "commit_source_intelligence" in names
         if source_turn == 1:
             return AgentModelTurn(
                 tool_calls=(
                     AgentToolCall(
-                        call_id="analyze-source-persisted",
-                        name="analyze_source_media",
+                        call_id="commit-source-persisted",
+                        name="commit_source_intelligence",
                         arguments={
                             "projectId": PROJECT_ID,
                             "targetRef": f"asset:{asset_id}",
-                            "arguments": {"force": False},
+                            "arguments": {
+                                "summary": "海边日落中人物向镜头走来，完整过程清晰可见。",
+                                "shots": [
+                                    {
+                                        "startMs": 0,
+                                        "endMs": 5000,
+                                        "description": (
+                                            "人物在海边日落环境中由远及近走向镜头；"
+                                            "固定机位，中景逐渐变为近景，暖色逆光稳定。"
+                                        ),
+                                        "events": ["人物行走", "逐渐接近镜头"],
+                                        "confidence": 0.95,
+                                    },
+                                ],
+                                "entities": [
+                                    {
+                                        "kind": "person",
+                                        "label": "主要人物",
+                                        "description": "从远处持续走向镜头",
+                                        "startMs": 0,
+                                        "endMs": 5000,
+                                        "confidence": 0.95,
+                                    },
+                                ],
+                                "semanticEntries": [
+                                    {
+                                        "startMs": 0,
+                                        "endMs": 5000,
+                                        "text": "人物在海边日落中完成走向镜头的动作",
+                                        "tags": ["海边", "日落", "行走", "接近镜头"],
+                                        "confidence": 0.95,
+                                    },
+                                ],
+                            },
                         },
                     ),
                 ),
@@ -1114,16 +1131,12 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
 
     project, specialist_runs = asyncio.run(scenario())
     assert read_intelligence is True
-    element = project.timelines.items["timeline:main"].elements_by_id[
-        "edit-source"
-    ]
+    element = project.timelines.items["timeline:main"].elements_by_id["edit-source"]
     assert element.render_source is not None
     assert element.render_source.version_id == asset_version_id
     assert element.creation.source_intelligence_version_id is not None
     assert (
-        project.sources.sources.items[
-            source_id
-        ].current_intelligence_version_id
+        project.sources.sources.items[source_id].current_intelligence_version_id
         is not None
     )
     assert {item.role.value for item in specialist_runs} == {

@@ -15,7 +15,6 @@ from services.project_files.facade import CreatorFileServices
 from services.project_files.models import Project
 from services.runtime_files.models import CreatorMessageRecord
 
-
 pytestmark = pytest.mark.unit
 
 
@@ -92,7 +91,7 @@ def test_asset_version_refs_are_uploaded_and_attached_as_native_media(
                 "mediaType": "video/mp4",
                 "versionId": version_id,
                 "checksum": response["items"][0]["checksum"],
-                "fps": 0.1,
+                "fps": 0.5,
             },
             "attachment": {
                 "assetVersionRef": f"asset-version:{version_id}",

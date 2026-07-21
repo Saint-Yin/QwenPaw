@@ -16,7 +16,6 @@ from services.file_agent_runtime.subagents import (
 )
 from services.project_files.models import Project
 
-
 _INACTIVE_STATE_WORDS = {
     "已取消",
     "已禁用",
@@ -55,9 +54,7 @@ def test_active_prompts_do_not_describe_inactive_states() -> None:
         assert token not in combined
 
 
-def test_file_runtime_prompts_are_structured_files_with_workspace_schema() -> (
-    None
-):
+def test_file_runtime_prompts_are_structured_files_with_workspace_schema() -> None:
     assert set(FILE_AGENT_PROMPT_SPECS) == {
         "creator_agent.system",
         "source_intelligence_agent.system",
@@ -82,9 +79,7 @@ def test_file_runtime_prompts_are_structured_files_with_workspace_schema() -> (
             assert "PROJECT_JSON_SCHEMA=" in rendered
 
 
-def test_creator_asset_flow_is_conditional_and_uses_visible_message_language() -> (
-    None
-):
+def test_creator_asset_flow_is_conditional_and_uses_visible_message_language() -> None:
     prompt = load_file_agent_prompt("creator_agent.system")
     assert "处理本轮上传素材（如有）" in prompt
     assert "没有该段落时" in prompt
@@ -110,25 +105,24 @@ def test_creator_owns_timeline_element_planning() -> None:
     assert "x=0.5, y=0.5" in prompt
 
 
-def test_source_prompt_bounds_transient_analysis_retry() -> None:
+def test_source_prompt_requires_outer_vlm_timeline_and_controlled_commit() -> None:
     prompt = load_file_agent_prompt("source_intelligence_agent.system")
-    assert "首次调用使用 `force=false`" in prompt
-    assert "只使用 `force=true` 重试一次" in prompt
-    assert "重试仍失败时返回 `[BLOCKED]`" in prompt
-    assert "不得继续重复调用或伪造关联" in prompt
+    assert "唯一 VLM 生产者" in prompt
+    assert "不得把理解工作转交给另一个 VLM" in prompt
+    assert "至少覆盖 90% 时长" in prompt
+    assert "整数毫秒半开区间 `[startMs,endMs)`" in prompt
+    assert "transcribe_source_audio" in prompt
+    assert "commit_source_intelligence" in prompt
+    assert "不得降低为一条 summary" in prompt
 
 
-def test_ai_editing_director_requires_pet_inner_monologue_not_action_labels() -> (
-    None
-):
+def test_ai_editing_director_requires_pet_inner_monologue_not_action_labels() -> None:
     prompt = load_file_agent_prompt("ai_editing_director.system")
     for field in ("overlay_kind=pet_os", "文案", "`vibe`", "绝对 span"):
         assert field in prompt
     assert "不是镜头标题、动作标签或客观摘要" in prompt
     assert "不再使用相对某个内部对象" in prompt
     assert "多个选择就是多个 Element" in prompt
-    assert (
-        "round((source_out_tick - source_in_tick) / playback_rate)" in prompt
-    )
+    assert "round((source_out_tick - source_in_tick) / playback_rate)" in prompt
     assert "jsonArgs.elements" in prompt
     assert "不是可选项" in prompt

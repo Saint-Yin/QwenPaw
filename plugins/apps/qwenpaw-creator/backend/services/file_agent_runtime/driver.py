@@ -33,6 +33,8 @@ from domain.errors import ConflictError
 from models.config import (
     EXECUTION_AUTHORIZATION_ALLOW_ALL,
     get_execution_authorization_mode,
+    get_text_model_name,
+    get_vlm_model_name,
     get_web_grounding_max_sources,
     get_web_grounding_timeout_seconds,
     get_image_model_name,
@@ -65,6 +67,7 @@ from services.runtime_files.execution_models import (
     SpecialistRunRecord,
 )
 from services.runtime_files.execution_store import ProjectExecutionStore
+from services.source_analysis import SourceAgentToolContext
 from services.specialist_tools import (
     FileSpecialistToolRegistry,
     SpecialistToolSpec,
@@ -98,7 +101,6 @@ from .subagents import (
     specialist_system_prompt,
 )
 
-
 GROUND_PROMPT_CONTEXT_TOOL_NAME = "ground_prompt_context"
 GROUNDING_VISUAL_MAX_BYTES = 16 * 1024 * 1024
 
@@ -125,11 +127,7 @@ def _grounding_extension(path: Path, media_type: str) -> str:
     if suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
         return suffix
     guessed = mimetypes.guess_extension(media_type)
-    return (
-        guessed
-        if guessed in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-        else ".img"
-    )
+    return guessed if guessed in {".jpg", ".jpeg", ".png", ".webp", ".gif"} else ".img"
 
 
 def _grounding_local_path(source: Mapping[str, Any]) -> Path | None:
@@ -278,9 +276,7 @@ class FileCreatorAgentRuntime:
         injected_model_client = model_client is not None
         self.model_client = model_client or AgentScopeAgentChatClient()
         self.source_model_client = source_model_client or (
-            self.model_client
-            if injected_model_client
-            else AgentScopeVlmChatClient()
+            self.model_client if injected_model_client else AgentScopeVlmChatClient()
         )
         self.poll_interval_seconds = poll_interval_seconds
         self.max_model_turns = max_model_turns
@@ -483,8 +479,7 @@ class FileCreatorAgentRuntime:
         if session.active_run_id is not None and handle is None:
             interrupted = any(
                 item.review_boundary is not None
-                and item.review_boundary.interrupted_run_id
-                == session.active_run_id
+                and item.review_boundary.interrupted_run_id == session.active_run_id
                 for item in user_messages
             )
             if not interrupted:
@@ -1130,9 +1125,7 @@ class FileCreatorAgentRuntime:
                 continue
             source["workspace_ref"] = entry["workspace_ref"]
             source["assetVersionRef"] = entry["workspace_ref"]
-            source["source_asset_version_id"] = entry[
-                "source_asset_version_id"
-            ]
+            source["source_asset_version_id"] = entry["source_asset_version_id"]
             source["logical_asset_id"] = entry["logical_asset_id"]
             source["indexed_file_id"] = entry["file_id"]
         context_lines = [
@@ -1244,8 +1237,7 @@ class FileCreatorAgentRuntime:
                     version_id=version_id,
                     logical_asset_id=logical_asset_id,
                     name=str(
-                        raw_source.get("title")
-                        or f"Grounding visual {index + 1}",
+                        raw_source.get("title") or f"Grounding visual {index + 1}",
                     )[:160],
                     file_id=file_id,
                     checksum=checksum,
@@ -1699,6 +1691,8 @@ class FileCreatorAgentRuntime:
                         request=request,
                         common=common,
                         call_id=call.call_id,
+                        assistant_message_id=message_id,
+                        provider_message_id=turn.provider_message_id,
                         name=call.name,
                         arguments=call.arguments,
                         tools=tools,
@@ -1828,6 +1822,8 @@ class FileCreatorAgentRuntime:
         request: CreatorMessageRecord,
         common: Mapping[str, Any],
         call_id: str,
+        assistant_message_id: str,
+        provider_message_id: str | None,
         name: str,
         arguments: Mapping[str, Any],
         tools: AgentProjectTools,
@@ -1839,8 +1835,7 @@ class FileCreatorAgentRuntime:
         if (
             spec is not None
             and spec.requires_execution_authorization
-            and get_execution_authorization_mode()
-            != EXECUTION_AUTHORIZATION_ALLOW_ALL
+            and get_execution_authorization_mode() != EXECUTION_AUTHORIZATION_ALLOW_ALL
         ):
             authorization_id = await self._await_execution_authorization(
                 project_id=project_id,
@@ -1903,6 +1898,22 @@ class FileCreatorAgentRuntime:
                 admitted_target_refs=admitted_target_refs,
                 project_tools=tools,
                 idempotency_key=idempotency_key,
+                context=SourceAgentToolContext(
+                    specialist_run_id=specialist_run_id,
+                    tool_call_id=call_id,
+                    assistant_message_id=assistant_message_id,
+                    provider_message_id=provider_message_id,
+                    provider=(
+                        "configured_vlm"
+                        if role is SpecialistRole.SOURCE_INTELLIGENCE
+                        else "configured_text"
+                    ),
+                    model=(
+                        get_vlm_model_name()
+                        if role is SpecialistRole.SOURCE_INTELLIGENCE
+                        else get_text_model_name()
+                    ),
+                ),
             )
             result = dict(invoked.payload)
             if spec is not None and spec.wait is SpecialistToolWait.TASK:
@@ -2249,14 +2260,18 @@ class FileCreatorAgentRuntime:
                 **(
                     {
                         "error": str(
-                            result.get("error", {}).get("message")
-                            if isinstance(result.get("error"), Mapping)
-                            else "Tool execution failed",
+                            (
+                                result.get("error", {}).get("message")
+                                if isinstance(result.get("error"), Mapping)
+                                else "Tool execution failed"
+                            ),
                         ),
                         "errorType": str(
-                            result.get("error", {}).get("type")
-                            if isinstance(result.get("error"), Mapping)
-                            else "ToolError",
+                            (
+                                result.get("error", {}).get("type")
+                                if isinstance(result.get("error"), Mapping)
+                                else "ToolError"
+                            ),
                         ),
                     }
                     if failed
@@ -2360,9 +2375,7 @@ class FileCreatorAgentRuntime:
     ) -> None:
         handle = self._active.get(project_id)
         superseded = bool(
-            handle is not None
-            and handle.run_id == run_id
-            and handle.superseded,
+            handle is not None and handle.run_id == run_id and handle.superseded,
         )
         try:
             await asyncio.to_thread(
@@ -2619,9 +2632,7 @@ def _message_text(message: CreatorMessageRecord) -> str:
             )
     refs = message.metadata.get("assetVersionRefs")
     if isinstance(refs, list):
-        exact_refs = [
-            str(value).strip() for value in refs if str(value).strip()
-        ]
+        exact_refs = [str(value).strip() for value in refs if str(value).strip()]
         if exact_refs:
             chunks.append(
                 "本轮已入库素材（本轮消息附件的 exact AssetVersion refs，"
@@ -2734,8 +2745,7 @@ def _require_source_intelligence_associations(
         )
         if (
             intelligence is None
-            or intelligence.source_asset_version_id
-            != source.selected_asset_version_id
+            or intelligence.source_asset_version_id != source.selected_asset_version_id
         ):
             raise FileAgentRuntimeError(
                 "Source Intelligence selection does not match the current Source version "

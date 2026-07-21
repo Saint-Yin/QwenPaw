@@ -3,13 +3,14 @@
 # pylint: disable=protected-access,raise-missing-from
 # pylint: disable=too-many-boolean-expressions,too-many-branches
 # pylint: disable=too-many-return-statements,too-many-statements
-"""No-SQL ``ANALYZE_SOURCE_MEDIA`` vertical slice.
+"""File-native Source Intelligence validation, modality tools, and publishing.
 
-The provider sees a verified Runtime copy of one exact ``IndexedFile``.  Its
-output is normalized into the canonical ``SourceIntelligenceIndex`` schema,
-published as one immutable Asset file, and then referenced by one Project
-commit.  Provider results that arrive after cancellation or a Project head
-change are durable quarantine facts and can never become Project authority.
+The outer Source Intelligence VLM is the only visual-understanding producer.
+This boundary verifies the exact selected SourceAssetVersion, runs optional
+non-VLM modality tools such as ASR, normalizes the outer VLM's structured
+payload, and publishes one immutable SourceIntelligenceIndex.  The legacy
+direct ANALYZE_SOURCE_MEDIA task protocol remains fail-closed for recovery of
+older Runtime records and never starts a hidden VLM call.
 """
 
 from __future__ import annotations
@@ -44,8 +45,9 @@ from domain.errors import (
     ValidationError,
 )
 from models import config as model_config
-from models import asr_model, vlm_model
+from models import asr_model
 from schemas.assets import (
+    SourceAgentIntelligenceInput,
     SourceIndexQueryResult,
     SourceIntelligenceIndex,
     SourceMediaMetadata,
@@ -82,13 +84,24 @@ from services.runtime_files.media_probe import (
 
 from .codec import build_source_intelligence_index
 
-
 _SAFE_SUFFIX = re.compile(r"^\.[A-Za-z0-9]{1,16}$")
 _MODALITIES = ("visual", "asr", "ocr", "audio")
 
 
 class SourceAnalyzerConfigurationError(RuntimeError):
     """The real provider cannot run with the current model/tool config."""
+
+
+@dataclass(frozen=True, slots=True)
+class SourceAgentToolContext:
+    """Runtime-owned identity for one outer-VLM Source tool call."""
+
+    specialist_run_id: str
+    tool_call_id: str
+    assistant_message_id: str
+    provider_message_id: str | None
+    provider: str
+    model: str
 
 
 class StaleSourceAnalysis(RuntimeError):
@@ -266,198 +279,47 @@ def _probe_media(
     )
 
 
-class DefaultSourceMediaAnalyzer:
-    """Real local probe + configured VLM/ASR implementation.
+def _source_module_result_ref(context: SourceAgentToolContext, kind: str) -> str:
+    identity = uuid5(
+        NAMESPACE_URL,
+        (
+            "qwenpaw-creator:source-module-result:"
+            f"{context.specialist_run_id}:{context.tool_call_id}:{kind}"
+        ),
+    ).hex
+    return f"source-module-result:{identity}"
 
-    It deliberately reports OCR and generic audio-event coverage as unavailable
-    because no dedicated producer is called.  Missing configuration for the
-    modality required by the Source kind is a failure, never an empty success.
-    """
+
+def _covered_ratio(
+    intervals: list[tuple[int, int]],
+    duration_ms: int,
+) -> float:
+    if duration_ms <= 0 or not intervals:
+        return 0.0
+    ordered = sorted(intervals)
+    covered = 0
+    current_start, current_end = ordered[0]
+    for start, end in ordered[1:]:
+        if start <= current_end:
+            current_end = max(current_end, end)
+            continue
+        covered += current_end - current_start
+        current_start, current_end = start, end
+    covered += current_end - current_start
+    return min(1.0, covered / duration_ms)
+
+
+class DefaultSourceMediaAnalyzer:
+    """Deprecated compatibility boundary; visual understanding belongs to the outer VLM."""
 
     async def analyze(
         self,
         request: SourceMediaAnalysisInput,
     ) -> SourceAnalyzerOutput:
-        kind = request.source_version.media_kind
-        if kind not in {"image", "video", "audio"}:
-            raise SourceAnalyzerConfigurationError(
-                f"default Source analyzer does not support media kind {kind!r}",
-            )
-        if kind in {"image", "video"} and not model_config.get_vlm_api_key():
-            raise SourceAnalyzerConfigurationError(
-                "ANALYZE_SOURCE_MEDIA requires configured creator_vlm_model credentials",
-            )
-        if kind == "audio" and not model_config.get_asr_api_key():
-            raise SourceAnalyzerConfigurationError(
-                "audio ANALYZE_SOURCE_MEDIA requires configured creator_asr_model credentials",
-            )
-
-        media_uri = (
-            request.local_path.as_uri()
-            if request.local_path is not None
-            else str(request.source_url or "")
-        )
-        if not media_uri:
-            raise SourceAnalyzerConfigurationError(
-                "Source analyzer has neither a local file nor a public URL",
-            )
-        media = (
-            await asyncio.to_thread(
-                _probe_media,
-                request.local_path,
-                request.source_version,
-            )
-            if request.local_path is not None
-            else SourceMediaMetadata(
-                mediaKind=request.source_version.media_kind,
-                mediaType=request.source_version.media_type,
-                durationMs=(
-                    round(request.source_version.duration_seconds * 1000)
-                    if request.source_version.duration_seconds is not None
-                    else None
-                ),
-            )
-        )
-        model_runs: list[SourceModelRunRef] = []
-        visual_summary = ""
-        if kind in {"image", "video"}:
-            visual_run = SourceModelRunRef(
-                id=f"vlm-{uuid5(NAMESPACE_URL, request.evidence_ref).hex}",
-                provider="configured_vlm",
-                model=model_config.get_vlm_model_name(),
-            )
-            visual_summary = await vlm_model.chat_completion(
-                [
-                    vlm_model.multimodal_media_part(
-                        media_uri,
-                        kind,
-                        fps=1.0,
-                    ),
-                    {
-                        "type": "text",
-                        "text": (
-                            "请仅基于所见素材，用简洁中文描述主体、场景、动作、风格与重要事件。"
-                            "不要猜测未观察到的音频、字幕或身份。"
-                        ),
-                    },
-                ],
-                system_prompt="你是素材理解器。只陈述可观察事实。",
-                temperature=0.1,
-                max_tokens=1200,
-            )
-            model_runs.append(visual_run)
-
-        transcript: list[dict[str, Any]] = []
-        asr_result = None
-        if kind in {"video", "audio"} and model_config.get_asr_api_key():
-            if (
-                model_config.get_asr_provider() != "whisper"
-                and kind == "audio"
-            ):
-                raise SourceAnalyzerConfigurationError(
-                    "local Project audio currently requires ASR provider=whisper",
-                )
-            asr_result = await asr_model.transcribe(media_uri)
-        if asr_result is not None:
-            asr_run = SourceModelRunRef(
-                id=f"asr-{uuid5(NAMESPACE_URL, request.evidence_ref).hex}",
-                provider=asr_result.provider,
-                model=asr_result.model,
-            )
-            model_runs.append(asr_run)
-            for index, segment in enumerate(asr_result.segments, 1):
-                end_ms = segment.end_ms
-                if media.duration_ms is not None:
-                    end_ms = min(end_ms, media.duration_ms)
-                if end_ms <= segment.start_ms:
-                    continue
-                transcript.append(
-                    {
-                        "id": f"transcript-{index:06d}",
-                        "startMs": segment.start_ms,
-                        "endMs": end_ms,
-                        "text": segment.text,
-                        "speaker": segment.speaker,
-                        "confidence": segment.confidence,
-                        "modelRunId": asr_run.id,
-                        "evidenceFrameRefs": [request.evidence_ref],
-                    },
-                )
-
-        if not model_runs:
-            raise SourceAnalyzerConfigurationError(
-                "no configured Source analyzer can cover this media",
-            )
-        summary = visual_summary.strip()
-        if kind in {"image", "video"} and not summary:
-            raise RuntimeError(
-                "configured VLM returned an empty Source analysis",
-            )
-        if not summary and transcript:
-            summary = " ".join(item["text"] for item in transcript).strip()
-        if not summary:
-            summary = "ASR 已完成分析，未检测到可转写语音。"
-
-        visual_available = kind in {"image", "video"}
-        asr_applicable = kind in {"video", "audio"}
-        asr_available = asr_result is not None
-        coverage = {
-            "visual": {
-                "mode": "available" if visual_available else "not_applicable",
-                "producer": "model_native" if visual_available else None,
-                "ratio": 1.0 if visual_available else None,
-            },
-            "asr": {
-                "mode": (
-                    "available"
-                    if asr_available
-                    else "unavailable"
-                    if asr_applicable
-                    else "not_applicable"
-                ),
-                "producer": "model_native" if asr_available else None,
-                "ratio": 1.0 if asr_available else None,
-            },
-            "ocr": {
-                "mode": "unavailable"
-                if visual_available
-                else "not_applicable",
-                "producer": None,
-                "ratio": None,
-            },
-            "audio": {
-                "mode": "unavailable" if asr_applicable else "not_applicable",
-                "producer": None,
-                "ratio": None,
-            },
-        }
-        semantic = [
-            {
-                "id": "semantic-000001",
-                "text": summary,
-                "tags": [kind, "source-intelligence"],
-                "confidence": 0.8,
-                "modelRunId": model_runs[0].id,
-                "evidenceFrameRefs": [request.evidence_ref],
-            },
-        ]
-        raw = {
-            "summary": summary,
-            "coverage": coverage,
-            "shots": [],
-            "transcript": transcript,
-            "words": [],
-            "ocrSegments": [],
-            "audioEvents": [],
-            "entities": [],
-            "semanticEntries": semantic,
-        }
-        return SourceAnalyzerOutput(
-            raw=raw,
-            media=media,
-            model_runs=tuple(model_runs),
-            coverage_policy=coverage,
-            provenance_refs=(request.evidence_ref,),
+        del request
+        raise SourceAnalyzerConfigurationError(
+            "Direct inner Source VLM analysis has been removed; the outer Source "
+            "Intelligence VLM must call commit_source_intelligence",
         )
 
 
@@ -472,6 +334,474 @@ class SourceMediaAnalysisService:
         self.analyzer = analyzer or DefaultSourceMediaAnalyzer()
         self.executions = ProjectExecutionStore(services.root)
         self._jobs: dict[str, asyncio.Task[TaskRecord]] = {}
+
+    def _resolve_agent_source_sync(
+        self,
+        project_id: str,
+        target_ref: str,
+    ) -> tuple[
+        Any,
+        ProjectSource,
+        SourceAssetVersion,
+        IndexedFile | None,
+        Path | None,
+        str | None,
+        SourceMediaMetadata,
+    ]:
+        snapshot = self.services.projects.read(project_id)
+        source = self._resolve_source(snapshot.project, target_ref, {})
+        version = snapshot.project.assets.source_versions_by_id.get(
+            source.selected_asset_version_id,
+        )
+        if version is None:
+            raise StorageIntegrityError(
+                "ProjectSource selected AssetVersion 不存在",
+            )
+        indexed = (
+            snapshot.project.assets.files_by_id.get(version.file_id)
+            if version.file_id is not None
+            else None
+        )
+        source_url = public_source_url(version)
+        local_path: Path | None = None
+        if indexed is not None:
+            if (
+                indexed.kind != "source_original"
+                or indexed.sha256 != version.checksum
+                or indexed.media_type != version.media_type
+            ):
+                raise StorageIntegrityError(
+                    "SourceAssetVersion 与 IndexedFile 内容身份不一致",
+                )
+            file_store = AssetFileStore(
+                self.services.projects.project_root(project_id),
+            )
+            inspection = file_store.inspect(indexed)
+            if not inspection.available:
+                raise StorageIntegrityError(
+                    f"Source IndexedFile 不可用: {inspection.status.value}",
+                )
+            local_path = Path(file_store.project_root, indexed.relative_uri)
+            media = _probe_media(local_path, version)
+        elif source_url is not None:
+            media = SourceMediaMetadata(
+                mediaKind=version.media_kind,
+                mediaType=version.media_type,
+                durationMs=(
+                    round(version.duration_seconds * 1000)
+                    if version.duration_seconds is not None
+                    else None
+                ),
+            )
+        else:
+            raise StorageIntegrityError(
+                "SourceAssetVersion 缺少本地文件与公网 URL",
+            )
+        return (
+            snapshot,
+            source,
+            version,
+            indexed,
+            local_path,
+            source_url,
+            media,
+        )
+
+    async def transcribe_source_audio(
+        self,
+        *,
+        project_id: str,
+        target_ref: str,
+        context: SourceAgentToolContext,
+    ) -> dict[str, Any]:
+        (
+            _snapshot,
+            _source,
+            version,
+            _indexed,
+            local_path,
+            source_url,
+            media,
+        ) = await asyncio.to_thread(
+            self._resolve_agent_source_sync,
+            project_id,
+            target_ref,
+        )
+        if version.media_kind not in {"video", "audio"}:
+            raise ValidationError("ASR 工具只适用于视频或音频 Source")
+        result_ref = _source_module_result_ref(context, "asr")
+        if not model_config.get_asr_api_key():
+            return {
+                "ok": True,
+                "module": "asr",
+                "resultRef": result_ref,
+                "available": False,
+                "reason": "Creator ASR 未配置",
+                "sourceAssetVersionId": version.version_id,
+                "sourceChecksum": version.checksum,
+                "transcript": [],
+            }
+        media_uri = (
+            local_path.as_uri() if local_path is not None else str(source_url or "")
+        )
+        result = await asr_model.transcribe(media_uri)
+        model_run_id = f"asr-{uuid5(NAMESPACE_URL, result_ref).hex}"
+        transcript: list[dict[str, Any]] = []
+        for segment in result.segments:
+            end_ms = segment.end_ms
+            if media.duration_ms is not None:
+                end_ms = min(end_ms, media.duration_ms)
+            if end_ms <= segment.start_ms:
+                continue
+            transcript.append(
+                {
+                    "startMs": segment.start_ms,
+                    "endMs": end_ms,
+                    "text": segment.text,
+                    "speaker": segment.speaker,
+                    "confidence": segment.confidence,
+                },
+            )
+        return {
+            "ok": True,
+            "module": "asr",
+            "resultRef": result_ref,
+            "available": True,
+            "sourceAssetVersionId": version.version_id,
+            "sourceChecksum": version.checksum,
+            "modelRun": {
+                "id": model_run_id,
+                "provider": result.provider,
+                "model": result.model,
+            },
+            "transcript": transcript,
+        }
+
+    def _module_result_sync(
+        self,
+        *,
+        project_id: str,
+        context: SourceAgentToolContext,
+        result_ref: str,
+        tool_name: str,
+    ) -> Mapping[str, Any]:
+        for message in reversed(
+            self.executions.list_specialist_messages(
+                project_id,
+                context.specialist_run_id,
+            ),
+        ):
+            if message.role != "tool" or message.metadata.get("tool") != tool_name:
+                continue
+            for content_part in message.content_parts:
+                if not isinstance(content_part, Mapping):
+                    continue
+                text = content_part.get("text")
+                if not isinstance(text, str):
+                    continue
+                try:
+                    value = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value, Mapping) and value.get("resultRef") == result_ref:
+                    return value
+        raise ValidationError(
+            f"素材理解模块结果不存在或不属于当前 SpecialistRun: {result_ref}",
+        )
+
+    @staticmethod
+    def _assert_agent_ranges(
+        payload: SourceAgentIntelligenceInput,
+        media: SourceMediaMetadata,
+    ) -> float | None:
+        kind = media.media_kind
+        duration_ms = media.duration_ms
+        if kind == "video":
+            if duration_ms is None or duration_ms <= 0:
+                raise ValidationError("视频素材理解需要可验证的媒体时长")
+            if not payload.shots:
+                raise ValidationError("视频素材理解必须包含详尽 shots 时间线")
+            if not payload.semantic_entries:
+                raise ValidationError(
+                    "视频素材理解必须包含带时间范围的 semanticEntries",
+                )
+        elif payload.shots:
+            raise ValidationError("非视频素材不得提交 shots 时间线")
+
+        def assert_range(start: int, end: int, label: str) -> None:
+            if duration_ms is not None and end > duration_ms:
+                raise ValidationError(
+                    f"{label} 时间范围超过素材时长: {end}>{duration_ms}",
+                )
+
+        for number, shot in enumerate(payload.shots, 1):
+            assert_range(shot.start_ms, shot.end_ms, f"shots[{number}]")
+        for number, entity in enumerate(payload.entities, 1):
+            if entity.start_ms is not None:
+                assert_range(
+                    entity.start_ms,
+                    entity.end_ms,
+                    f"entities[{number}]",
+                )
+        for number, item in enumerate(payload.semantic_entries, 1):
+            if kind in {"video", "audio"} and item.start_ms is None:
+                raise ValidationError(
+                    f"semanticEntries[{number}] 缺少 startMs/endMs",
+                )
+            if kind == "image" and item.start_ms is not None:
+                raise ValidationError(
+                    f"图片 semanticEntries[{number}] 不得包含时间范围",
+                )
+            if item.start_ms is not None:
+                assert_range(
+                    item.start_ms,
+                    item.end_ms,
+                    f"semanticEntries[{number}]",
+                )
+        if kind != "video":
+            return None
+        ratio = _covered_ratio(
+            [(item.start_ms, item.end_ms) for item in payload.shots],
+            duration_ms,
+        )
+        if ratio < 0.9:
+            raise ValidationError(
+                "视频 shots 时间线覆盖不足 90%，必须记录开头、过渡、静止/黑屏和结尾",
+            )
+        return ratio
+
+    async def commit_agent_intelligence(
+        self,
+        *,
+        project_id: str,
+        target_ref: str,
+        command_id: str,
+        arguments: Mapping[str, Any],
+        context: SourceAgentToolContext,
+    ) -> dict[str, Any]:
+        try:
+            agent_payload = SourceAgentIntelligenceInput.model_validate(
+                dict(arguments),
+            )
+        except ValueError as error:
+            raise ValidationError(
+                f"外层 VLM 素材理解结构不合法: {error}",
+            ) from error
+        (
+            snapshot,
+            source,
+            version,
+            indexed,
+            _local_path,
+            _source_url,
+            media,
+        ) = await asyncio.to_thread(
+            self._resolve_agent_source_sync,
+            project_id,
+            target_ref,
+        )
+        visual_ratio = self._assert_agent_ranges(agent_payload, media)
+        evidence_ref = f"asset://{version.logical_asset_id}@{version.version_id}"
+        identity = (
+            context.provider_message_id
+            or context.assistant_message_id
+            or context.tool_call_id
+        )
+        visual_run = SourceModelRunRef(
+            id=f"vlm-{uuid5(NAMESPACE_URL, f'{context.specialist_run_id}:{identity}').hex}",
+            provider=context.provider,
+            model=context.model,
+        )
+        additional_runs: list[SourceModelRunRef] = []
+        transcript: list[dict[str, Any]] = []
+        asr_available = False
+        asr_ref = agent_payload.module_result_refs.asr
+        if asr_ref:
+            module = await asyncio.to_thread(
+                self._module_result_sync,
+                project_id=project_id,
+                context=context,
+                result_ref=asr_ref,
+                tool_name="transcribe_source_audio",
+            )
+            if (
+                module.get("sourceAssetVersionId") != version.version_id
+                or module.get("sourceChecksum") != version.checksum
+            ):
+                raise ValidationError("ASR 结果不属于当前 SourceAssetVersion")
+            asr_available = module.get("available") is True
+            model_run = module.get("modelRun")
+            if asr_available:
+                try:
+                    asr_run = SourceModelRunRef.model_validate(model_run)
+                except ValueError as error:
+                    raise ValidationError(
+                        f"ASR modelRun 不合法: {error}",
+                    ) from error
+                additional_runs.append(asr_run)
+                for number, raw_item in enumerate(
+                    module.get("transcript") or (),
+                    1,
+                ):
+                    if not isinstance(raw_item, Mapping):
+                        raise ValidationError("ASR transcript 必须是 object 数组")
+                    item = dict(raw_item)
+                    item.update(
+                        {
+                            "id": f"transcript-{number:06d}",
+                            "modelRunId": asr_run.id,
+                            "evidenceFrameRefs": [evidence_ref],
+                        },
+                    )
+                    transcript.append(item)
+
+        visual_available = media.media_kind in {"image", "video"}
+        asr_applicable = media.media_kind in {"video", "audio"}
+        coverage = {
+            "visual": {
+                "mode": "available" if visual_available else "not_applicable",
+                "producer": "model_native" if visual_available else None,
+                "ratio": (
+                    visual_ratio
+                    if media.media_kind == "video"
+                    else 1.0 if media.media_kind == "image" else None
+                ),
+            },
+            "asr": {
+                "mode": (
+                    "available"
+                    if asr_available
+                    else "unavailable" if asr_applicable else "not_applicable"
+                ),
+                "producer": "model_native" if asr_available else None,
+                "ratio": 1.0 if asr_available else None,
+            },
+            "ocr": {
+                "mode": "unavailable" if visual_available else "not_applicable",
+                "producer": None,
+                "ratio": None,
+            },
+            "audio": {
+                "mode": "unavailable" if asr_applicable else "not_applicable",
+                "producer": None,
+                "ratio": None,
+            },
+        }
+        shots = [
+            {
+                "id": f"shot-{number:06d}",
+                "startMs": item.start_ms,
+                "endMs": item.end_ms,
+                "description": item.description.strip(),
+                "events": [value.strip() for value in item.events],
+                "keyframeRef": evidence_ref,
+                "confidence": item.confidence,
+                "modelRunId": visual_run.id,
+                "evidenceFrameRefs": [evidence_ref],
+            }
+            for number, item in enumerate(agent_payload.shots, 1)
+        ]
+        entities = [
+            {
+                "id": f"entity-{number:06d}",
+                "kind": item.kind.strip(),
+                "label": item.label.strip(),
+                "description": item.description.strip(),
+                **(
+                    {"startMs": item.start_ms, "endMs": item.end_ms}
+                    if item.start_ms is not None
+                    else {}
+                ),
+                "confidence": item.confidence,
+                "modelRunId": visual_run.id,
+                "evidenceFrameRefs": [evidence_ref],
+            }
+            for number, item in enumerate(agent_payload.entities, 1)
+        ]
+        semantic = [
+            {
+                "id": f"semantic-{number:06d}",
+                "text": item.text.strip(),
+                "tags": [value.strip() for value in item.tags],
+                **(
+                    {"startMs": item.start_ms, "endMs": item.end_ms}
+                    if item.start_ms is not None
+                    else {}
+                ),
+                "confidence": item.confidence,
+                "modelRunId": visual_run.id,
+                "evidenceFrameRefs": [evidence_ref],
+            }
+            for number, item in enumerate(agent_payload.semantic_entries, 1)
+        ]
+        raw = {
+            "summary": agent_payload.summary.strip(),
+            "coverage": coverage,
+            "shots": shots,
+            "transcript": transcript,
+            "words": [],
+            "ocrSegments": [],
+            "audioEvents": [],
+            "entities": entities,
+            "semanticEntries": semantic,
+        }
+        created_at = datetime.now(UTC)
+        intelligence_version_id = _stable_id(
+            "source-intelligence",
+            project_id,
+            command_id,
+        )
+        index = build_source_intelligence_index(
+            raw,
+            analysis_version_id=intelligence_version_id,
+            asset_id=version.logical_asset_id,
+            asset_version_id=version.version_id,
+            source_checksum=version.checksum,
+            model_run=visual_run,
+            additional_model_runs=additional_runs,
+            created_at=created_at.isoformat().replace("+00:00", "Z"),
+            media=media,
+            coverage_policy=coverage,
+            provenance_refs=(evidence_ref,),
+        )
+        job = SourceAnalysisJob(
+            project_id=project_id,
+            command_id=command_id,
+            round_id=context.specialist_run_id,
+            run_id=context.specialist_run_id,
+            task_id=_stable_id("source-agent-commit", project_id, command_id),
+            attempt_id=_stable_id("source-agent-attempt", project_id, command_id),
+            intelligence_version_id=intelligence_version_id,
+            intelligence_file_id=_stable_id(
+                "source-intelligence-file",
+                project_id,
+                command_id,
+            ),
+            commit_id=_stable_id("source-commit", project_id, command_id),
+            source_id=source.source_id,
+            source_version=version,
+            indexed_file=indexed,
+            input_generation=snapshot.generation,
+            input_etag=snapshot.etag,
+            request_fingerprint=sha256(
+                canonical_json_bytes(dict(arguments)),
+            ).hexdigest(),
+        )
+        published = await _thread_boundary(
+            self._publish_and_commit_sync,
+            job,
+            index,
+            created_at,
+            False,
+        )
+        return {
+            "ok": True,
+            "status": "SUCCEEDED",
+            "summary": index.summary,
+            "shotCount": len(index.shots),
+            "semanticEntryCount": len(index.semantic_entries),
+            **published,
+        }
 
     async def dispatch(
         self,
@@ -631,8 +961,7 @@ class SourceMediaAnalysisService:
                         "sourceId": job.source_id,
                         "analysisVersionId": index.id,
                         "coverage": {
-                            key: value.mode
-                            for key, value in index.coverage.items()
+                            key: value.mode for key, value in index.coverage.items()
                         },
                     },
                 },
@@ -660,9 +989,7 @@ class SourceMediaAnalysisService:
         snapshot = self.services.projects.read(project_id)
         project = snapshot.project
         source = self._source_for_logical_asset(project, logical_asset_id)
-        selected_id = (
-            intelligence_version_id or source.current_intelligence_version_id
-        )
+        selected_id = intelligence_version_id or source.current_intelligence_version_id
         if selected_id is None:
             raise NotFoundError("该 Asset 尚无 source intelligence 索引")
         record = project.assets.intelligence_versions_by_id.get(selected_id)
@@ -707,9 +1034,7 @@ class SourceMediaAnalysisService:
                 "Source Intelligence 索引不是 canonical JSON",
             )
         expected_runs = [item.id for item in index.model_runs]
-        expected_coverage = {
-            key: value.mode for key, value in index.coverage.items()
-        }
+        expected_coverage = {key: value.mode for key, value in index.coverage.items()}
         if (
             index.id != record.intelligence_version_id
             or index.asset_id != logical_asset_id
@@ -885,8 +1210,7 @@ class SourceMediaAnalysisService:
                     or existing_task.kind is not TaskKind.SOURCE_INTELLIGENCE
                     or existing_task.request_fingerprint != request_fingerprint
                     or existing_task.idempotency_key != command_id
-                    or existing_task.expected_target_version
-                    != version.checksum
+                    or existing_task.expected_target_version != version.checksum
                     or existing_task.input_generation != frozen_generation
                     or existing_task.input_etag != frozen_etag
                 ):
@@ -1105,18 +1429,20 @@ class SourceMediaAnalysisService:
         job: SourceAnalysisJob,
         index: SourceIntelligenceIndex,
         created_at: datetime,
+        task_owned: bool = True,
     ) -> dict[str, Any]:
         project_root = self.services.projects.project_root(job.project_id)
         with self.services.projects.lifecycle_lock(job.project_id):
-            task = self.executions.get_task(
-                job.project_id,
-                job.task_id,
-                _lifecycle_lock_held=True,
-            )
-            if task.status is TaskStatus.CANCELLED:
-                raise CancelledSourceAnalysis(
-                    "Task was cancelled before Source Intelligence publication",
+            if task_owned:
+                task = self.executions.get_task(
+                    job.project_id,
+                    job.task_id,
+                    _lifecycle_lock_held=True,
                 )
+                if task.status is TaskStatus.CANCELLED:
+                    raise CancelledSourceAnalysis(
+                        "Task was cancelled before Source Intelligence publication",
+                    )
             current = self.services.projects.read(job.project_id)
             replay = self._already_published(current.project, job)
             if replay:
@@ -1129,7 +1455,8 @@ class SourceMediaAnalysisService:
                     "etag": current.etag,
                     "idempotentReplay": True,
                 }
-                self._complete_task_sync(job, published)
+                if task_owned:
+                    self._complete_task_sync(job, published)
                 return published
             if (
                 current.generation != job.input_generation
@@ -1179,9 +1506,7 @@ class SourceMediaAnalysisService:
                         "Source Intelligence immutable path 已存在但内容不同",
                     )
             candidate = current.project.model_dump(mode="json")
-            candidate["assets"]["files_by_id"][
-                indexed.file_id
-            ] = indexed.model_dump(
+            candidate["assets"]["files_by_id"][indexed.file_id] = indexed.model_dump(
                 mode="json",
             )
             intelligence = SourceIntelligenceVersion(
@@ -1190,14 +1515,12 @@ class SourceMediaAnalysisService:
                 file_id=indexed.file_id,
                 source_checksum=job.source_version.checksum,
                 model_run_ids=[item.id for item in index.model_runs],
-                coverage={
-                    key: value.mode for key, value in index.coverage.items()
-                },
+                coverage={key: value.mode for key, value in index.coverage.items()},
                 created_at=created_at,
             )
-            candidate["assets"]["intelligence_versions_by_id"][
-                index.id
-            ] = intelligence.model_dump(mode="json")
+            candidate["assets"]["intelligence_versions_by_id"][index.id] = (
+                intelligence.model_dump(mode="json")
+            )
             candidate["sources"]["sources"]["items"][job.source_id][
                 "current_intelligence_version_id"
             ] = index.id
@@ -1226,7 +1549,8 @@ class SourceMediaAnalysisService:
             # Cancellation takes the same Project lifecycle lock.  Completing
             # the Task before releasing it makes "committed but cancelled"
             # impossible for the public cancellation boundary.
-            self._complete_task_sync(job, published)
+            if task_owned:
+                self._complete_task_sync(job, published)
             return published
 
     def _complete_task_sync(
@@ -1317,8 +1641,7 @@ class SourceMediaAnalysisService:
                         "sourceId": job.source_id,
                         "analysisVersionId": index.id,
                         "coverage": {
-                            key: value.mode
-                            for key, value in index.coverage.items()
+                            key: value.mode for key, value in index.coverage.items()
                         },
                     },
                 },
@@ -1443,8 +1766,7 @@ class SourceMediaAnalysisService:
         )
         return (
             source is not None
-            and source.selected_asset_version_id
-            == job.source_version.version_id
+            and source.selected_asset_version_id == job.source_version.version_id
             and version == job.source_version
             and indexed == job.indexed_file
         )
@@ -1458,11 +1780,9 @@ class SourceMediaAnalysisService:
         indexed = project.assets.files_by_id.get(job.intelligence_file_id)
         return bool(
             source is not None
-            and source.current_intelligence_version_id
-            == job.intelligence_version_id
+            and source.current_intelligence_version_id == job.intelligence_version_id
             and intelligence is not None
-            and intelligence.source_asset_version_id
-            == job.source_version.version_id
+            and intelligence.source_asset_version_id == job.source_version.version_id
             and intelligence.file_id == job.intelligence_file_id
             and indexed is not None
             and indexed.kind == "source_intelligence",
@@ -1475,9 +1795,7 @@ class SourceMediaAnalysisService:
             "sourceId": job.source_id,
             "sourceAssetVersionId": job.source_version.version_id,
             "fileId": (
-                job.indexed_file.file_id
-                if job.indexed_file is not None
-                else None
+                job.indexed_file.file_id if job.indexed_file is not None else None
             ),
             "sourceUrl": public_source_url(job.source_version),
             "sourceChecksum": job.source_version.checksum,
@@ -1762,20 +2080,17 @@ def recover_interrupted_source_analysis(
                 )
                 recovered += 1
         for task in executions.list_tasks(project_id):
-            if (
-                task.kind is not TaskKind.SOURCE_INTELLIGENCE
-                or task.status not in {TaskStatus.QUEUED, TaskStatus.RUNNING}
-            ):
+            if task.kind is not TaskKind.SOURCE_INTELLIGENCE or task.status not in {
+                TaskStatus.QUEUED,
+                TaskStatus.RUNNING,
+            }:
                 continue
             recovery_job = convergence._recovery_job_from_task(task)
             if recovery_job is not None:
                 converged = convergence._converge_published_job_sync(
                     recovery_job,
                 )
-                if (
-                    converged is not None
-                    and converged.status is TaskStatus.SUCCEEDED
-                ):
+                if converged is not None and converged.status is TaskStatus.SUCCEEDED:
                     recovered += 1
                     continue
             if task.status is TaskStatus.RUNNING:
@@ -1833,6 +2148,7 @@ def recover_interrupted_source_analysis(
 
 __all__ = [
     "DefaultSourceMediaAnalyzer",
+    "SourceAgentToolContext",
     "SourceAnalysisDispatch",
     "SourceAnalysisJob",
     "SourceAnalyzerConfigurationError",

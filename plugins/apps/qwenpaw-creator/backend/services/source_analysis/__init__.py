@@ -3,6 +3,7 @@
 
 from .service import (
     DefaultSourceMediaAnalyzer,
+    SourceAgentToolContext,
     SourceAnalysisDispatch,
     SourceAnalysisJob,
     SourceAnalyzerConfigurationError,
@@ -18,6 +19,7 @@ from .service import (
 
 __all__ = [
     "DefaultSourceMediaAnalyzer",
+    "SourceAgentToolContext",
     "SourceAnalysisDispatch",
     "SourceAnalysisJob",
     "SourceAnalyzerConfigurationError",

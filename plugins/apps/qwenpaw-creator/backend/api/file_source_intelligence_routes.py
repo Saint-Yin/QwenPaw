@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, Header, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import Field
 
 from schemas.assets import SourceIndexQueryResult, SourceIntelligenceIndex
@@ -16,9 +16,7 @@ from services.source_analysis import source_analysis_service
 from .dependencies import (
     CreatorErrorRoute,
     project_file_services,
-    resolve_idempotency_key,
 )
-
 
 router = APIRouter(
     prefix="/projects/{project_id}",
@@ -33,19 +31,10 @@ class SourceAnalysisRequest(StrictModel):
     asset_version_id: str | None = Field(None, alias="assetVersionId")
 
 
-class SourceAnalysisAccepted(StrictModel):
-    task_id: str = Field(alias="taskId")
-    run_id: str = Field(alias="runId")
-    status: str
-    transaction_id: str = Field(alias="transactionId")
-    input_generation: int = Field(alias="inputGeneration", ge=0)
-    input_etag: str = Field(alias="inputEtag")
-
-
 @router.post(
     "/assets/{asset_id}/analyze",
-    response_model=SourceAnalysisAccepted,
-    status_code=status.HTTP_202_ACCEPTED,
+    status_code=status.HTTP_409_CONFLICT,
+    deprecated=True,
 )
 async def analyze_source_asset(
     project_id: str,
@@ -54,30 +43,16 @@ async def analyze_source_asset(
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     services: CreatorFileServices = Depends(project_file_services),
 ) -> dict[str, object]:
-    key = resolve_idempotency_key(
-        idempotency_key,
-        stable_client_id=request.client_request_id,
+    del project_id, asset_id, request, idempotency_key, services
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "Direct inner Source VLM analysis has been removed. "
+            "Submit the asset through the Creator Agent so the outer Source "
+            "Intelligence VLM can "
+            "observe it and call commit_source_intelligence."
+        ),
     )
-    arguments: dict[str, str] = {}
-    if request.source_id:
-        arguments["sourceId"] = request.source_id
-    if request.asset_version_id:
-        arguments["assetVersionId"] = request.asset_version_id
-    dispatch = await source_analysis_service(services).dispatch(
-        project_id=project_id,
-        target_ref=f"asset:{asset_id}",
-        command_id=key,
-        arguments=arguments,
-        start=True,
-    )
-    return {
-        "taskId": dispatch.task.task_id,
-        "runId": dispatch.run.run_id,
-        "status": dispatch.task.status.value,
-        "transactionId": dispatch.job.round_id,
-        "inputGeneration": dispatch.job.input_generation,
-        "inputEtag": dispatch.job.input_etag,
-    }
 
 
 @router.get(

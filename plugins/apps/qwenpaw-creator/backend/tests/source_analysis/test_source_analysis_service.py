@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import httpx
 from fastapi import FastAPI
@@ -20,8 +20,9 @@ from api.file_asset_routes import (
 )
 from api.file_execution_routes import _cancel_task_sync
 from api.file_source_intelligence_routes import router as source_router
-from domain.enums import SpecialistRunStatus, TaskStatus
+from domain.enums import SpecialistRole, SpecialistRunStatus, TaskStatus
 from domain.errors import StorageIntegrityError
+from models.asr_model import ASRResult, ASRSegment
 from schemas.assets import SourceMediaMetadata, SourceModelRunRef
 from services.project_files.facade import CreatorFileServices
 from services.project_files.models import (
@@ -33,6 +34,7 @@ from services.project_files.store import ProjectNotFound
 from services.runtime_files.models import ChangeOrigin, ReviewPolicy
 from services.source_analysis import (
     DefaultSourceMediaAnalyzer,
+    SourceAgentToolContext,
     SourceAnalyzerConfigurationError,
     SourceAnalyzerOutput,
     SourceMediaAnalysisInput,
@@ -42,7 +44,10 @@ from services.source_analysis import (
     shutdown_source_analysis_services,
     source_analysis_service,
 )
-from services.runtime_files.execution_models import TaskAttemptStatus
+from services.runtime_files.execution_models import (
+    SpecialistRunRecord,
+    TaskAttemptStatus,
+)
 
 
 def _services_with_source(
@@ -210,9 +215,7 @@ def test_fake_provider_publishes_one_canonical_index_and_read_apis(
     intelligence_id = source.current_intelligence_version_id
     assert snapshot.generation == 2
     assert intelligence_id == dispatch.job.intelligence_version_id
-    intelligence = snapshot.project.assets.intelligence_versions_by_id[
-        intelligence_id
-    ]
+    intelligence = snapshot.project.assets.intelligence_versions_by_id[intelligence_id]
     assert intelligence.source_asset_version_id == asset_version_id
     indexed = snapshot.project.assets.files_by_id[intelligence.file_id]
     assert indexed.kind == "source_intelligence"
@@ -248,9 +251,7 @@ def test_fake_provider_publishes_one_canonical_index_and_read_apis(
         return current, exact, queried
 
     current, exact, queried = asyncio.run(read_api())
-    assert (
-        current.status_code == exact.status_code == queried.status_code == 200
-    )
+    assert current.status_code == exact.status_code == queried.status_code == 200
     assert current.json()["id"] == exact.json()["id"] == intelligence_id
     assert queried.json()["items"]
 
@@ -282,10 +283,7 @@ def test_url_backed_source_is_analyzed_before_runtime_cache_exists(
     assert analyzer.observed_local_path is None
     assert analyzer.observed_url == "https://assets.example/source.mp4"
     project = services.projects.read("project-1").project
-    assert (
-        project.assets.source_versions_by_id[item["assetVersionId"]].file_id
-        is None
-    )
+    assert project.assets.source_versions_by_id[item["assetVersionId"]].file_id is None
     source = next(iter(project.sources.sources.items.values()))
     assert source.current_intelligence_version_id is not None
 
@@ -411,7 +409,7 @@ def test_cancelled_task_quarantines_provider_result_without_project_commit(
     assert not project.assets.intelligence_versions_by_id
 
 
-def test_default_provider_fails_explicitly_without_vlm_configuration(
+def test_default_inner_provider_is_removed_in_favor_of_outer_vlm_commit(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -436,13 +434,9 @@ def test_default_provider_fails_explicitly_without_vlm_configuration(
         media_type="video/mp4",
         created_at=datetime.now(UTC),
     )
-    monkeypatch.setattr(
-        "services.source_analysis.service.model_config.get_vlm_api_key",
-        lambda: "",
-    )
     with pytest.raises(
         SourceAnalyzerConfigurationError,
-        match="creator_vlm_model",
+        match="outer Source Intelligence VLM must call commit_source_intelligence",
     ):
         asyncio.run(
             DefaultSourceMediaAnalyzer().analyze(
@@ -459,15 +453,11 @@ def test_default_provider_fails_explicitly_without_vlm_configuration(
         )
 
 
-def test_missing_media_tools_fail_task_and_run_once_without_retry(
+def test_legacy_dispatch_fails_closed_without_calling_an_inner_vlm(
     tmp_path,
     monkeypatch,
 ) -> None:
     services, asset_id, _ = _services_with_source(tmp_path)
-    monkeypatch.setattr(
-        "services.source_analysis.service.model_config.get_vlm_api_key",
-        lambda: "configured",
-    )
     monkeypatch.setattr(
         "services.runtime_files.media_probe.resolve_ffprobe",
         lambda **_kwargs: None,
@@ -491,7 +481,10 @@ def test_missing_media_tools_fail_task_and_run_once_without_retry(
     assert completed.status is replay.status is TaskStatus.FAILED
     assert completed.error == {
         "code": "SOURCEANALYZERCONFIGURATIONERROR",
-        "message": "视频处理工具 ffprobe/ffmpeg 未就绪，暂时无法完成该视频。",
+        "message": (
+            "Direct inner Source VLM analysis has been removed; the outer Source "
+            "Intelligence VLM must call commit_source_intelligence"
+        ),
         "retryable": False,
     }
     assert (
@@ -510,33 +503,162 @@ def test_missing_media_tools_fail_task_and_run_once_without_retry(
     ] == [TaskAttemptStatus.RUNNING, TaskAttemptStatus.FAILED]
 
 
-def test_analyze_endpoint_dispatches_directly(
+def test_outer_vlm_commit_persists_timeline_and_merges_exact_asr_result(
     tmp_path,
     monkeypatch,
 ) -> None:
-    services, asset_id, _ = _services_with_source(tmp_path)
-    calls: list[dict[str, object]] = []
+    services, asset_id, version_id = _services_with_source(tmp_path)
+    service = SourceMediaAnalysisService(services)
+    snapshot = services.projects.read("project-1")
+    source_run_id = "specialist-run-outer-vlm"
+    service.executions.create_specialist_run(
+        SpecialistRunRecord(
+            run_id=source_run_id,
+            project_id="project-1",
+            round_id="round-outer-vlm",
+            role=SpecialistRole.SOURCE_INTELLIGENCE,
+            target_refs=[f"asset:{asset_id}"],
+            input_generation=snapshot.generation,
+            input_etag=snapshot.etag,
+        ),
+    )
+    service.executions.transition_specialist_run(
+        "project-1",
+        source_run_id,
+        expected_status=SpecialistRunStatus.QUEUED,
+        status=SpecialistRunStatus.RUNNING_MODEL,
+    )
+    monkeypatch.setattr(
+        "services.source_analysis.service._probe_media",
+        lambda _path, version: SourceMediaMetadata(
+            mediaKind=version.media_kind,
+            mediaType=version.media_type,
+            durationMs=10_000,
+            width=1920,
+            height=1080,
+        ),
+    )
+    monkeypatch.setattr(
+        "services.source_analysis.service.model_config.get_asr_api_key",
+        lambda: "configured",
+    )
 
-    class Dispatcher:
-        async def dispatch(self, **kwargs):
-            calls.append(kwargs)
-            return SimpleNamespace(
-                job=SimpleNamespace(
-                    round_id="round-source",
-                    input_generation=0,
-                    input_etag="sha256:input",
-                ),
-                task=SimpleNamespace(
-                    task_id="task-source",
-                    status=TaskStatus.QUEUED,
-                ),
-                run=SimpleNamespace(run_id="run-source"),
-            )
+    async def fake_transcribe(_media_uri):
+        return ASRResult(
+            provider="fake-asr",
+            model="asr-v1",
+            segments=(ASRSegment(1000, 2500, "保持向前走"),),
+        )
 
     monkeypatch.setattr(
-        "api.file_source_intelligence_routes.source_analysis_service",
-        lambda _services: Dispatcher(),
+        "services.source_analysis.service.asr_model.transcribe",
+        fake_transcribe,
     )
+    asr_context = SourceAgentToolContext(
+        specialist_run_id=source_run_id,
+        tool_call_id="asr-call",
+        assistant_message_id="assistant-asr",
+        provider_message_id="provider-asr",
+        provider="configured_vlm",
+        model="vlm-v1",
+    )
+
+    async def scenario():
+        asr = await service.transcribe_source_audio(
+            project_id="project-1",
+            target_ref=f"asset:{asset_id}",
+            context=asr_context,
+        )
+        service.executions.append_specialist_message(
+            "project-1",
+            source_run_id,
+            message_id="tool-asr-result",
+            role="tool",
+            content_parts=[{"type": "text", "text": json.dumps(asr)}],
+            metadata={
+                "tool": "transcribe_source_audio",
+                "toolCallId": "asr-call",
+            },
+        )
+        committed = await service.commit_agent_intelligence(
+            project_id="project-1",
+            target_ref=f"asset:{asset_id}",
+            command_id="outer-vlm-commit",
+            context=SourceAgentToolContext(
+                specialist_run_id=source_run_id,
+                tool_call_id="commit-call",
+                assistant_message_id="assistant-commit",
+                provider_message_id="provider-vlm-commit",
+                provider="configured_vlm",
+                model="vlm-v1",
+            ),
+            arguments={
+                "summary": "人物在十秒视频中持续向前行走，画面由全景过渡到中景。",
+                "shots": [
+                    {
+                        "startMs": 0,
+                        "endMs": 5000,
+                        "description": "全景固定机位，人物从远处进入并向前行走。",
+                        "events": ["进入画面", "向前行走"],
+                        "confidence": 0.95,
+                    },
+                    {
+                        "startMs": 5000,
+                        "endMs": 10_000,
+                        "description": "中景继续跟随人物，动作持续至视频结尾。",
+                        "events": ["持续行走", "接近镜头"],
+                        "confidence": 0.93,
+                    },
+                ],
+                "entities": [
+                    {
+                        "kind": "person",
+                        "label": "主要人物",
+                        "description": "全程可见并持续移动",
+                        "startMs": 0,
+                        "endMs": 10_000,
+                        "confidence": 0.96,
+                    },
+                ],
+                "semanticEntries": [
+                    {
+                        "startMs": 0,
+                        "endMs": 5000,
+                        "text": "人物从远处进入并开始行走",
+                        "tags": ["进入", "行走", "全景"],
+                        "confidence": 0.95,
+                    },
+                    {
+                        "startMs": 5000,
+                        "endMs": 10_000,
+                        "text": "人物继续接近镜头直至结尾",
+                        "tags": ["接近镜头", "中景", "行走"],
+                        "confidence": 0.93,
+                    },
+                ],
+                "moduleResultRefs": {"asr": asr["resultRef"]},
+            },
+        )
+        return asr, committed
+
+    asr, committed = asyncio.run(scenario())
+    assert committed["status"] == "SUCCEEDED"
+    assert committed["shotCount"] == 2
+    index = service.load("project-1", asset_id)
+    assert index.asset_version_id == version_id
+    assert [(item.start_ms, item.end_ms) for item in index.shots] == [
+        (0, 5000),
+        (5000, 10_000),
+    ]
+    assert index.transcript[0].text == "保持向前走"
+    assert index.transcript[0].model_run_id == asr["modelRun"]["id"]
+    assert [item.model for item in index.model_runs] == ["vlm-v1", "asr-v1"]
+
+
+def test_analyze_endpoint_rejects_removed_inner_vlm_path(
+    tmp_path,
+) -> None:
+    services, asset_id, _ = _services_with_source(tmp_path)
     app = FastAPI()
     app.include_router(source_router)
     app.dependency_overrides[project_file_services] = lambda: services
@@ -556,16 +678,8 @@ def test_analyze_endpoint_dispatches_directly(
             )
 
     response = asyncio.run(submit())
-    assert response.status_code == 202
-    assert response.json() == {
-        "taskId": "task-source",
-        "runId": "run-source",
-        "status": "QUEUED",
-        "transactionId": "round-source",
-        "inputGeneration": 0,
-        "inputEtag": "sha256:input",
-    }
-    assert calls[0]["target_ref"] == f"asset:{asset_id}"
+    assert response.status_code == 409
+    assert "outer Source Intelligence VLM" in response.json()["detail"]
 
 
 def test_source_admission_replay_repairs_run_created_before_task(
