@@ -3,7 +3,6 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
   within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -12,7 +11,6 @@ import type { CreatorSessionStatus, TaskStatus } from "@/contracts/creator";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorSessionStore } from "@/store/creatorSessionStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
-import { installMockFetch } from "@/test/mockFetch";
 
 function setSession(status: CreatorSessionStatus) {
   useCreatorSessionStore.setState({
@@ -68,7 +66,7 @@ describe("AgentStatusBar origin/main state projection", () => {
     expect(screen.queryByText("镜头生成中")).not.toBeInTheDocument();
   });
 
-  it("keeps the global hard-stop available while the AgentDock is closed", () => {
+  it("no longer renders the stop control after it moved into the AgentDock composer", () => {
     setSession("RUNNING");
     const { container } = render(<AgentStatusBar />);
     // Apply the state after mount as well so late cleanup from a previously
@@ -82,10 +80,10 @@ describe("AgentStatusBar origin/main state projection", () => {
       }),
     ).toBeInTheDocument();
     expect(
-      within(statusBar as HTMLElement).getByRole("button", {
+      within(statusBar as HTMLElement).queryByRole("button", {
         name: "停止所有 Agent",
       }),
-    ).toBeInTheDocument();
+    ).not.toBeInTheDocument();
     expect(screen.queryByText("端到端生产中")).not.toBeInTheDocument();
     expect(screen.queryByText("执行中")).not.toBeInTheDocument();
     expect(screen.queryByText("镜头生成中")).not.toBeInTheDocument();
@@ -98,43 +96,11 @@ describe("AgentStatusBar origin/main state projection", () => {
     );
     expect(useAgentDockUiStore.getState().open).toBe(true);
     expect(
-      within(statusBar as HTMLElement).getByRole("button", {
+      within(statusBar as HTMLElement).queryByRole("button", {
         name: "停止所有 Agent",
       }),
-    ).toBeInTheDocument();
+    ).not.toBeInTheDocument();
     expect(statusBar.querySelector(".border-l")).not.toBeInTheDocument();
-  });
-
-  it("exposes a global stop control and interrupts the whole Creator Session", async () => {
-    const { calls } = installMockFetch([
-      {
-        match: "/projects/p1/interrupt",
-        method: "POST",
-        response: {
-          json: {
-            creatorSessionId: "session-1",
-            status: "INTERRUPT_REQUESTED",
-            stopRequested: true,
-          },
-        },
-      },
-    ]);
-    setSession("RUNNING");
-    render(<AgentStatusBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "停止所有 Agent" }));
-
-    expect(useCreatorSessionStore.getState().session?.status).toBe(
-      "INTERRUPT_REQUESTED",
-    );
-    await waitFor(() =>
-      expect(
-        calls.some((call) => call.url.includes("/projects/p1/interrupt")),
-      ).toBe(true),
-    );
-    expect(
-      calls.find((call) => call.url.includes("/projects/p1/interrupt"))?.method,
-    ).toBe("POST");
   });
 
   it("maps authorization wait to the origin decision-center interaction", () => {

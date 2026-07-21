@@ -1,27 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import { message } from "antd";
-import { Sparkles, Square } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorSessionStore } from "@/store/creatorSessionStore";
-import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
-
-const ACTIVE_RUN_STATUSES = new Set([
-  "QUEUED",
-  "QUEUED_CAPACITY",
-  "RUNNING_MODEL",
-  "WAITING_RUNTIME",
-  "WAITING_AUTHORIZATION",
-]);
 
 export default function AgentStatusBar() {
   const status = useCreatorSessionStore((state) => state.agentStatusBar);
   const session = useCreatorSessionStore((state) => state.session);
-  const runs = useCreatorTaskViewStore((state) => state.runs);
   const stopping = useCreatorSessionStore((state) => state.stopping);
-  const stopAllAgents = useCreatorSessionStore((state) => state.stopAllAgents);
-  const subagentActivities = useCreatorSessionStore(
-    (state) => state.subagentActivities,
-  );
   const open = useAgentDockUiStore((state) => state.open);
   const setOpen = useAgentDockUiStore((state) => state.setOpen);
   const setTab = useAgentDockUiStore((state) => state.setTab);
@@ -36,45 +20,6 @@ export default function AgentStatusBar() {
         ].includes(session.status)),
   );
   const waitingInput = session?.status === "WAITING_USER_INPUT";
-  const hasActiveRuns = runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status));
-  const hasActiveSubagents = Object.values(subagentActivities).some(
-    (a) => !a.completed,
-  );
-  const stoppable =
-    hasActiveSubagents ||
-    hasActiveRuns ||
-    Boolean(
-      session &&
-        [
-          "RUNNING",
-          "RESUMING",
-          "WAITING_RUNTIME",
-          "WAITING_EXECUTION_AUTH",
-          "WAITING_USER_INPUT",
-          "PENDING_REVIEW",
-          "INTERRUPT_REQUESTED",
-        ].includes(session.status),
-    );
-  const [stoppableVisible, setStoppableVisible] = useState(stoppable);
-  const stoppableHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
-  useEffect(() => {
-    if (stoppable || stopping) {
-      if (stoppableHideTimerRef.current)
-        clearTimeout(stoppableHideTimerRef.current);
-      setStoppableVisible(true);
-    } else {
-      stoppableHideTimerRef.current = setTimeout(
-        () => setStoppableVisible(false),
-        2000,
-      );
-    }
-    return () => {
-      if (stoppableHideTimerRef.current)
-        clearTimeout(stoppableHideTimerRef.current);
-    };
-  }, [stoppable, stopping]);
   const pendingCount = (status?.badges || []).reduce(
     (sum, badge) =>
       badge.kind === "review" || badge.kind === "execution_authorization"
@@ -128,27 +73,6 @@ export default function AgentStatusBar() {
               {progressPercent}%
             </span>
           </div>
-        )}
-        {stoppableVisible && (
-          <button
-            type="button"
-            aria-label="停止所有 Agent"
-            disabled={stopping}
-            onClick={() =>
-              void stopAllAgents()
-                .then(() => message.success("已停止所有 Agent 活动"))
-                .catch((error) => message.error((error as Error).message))
-            }
-            className="inline-flex items-center gap-1 rounded-full border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-0.5 text-[11px] font-semibold text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/20 disabled:cursor-wait disabled:opacity-60"
-            title={
-              session?.status === "INTERRUPT_REQUESTED"
-                ? "停止请求已发送，点击再次停止"
-                : "立即停止当前项目的主 Agent、子 Agent 与未完成任务"
-            }
-          >
-            <Square className="h-2.5 w-2.5 fill-current" />
-            {stopping ? "正在停止" : "停止"}
-          </button>
         )}
         {open && waitingInput && (
           <button

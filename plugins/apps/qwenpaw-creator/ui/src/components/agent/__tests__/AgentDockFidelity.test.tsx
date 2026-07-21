@@ -638,16 +638,78 @@ describe("AgentDock origin/main visible fidelity", () => {
     );
   });
 
-  it("does not duplicate the global stop control inside AgentDock", () => {
+  it("morphs the composer button into a stop control while agents run with an empty input", async () => {
+    const { calls } = installMockFetch([
+      {
+        match: "/projects/p1/interrupt",
+        method: "POST",
+        response: {
+          json: {
+            creatorSessionId: "session-1",
+            status: "INTERRUPT_REQUESTED",
+            stopRequested: true,
+          },
+        },
+      },
+    ]);
     useCreatorSessionStore.setState((state) => ({
       session: { ...state.session!, status: "RUNNING" },
     }));
     useAgentDockUiStore.getState().setOpen(true);
     renderDock();
 
+    // 运行中 + 输入框为空 → 停止按钮取代发送按钮，带呼吸光圈
+    const stop = screen.getByRole("button", { name: "停止所有 Agent" });
+    expect(stop).toHaveClass("agent-dock-stop-glow");
+    expect(
+      screen.queryByRole("button", { name: "发送" }),
+    ).not.toBeInTheDocument();
+
+    // 运行中 + 输入框有内容 → 回到可点击的发送按钮
+    const textbox = screen.getByRole("textbox", {
+      name: "输入修改意图，@ 可引用对象…",
+    });
+    textbox.textContent = "运行中追加指令";
+    fireEvent.input(textbox);
     expect(
       screen.queryByRole("button", { name: "停止所有 Agent" }),
     ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
+
+    // 清空输入 → 重新变回停止按钮，点击中断整个 Creator Session
+    textbox.textContent = "";
+    fireEvent.input(textbox);
+    fireEvent.click(screen.getByRole("button", { name: "停止所有 Agent" }));
+    expect(useCreatorSessionStore.getState().session?.status).toBe(
+      "INTERRUPT_REQUESTED",
+    );
+    await waitFor(() =>
+      expect(
+        calls.some((call) => call.url.includes("/projects/p1/interrupt")),
+      ).toBe(true),
+    );
+    expect(
+      calls.find((call) => call.url.includes("/projects/p1/interrupt"))?.method,
+    ).toBe("POST");
+  });
+
+  it("keeps the send button whenever agents are idle, regardless of input content", () => {
+    useAgentDockUiStore.getState().setOpen(true);
+    renderDock();
+
+    // 未运行 + 空输入 → 置灰的发送按钮
+    expect(
+      screen.queryByRole("button", { name: "停止所有 Agent" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+
+    // 未运行 + 有内容 → 可点击的发送按钮
+    const textbox = screen.getByRole("textbox", {
+      name: "输入修改意图，@ 可引用对象…",
+    });
+    textbox.textContent = "新的修改意图";
+    fireEvent.input(textbox);
+    expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
   });
 
   it("mounts the origin run block with Timeline/Element targets", () => {

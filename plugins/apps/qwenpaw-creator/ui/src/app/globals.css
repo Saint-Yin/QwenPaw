@@ -349,6 +349,24 @@ a {
   animation: agent-dock-enter 0.22s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* AgentDock 停止按钮：呼吸光圈提示 Agent 正在运行且可立即停止 */
+@keyframes agent-dock-stop-glow {
+  0% {
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--color-danger) 35%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.agent-dock-stop-glow {
+  animation: agent-dock-stop-glow 1.6s ease-out infinite;
+}
+
 @keyframes panel-enter {
   from {
     opacity: 0;

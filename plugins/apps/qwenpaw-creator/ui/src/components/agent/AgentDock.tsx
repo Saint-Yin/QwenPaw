@@ -12,6 +12,7 @@ import {
   MessageSquare,
   Plus,
   Sparkles,
+  Square,
 } from "lucide-react";
 import { getAssetVersionMediaUrl, getGeneratedMediaUrl } from "@/api/creator";
 import type {
@@ -66,6 +67,25 @@ const DOCK_MIN_WIDTH = 440;
 const DOCK_MIN_HEIGHT = 420;
 const DOCK_DEFAULT_SIZE: DockSize = { width: 440, height: 620 };
 const DOCK_SIZE_STORAGE_KEY = "agentDock.size.v1";
+
+// 与全局硬停止一致的"可停止"判定（原 AgentStatusBar 停止按钮迁移至此）。
+const ACTIVE_RUN_STATUSES = new Set([
+  "QUEUED",
+  "QUEUED_CAPACITY",
+  "RUNNING_MODEL",
+  "WAITING_RUNTIME",
+  "WAITING_AUTHORIZATION",
+]);
+
+const STOPPABLE_SESSION_STATUSES = [
+  "RUNNING",
+  "RESUMING",
+  "WAITING_RUNTIME",
+  "WAITING_EXECUTION_AUTH",
+  "WAITING_USER_INPUT",
+  "PENDING_REVIEW",
+  "INTERRUPT_REQUESTED",
+];
 
 function dockMaxSize(): DockSize {
   if (typeof window === "undefined") return { width: 960, height: 1200 };
@@ -1255,6 +1275,11 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
     (state) => state.loadOlderMessages,
   );
   const sendMessage = useCreatorSessionStore((state) => state.sendMessage);
+  const stopping = useCreatorSessionStore((state) => state.stopping);
+  const stopAllAgents = useCreatorSessionStore((state) => state.stopAllAgents);
+  const subagentActivities = useCreatorSessionStore(
+    (state) => state.subagentActivities,
+  );
 
   const runs = useCreatorTaskViewStore((state) => state.runs);
   const tasks = useCreatorTaskViewStore((state) => state.tasks);
@@ -1278,6 +1303,10 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
     session &&
       ["RUNNING", "RESUMING", "INTERRUPT_REQUESTED"].includes(session.status),
   );
+  const stoppable =
+    Object.values(subagentActivities).some((activity) => !activity.completed) ||
+    runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status)) ||
+    Boolean(session && STOPPABLE_SESSION_STATUSES.includes(session.status));
   const showWorkspace = tab === "activity";
   const showDecisions = tab === "review";
   const [showHistory, setShowHistory] = useState(false);
@@ -2205,13 +2234,37 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                     onMentionConfirm={confirmMention}
                     onMentionClose={() => setMentionQuery(null)}
                   />
-                  <Button
-                    type="primary"
-                    icon={<ArrowUpOutlined />}
-                    disabled={!canSend}
-                    onClick={() => void submit()}
-                    className="!flex !h-8 !w-8 !items-center !justify-center !p-0"
-                  />
+                  {(stoppable || stopping) && !canSend ? (
+                    <Button
+                      type="primary"
+                      danger
+                      aria-label="停止所有 Agent"
+                      icon={<Square className="h-3 w-3 fill-current" />}
+                      disabled={stopping}
+                      onClick={() =>
+                        void stopAllAgents()
+                          .then(() => message.success("已停止所有 Agent 活动"))
+                          .catch((error) =>
+                            message.error((error as Error).message),
+                          )
+                      }
+                      className="agent-dock-stop-glow !flex !h-8 !w-8 !items-center !justify-center !p-0"
+                      title={
+                        session?.status === "INTERRUPT_REQUESTED"
+                          ? "停止请求已发送，点击再次停止"
+                          : "立即停止当前项目的主 Agent、子 Agent 与未完成任务"
+                      }
+                    />
+                  ) : (
+                    <Button
+                      type="primary"
+                      aria-label="发送"
+                      icon={<ArrowUpOutlined />}
+                      disabled={!canSend}
+                      onClick={() => void submit()}
+                      className="!flex !h-8 !w-8 !items-center !justify-center !p-0"
+                    />
+                  )}
                 </div>
               </div>
             </>
