@@ -457,13 +457,16 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       );
       if (!result.ok) throw new Error("服务端未确认配置写入");
       message.success("配置已保存");
+      // 保存成功后同步快照并自动关闭窗口。
+      snapshotRef.current = JSON.parse(JSON.stringify(config));
+      onClose();
     } catch (error) {
       const detail = error instanceof Error ? error.message : "未知错误";
       message.error(`保存失败：${detail}`);
     } finally {
       setSaving(false);
     }
-  }, [activeTab, config, tested, saving, handleTest]);
+  }, [activeTab, config, tested, saving, handleTest, onClose]);
 
   const handleCancel = useCallback(() => {
     if (snapshotRef.current)

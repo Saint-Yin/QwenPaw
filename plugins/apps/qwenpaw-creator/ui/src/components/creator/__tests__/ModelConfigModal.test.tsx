@@ -95,7 +95,7 @@ describe("ModelConfigModal configuration lifecycle", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /保存配置/ }));
-    // 分段保存只 PATCH 当前标签页的 section，modal 保持打开
+    // 分段保存只 PATCH 当前标签页的 section，保存成功后自动关闭窗口
     await waitFor(() => {
       const save = calls.find(
         (call) =>
@@ -107,9 +107,6 @@ describe("ModelConfigModal configuration lifecycle", () => {
         base_url: "https://provider.test/v1",
       });
     });
-    expect(onClose).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
   });
 });
