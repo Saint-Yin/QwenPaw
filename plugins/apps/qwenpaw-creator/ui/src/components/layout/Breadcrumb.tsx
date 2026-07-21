@@ -26,6 +26,17 @@ export function useBreadcrumbs(): Crumb[] {
   const routeSection = parts[2] || "";
   if (routeSection === "plan") {
     const crumbs: Crumb[] = [{ label: "视频方案", path: `${base}/plan` }];
+    if (parts[3] === "element" && parts[4]) {
+      // R2V 工作台：/project/:id/plan/element/:elementId
+      const elementId = decodeURIComponent(parts[4]);
+      const element = timeline?.elements_by_id[elementId];
+      crumbs.push({
+        label: element?.label || elementId,
+        path: `${base}/plan?element=${encodeURIComponent(elementId)}`,
+      });
+      crumbs.push({ label: "制作工作台" });
+      return crumbs;
+    }
     const elementId = searchParams.get("element");
     if (elementId) {
       const element = timeline?.elements_by_id[elementId];

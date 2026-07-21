@@ -19,6 +19,9 @@ const PlanPage = lazy(() =>
 const AssetsPage = lazy(() =>
   loadWithChunkRecovery(() => import("@/pages/AssetsPage")),
 );
+const R2VWorkbenchPage = lazy(() =>
+  loadWithChunkRecovery(() => import("@/pages/R2VWorkbenchPage")),
+);
 
 function suspended(
   element: React.ReactNode,
@@ -30,6 +33,7 @@ function suspended(
 export const FORMAL_CREATOR_ROUTES = [
   "/",
   "/project/:id/plan",
+  "/project/:id/plan/element/:elementId",
   "/project/:id/assets",
 ] as const;
 
@@ -91,6 +95,11 @@ export const CREATOR_ROUTE_OBJECTS: RouteObject[] = [
             id: "project-plan",
             path: "plan",
             element: suspended(<PlanPage />),
+          },
+          {
+            id: "project-element-workbench",
+            path: "plan/element/:elementId",
+            element: suspended(<R2VWorkbenchPage />, "editor"),
           },
           {
             id: "project-assets",

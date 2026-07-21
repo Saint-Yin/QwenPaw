@@ -154,6 +154,8 @@ export default function PlanPage() {
     );
   };
   const timelineTargetRef = `timeline:${timeline.timeline_id}`;
+  const openElementWorkbench = (element: TimelineElementDocument) =>
+    navigate(`${base}/element/${encodeURIComponent(element.element_id)}`);
 
   return (
     <div
@@ -286,6 +288,7 @@ export default function PlanPage() {
           onPatch={patchValue}
           onDelete={removeElement}
           onAgent={openElementAgent}
+          onOpenWorkbench={openElementWorkbench}
         />
       </main>
     </div>

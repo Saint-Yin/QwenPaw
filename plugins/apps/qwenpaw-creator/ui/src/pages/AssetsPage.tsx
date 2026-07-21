@@ -278,16 +278,14 @@ export default function AssetsPage() {
         : `/project/${id}/assets`,
     );
   };
-  const openAgent = (item?: AssetItem) => {
-    useCreatorInteractionStore.getState().select(item?.ref || null);
+  const openAgent = (item: AssetItem) => {
+    useCreatorInteractionStore.getState().select(item.ref);
     useAgentDockUiStore.getState().setOpen(true);
     useAgentDockUiStore.getState().setTab("conversation");
     useAgentDockUiStore
       .getState()
       .setDraft(
-        item
-          ? `请检查并完善「${item.name}」(${item.ref})，先读取 Project 中的现状和引用关系再行动。`
-          : "请检查当前 Project 的来源素材、生成产物和视觉设定，并说明下一步需要补充或生成什么。",
+        `请检查并完善「${item.name}」(${item.ref})，先读取 Project 中的现状和引用关系再行动。`,
       );
   };
   const refreshAfterIngest = async () => {
@@ -380,14 +378,6 @@ export default function AssetsPage() {
             onClick={() => fileInputRef.current?.click()}
           >
             上传素材
-          </Button>
-          <Button
-            size="small"
-            type="primary"
-            icon={<Sparkles className="h-3.5 w-3.5" />}
-            onClick={() => openAgent()}
-          >
-            Agent 整理
           </Button>
         </div>
       </header>

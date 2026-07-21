@@ -9,14 +9,18 @@ function terminalRouteId(path: string): string | undefined {
 }
 
 describe("Creator hash router", () => {
-  it("registers only the Project, Timeline/Element Plan, and Assets page paths", () => {
+  it("registers only the Project, Timeline/Element Plan, R2V Workbench, and Assets page paths", () => {
     expect(FORMAL_CREATOR_ROUTES).toEqual([
       "/",
       "/project/:id/plan",
+      "/project/:id/plan/element/:elementId",
       "/project/:id/assets",
     ]);
     expect(terminalRouteId("/")).toBe("home");
     expect(terminalRouteId("/project/p1/plan")).toBe("project-plan");
+    expect(terminalRouteId("/project/p1/plan/element/r2v-window")).toBe(
+      "project-element-workbench",
+    );
     expect(terminalRouteId("/project/p1/assets")).toBe("project-assets");
     expect(terminalRouteId("/project/p1/unknown")).toBe("project-not-found");
   });

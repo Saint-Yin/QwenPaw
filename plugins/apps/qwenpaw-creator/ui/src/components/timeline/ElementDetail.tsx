@@ -35,6 +35,7 @@ interface ElementDetailProps {
   onPatch: (path: string, before: unknown, value: unknown) => Promise<void>;
   onDelete: (element: TimelineElementDocument) => Promise<void>;
   onAgent: (element: TimelineElementDocument, prompt?: string) => void;
+  onOpenWorkbench: (element: TimelineElementDocument) => void;
 }
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
@@ -140,6 +141,7 @@ export default function ElementDetail({
   onPatch,
   onDelete,
   onAgent,
+  onOpenWorkbench,
 }: ElementDetailProps) {
   const outputs = useMemo(
     () => (element ? resolveElementOutputs(project, element) : []),
@@ -664,9 +666,16 @@ export default function ElementDetail({
       </div>
 
       {creation.type === "r2v" && (
-        <footer className="flex shrink-0 justify-end border-t border-[var(--color-border)] bg-[var(--color-bg-primary)] px-4 py-3">
+        <footer className="flex shrink-0 items-center gap-2 border-t border-[var(--color-border)] bg-[var(--color-bg-primary)] px-4 py-3">
           <Button
+            type="primary"
+            className="flex-1"
             icon={<ArrowUpRight className="h-3.5 w-3.5" />}
+            onClick={() => onOpenWorkbench(element)}
+          >
+            进入 R2V 工作台
+          </Button>
+          <Button
             onClick={() =>
               onAgent(element, "请继续完成当前 AI 生成画面的分镜和视频生成。")
             }
