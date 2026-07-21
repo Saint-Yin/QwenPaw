@@ -1703,6 +1703,139 @@ def test_missing_model_configuration_persists_session_error(tmp_path) -> None:
     assert run.status is AgentRunStatus.FAILED
 
 
+def test_failed_run_is_not_relaunched_after_restart_or_notify(tmp_path) -> None:
+    """A failed request is a durable input boundary.
+
+    Neither a process restart (which discards the in-memory blocked-head
+    guard) nor an unrelated ``notify`` (model config saves wake every
+    Project) may relaunch the Agent on the same failed message.
+    """
+
+    relaunch_calls = 0
+
+    async def failing(_messages, _tools):
+        raise AgentModelConfigurationError(
+            "Creator text model configuration is incomplete: api_key",
+        )
+
+    async def counting(_messages, _tools) -> AgentModelTurn:
+        nonlocal relaunch_calls
+        relaunch_calls += 1
+        return AgentModelTurn(content="不应被调用")
+
+    async def scenario():
+        services, _snapshot = _create_project(tmp_path, initial_goal="请修改项目")
+        first = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(failing),
+            poll_interval_seconds=0.01,
+        )
+        await first.start()
+        first.notify(PROJECT_ID)
+        await _wait_for(
+            lambda: services.sessions.get_project_session(
+                PROJECT_ID,
+            ).status.value
+            == "ERROR",
+        )
+        await first.wait_until_idle(PROJECT_ID)
+        failed_session = services.sessions.get_project_session(PROJECT_ID)
+        await first.stop()
+
+        # A fresh runtime instance models a QwenPaw restart: the in-memory
+        # ``_blocked_heads`` guard is gone and only durable state remains.
+        second = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(counting),
+            poll_interval_seconds=0.01,
+        )
+        await second.start()
+        second.notify(PROJECT_ID)
+        await asyncio.sleep(0.2)
+        await second.wait_until_idle(PROJECT_ID)
+        runs = second.runs.list(PROJECT_ID)
+        await second.stop()
+        return failed_session, runs
+
+    failed_session, runs = asyncio.run(scenario())
+    assert failed_session.last_consumed_message_seq == 1
+    assert relaunch_calls == 0
+    assert len(runs) == 1
+    assert runs[0].status is AgentRunStatus.FAILED
+
+
+def test_legacy_unconsumed_failed_head_is_consumed_instead_of_relaunched(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Sessions written before failures consumed their request must not
+    auto-start the Agent after a restart; reconciliation consumes the failed
+    head based on the durable run record instead."""
+
+    relaunch_calls = 0
+
+    async def failing(_messages, _tools):
+        raise AgentModelConfigurationError(
+            "Creator text model configuration is incomplete: api_key",
+        )
+
+    async def counting(_messages, _tools) -> AgentModelTurn:
+        nonlocal relaunch_calls
+        relaunch_calls += 1
+        return AgentModelTurn(content="不应被调用")
+
+    async def scenario():
+        services, _snapshot = _create_project(tmp_path, initial_goal="请修改项目")
+        first = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(failing),
+            poll_interval_seconds=0.01,
+        )
+        # Model the legacy failure path that never consumed the request.
+        monkeypatch.setattr(
+            first.sessions,
+            "mark_messages_consumed",
+            lambda *args, **kwargs: services.sessions.get_project_session(
+                PROJECT_ID,
+            ),
+        )
+        await first.start()
+        first.notify(PROJECT_ID)
+        await _wait_for(
+            lambda: services.sessions.get_project_session(
+                PROJECT_ID,
+            ).status.value
+            == "ERROR",
+        )
+        await first.wait_until_idle(PROJECT_ID)
+        await first.stop()
+        legacy_session = services.sessions.get_project_session(PROJECT_ID)
+
+        second = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(counting),
+            poll_interval_seconds=0.01,
+        )
+        await second.start()
+        second.notify(PROJECT_ID)
+        await _wait_for(
+            lambda: services.sessions.get_project_session(
+                PROJECT_ID,
+            ).last_consumed_message_seq
+            == 1,
+        )
+        await second.wait_until_idle(PROJECT_ID)
+        runs = second.runs.list(PROJECT_ID)
+        await second.stop()
+        return legacy_session, runs
+
+    legacy_session, runs = asyncio.run(scenario())
+    assert legacy_session.last_consumed_message_seq == 0
+    assert relaunch_calls == 0
+    assert len(runs) == 1
+    assert runs[0].status is AgentRunStatus.FAILED
+
+
 def test_costly_specialist_tool_waits_for_file_authorization(
     tmp_path,
     monkeypatch,

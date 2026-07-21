@@ -1,10 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
 import PlanPage from "@/pages/PlanPage";
 import { NavigationRuntime } from "@/routing/navigation";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
+import { useCreatorSessionStore } from "@/store/creatorSessionStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { projectDocument } from "@/test/creatorFixtures";
@@ -62,6 +64,7 @@ describe("PlanPage Timeline/Element frontend", () => {
     useCreatorTaskViewStore.getState().reset();
     useCreatorInteractionStore.getState().reset();
     useAgentDockUiStore.getState().reset();
+    useCreatorSessionStore.getState().reset();
     seedProject();
   });
 
@@ -101,6 +104,43 @@ describe("PlanPage Timeline/Element frontend", () => {
     expect(
       screen.getByRole("button", { name: "添加内容" }),
     ).toBeInTheDocument();
+  });
+
+  it("replaces the empty-Timeline hints with a live working state while the Agent runs", () => {
+    const project = cloneProject();
+    project.timelines.items["timeline:main"].elements_by_id = {};
+    seedProject(project);
+    useCreatorSessionStore.setState({
+      projectId: "p1",
+      session: {
+        id: "cs-1",
+        projectId: "p1",
+        status: "RUNNING",
+        lastMessageSeq: 0,
+        lastConsumedMessageSeq: 0,
+        lastEventSeq: 0,
+      },
+    });
+    const { container } = renderPage();
+
+    expect(screen.getByText("Agent 正在规划视频方案")).toBeInTheDocument();
+    expect(screen.getByText("正在分析你的创作需求")).toBeInTheDocument();
+    expect(
+      container.querySelector("[data-timeline-working]"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("时间轴还是空的")).not.toBeInTheDocument();
+    expect(screen.queryByText("时间轴中还没有内容")).not.toBeInTheDocument();
+
+    // Agent 停止后回落到静态引导，避免"假装在工作"。
+    act(() => {
+      useCreatorSessionStore.setState((state) => ({
+        session: state.session ? { ...state.session, status: "IDLE" } : null,
+      }));
+    });
+    expect(screen.getByText("时间轴还是空的")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Agent 正在规划视频方案"),
+    ).not.toBeInTheDocument();
   });
 
   it("shows every active Element when a collapsed point is selected and can attach that point to AgentDock", () => {

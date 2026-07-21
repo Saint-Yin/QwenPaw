@@ -576,3 +576,58 @@ a {
   white-space: nowrap;
   display: inline-block;
 }
+
+/* 工作区空状态：Agent 工作中动效（时间轴/时间线内容在 project 尚未写入时的
+   "进行中"反馈，消除卡住错觉）。 */
+@keyframes agent-working-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
+
+@keyframes agent-working-dots {
+  0% {
+    content: "";
+  }
+  25% {
+    content: ".";
+  }
+  50% {
+    content: "..";
+  }
+  75% {
+    content: "...";
+  }
+}
+
+.agent-working-breathe {
+  animation: agent-working-breathe 2s ease-in-out infinite;
+}
+
+.agent-working-dots::after {
+  content: "";
+  display: inline-block;
+  width: 1.2em;
+  text-align: left;
+  animation: agent-working-dots 1.5s steps(1) infinite;
+}
+
+.agent-working-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.agent-working-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--color-accent), transparent);
+  opacity: 0.65;
+  animation: slide-progress 1.4s ease-in-out infinite;
+}

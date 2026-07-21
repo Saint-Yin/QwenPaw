@@ -511,6 +511,29 @@ class FileCreatorAgentRuntime:
         message = user_messages[0]
         if self._blocked_heads.get(project_id) == message.message_seq:
             return
+        # Durable variant of the in-memory guard above: sessions written
+        # before failures consumed their request (or a crash between the
+        # FAILED transition and the consumption) can still expose a failed
+        # head message after a restart.  Relaunching it would auto-start the
+        # Agent without any new user input, so consume it instead and let
+        # AgentDock surface the persisted session error.
+        head_runs = [
+            record
+            for record in await asyncio.to_thread(self.runs.list, project_id)
+            if record.caused_by_message_seq == message.message_seq
+        ]
+        if head_runs and head_runs[-1].status is AgentRunStatus.FAILED:
+            try:
+                await asyncio.to_thread(
+                    self.sessions.mark_messages_consumed,
+                    project_id,
+                    session.session_id,
+                    through_seq=message.message_seq,
+                    goal_id=head_runs[-1].goal_id,
+                )
+            except SessionStateConflict:
+                pass
+            return
         run_id = f"agent-run-{uuid4().hex}"
         epoch = self._begin_epoch(project_id, run_id)
         task = asyncio.create_task(
@@ -2539,6 +2562,22 @@ class FileCreatorAgentRuntime:
                 },
             )
         except AgentRunStateConflict:
+            pass
+        # A failure is a durable input boundary, not a process-local retry
+        # guard.  Consume the failed request before releasing active_run_id so
+        # that neither a process restart nor an unrelated ``notify`` (which
+        # clears the in-memory ``_blocked_heads``) relaunches the Agent on the
+        # same message.  Recovery requires a new explicit user request; the
+        # persisted session error keeps the failure visible to AgentDock.
+        try:
+            await asyncio.to_thread(
+                self.sessions.mark_messages_consumed,
+                project_id,
+                session_id,
+                through_seq=request.message_seq,
+                goal_id=goal_id,
+            )
+        except SessionStateConflict:
             pass
         try:
             await asyncio.to_thread(

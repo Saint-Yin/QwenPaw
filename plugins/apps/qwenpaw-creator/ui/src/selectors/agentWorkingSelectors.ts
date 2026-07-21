@@ -1,0 +1,51 @@
+import { useMemo } from "react";
+import { useCreatorSessionStore } from "@/store/creatorSessionStore";
+
+// 与 AgentStatusBar 的 active 判定保持一致的"Agent 正在工作"口径；
+// 额外纳入 queuedUi 中尚未落库的消息，覆盖"刚点发送、后端还没响应"的窗口期。
+const WORKING_SESSION_STATUSES = new Set([
+  "RUNNING",
+  "RESUMING",
+  "WAITING_RUNTIME",
+  "INTERRUPT_REQUESTED",
+]);
+
+export interface AgentWorkingState {
+  working: boolean;
+  hint: string | null;
+}
+
+export function useAgentWorkingState(): AgentWorkingState {
+  const session = useCreatorSessionStore((state) => state.session);
+  const agentStatusBar = useCreatorSessionStore(
+    (state) => state.agentStatusBar,
+  );
+  const queuedUi = useCreatorSessionStore((state) => state.queuedUi);
+  const subagentActivities = useCreatorSessionStore(
+    (state) => state.subagentActivities,
+  );
+
+  return useMemo(() => {
+    const working =
+      (agentStatusBar?.activity?.runningTaskCount ?? 0) > 0 ||
+      Boolean(session && WORKING_SESSION_STATUSES.has(session.status)) ||
+      queuedUi.some((item) => item.state !== "failed");
+    if (!working) return { working: false, hint: null };
+
+    const label = agentStatusBar?.progress.label;
+    if (label) return { working: true, hint: label };
+    const activity = Object.values(subagentActivities)
+      .filter((item) => !item.completed)
+      .sort((left, right) => right.firstEventSeq - left.firstEventSeq)[0];
+    if (activity) {
+      const task = activity.delegationText || "执行委派任务中";
+      return {
+        working: true,
+        hint: activity.roleDisplayName
+          ? `${activity.roleDisplayName}：${task}`
+          : task,
+      };
+    }
+    return { working: true, hint: null };
+  }, [agentStatusBar, queuedUi, session, subagentActivities]);
+}

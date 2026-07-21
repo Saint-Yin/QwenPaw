@@ -11,6 +11,7 @@ import {
   elementsAtTick,
   orderedTimelineElements,
 } from "@/selectors/timelineElementSelectors";
+import { useAgentWorkingState } from "@/selectors/agentWorkingSelectors";
 
 interface ElementListProps {
   timeline: TimelineDocument;
@@ -81,6 +82,7 @@ export default function ElementList({
 }: ElementListProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef(new Map<string, HTMLButtonElement>());
+  const agentWorking = useAgentWorkingState();
   const elements = useMemo(() => orderedTimelineElements(timeline), [timeline]);
   const activeIds = useMemo(
     () =>
@@ -127,15 +129,39 @@ export default function ElementList({
         className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3 [scrollbar-gutter:stable]"
       >
         {elements.length === 0 ? (
-          <div className="flex h-full min-h-44 flex-col items-center justify-center px-6 text-center">
-            <Sparkles className="mb-3 h-7 w-7 text-[var(--color-accent)]" />
-            <p className="text-sm font-semibold text-[var(--color-text-primary)]">
-              时间轴还是空的
-            </p>
-            <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
-              可以从上方添加内容，或在 Agent 中描述想生成、剪辑和叠加的画面。
-            </p>
-          </div>
+          agentWorking.working ? (
+            <div
+              data-element-list-working
+              className="flex h-full min-h-44 flex-col items-center justify-center px-6 text-center"
+            >
+              <div className="agent-working-breathe mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--color-accent-soft)]">
+                <Sparkles className="h-6 w-6 text-[var(--color-accent)]" />
+              </div>
+              <p className="agent-working-dots text-sm font-semibold text-[var(--color-text-primary)]">
+                Agent 正在规划视频方案
+              </p>
+              <span className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-full bg-[var(--color-bg-secondary)] px-3 py-1 text-[11px] text-[var(--color-text-secondary)]">
+                <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-warning)]" />
+                <span className="truncate">
+                  {agentWorking.hint || "正在分析你的创作需求"}
+                </span>
+              </span>
+              <p className="mt-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
+                方案生成后，时间线内容会自动出现在这里。
+              </p>
+              <div className="agent-working-shimmer mt-4 h-1 w-40 rounded-full bg-[var(--color-bg-secondary)]" />
+            </div>
+          ) : (
+            <div className="flex h-full min-h-44 flex-col items-center justify-center px-6 text-center">
+              <Sparkles className="mb-3 h-7 w-7 text-[var(--color-accent)]" />
+              <p className="text-sm font-semibold text-[var(--color-text-primary)]">
+                时间轴还是空的
+              </p>
+              <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
+                可以从上方添加内容，或在 Agent 中描述想生成、剪辑和叠加的画面。
+              </p>
+            </div>
+          )
         ) : (
           elements.map((element) => {
             const selected = selectedElementId === element.element_id;

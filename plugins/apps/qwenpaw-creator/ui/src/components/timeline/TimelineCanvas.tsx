@@ -25,6 +25,7 @@ import {
 import { projectJsonPointer } from "@/lib/projectJsonPointer";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
+import { useAgentWorkingState } from "@/selectors/agentWorkingSelectors";
 
 interface TimelineSelection {
   startTick: number;
@@ -75,6 +76,7 @@ export default function TimelineCanvas({
   const [muted, setMuted] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [selection, setSelection] = useState<TimelineSelection | null>(null);
+  const agentWorking = useAgentWorkingState();
   const [toolbarPos, setToolbarPos] = useState<{
     left: number;
     top: number;
@@ -226,17 +228,21 @@ export default function TimelineCanvas({
     return () => document.removeEventListener("mousedown", close);
   }, []);
 
+  // 让成片预览始终对齐播放头；预览刚打开或元数据尚未加载时也要补齐一次定位
+  const seekPreviewToPlayhead = (video: HTMLVideoElement) => {
+    if (!Number.isFinite(video.duration)) return;
+    const target = playheadTick / timeline.ticks_per_second;
+    if (Math.abs(video.currentTime - target) > 0.35) {
+      video.currentTime = Math.min(video.duration || target, target);
+    }
+  };
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video || document.activeElement === video) return;
-    const target = playheadTick / timeline.ticks_per_second;
-    if (
-      Number.isFinite(video.duration) &&
-      Math.abs(video.currentTime - target) > 0.35
-    ) {
-      video.currentTime = Math.min(video.duration || target, target);
-    }
-  }, [playheadTick, timeline.ticks_per_second]);
+    seekPreviewToPlayhead(video);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playheadTick, previewOpen, renderUrl, timeline.ticks_per_second]);
 
   useEffect(() => {
     if (!previewOpen || !renderUrl) setPlaying(false);
@@ -365,6 +371,9 @@ export default function TimelineCanvas({
               muted={muted}
               playsInline
               preload="metadata"
+              onLoadedMetadata={(event) =>
+                seekPreviewToPlayhead(event.currentTarget)
+              }
               onPlay={() => setPlaying(true)}
               onPause={() => setPlaying(false)}
               onTimeUpdate={(event) =>
@@ -502,9 +511,22 @@ export default function TimelineCanvas({
             }
           >
             {lanes.length === 0 ? (
-              <div className="flex h-14 items-center justify-center text-xs text-[var(--color-text-tertiary)]">
-                时间轴中还没有内容
-              </div>
+              agentWorking.working ? (
+                <div
+                  data-timeline-working
+                  className="flex h-14 flex-col items-center justify-center gap-2 text-xs text-[var(--color-text-secondary)]"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-warning)]" />
+                    Agent 正在编排时间轴，内容生成后会自动出现
+                  </span>
+                  <div className="agent-working-shimmer h-1.5 w-3/5 rounded-full bg-[var(--color-bg-secondary)]" />
+                </div>
+              ) : (
+                <div className="flex h-14 items-center justify-center text-xs text-[var(--color-text-tertiary)]">
+                  时间轴中还没有内容
+                </div>
+              )
             ) : (
               lanes.map((lane) => (
                 <div
