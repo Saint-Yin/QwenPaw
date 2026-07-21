@@ -990,6 +990,17 @@ function safeConversationDate(raw: string): string {
   return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
 }
 
+const REF_TYPE_LABELS: Record<RefSearchItem["type"], string> = {
+  timeline: "主时间轴",
+  element: "时间线内容",
+  asset: "素材",
+  artifact: "生成产物",
+};
+
+function refTypeLabel(type: RefSearchItem["type"]): string {
+  return REF_TYPE_LABELS[type] ?? "";
+}
+
 function fallbackRefName(ref: string): string {
   const value = ref.split(/[:/]/).filter(Boolean).at(-1) || ref;
   return value.length > 20 ? `${value.slice(0, 20)}…` : value;
@@ -2168,9 +2179,12 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                             : "hover:bg-[var(--color-accent-soft)]"
                         }`}
                       >
-                        <span className="rounded bg-[var(--color-bg-secondary)] px-1 text-[10px] text-[var(--color-text-tertiary)]">
-                          {item.type}
-                        </span>
+                        {refTypeLabel(item.type) &&
+                          refTypeLabel(item.type) !== item.name && (
+                            <span className="rounded bg-[var(--color-bg-secondary)] px-1 text-[10px] text-[var(--color-text-tertiary)]">
+                              {refTypeLabel(item.type)}
+                            </span>
+                          )}
                         <span className="truncate text-[var(--color-text-primary)]">
                           {item.name}
                         </span>

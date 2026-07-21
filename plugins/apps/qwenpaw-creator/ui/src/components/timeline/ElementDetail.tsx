@@ -191,35 +191,35 @@ export default function ElementDetail({
     >
       <header className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3">
         <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <span
-              className="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+              className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"
               style={{ color: meta.color, background: meta.soft }}
             >
               {meta.label}
             </span>
-            <span
-              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${status.tone}`}
-            >
-              {status.label}
-            </span>
-            {!element.enabled && (
-              <span className="rounded-full bg-[var(--color-bg-secondary)] px-2 py-0.5 text-[10px] text-[var(--color-text-tertiary)]">
-                已停用
-              </span>
-            )}
+            <h3 className="truncate text-base font-semibold text-[var(--color-text-primary)]">
+              {element.label || element.element_id}
+            </h3>
           </div>
-          <h3 className="mt-2 truncate text-base font-semibold text-[var(--color-text-primary)]">
-            {element.label || element.element_id}
-          </h3>
           <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--color-text-secondary)]">
             {elementCreationSummary(creation) || "尚未补充创作说明"}
           </p>
         </div>
         <div
           data-element-detail-header-actions
-          className="flex shrink-0 items-center gap-1"
+          className="flex shrink-0 items-center gap-1.5"
         >
+          {!element.enabled && (
+            <span className="rounded-full bg-[var(--color-bg-secondary)] px-2 py-0.5 text-[10px] text-[var(--color-text-tertiary)]">
+              已停用
+            </span>
+          )}
+          <span
+            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${status.tone}`}
+          >
+            {status.label}
+          </span>
           <Button
             type="text"
             danger
@@ -600,65 +600,67 @@ export default function ElementDetail({
           )}
         </section>
 
-        <section className="rounded-xl border border-[var(--color-border)] p-3">
-          <h4 className="mb-3 flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-primary)]">
-            <Film className="h-3.5 w-3.5 text-[var(--color-accent)]" />
-            生成结果
-          </h4>
-          {outputs.length === 0 ? (
-            <p className="rounded-lg bg-[var(--color-bg-secondary)] p-3 text-xs text-[var(--color-text-tertiary)]">
-              当前还没有生成结果。
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {outputs.map((output) => {
-                const file = output.selected
-                  ? project.assets.files_by_id[output.selected.file_id]
-                  : null;
-                const mediaType = file?.media_type || "";
-                const url = output.selected
-                  ? getArtifactVersionMediaUrl(output.selected.version_id)
-                  : null;
-                return (
-                  <div
-                    key={output.name}
-                    className="overflow-hidden rounded-lg border border-[var(--color-border)]"
-                  >
-                    <div className="flex items-center justify-between gap-2 bg-[var(--color-bg-secondary)] px-3 py-2 text-[11px]">
-                      <b>{outputLabel(output.name)}</b>
-                      <span className="text-[var(--color-text-tertiary)]">
-                        {output.selected ? "已生成" : "未生成"}
-                      </span>
+        {creation.type === "r2v" && (
+          <section className="rounded-xl border border-[var(--color-border)] p-3">
+            <h4 className="mb-3 flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-primary)]">
+              <Film className="h-3.5 w-3.5 text-[var(--color-accent)]" />
+              生成结果
+            </h4>
+            {outputs.length === 0 ? (
+              <p className="rounded-lg bg-[var(--color-bg-secondary)] p-3 text-xs text-[var(--color-text-tertiary)]">
+                当前还没有生成结果。
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {outputs.map((output) => {
+                  const file = output.selected
+                    ? project.assets.files_by_id[output.selected.file_id]
+                    : null;
+                  const mediaType = file?.media_type || "";
+                  const url = output.selected
+                    ? getArtifactVersionMediaUrl(output.selected.version_id)
+                    : null;
+                  return (
+                    <div
+                      key={output.name}
+                      className="overflow-hidden rounded-lg border border-[var(--color-border)]"
+                    >
+                      <div className="flex items-center justify-between gap-2 bg-[var(--color-bg-secondary)] px-3 py-2 text-[11px]">
+                        <b>{outputLabel(output.name)}</b>
+                        <span className="text-[var(--color-text-tertiary)]">
+                          {output.selected ? "已生成" : "未生成"}
+                        </span>
+                      </div>
+                      {url && mediaType.startsWith("image/") && (
+                        <img
+                          src={url}
+                          alt={`${output.name} 输出`}
+                          className="max-h-56 w-full bg-black object-contain"
+                        />
+                      )}
+                      {url && mediaType.startsWith("video/") && (
+                        <video
+                          src={url}
+                          controls
+                          preload="metadata"
+                          className="max-h-64 w-full bg-black object-contain"
+                        />
+                      )}
+                      {url && mediaType.startsWith("audio/") && (
+                        <audio src={url} controls className="w-full p-3" />
+                      )}
+                      {output.selected?.stale && (
+                        <p className="px-3 py-2 text-[10px] text-[var(--color-warning)]">
+                          该结果基于旧版方案，需要重新生成。
+                        </p>
+                      )}
                     </div>
-                    {url && mediaType.startsWith("image/") && (
-                      <img
-                        src={url}
-                        alt={`${output.name} 输出`}
-                        className="max-h-56 w-full bg-black object-contain"
-                      />
-                    )}
-                    {url && mediaType.startsWith("video/") && (
-                      <video
-                        src={url}
-                        controls
-                        preload="metadata"
-                        className="max-h-64 w-full bg-black object-contain"
-                      />
-                    )}
-                    {url && mediaType.startsWith("audio/") && (
-                      <audio src={url} controls className="w-full p-3" />
-                    )}
-                    {output.selected?.stale && (
-                      <p className="px-3 py-2 text-[10px] text-[var(--color-warning)]">
-                        该结果基于旧版方案，需要重新生成。
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
       </div>
 
       {creation.type === "r2v" && (

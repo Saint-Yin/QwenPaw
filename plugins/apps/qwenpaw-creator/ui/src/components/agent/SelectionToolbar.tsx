@@ -1,9 +1,9 @@
 /**
- * Text-selection toolbar.  Its DOM, positioning and keyboard/mouse behaviour
- * intentionally match origin/main; only the backing store is the new
- * Creator-session UI store.
+ * Text-selection toolbar.  The toolbar anchors to the end of the selection
+ * (top-right of the last selected line) and only flips to the other side when
+ * the viewport edge would clip it, so it never covers the selected content.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MessageSquarePlus } from "lucide-react";
 import {
   useAgentDockUiStore,
@@ -11,10 +11,38 @@ import {
 } from "@/store/agentDockUiStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
 
+interface ToolbarAnchor {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 interface ToolbarState {
-  x: number;
-  y: number;
+  anchor: ToolbarAnchor;
   sel: SelectionAttachment;
+}
+
+function pointAnchor(x: number, y: number): ToolbarAnchor {
+  const px = Number.isFinite(x) ? x : 8;
+  const py = Number.isFinite(y) ? y : 54;
+  return { left: px, top: py, right: px, bottom: py };
+}
+
+function rangeEndAnchor(range: Range): ToolbarAnchor {
+  const rects =
+    typeof range.getClientRects === "function"
+      ? Array.from(range.getClientRects()).filter(
+          (rect) => rect.width > 0 || rect.height > 0,
+        )
+      : [];
+  const rect = rects[rects.length - 1] ?? range.getBoundingClientRect();
+  return {
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+  };
 }
 
 function locateField(element: Element | null): {
@@ -45,6 +73,7 @@ function shouldIgnoreSelectionIn(element: Element | null): boolean {
 
 export default function SelectionToolbar() {
   const [state, setState] = useState<ToolbarState | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
   const lastPointRef = useRef<{ x: number; y: number } | null>(null);
   const setDockSelection = useAgentDockUiStore((item) => item.setSelection);
@@ -65,8 +94,7 @@ export default function SelectionToolbar() {
           const { field, path, label } = locateField(input);
           if (!field) return null;
           return {
-            x: clientX,
-            y: clientY,
+            anchor: pointAnchor(clientX, clientY),
             sel: {
               text: input.value.slice(start, end),
               ref: refOfField(field),
@@ -110,8 +138,7 @@ export default function SelectionToolbar() {
           const start = before.toString().length;
           if (start < 0) return null;
           return {
-            x: clientX,
-            y: clientY,
+            anchor: rangeEndAnchor(range),
             sel: {
               text,
               ref: refOfField(field),
@@ -182,6 +209,33 @@ export default function SelectionToolbar() {
     };
   }, []);
 
+  useLayoutEffect(() => {
+    if (!state) {
+      setPos(null);
+      return;
+    }
+    const bar = barRef.current;
+    const width = bar?.offsetWidth || 116;
+    const height = bar?.offsetHeight || 32;
+    const gap = 6;
+    const { anchor } = state;
+    // 默认落在选区末尾的右上角，避免盖住刚选中的内容；
+    // 右侧空间不够时向左收拢，上方空间不够时翻转到选区下方。
+    let left = anchor.right + gap;
+    if (left + width > window.innerWidth - 8) left = anchor.right - width;
+    left = Math.min(
+      Math.max(left, 8),
+      Math.max(8, window.innerWidth - width - 8),
+    );
+    let top = anchor.top - height - gap;
+    if (top < 8) top = anchor.bottom + gap;
+    top = Math.min(
+      Math.max(top, 8),
+      Math.max(8, window.innerHeight - height - 8),
+    );
+    setPos({ left, top });
+  }, [state]);
+
   if (!state) return null;
 
   const addToConversation = () => {
@@ -190,17 +244,15 @@ export default function SelectionToolbar() {
     setState(null);
     window.getSelection()?.removeAllRanges();
   };
-  const x = Number.isFinite(state.x) ? state.x : lastPointRef.current?.x ?? 8;
-  const y = Number.isFinite(state.y) ? state.y : lastPointRef.current?.y ?? 54;
 
   return (
     <div
       ref={barRef}
       style={{
         position: "fixed",
-        top: Math.max(8, y - 46),
-        left: x,
-        transform: "translateX(-50%)",
+        top: pos?.top ?? -9999,
+        left: pos?.left ?? -9999,
+        visibility: pos ? "visible" : "hidden",
         zIndex: 50,
       }}
       className="agent-dock-enter flex items-center overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-0.5 shadow-lg"

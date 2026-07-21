@@ -68,13 +68,13 @@ describe("PlanPage Timeline/Element frontend", () => {
   it("renders the canonical Timeline as overlapping display lanes and a start-sorted Element list", () => {
     const { container } = renderPage("/project/p1/plan?element=r2v-window");
 
-    expect(screen.getByText("视频方案")).toBeInTheDocument();
+    expect(screen.getByText("创作总纲")).toBeInTheDocument();
     expect(screen.getAllByText("20s").length).toBeGreaterThan(0);
     expect(screen.getByText("16:9")).toBeInTheDocument();
     expect(screen.getByText("6 项内容")).toBeInTheDocument();
     expect(screen.getByText(/5 层/)).toHaveTextContent("可上下滚动");
     expect(
-      container.querySelector('[class~="max-h-[216px]"]'),
+      container.querySelector('[class~="max-h-[210px]"]'),
     ).toBeInTheDocument();
     expect(screen.getAllByText("午饭名场面").length).toBeGreaterThan(0);
     expect(screen.getByText("分镜描述")).toBeInTheDocument();

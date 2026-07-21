@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   ChevronDown,
@@ -75,6 +75,10 @@ export default function TimelineCanvas({
   const [muted, setMuted] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [selection, setSelection] = useState<TimelineSelection | null>(null);
+  const [toolbarPos, setToolbarPos] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
   const [pointCandidates, setPointCandidates] = useState<
     TimelineElementDocument[]
   >([]);
@@ -85,6 +89,7 @@ export default function TimelineCanvas({
     moved: boolean;
   } | null>(null);
   const chartRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const lanes = useMemo(() => packDisplayLanes(timeline), [timeline]);
   const active = useMemo(
@@ -236,6 +241,44 @@ export default function TimelineCanvas({
   useEffect(() => {
     if (!previewOpen || !renderUrl) setPlaying(false);
   }, [previewOpen, renderUrl]);
+
+  useLayoutEffect(() => {
+    if (!selection) {
+      setToolbarPos(null);
+      return;
+    }
+    const update = () => {
+      const rect = chartRef.current?.getBoundingClientRect();
+      const bar = toolbarRef.current;
+      if (!rect || !bar) return;
+      const width = bar.offsetWidth || 116;
+      const height = bar.offsetHeight || 32;
+      const centerTick =
+        selection.kind === "point"
+          ? selection.startTick
+          : (selection.startTick + selection.endTick) / 2;
+      const inner = Math.max(1, rect.width - LABEL_WIDTH - 24);
+      const x =
+        rect.left +
+        LABEL_WIDTH +
+        (inner * percent(centerTick, timelineDuration)) / 100;
+      const left = Math.min(
+        Math.max(x - width / 2, 8),
+        Math.max(8, window.innerWidth - width - 8),
+      );
+      // 悬浮在时间轴图表上方，不遮挡刻度与轨道；上方放不下时退回刻度下方
+      let top = rect.top - height - 6;
+      if (top < 8) top = rect.top + 30;
+      setToolbarPos({ left, top });
+    };
+    update();
+    window.addEventListener("resize", update);
+    document.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      document.removeEventListener("scroll", update, true);
+    };
+  }, [selection, timelineDuration]);
 
   const rulerTicks = Array.from({ length: 7 }, (_, index) =>
     Math.round((timelineDuration * index) / 6),
@@ -453,7 +496,7 @@ export default function TimelineCanvas({
             className={
               scrollable
                 ? `${
-                    previewOpen ? "max-h-[108px]" : "max-h-[216px]"
+                    previewOpen ? "max-h-[84px]" : "max-h-[210px]"
                   } overflow-y-auto overscroll-contain [scrollbar-gutter:stable]`
                 : ""
             }
@@ -466,7 +509,7 @@ export default function TimelineCanvas({
               lanes.map((lane) => (
                 <div
                   key={lane.id}
-                  className="relative flex h-[54px] border-b border-[var(--color-border)]/65 last:border-b-0"
+                  className="relative flex h-[42px] border-b border-[var(--color-border)]/65 last:border-b-0"
                 >
                   <div className="flex w-[68px] shrink-0 items-center justify-center text-[10px] font-semibold text-[var(--color-text-tertiary)]">
                     {lane.id}
@@ -501,7 +544,7 @@ export default function TimelineCanvas({
                             event.stopPropagation();
                             onSelectElement(element.element_id);
                           }}
-                          className={`absolute top-1.5 flex h-[42px] min-w-3 items-center overflow-hidden rounded-lg border px-2 text-left text-[11px] font-semibold shadow-sm transition ${
+                          className={`absolute top-1.5 flex h-[30px] min-w-3 flex-col justify-center overflow-hidden rounded-[7px] border px-2 text-left text-[10px] font-semibold shadow-sm transition ${
                             selected
                               ? "z-20 border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/20"
                               : "z-10"
@@ -518,6 +561,19 @@ export default function TimelineCanvas({
                         >
                           <span className="min-w-0 truncate">
                             {element.label || "时间线内容"}
+                          </span>
+                          <span className="truncate whitespace-nowrap text-[9px] font-medium opacity-75">
+                            {seconds(
+                              element.span.start_tick,
+                              timeline.ticks_per_second,
+                            )}
+                            s –{" "}
+                            {seconds(
+                              element.span.start_tick +
+                                element.span.duration_tick,
+                              timeline.ticks_per_second,
+                            )}
+                            s
                           </span>
                         </button>
                       );
@@ -563,19 +619,15 @@ export default function TimelineCanvas({
               }}
             />
             <div
+              ref={toolbarRef}
               data-timeline-selection-toolbar
-              className="absolute top-7 z-30 -translate-x-1/2 rounded-lg border border-[var(--color-border)] bg-white p-0.5 shadow-lg"
+              className="rounded-lg border border-[var(--color-border)] bg-white p-0.5 shadow-lg"
               style={{
-                left: `calc(${LABEL_WIDTH}px + (100% - ${
-                  LABEL_WIDTH + 24
-                }px) * ${
-                  percent(
-                    selection.kind === "point"
-                      ? selection.startTick
-                      : (selection.startTick + selection.endTick) / 2,
-                    timelineDuration,
-                  ) / 100
-                })`,
+                position: "fixed",
+                top: toolbarPos?.top ?? -9999,
+                left: toolbarPos?.left ?? -9999,
+                visibility: toolbarPos ? "visible" : "hidden",
+                zIndex: 50,
               }}
             >
               <button

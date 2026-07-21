@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button, message } from "antd";
+import { message } from "antd";
 import { Plus, Scissors, Sparkles } from "lucide-react";
 import { navigate, useParams, useSearchParams } from "@/routing/navigation";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
@@ -163,17 +163,11 @@ export default function PlanPage() {
     >
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]/60 px-5 py-3 backdrop-blur">
         <div className="min-w-0">
-          <h2 className="text-base font-semibold text-[var(--color-text-primary)]">
-            视频方案
-          </h2>
-          <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">
-            画面、剪辑、字幕动效和声音都直接排列在同一时间轴上，可在同一时刻叠加呈现。
-          </p>
-          {(project.strategy.creative_brief ||
-            project.strategy.creative_direction) && (
-            <details className="mt-1 max-w-3xl text-xs text-[var(--color-text-secondary)]">
-              <summary className="w-fit cursor-pointer select-none text-[var(--color-accent)]">
-                查看创作总纲
+          {project.strategy.creative_brief ||
+          project.strategy.creative_direction ? (
+            <details className="max-w-3xl">
+              <summary className="w-fit cursor-pointer select-none text-base font-semibold text-[var(--color-text-primary)]">
+                创作总纲
               </summary>
               <div
                 data-creator-field="project:strategy/creative_brief"
@@ -182,13 +176,17 @@ export default function PlanPage() {
                   "creative_brief",
                 )}
                 data-creator-field-label="创作总纲"
-                className="mt-2 max-h-44 overflow-y-auto whitespace-pre-wrap rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 leading-5"
+                className="mt-2 max-h-[92px] overflow-y-auto whitespace-pre-wrap rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 text-xs leading-5 text-[var(--color-text-secondary)]"
               >
                 {project.strategy.creative_brief}
                 {project.strategy.creative_direction &&
                   `\n\n创作方向：${project.strategy.creative_direction}`}
               </div>
             </details>
+          ) : (
+            <h2 className="text-base font-semibold text-[var(--color-text-primary)]">
+              创作总纲
+            </h2>
           )}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -201,9 +199,9 @@ export default function PlanPage() {
           <span className="rounded-full border border-[var(--color-border)] bg-white px-2.5 py-1 text-[11px] font-semibold text-[var(--color-text-secondary)]">
             {Object.keys(timeline.elements_by_id).length} 项内容
           </span>
-          <Button
-            size="small"
-            icon={<Plus className="h-3.5 w-3.5" />}
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-bg-secondary)]"
             onClick={() =>
               focusAgent(
                 timelineTargetRef,
@@ -211,11 +209,12 @@ export default function PlanPage() {
               )
             }
           >
+            <Plus className="h-3.5 w-3.5" />
             添加内容
-          </Button>
-          <Button
-            size="small"
-            icon={<Scissors className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-bg-secondary)]"
             onClick={() =>
               focusAgent(
                 timelineTargetRef,
@@ -223,12 +222,12 @@ export default function PlanPage() {
               )
             }
           >
+            <Scissors className="h-3.5 w-3.5" />
             生成成片
-          </Button>
-          <Button
-            size="small"
-            type="primary"
-            icon={<Sparkles className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent)] px-3 py-1.5 text-xs font-semibold text-white transition hover:border-[var(--color-accent-hover)] hover:bg-[var(--color-accent-hover)]"
             onClick={() =>
               focusAgent(
                 timelineTargetRef,
@@ -236,8 +235,9 @@ export default function PlanPage() {
               )
             }
           >
+            <Sparkles className="h-3.5 w-3.5" />
             Agent 规划
-          </Button>
+          </button>
         </div>
       </header>
 

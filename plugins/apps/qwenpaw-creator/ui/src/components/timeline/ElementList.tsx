@@ -109,13 +109,13 @@ export default function ElementList({
   return (
     <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] shadow-sm">
       <header className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
-        <div>
+        <div className="flex min-w-0 items-baseline gap-1.5">
           <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">
             时间线内容
           </h3>
-          <p className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">
-            按开始时间排列；重叠关系以时间轴为准
-          </p>
+          <span className="truncate text-[10px] text-[var(--color-text-tertiary)]">
+            按开始时间排列
+          </span>
         </div>
         <span className="rounded-full bg-[var(--color-bg-secondary)] px-2 py-0.5 text-[10px] font-semibold text-[var(--color-text-secondary)]">
           {elements.length}
