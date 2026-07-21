@@ -656,6 +656,23 @@ def _target_id(target_ref: str, prefix: str) -> str:
     return target_ref[len(expected) :]
 
 
+def _target_timeline(project: Project, target_ref: str) -> Timeline:
+    """Resolve a timeline targetRef.
+
+    Canonical Timeline IDs already carry the ``timeline:`` prefix (for
+    example ``timeline:main``), so both ``timeline:timeline:main`` and the
+    bare ID ``timeline:main`` must resolve to the same Timeline.
+    """
+
+    timeline_id = _target_id(target_ref, "timeline")
+    timeline = project.timelines.items.get(timeline_id)
+    if timeline is None:
+        timeline = project.timelines.items.get(target_ref)
+    if timeline is None:
+        raise NotFoundError("Timeline 不存在")
+    return timeline
+
+
 def _canvas_size(aspect_ratio: str, resolution: str) -> tuple[int, int]:
     """Resolve Project display settings to one even-pixel render canvas."""
 
@@ -1023,10 +1040,7 @@ def _resolve_execution(
 ) -> _ResolvedExecution:
     project = snapshot.project
     if command is CreatorCommandType.EXECUTE_EDIT:
-        timeline_id = _target_id(target_ref, "timeline")
-        timeline = project.timelines.items.get(timeline_id)
-        if timeline is None:
-            raise NotFoundError("Timeline 不存在")
+        timeline = _target_timeline(project, target_ref)
         return _timeline_execution(
             project=project,
             timeline=timeline,
@@ -1034,10 +1048,7 @@ def _resolve_execution(
             command=command,
         )
     if command is CreatorCommandType.COMPOSE_FINAL_VIDEO:
-        timeline_id = _target_id(target_ref, "timeline")
-        timeline = project.timelines.items.get(timeline_id)
-        if timeline is None:
-            raise NotFoundError("Timeline 不存在")
+        timeline = _target_timeline(project, target_ref)
         return _timeline_execution(
             project=project,
             timeline=timeline,
