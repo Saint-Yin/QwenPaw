@@ -1416,9 +1416,15 @@ def _composition_view(
             for source_ref in sorted(expected - selected_sources)
         )
     elif kind == "final":
+        sections_with_candidates = {
+            candidate["ownerRef"]
+            for candidate in candidates
+            if candidate.get("kind") == "section_video"
+        }
         expected = {
             f"project://section/{section_id}"
             for section_id in project.story.sections.order
+            if f"project://section/{section_id}" in sections_with_candidates
         }
         selected_sources = {item["sourceRef"] for item in selections}
         blockers.extend(
