@@ -312,6 +312,18 @@ VLM_MAX_INLINE_BYTES = _positive_int_env(
     20 * 1024 * 1024,
 )
 
+# ── Web grounding ────────────────────────────────────────────────────────────
+WEB_GROUNDING_TIMEOUT_SECONDS = _positive_int_env(
+    "WEB_GROUNDING_TIMEOUT_SECONDS",
+    8,
+)
+WEB_GROUNDING_MAX_SOURCES = _positive_int_env("WEB_GROUNDING_MAX_SOURCES", 6)
+WEB_GROUNDING_MAX_ENTITIES = _positive_int_env("WEB_GROUNDING_MAX_ENTITIES", 3)
+WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS = _positive_int_env(
+    "WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS",
+    20,
+)
+
 # ── ASR Model (OpenAI Whisper / DashScope Fun-ASR) ───────────────────────────
 ASR_BASE_URL = os.environ.get(
     "ASR_BASE_URL",
@@ -433,6 +445,42 @@ def get_vlm_max_inline_bytes() -> int:
         "max_inline_bytes",
         "VLM_MAX_INLINE_BYTES",
         VLM_MAX_INLINE_BYTES,
+    )
+
+
+def get_web_grounding_enabled() -> bool:
+    return os.environ.get("WEB_GROUNDING_ENABLED", "1").lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+
+
+def get_web_grounding_timeout_seconds() -> int:
+    return _positive_int_env(
+        "WEB_GROUNDING_TIMEOUT_SECONDS",
+        WEB_GROUNDING_TIMEOUT_SECONDS,
+    )
+
+
+def get_web_grounding_max_sources() -> int:
+    return _positive_int_env(
+        "WEB_GROUNDING_MAX_SOURCES",
+        WEB_GROUNDING_MAX_SOURCES,
+    )
+
+
+def get_web_grounding_max_entities() -> int:
+    return _positive_int_env(
+        "WEB_GROUNDING_MAX_ENTITIES",
+        WEB_GROUNDING_MAX_ENTITIES,
+    )
+
+
+def get_web_grounding_entity_timeout_seconds() -> int:
+    return _positive_int_env(
+        "WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS",
+        WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS,
     )
 
 

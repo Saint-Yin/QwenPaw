@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
 # pylint: disable=line-too-long,protected-access,too-many-statements
-# pylint: disable=unused-argument
+# pylint: disable=unused-argument,use-implicit-booleaness-not-comparison
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import io
 import json
 
 import pytest
+from PIL import Image
 
 from api.file_asset_routes import _AssetInput, _ingest_many_sync
 from schemas.assets import SourceMediaMetadata, SourceModelRunRef
@@ -174,6 +177,7 @@ def _edit_client(*, description: str):
             "read_project",
             "read_project_file",
             "jq_project",
+            "ground_prompt_context",
             "delegate_to_agent",
         }
         # The role prompt and static Pydantic schema form one stable system prompt.
@@ -296,6 +300,197 @@ def test_initial_creation_runs_auto_fix_tool_loop_without_review(
     )
 
 
+def test_creator_agent_can_call_ground_prompt_context_tool(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from services.file_agent_runtime import driver as driver_module
+
+    image_buffer = io.BytesIO()
+    Image.new("RGB", (8, 8), color="blue").save(image_buffer, format="WEBP")
+    image_bytes = image_buffer.getvalue()
+    external_root = tmp_path.parent / f"{tmp_path.name}-grounding"
+    external_root.mkdir()
+    grounding_image = external_root / "haaland.webp"
+    grounding_image.write_bytes(image_bytes)
+    grounding_sha = hashlib.sha256(image_bytes).hexdigest()
+
+    async def fake_ground_prompt_context(prompt: str, **kwargs):
+        assert prompt == "哈兰德参加偶像练习生"
+        assert kwargs["queries"] == ["Erling Haaland visual reference"]
+        assert kwargs["include_visuals"] is True
+        return {
+            "ok": True,
+            "status": "success",
+            "provider": "dashscope_web_search_image",
+            "grounded_context": (
+                f"Visual References:\n[V1] accepted/identity local={grounding_image.as_uri()}"
+            ),
+            "visual_sources": [
+                {
+                    "verification": {
+                        "status": "accepted",
+                        "usage": "identity",
+                    },
+                    "local_url": grounding_image.as_uri(),
+                    "local_path": str(grounding_image),
+                    "media_type": "image/webp",
+                    "storage_sha256": grounding_sha,
+                    "title": "Erling Haaland official portrait",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(
+        driver_module,
+        "ground_prompt_context",
+        fake_ground_prompt_context,
+    )
+
+    turn = 0
+
+    async def callback(messages, tools):
+        nonlocal turn
+        assert "ground_prompt_context" in {
+            item["function"]["name"] for item in tools
+        }
+        turn += 1
+        if turn == 1:
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id="ground-1",
+                        name="ground_prompt_context",
+                        arguments={
+                            "projectId": PROJECT_ID,
+                            "prompt": "哈兰德参加偶像练习生",
+                            "queries": ["Erling Haaland visual reference"],
+                            "includeVisuals": True,
+                        },
+                    ),
+                ),
+            )
+        result = json.loads(messages[-1]["content"])
+        assert result["provider"] == "dashscope_web_search_image"
+        assert grounding_image.as_uri() in result["grounded_context"]
+        assert result["visual_sources"][0]["source_asset_version_id"]
+        assert result["visual_sources"][0]["workspace_ref"].startswith(
+            "asset://",
+        )
+        return AgentModelTurn(content="grounding 已完成")
+
+    async def scenario():
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="哈兰德参加偶像练习生",
+        )
+        runtime = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(callback),
+            poll_interval_seconds=0.01,
+        )
+        await runtime.start()
+        runtime.notify(PROJECT_ID)
+        await _wait_for(
+            lambda: services.sessions.get_project_session(
+                PROJECT_ID,
+            ).last_consumed_message_seq
+            == 1,
+        )
+        await runtime.wait_until_idle(PROJECT_ID)
+        messages = services.sessions.list_messages(PROJECT_ID, SESSION_ID)
+        events = services.sessions.list_events(PROJECT_ID, SESSION_ID)
+        await runtime.stop()
+        return services, messages, events
+
+    services, messages, events = asyncio.run(scenario())
+    tool_results = [
+        item
+        for item in messages
+        if item.source == "runtime_action_result"
+        and item.metadata.get("tool") == "ground_prompt_context"
+    ]
+    assert len(tool_results) == 1
+    assert tool_results[0].metadata["resultKind"] == "web_grounding"
+    payload = json.loads(tool_results[0].content_parts[0].text or "")
+    assert payload["ok"] is True
+    source_version_id = payload["visual_sources"][0]["source_asset_version_id"]
+    project = services.projects.read(PROJECT_ID).project
+    assert source_version_id in project.assets.source_versions_by_id
+    assert (
+        project.assets.source_versions_by_id[source_version_id].checksum
+        == grounding_sha
+    )
+    assert any(
+        event.event_type == "agent.tool_completed"
+        and event.payload.get("tool") == "ground_prompt_context"
+        for event in events
+    )
+
+
+def test_grounding_visual_promotion_requires_explicit_acceptance() -> None:
+    from services.file_agent_runtime import driver as driver_module
+
+    assert driver_module._grounding_visual_is_usable(
+        {"verification": {"status": "accepted"}},
+    )
+    assert not driver_module._grounding_visual_is_usable({})
+    assert not driver_module._grounding_visual_is_usable(
+        {"verification": {"status": "error"}},
+    )
+    assert not driver_module._grounding_visual_is_usable(
+        {"verification": {"status": "unranked"}},
+    )
+    assert not driver_module._grounding_visual_is_usable(
+        {"verification": {"status": "rejected"}},
+    )
+
+
+def test_grounding_visual_promotion_is_idempotent(tmp_path) -> None:
+    image_buffer = io.BytesIO()
+    Image.new("RGB", (8, 8), color="blue").save(image_buffer, format="WEBP")
+    image_bytes = image_buffer.getvalue()
+    grounding_image = tmp_path / "grounding.webp"
+    grounding_image.write_bytes(image_bytes)
+    grounding_sha = hashlib.sha256(image_bytes).hexdigest()
+    visual_source = {
+        "verification": {"status": "accepted", "usage": "identity"},
+        "local_url": grounding_image.as_uri(),
+        "local_path": str(grounding_image),
+        "media_type": "image/webp",
+        "storage_sha256": grounding_sha,
+        "title": "Grounding identity portrait",
+    }
+    services, _snapshot = _create_project(tmp_path, initial_goal=None)
+    runtime = FileCreatorAgentRuntime(services)
+
+    first = runtime._promote_grounding_visuals_sync(
+        PROJECT_ID,
+        "grounding-request-1",
+        [visual_source],
+    )
+    first_project = services.projects.read(PROJECT_ID).project
+    file_id = first["promoted"][0]["file_id"]
+    first_created_at = first_project.assets.files_by_id[file_id].created_at
+    first_generation = first_project.generation
+
+    replay = runtime._promote_grounding_visuals_sync(
+        PROJECT_ID,
+        "grounding-request-1",
+        [visual_source],
+    )
+    replay_project = services.projects.read(PROJECT_ID).project
+
+    assert first["promoted_count"] == 1
+    assert replay["promoted_count"] == 1
+    assert replay["issues"] == []
+    assert replay_project.generation == first_generation
+    assert (
+        replay_project.assets.files_by_id[file_id].created_at
+        == first_created_at
+    )
+
+
 def test_stream_persistence_failure_is_not_reported_as_a_model_failure(
     tmp_path,
     monkeypatch,
@@ -355,6 +550,7 @@ def test_parent_authors_story_units_and_production_without_planning_specialists(
             "read_project",
             "read_project_file",
             "jq_project",
+            "ground_prompt_context",
             "delegate_to_agent",
         }
         delegate = next(

@@ -2,7 +2,39 @@
 # flake8: noqa: E501
 from __future__ import annotations
 
-from models.media_transport import _upload_local_file_to_dashscope_temp_sync
+from models.media_transport import (
+    _upload_local_file_to_dashscope_temp_sync,
+    validate_reference_image_bytes,
+)
+
+
+def test_reference_image_dimensions_are_read_before_verify(
+    monkeypatch,
+) -> None:
+    class VerifyInvalidatesImage:
+        verified = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        @property
+        def size(self):
+            if self.verified:
+                raise AssertionError("image attributes accessed after verify")
+            return (8, 8)
+
+        def verify(self):
+            self.verified = True
+
+    monkeypatch.setattr(
+        "models.media_transport.Image.open",
+        lambda _stream: VerifyInvalidatesImage(),
+    )
+
+    validate_reference_image_bytes(b"fake image bytes")
 
 
 def test_dashscope_temporary_upload_streams_file_handle_instead_of_loading_bytes(

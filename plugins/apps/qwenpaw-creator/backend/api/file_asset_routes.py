@@ -78,6 +78,7 @@ from services.runtime_files.session_store import (
     RuntimeSessionNotFound,
 )
 
+from .content_disposition import inline_content_disposition
 from .dependencies import (
     CreatorErrorRoute,
     project_file_services,
@@ -1435,7 +1436,9 @@ async def get_asset_content(
             media_type=version.media_type,
             headers={
                 "Content-Length": str(cache.size_bytes),
-                "Content-Disposition": f'inline; filename="{Path(version.name).name}"',
+                "Content-Disposition": inline_content_disposition(
+                    version.name,
+                ),
                 "ETag": f'"sha256:{cache.sha256}"',
             },
         )
@@ -1454,7 +1457,7 @@ async def get_asset_content(
         media_type=version.media_type,
         headers={
             "Content-Length": str(indexed.size_bytes),
-            "Content-Disposition": f'inline; filename="{Path(version.name).name}"',
+            "Content-Disposition": inline_content_disposition(version.name),
             "ETag": f'"sha256:{indexed.sha256}"',
         },
     )

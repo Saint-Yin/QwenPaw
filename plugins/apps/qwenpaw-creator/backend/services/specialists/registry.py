@@ -15,6 +15,7 @@ READ_FILE_TOOLS = ("read_file", "grep_search", "glob_search", "ast_search")
 WRITE_FILE_TOOLS = ("write_file", "edit_file", "append_file")
 DELEGATE_TOOL_NAME = "delegate_to_agent"
 FINALIZE_VIDEO_TOOL_NAME = "finalize_video"
+GROUND_PROMPT_CONTEXT_TOOL_NAME = "ground_prompt_context"
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,6 +311,7 @@ def creator_available_actions() -> tuple[str, ...]:
         "final",
         *READ_FILE_TOOLS,
         *WRITE_FILE_TOOLS,
+        GROUND_PROMPT_CONTEXT_TOOL_NAME,
         DELEGATE_TOOL_NAME,
         FINALIZE_VIDEO_TOOL_NAME,
         "yield_until_runtime_event",

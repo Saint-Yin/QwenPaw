@@ -12,6 +12,7 @@ import httpx
 from fastapi import FastAPI
 import pytest
 
+from api.content_disposition import inline_content_disposition
 from api import file_asset_routes, file_media_routes
 from api.dependencies import creator_error_handler, project_file_services
 from api.file_asset_routes import (
@@ -141,6 +142,55 @@ def test_text_asset_is_published_indexed_attached_and_replayed(
     assert project.generation == 1
 
 
+def test_asset_content_supports_utf8_filenames(tmp_path) -> None:
+    app, _services = _app(tmp_path)
+    payload = {
+        "clientRequestId": "asset-utf8-content-1",
+        "kind": "text",
+        "name": "哈兰德–舞台.txt",
+        "value": "unicode filename",
+        "postIngestAction": "ATTACH_SOURCE",
+    }
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            created = await client.post(
+                "/projects/project-1/assets",
+                headers={"Idempotency-Key": "asset-utf8-content-1"},
+                json=payload,
+            )
+            content = await client.get(
+                f"/projects/project-1/assets/{created.json()['assetId']}/content",
+                params={"versionId": created.json()["assetVersionId"]},
+            )
+        return created, content
+
+    created, content = asyncio.run(scenario())
+    assert created.status_code == 202
+    assert content.status_code == 200
+    assert content.content == b"unicode filename"
+    disposition = content.headers["content-disposition"]
+    assert disposition.startswith('inline; filename="')
+    assert (
+        "filename*=UTF-8''%E5%93%88%E5%85%B0%E5%BE%B7%E2%80%93"
+        "%E8%88%9E%E5%8F%B0.txt"
+    ) in disposition
+
+
+def test_content_disposition_handles_lone_surrogates_and_ascii_fallback() -> (
+    None
+):
+    disposition = inline_content_disposition("坏文件\ud800.mp4")
+
+    assert disposition.startswith('inline; filename="media.mp4"; ')
+    assert "filename*=UTF-8''%E5%9D%8F%E6%96%87%E4%BB%B6%3F.mp4" in disposition
+    disposition.encode("latin-1")
+
+
 def test_indexed_media_supports_byte_ranges_and_utf8_filenames(
     tmp_path,
 ) -> None:
@@ -182,7 +232,7 @@ def test_indexed_media_supports_byte_ranges_and_utf8_filenames(
     assert ranged.headers["content-range"] == "bytes 2-5/10"
     assert ranged.headers["content-length"] == "4"
     disposition = ranged.headers["content-disposition"]
-    assert disposition.startswith('inline; filename="')
+    assert disposition.startswith('inline; filename="media.mp4"; ')
     assert (
         "filename*=UTF-8''%E7%8C%AB%E5%92%AA%E6%88%90%E7%89%87.mp4"
         in disposition
@@ -238,7 +288,7 @@ def test_remote_asset_streams_to_file_and_project_json_only_indexes_it(
     request_payload = {
         "clientRequestId": "remote-asset-1",
         "kind": "url",
-        "name": "remote",
+        "name": "远程–视频.mp4",
         "value": "https://assets.example/source.mp4",
         "postIngestAction": "ATTACH_SOURCE",
     }
@@ -269,13 +319,31 @@ def test_remote_asset_streams_to_file_and_project_json_only_indexes_it(
             after_cache = await client.get(
                 f"/media/assets/{first.json()['assetVersionId']}",
             )
+            direct_after_cache = await client.get(
+                f"/projects/project-1/assets/{first.json()['assetId']}/content",
+                params={"versionId": first.json()["assetVersionId"]},
+            )
             keyframe = await client.get(
                 f"/media/assets/{first.json()['assetVersionId']}/frame",
                 params={"timestamp": 4.5, "width": 640},
             )
-        return first, replay, before_cache, after_cache, keyframe
+        return (
+            first,
+            replay,
+            before_cache,
+            after_cache,
+            direct_after_cache,
+            keyframe,
+        )
 
-    first, replay, before_cache, after_cache, keyframe = asyncio.run(
+    (
+        first,
+        replay,
+        before_cache,
+        after_cache,
+        direct_after_cache,
+        keyframe,
+    ) = asyncio.run(
         scenario(),
     )
     assert first.status_code == 202
@@ -288,6 +356,11 @@ def test_remote_asset_streams_to_file_and_project_json_only_indexes_it(
         assert before_cache.content == payload
     assert after_cache.status_code == 200
     assert after_cache.content == payload
+    assert direct_after_cache.status_code == 200
+    assert direct_after_cache.content == payload
+    assert (
+        "filename*=UTF-8''%E8%BF%9C%E7%A8%8B%E2%80%93" "%E8%A7%86%E9%A2%91.mp4"
+    ) in direct_after_cache.headers["content-disposition"]
     assert keyframe.status_code == 200
     assert keyframe.content == b"LOCAL_KEYFRAME"
     assert keyframe.headers["x-creator-media-source"] == "local-keyframe-cache"

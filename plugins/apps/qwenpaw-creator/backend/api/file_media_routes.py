@@ -8,7 +8,6 @@ import asyncio
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -26,6 +25,7 @@ from services.project_files.remote_cache import resolve_remote_cache
 from services.runtime_files.execution_store import ProjectExecutionStore
 from utils.paths import media_path_from_url
 
+from .content_disposition import inline_content_disposition
 from .dependencies import CreatorErrorRoute, project_file_services
 
 
@@ -33,24 +33,6 @@ router = APIRouter(tags=["media-files"], route_class=CreatorErrorRoute)
 
 
 _STREAM_CHUNK_BYTES = 64 * 1024
-
-
-def _inline_content_disposition(name: str) -> str:
-    """Build a Latin-1-safe inline filename with an RFC 5987 UTF-8 value."""
-
-    original = Path(str(name or "media")).name or "media"
-    fallback = "".join(
-        character
-        if 32 <= ord(character) < 127 and character not in {'"', "\\"}
-        else "_"
-        for character in original
-    ).strip()
-    if not fallback:
-        fallback = "media"
-    return (
-        f'inline; filename="{fallback}"; '
-        f"filename*=UTF-8''{quote(original, safe='')}"
-    )
 
 
 def _response_range(
@@ -137,7 +119,7 @@ def _media_response(
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Length": str(length),
-        "Content-Disposition": _inline_content_disposition(name),
+        "Content-Disposition": inline_content_disposition(name),
         "ETag": etag,
         "Cache-Control": cache_control,
     }

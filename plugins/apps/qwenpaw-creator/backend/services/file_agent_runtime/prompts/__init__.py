@@ -41,7 +41,7 @@ FILE_AGENT_PROMPT_SPECS = {
         _spec(
             "creator_agent.system",
             "creator_agent.system.txt",
-            "ab0e447e93be735364f744b6ce3c34810ebd2cb1e838a1b7c3d55e8572d05ff6",
+            "cddaa72842b9683130f16295b9350d38ad274f9fa371ec4f9d295eb9b41b2688",
             "project_id",
             "workspace_schema",
         ),
@@ -55,7 +55,7 @@ FILE_AGENT_PROMPT_SPECS = {
         _spec(
             "visual_development_agent.system",
             "visual_development_agent.system.txt",
-            "eba034bf9bdeacbf4c3f22f84ef8157554b9247b43634ecf5ec7e0df4d184d19",
+            "0f93c373364b0796b3bc42050d106a32e00025a4c11c7a647fd90c7497416022",
             "project_id",
             "workspace_schema",
         ),

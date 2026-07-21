@@ -18,6 +18,7 @@ import os
 from models.media_transport import (
     read_reference_media,
     upload_reference_media_to_creator_oss,
+    validate_reference_image_bytes,
 )
 from utils.exceptions import ModelError
 from models.image.base import (
@@ -166,6 +167,13 @@ class DashScopeImageModel(BaseImageModel):
                 public_url = url
             else:
                 media_bytes, filename = await read_reference_media(url)
+                try:
+                    validate_reference_image_bytes(media_bytes)
+                except ValueError:
+                    # A stale or corrupt project reference must not fail the
+                    # whole generation. Continue with the remaining references,
+                    # or as text-to-image when none are usable.
+                    continue
                 public_url = await upload_reference_media_to_creator_oss(
                     media_bytes,
                     filename,

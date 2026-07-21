@@ -9,14 +9,19 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import hashlib
 import json
+import mimetypes
+from pathlib import Path, PurePosixPath
 import secrets
 import threading
 import time
 from typing import Any
+from urllib.parse import unquote, urlparse
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from domain.refs import workspace_asset_ref
 from domain.enums import (
     CreatorGoalStatus,
     CreatorSessionStatus,
@@ -24,13 +29,17 @@ from domain.enums import (
     SpecialistRunStatus,
     TaskStatus,
 )
+from domain.errors import ConflictError
 from models.config import (
     EXECUTION_AUTHORIZATION_ALLOW_ALL,
     get_execution_authorization_mode,
+    get_web_grounding_max_sources,
+    get_web_grounding_timeout_seconds,
     get_image_model_name,
     get_video_backend,
     get_video_model_name,
 )
+from models.media_transport import validate_reference_image_bytes
 from services.project_files.agent_tools import (
     AgentProjectToolContext,
     AgentProjectTools,
@@ -38,7 +47,12 @@ from services.project_files.agent_tools import (
 )
 from services.project_files.commit import ProjectCommitBoundary
 from services.project_files.facade import CreatorFileServices
-from services.project_files.models import Project
+from services.project_files.assets import AssetAlreadyExists, AssetFileStore
+from services.project_files.models import (
+    IndexedFile,
+    Project,
+    SourceAssetVersion,
+)
 from services.runtime_files.models import (
     ChangeOrigin,
     CreatorMessageRecord,
@@ -61,6 +75,7 @@ from services.runtime_files.session_store import (
     RuntimeGoalNotFound,
     SessionStateConflict,
 )
+from services.web_grounding import ground_prompt_context
 
 from .model_client import (
     AgentChatClient,
@@ -82,6 +97,107 @@ from .subagents import (
     delegate_tool_manifest,
     specialist_system_prompt,
 )
+
+
+GROUND_PROMPT_CONTEXT_TOOL_NAME = "ground_prompt_context"
+GROUNDING_VISUAL_MAX_BYTES = 16 * 1024 * 1024
+
+
+def _grounding_stable_id(prefix: str, project_id: str, identity: str) -> str:
+    value = uuid5(
+        NAMESPACE_URL,
+        f"qwenpaw-creator:grounding:{prefix}:{project_id}:{identity}",
+    ).hex
+    return f"{prefix}-{value}"
+
+
+def _grounding_media_kind(media_type: str) -> str:
+    main_type = media_type.split("/", 1)[0].casefold()
+    if main_type in {"image", "video", "audio", "text"}:
+        return main_type
+    if media_type.casefold() in {"application/pdf"}:
+        return "document"
+    return "other"
+
+
+def _grounding_extension(path: Path, media_type: str) -> str:
+    suffix = path.suffix.lower()
+    if suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+        return suffix
+    guessed = mimetypes.guess_extension(media_type)
+    return (
+        guessed
+        if guessed in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+        else ".img"
+    )
+
+
+def _grounding_local_path(source: Mapping[str, Any]) -> Path | None:
+    raw_path = str(source.get("local_path") or "").strip()
+    if raw_path:
+        return Path(raw_path)
+    raw_url = str(source.get("local_url") or "").strip()
+    if not raw_url:
+        return None
+    parsed = urlparse(raw_url)
+    if parsed.scheme != "file":
+        return None
+    return Path(unquote(parsed.path))
+
+
+def _grounding_visual_is_usable(source: Mapping[str, Any]) -> bool:
+    verification = source.get("verification")
+    return (
+        isinstance(verification, Mapping)
+        and str(verification.get("status") or "").casefold() == "accepted"
+    )
+
+
+def _ground_prompt_context_tool_manifest() -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": GROUND_PROMPT_CONTEXT_TOOL_NAME,
+            "description": (
+                "对用户目标中的真实人物、品牌、地点、赛事、IP、视觉风格或文化/服饰/材质引用"
+                "执行 web grounding；返回 source-backed text context 和下载后的视觉参考。"
+                "这是只读工具，不修改 Project。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "projectId": {"type": "string", "minLength": 1},
+                    "prompt": {"type": "string"},
+                    "queries": {
+                        "type": "array",
+                        "description": (
+                            "可选的简短检索建议，按实际检索目标生成最少必要数量，最多 6 条；6 是上限而非配额。"
+                            "每个独立人物、节目/舞台或风格目标至多一条，不得为了凑数制造 query。"
+                            "真实人物身份检索只使用规范姓名和稳定身份词，"
+                            "例如 'Erling Haaland official profile portrait'；除非用户明确要求特定时期，"
+                            "或所查事实本身具有时效性，否则不得添加年份或 current/latest，也不得添加 "
+                            "personality、fashion、style、look 等宽泛修饰词。"
+                            "舞台、节目和视觉风格必须作为单独的 context query。"
+                        ),
+                        "items": {"type": "string"},
+                    },
+                    "includeVisuals": {"type": "boolean"},
+                    "context": {
+                        "type": "object",
+                        "additionalProperties": True,
+                    },
+                    "force": {"type": "boolean"},
+                    "detectOnly": {"type": "boolean"},
+                    "detector": {
+                        "type": "string",
+                        "enum": ["hybrid", "llm", "heuristic"],
+                    },
+                },
+                "required": ["projectId"],
+                "additionalProperties": False,
+            },
+        },
+    }
 
 
 class FileAgentRuntimeError(RuntimeError):
@@ -655,6 +771,7 @@ class FileCreatorAgentRuntime:
     ) -> _LoopResult:
         tool_manifest = [
             *agent_project_tool_manifest(),
+            _ground_prompt_context_tool_manifest(),
             delegate_tool_manifest(),
         ]
         conversation_records = await asyncio.to_thread(
@@ -825,6 +942,11 @@ class FileCreatorAgentRuntime:
                             tools=tools,
                             arguments=call.arguments,
                         )
+                    elif call.name == GROUND_PROMPT_CONTEXT_TOOL_NAME:
+                        result = await self._run_ground_prompt_context(
+                            request=request,
+                            arguments=call.arguments,
+                        )
                     else:
                         result = await asyncio.to_thread(
                             tools.invoke,
@@ -900,6 +1022,346 @@ class FileCreatorAgentRuntime:
         raise AgentModelError(
             f"Creator Agent exceeded {self.max_model_turns} model turns",
         )
+
+    async def _run_ground_prompt_context(
+        self,
+        *,
+        request: CreatorMessageRecord,
+        arguments: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        prompt = str(arguments.get("prompt") or _message_text(request)).strip()
+        if not prompt:
+            raise FileAgentRuntimeError(
+                "ground_prompt_context requires prompt text",
+            )
+
+        raw_queries = arguments.get("queries")
+        queries: list[str] | None = None
+        if raw_queries is not None:
+            if not isinstance(raw_queries, list) or not all(
+                isinstance(item, str) for item in raw_queries
+            ):
+                raise FileAgentRuntimeError(
+                    "ground_prompt_context queries must be a string array",
+                )
+            queries = [item for item in raw_queries if item.strip()]
+
+        raw_context = arguments.get("context")
+        if raw_context is not None and not isinstance(raw_context, dict):
+            raise FileAgentRuntimeError(
+                "ground_prompt_context context must be an object",
+            )
+
+        detector = arguments.get("detector")
+        if detector is not None and detector not in {
+            "hybrid",
+            "llm",
+            "heuristic",
+        }:
+            raise FileAgentRuntimeError(
+                "ground_prompt_context detector is invalid",
+            )
+
+        include_visuals = arguments.get("includeVisuals")
+        if include_visuals is not None and not isinstance(
+            include_visuals,
+            bool,
+        ):
+            raise FileAgentRuntimeError(
+                "ground_prompt_context includeVisuals must be boolean",
+            )
+        force = arguments.get("force", False)
+        if not isinstance(force, bool):
+            raise FileAgentRuntimeError(
+                "ground_prompt_context force must be boolean",
+            )
+        detect_only = arguments.get("detectOnly", False)
+        if not isinstance(detect_only, bool):
+            raise FileAgentRuntimeError(
+                "ground_prompt_context detectOnly must be boolean",
+            )
+
+        result = await ground_prompt_context(
+            prompt,
+            context=raw_context,
+            queries=queries,
+            force=force,
+            detect_only=detect_only,
+            detector=detector,
+            max_sources=get_web_grounding_max_sources(),
+            timeout=float(get_web_grounding_timeout_seconds()),
+            include_visuals=include_visuals,
+        )
+        return await self._promote_grounding_visuals(
+            project_id=request.project_id,
+            request_id=request.message_id,
+            result=result,
+        )
+
+    async def _promote_grounding_visuals(
+        self,
+        *,
+        project_id: str,
+        request_id: str,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        visual_sources = result.get("visual_sources")
+        if not isinstance(visual_sources, list) or not visual_sources:
+            return result
+        promoted = await asyncio.to_thread(
+            self._promote_grounding_visuals_sync,
+            project_id,
+            request_id,
+            visual_sources,
+        )
+        if not promoted["promoted"]:
+            result["grounding_asset_promotion"] = promoted
+            return result
+        by_index = {
+            item["index"]: item
+            for item in promoted["promoted"]
+            if isinstance(item.get("index"), int)
+        }
+        for index, source in enumerate(visual_sources):
+            if not isinstance(source, dict):
+                continue
+            entry = by_index.get(index)
+            if entry is None:
+                continue
+            source["workspace_ref"] = entry["workspace_ref"]
+            source["assetVersionRef"] = entry["workspace_ref"]
+            source["source_asset_version_id"] = entry[
+                "source_asset_version_id"
+            ]
+            source["logical_asset_id"] = entry["logical_asset_id"]
+            source["indexed_file_id"] = entry["file_id"]
+        context_lines = [
+            "",
+            "Workspace Visual References:",
+            *[
+                (
+                    f"[G{item['index'] + 1}] "
+                    f"{item['workspace_ref']} "
+                    f"asset_version_id={item['source_asset_version_id']} "
+                    f"local={item.get('local_url') or ''}"
+                ).rstrip()
+                for item in promoted["promoted"]
+            ],
+        ]
+        grounded_context = str(result.get("grounded_context") or "").rstrip()
+        result["grounded_context"] = "\n".join(
+            item for item in [grounded_context, *context_lines] if item
+        )
+        result["grounding_asset_promotion"] = promoted
+        return result
+
+    def _promote_grounding_visuals_sync(
+        self,
+        project_id: str,
+        request_id: str,
+        visual_sources: list[Any],
+    ) -> dict[str, Any]:
+        promoted: list[dict[str, Any]] = []
+        issues: list[str] = []
+        changed = False
+        project_root = self.services.projects.project_root(project_id)
+        file_store = AssetFileStore(project_root)
+        with self.services.projects.lifecycle_lock(project_id):
+            base = self.services.projects.read(project_id)
+            candidate = base.project.model_dump(mode="json")
+            files = candidate["assets"]["files_by_id"]
+            versions = candidate["assets"]["source_versions_by_id"]
+            created_at = datetime.now(UTC)
+            for index, raw_source in enumerate(visual_sources):
+                if not isinstance(raw_source, Mapping):
+                    continue
+                if not _grounding_visual_is_usable(raw_source):
+                    continue
+                local_path = _grounding_local_path(raw_source)
+                if local_path is None:
+                    issues.append(f"visual_source_missing_local_path:{index}")
+                    continue
+                try:
+                    stat = local_path.stat()
+                except OSError as exc:
+                    issues.append(
+                        f"visual_source_unavailable:{index}:{type(exc).__name__}",
+                    )
+                    continue
+                if not local_path.is_file() or stat.st_size <= 0:
+                    issues.append(f"visual_source_not_regular:{index}")
+                    continue
+                if stat.st_size > GROUNDING_VISUAL_MAX_BYTES:
+                    issues.append(
+                        f"visual_source_too_large:{index}:{stat.st_size}",
+                    )
+                    continue
+                content = local_path.read_bytes()
+                try:
+                    validate_reference_image_bytes(content)
+                except ValueError:
+                    issues.append(f"visual_source_invalid_image:{index}")
+                    continue
+                checksum = hashlib.sha256(content).hexdigest()
+                identity = str(raw_source.get("storage_sha256") or checksum)
+                logical_asset_id = _grounding_stable_id(
+                    "asset",
+                    project_id,
+                    identity,
+                )
+                version_id = _grounding_stable_id(
+                    "asset-version",
+                    project_id,
+                    identity,
+                )
+                file_id = _grounding_stable_id("file", project_id, identity)
+                media_type = str(
+                    raw_source.get("media_type")
+                    or (raw_source.get("download") or {}).get("media_type")
+                    or mimetypes.guess_type(local_path.name)[0]
+                    or "image/jpeg",
+                )
+                if not media_type.casefold().startswith("image/"):
+                    issues.append(
+                        f"visual_source_not_image:{index}:{media_type}",
+                    )
+                    continue
+                relative_uri = PurePosixPath(
+                    "assets",
+                    "sources",
+                    f"{file_id}{_grounding_extension(local_path, media_type)}",
+                ).as_posix()
+                indexed = IndexedFile(
+                    file_id=file_id,
+                    kind="source_original",
+                    relative_uri=relative_uri,
+                    sha256=checksum,
+                    size_bytes=len(content),
+                    media_type=media_type,
+                    created_at=created_at,
+                )
+                version = SourceAssetVersion(
+                    version_id=version_id,
+                    logical_asset_id=logical_asset_id,
+                    name=str(
+                        raw_source.get("title")
+                        or f"Grounding visual {index + 1}",
+                    )[:160],
+                    file_id=file_id,
+                    checksum=checksum,
+                    media_kind=_grounding_media_kind(media_type),  # type: ignore[arg-type]
+                    media_type=media_type,
+                    provenance_refs=[
+                        item
+                        for item in (
+                            str(raw_source.get("url") or ""),
+                            str(raw_source.get("source_url") or ""),
+                            str(raw_source.get("grounding_ref") or ""),
+                        )
+                        if item
+                    ],
+                    created_at=created_at,
+                    metadata={
+                        "sourceKind": "web_grounding_visual",
+                        "requestId": request_id,
+                        "provider": str(raw_source.get("provider") or ""),
+                        "query": str(raw_source.get("query") or ""),
+                        "entityName": str(raw_source.get("entity_name") or ""),
+                        "usage": str(
+                            raw_source.get("usage")
+                            or raw_source.get("usage_hint")
+                            or "",
+                        ),
+                        "localUrl": str(
+                            raw_source.get("local_url") or local_path.as_uri(),
+                        ),
+                    },
+                )
+                indexed_json = indexed.model_dump(mode="json")
+                version_json = version.model_dump(mode="json")
+                existing_file = files.get(file_id)
+                existing_version = versions.get(version_id)
+                if existing_file is not None:
+                    existing_created_at = existing_file.get("created_at")
+                    if existing_created_at is not None:
+                        indexed_json["created_at"] = existing_created_at
+                    if existing_file != indexed_json:
+                        raise ConflictError(
+                            "Grounding visual file id collision",
+                        )
+                if existing_version is not None:
+                    existing = SourceAssetVersion.model_validate(
+                        existing_version,
+                    )
+                    if (
+                        existing.logical_asset_id != logical_asset_id
+                        or existing.checksum != checksum
+                        or existing.file_id != file_id
+                    ):
+                        raise ConflictError(
+                            "Grounding visual asset version collision",
+                        )
+                if existing_file is None:
+                    staged = file_store.stage_bytes(
+                        content,
+                        staging_id=f"grounding-{file_id[:48]}",
+                    )
+                    try:
+                        file_store.publish(
+                            staged,
+                            relative_uri,
+                            expected_sha256=checksum,
+                            expected_size_bytes=len(content),
+                        )
+                    except AssetAlreadyExists:
+                        file_store.abandon(staged)
+                    files[file_id] = indexed_json
+                    changed = True
+                if existing_version is None:
+                    versions[version_id] = version_json
+                    changed = True
+                promoted.append(
+                    {
+                        "index": index,
+                        "workspace_ref": workspace_asset_ref(
+                            logical_asset_id,
+                            version_id,
+                        ),
+                        "logical_asset_id": logical_asset_id,
+                        "source_asset_version_id": version_id,
+                        "file_id": file_id,
+                        "local_url": str(
+                            raw_source.get("local_url") or local_path.as_uri(),
+                        ),
+                    },
+                )
+            if changed:
+                commit = self.services.commits.commit(
+                    base=base,
+                    candidate=candidate,
+                    origin=ChangeOrigin.RUNTIME_TASK,
+                    review_policy=ReviewPolicy.AUTO_FIX,
+                    caused_by_request_id=request_id,
+                    round_id=_grounding_stable_id(
+                        "round",
+                        project_id,
+                        request_id,
+                    ),
+                    transaction_id=_grounding_stable_id(
+                        "transaction",
+                        project_id,
+                        request_id,
+                    ),
+                    advance_accepted_baseline=True,
+                    _lifecycle_lock_held=True,
+                )
+                self.services.poller.note_commit(commit.snapshot)
+        return {
+            "status": "success" if promoted else "skipped",
+            "promoted_count": len(promoted),
+            "promoted": promoted,
+            "issues": issues,
+        }
 
     async def _run_subagent(
         self,
@@ -1758,6 +2220,11 @@ class FileCreatorAgentRuntime:
                 "toolCallId": call_id,
                 "toolName": tool_name,
                 "tool": tool_name,
+                **(
+                    {"resultKind": "web_grounding"}
+                    if tool_name == GROUND_PROMPT_CONTEXT_TOOL_NAME
+                    else {}
+                ),
                 "failed": failed,
                 "generation": result.get("generation"),
                 "etag": result.get("etag"),

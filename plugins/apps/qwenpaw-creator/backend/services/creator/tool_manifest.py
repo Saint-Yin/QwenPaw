@@ -10,6 +10,7 @@ from typing import Any
 from services.specialists.registry import (
     DELEGATE_TOOL_NAME,
     FINALIZE_VIDEO_TOOL_NAME,
+    GROUND_PROMPT_CONTEXT_TOOL_NAME,
     READ_FILE_TOOLS,
     WRITE_FILE_TOOLS,
     creator_available_actions,
@@ -61,6 +62,36 @@ CREATOR_CONTROL_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     DELEGATE_TOOL_NAME: {
         "description": "把一个边界明确的专业任务委派给已注册的 Creator Specialist。",
         "parameters": creator_delegate_arguments_schema(),
+    },
+    GROUND_PROMPT_CONTEXT_TOOL_NAME: {
+        "description": (
+            "只读 web grounding：为真实人物、品牌、地点、赛事、IP、视觉风格或文化/服饰/材质引用"
+            "获取 source-backed context 和下载后的视觉参考。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "projectId": {"type": "string", "minLength": 1},
+                "prompt": _STRING,
+                "queries": {
+                    "type": "array",
+                    "items": _STRING,
+                },
+                "includeVisuals": {"type": "boolean"},
+                "context": {
+                    "type": "object",
+                    "additionalProperties": True,
+                },
+                "force": {"type": "boolean"},
+                "detectOnly": {"type": "boolean"},
+                "detector": {
+                    "type": "string",
+                    "enum": ["hybrid", "llm", "heuristic"],
+                },
+            },
+            "required": ["projectId"],
+            "additionalProperties": False,
+        },
     },
     FINALIZE_VIDEO_TOOL_NAME: {
         "description": "使用当前 Workspace 的权威结果执行最终视频拼接。",

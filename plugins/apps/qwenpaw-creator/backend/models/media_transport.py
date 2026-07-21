@@ -2,6 +2,7 @@
 # flake8: noqa: E501
 # pylint: disable=line-too-long,too-many-return-statements
 import asyncio
+import io
 import mimetypes
 import re
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import httpx
+from PIL import Image
 
 from models import config as model_config
 from utils.paths import media_path_from_url
@@ -371,6 +373,18 @@ async def read_reference_media(url: str) -> tuple[bytes, str]:
             )
             return response.content, filename
     raise ValueError(f"Unsupported reference media URL: {url}")
+
+
+def validate_reference_image_bytes(content: bytes) -> None:
+    """Reject empty, mislabeled, or truncated image-reference payloads."""
+    try:
+        with Image.open(io.BytesIO(content)) as image:
+            width, height = image.size
+            image.verify()
+    except Exception as exc:
+        raise ValueError("reference image cannot be decoded") from exc
+    if width <= 0 or height <= 0:
+        raise ValueError("reference image has invalid dimensions")
 
 
 def _suffix_from_magic(content: bytes) -> str:
