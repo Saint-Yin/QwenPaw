@@ -38,3 +38,26 @@ export function testOssConnection(
     body: jsonBody(request),
   });
 }
+
+export function patchModelConfigSection(
+  section: string,
+  data: Record<string, unknown>,
+): Promise<{ ok: boolean }> {
+  const id = newClientId("model-config-patch");
+  return creatorRequest(`/models/config/${section}`, {
+    method: "PATCH",
+    headers: { "Idempotency-Key": id },
+    body: jsonBody(data),
+  });
+}
+
+export function patchExecutionAuthorization(
+  mode: "required" | "allow_all",
+): Promise<{ ok: boolean }> {
+  const id = newClientId("execution-auth");
+  return creatorRequest("/models/config/execution-authorization", {
+    method: "PATCH",
+    headers: { "Idempotency-Key": id },
+    body: jsonBody({ mode }),
+  });
+}

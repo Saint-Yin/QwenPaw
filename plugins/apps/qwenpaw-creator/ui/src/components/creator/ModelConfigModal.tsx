@@ -12,10 +12,13 @@ import {
   AudioOutlined,
   CloudOutlined,
   ReloadOutlined,
+  CloseOutlined,
 } from "@ant-design/icons";
 import {
   getModelConfig,
   saveModelConfig,
+  patchModelConfigSection,
+  patchExecutionAuthorization,
   testModelConnection,
   testOssConnection,
 } from "@/api/creator";
@@ -403,31 +406,8 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     [config],
   );
 
-  const handleSave = useCallback(async () => {
-    if (saving) return;
-    setSaving(true);
-    try {
-      const payload = { ...config, llm: { ...config.llm, enabled: true } };
-      const result = await saveModelConfig(payload);
-      if (!result.ok) throw new Error("服务端未确认配置写入");
-      message.success("配置已保存");
-      onClose();
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "未知错误";
-      message.error(`保存失败：${detail}`);
-    } finally {
-      setSaving(false);
-    }
-  }, [config, onClose, saving]);
-
-  const handleCancel = useCallback(() => {
-    if (snapshotRef.current)
-      setConfig(JSON.parse(JSON.stringify(snapshotRef.current)));
-    onClose();
-  }, [onClose]);
-
   const handleTest = useCallback(
-    async (type: ModelType) => {
+    async (type: ModelType): Promise<boolean> => {
       let item = config[type] as ModelConfigItem;
       if (type === "vlm" && config.vlm.use_llm) {
         item = config.llm;
@@ -440,7 +420,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
         message.warning(
           "请先填写完整的模型配置（Base URL、API Key、模型名称）",
         );
-        return;
+        return false;
       }
 
       setTesting((prev) => ({ ...prev, [type]: true }));
@@ -460,19 +440,105 @@ export default function ModelConfigModal({ open, onClose }: Props) {
           message.success("连接测试成功");
           setTested((prev) => ({ ...prev, [type]: true }));
           updateItem(type, "enabled", true);
+          return true;
         } else {
           message.warning(data.error || "连接测试失败");
           setTested((prev) => ({ ...prev, [type]: false }));
+          return false;
         }
       } catch (err) {
         message.error((err as Error).message || "测试连接时发生错误");
         setTested((prev) => ({ ...prev, [type]: false }));
+        return false;
       } finally {
         setTesting((prev) => ({ ...prev, [type]: false }));
       }
     },
     [config, updateItem],
   );
+
+  const handleOssTest = useCallback(async (): Promise<boolean> => {
+    let item = config["oss"] as OssConfig;
+    if (
+      !item.access_key_id ||
+      !item.access_key_secret ||
+      !item.endpoint ||
+      !item.bucket
+    ) {
+      message.warning(
+        "请先填写完整的OSS配置（access_key_id, access_key_secret, endpoint, bucket）",
+      );
+      return false;
+    }
+
+    setOssTesting(true);
+    try {
+      const response = await testOssConnection({
+        access_key_id: item.access_key_id,
+        access_key_secret: item.access_key_secret,
+        endpoint: item.endpoint,
+        bucket: item.bucket,
+        // the following values do not matter
+        enabled: false,
+        public_base_url: "",
+        policy_api_key: "",
+      });
+      if (response.ok) {
+        message.success("连接测试成功");
+        updateOss("enabled", true);
+        setTested((prev) => ({ ...prev, oss: true }));
+        return true;
+      } else {
+        message.warning(response.error || "连接测试失败");
+        setTested((prev) => ({ ...prev, oss: false }));
+        return false;
+      }
+    } catch (err) {
+      message.error((err as Error).message || "测试连接时发生错误");
+      setTested((prev) => ({ ...prev, oss: false }));
+      return false;
+    } finally {
+      setOssTesting(false);
+    }
+  }, [config, updateOss]);
+
+  const handleSave = useCallback(async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const section = activeTab;
+      const sectionData =
+        section === "oss" ? config.oss : config[section as ModelType];
+
+      const isTested =
+        section === "oss" ? tested.oss : tested[section as ModelType];
+      if (!isTested) {
+        const ok =
+          section === "oss"
+            ? await handleOssTest()
+            : await handleTest(section as ModelType);
+        if (!ok) return;
+      }
+
+      const result = await patchModelConfigSection(
+        section,
+        sectionData as unknown as Record<string, unknown>,
+      );
+      if (!result.ok) throw new Error("服务端未确认配置写入");
+      message.success("配置已保存");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "未知错误";
+      message.error(`保存失败：${detail}`);
+    } finally {
+      setSaving(false);
+    }
+  }, [activeTab, config, tested, saving, handleTest, handleOssTest]);
+
+  const handleCancel = useCallback(() => {
+    if (snapshotRef.current)
+      setConfig(JSON.parse(JSON.stringify(snapshotRef.current)));
+    onClose();
+  }, [onClose]);
 
   const protocolsFor = (type: ModelType) =>
     type === "llm"
@@ -781,48 +847,6 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     );
   };
 
-  const handleOssTest = useCallback(async () => {
-    let item = config["oss"] as OssConfig;
-    if (
-      !item.access_key_id ||
-      !item.access_key_secret ||
-      !item.endpoint ||
-      !item.bucket
-    ) {
-      message.warning(
-        "请先填写完整的OSS配置（access_key_id, access_key_secret, endpoint, bucket）",
-      );
-      return;
-    }
-
-    setOssTesting(true);
-    try {
-      const response = await testOssConnection({
-        access_key_id: item.access_key_id,
-        access_key_secret: item.access_key_secret,
-        endpoint: item.endpoint,
-        bucket: item.bucket,
-        // the following values do not matter
-        enabled: false,
-        public_base_url: "",
-        policy_api_key: "",
-      });
-      if (response.ok) {
-        message.success("连接测试成功");
-        updateOss("enabled", true);
-        setTested((prev) => ({ ...prev, oss: true }));
-      } else {
-        message.warning(response.error || "连接测试失败");
-        setTested((prev) => ({ ...prev, oss: false }));
-      }
-    } catch (err) {
-      message.error((err as Error).message || "测试连接时发生错误");
-      setTested((prev) => ({ ...prev, oss: false }));
-    } finally {
-      setOssTesting(false);
-    }
-  }, [config, updateOss]);
-
   const renderOssCard = () => {
     const oss = config.oss;
     const configured = Boolean(oss.endpoint && oss.access_key_id);
@@ -1047,6 +1071,35 @@ export default function ModelConfigModal({ open, onClose }: Props) {
             模型配置
           </span>
         </div>
+        <button
+          onClick={onClose}
+          style={{
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            color: "var(--color-text-tertiary)",
+            padding: 4,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: 4,
+            transition: "all 0.15s",
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.color =
+              "var(--color-text-primary)";
+            (e.currentTarget as HTMLButtonElement).style.background =
+              "var(--color-bg-secondary)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.color =
+              "var(--color-text-tertiary)";
+            (e.currentTarget as HTMLButtonElement).style.background = "none";
+          }}
+          aria-label="关闭"
+        >
+          <CloseOutlined style={{ fontSize: 14 }} />
+        </button>
       </div>
 
       {/* Body */}
@@ -1096,14 +1149,18 @@ export default function ModelConfigModal({ open, onClose }: Props) {
               type="checkbox"
               aria-label="高花费模型执行授权"
               checked={config.executionAuthorization.mode === "required"}
-              onChange={(event) =>
+              onChange={async (event) => {
+                const mode = event.target.checked ? "required" : "allow_all";
                 setConfig((previous) => ({
                   ...previous,
-                  executionAuthorization: {
-                    mode: event.target.checked ? "required" : "allow_all",
-                  },
-                }))
-              }
+                  executionAuthorization: { mode },
+                }));
+                try {
+                  await patchExecutionAuthorization(mode);
+                } catch (err) {
+                  message.error((err as Error).message || "授权设置保存失败");
+                }
+              }}
             />
             <div className="track" />
             <div className="thumb" />

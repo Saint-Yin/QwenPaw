@@ -324,114 +324,84 @@ def _notify_agent_model_config_changed() -> None:
         runtime.notify(project.project_id)
 
 
-async def _validate_model_connectivity(data: ModelConfigData) -> None:
-    """Run connectivity probes for every enabled model with credentials. Raises ValidationError on failure."""
+async def _validate_section_connectivity(section: str, config: dict[str, Any]) -> None:
+    """Run connectivity probe for a single section. Raises ValidationError on failure."""
 
-    failures: list[str] = []
+    if section == "execution_authorization" or section == "executionAuthorization":
+        return
+
+    if section == "oss":
+        oss = config.get("oss", {})
+        if not oss.get("enabled") or not oss.get("endpoint") or not oss.get("access_key_id") or not oss.get("access_key_secret") or not oss.get("bucket"):
+            return
+        try:
+            import oss2
+            auth = oss2.Auth(oss["access_key_id"], oss["access_key_secret"])
+            bucket = oss2.Bucket(auth, oss["endpoint"], oss["bucket"])
+            bucket.get_bucket_info()
+        except Exception as exc:
+            exc_str = str(exc)
+            if "InvalidAccessKeyId" in exc_str or "AccessDenied" in exc_str:
+                raise ValidationError("OSS: Access Key 无效或权限不足，请检查配置")
+            elif "NoSuchBucket" in exc_str:
+                raise ValidationError("OSS: Bucket 不存在，请检查 Bucket 名称")
+            elif "connect" in exc_str.lower() or "timeout" in exc_str.lower():
+                raise ValidationError("OSS: 无法连接到 OSS 服务，请检查 Endpoint 和网络")
+            raise ValidationError(f"OSS: {exc_str}")
+        return
+
+    item = config.get(section, {})
+    if not item.get("enabled") or not item.get("model_name"):
+        return
+
+    api_key = item.get("api_key", "")
+    if section == "asr" and item.get("reuse_llm_key") and not api_key:
+        api_key = config.get("llm", {}).get("api_key", "")
+    if not item.get("base_url") or not api_key:
+        raise ValidationError(f"{section}: 缺少 Base URL 或 API Key，请检查配置")
+
+    probe = ModelConnectionTestRequest(
+        type=section,
+        base_url=item["base_url"],
+        api_key=api_key,
+        model_name=item["model_name"],
+        protocol=item.get("protocol", ""),
+        provider=item.get("provider"),
+    )
 
     async with httpx.AsyncClient(timeout=30) as client:
-        for section in ("llm", "vlm", "asr", "image", "video"):
-            item = getattr(data, section)
-            if not getattr(item, "enabled", False) or not item.model_name:
-                continue
-            api_key = item.api_key
-            if (
-                section == "asr"
-                and getattr(item, "reuse_llm_key", False)
-                and not api_key
-            ):
-                api_key = data.llm.api_key
-            if not item.base_url or not api_key:
-                failures.append(f"{section}: 缺少 Base URL 或 API Key")
-                continue
-            probe = ModelConnectionTestRequest(
-                type=section,
-                base_url=item.base_url,
-                api_key=api_key,
-                model_name=item.model_name,
-                protocol=item.protocol,
-                provider=getattr(item, "provider", None),
-            )
-            try:
-                url, headers, payload = _probe_payload(probe)
-                if payload.pop("_multipart_probe", False):
-                    headers.pop("Content-Type", None)
-                    resp = await client.post(
-                        url,
-                        headers=headers,
-                        data={
-                            "model": payload["model"],
-                            "response_format": "json",
-                        },
-                        files={
-                            "file": ("probe.wav", _probe_wav(), "audio/wav"),
-                        },
-                    )
-                else:
-                    resp = await client.post(
-                        url,
-                        headers=headers,
-                        json=payload,
-                    )
-                if not resp.is_success:
-                    try:
-                        body = resp.json()
-                        if isinstance(body, dict):
-                            err_obj = body.get("error")
-                            msg = (
-                                err_obj.get("message")
-                                if isinstance(err_obj, dict)
-                                else body.get("message")
-                                or body.get("error")
-                                or str(body)
-                            )
-                        else:
-                            msg = str(body)
-                    except ValueError:
-                        msg = resp.text[:200]
-                    failures.append(
-                        f"{section}: HTTP {resp.status_code}: {msg or '请求失败'}",
-                    )
-            except httpx.ConnectError:
-                failures.append(f"{section}: 无法连接到服务，请检查 Base URL")
-            except httpx.TimeoutException:
-                failures.append(f"{section}: 连接超时，请检查网络或 Base URL")
-            except (httpx.HTTPError, ValueError) as exc:
-                failures.append(f"{section}: {exc}")
-
-        oss = data.oss
-        if (
-            oss.enabled
-            and oss.endpoint
-            and oss.access_key_id
-            and oss.access_key_secret
-            and oss.bucket
-        ):
-            try:
-                import oss2
-
-                auth = oss2.Auth(oss.access_key_id, oss.access_key_secret)
-                bucket = oss2.Bucket(auth, oss.endpoint, oss.bucket)
-                bucket.get_bucket_info()
-            except Exception as exc:
-                exc_str = str(exc)
-                if (
-                    "InvalidAccessKeyId" in exc_str
-                    or "AccessDenied" in exc_str
-                ):
-                    failures.append("OSS: Access Key 无效或权限不足")
-                elif "NoSuchBucket" in exc_str:
-                    failures.append("OSS: Bucket 不存在")
-                elif (
-                    "connect" in exc_str.lower()
-                    or "timeout" in exc_str.lower()
-                ):
-                    failures.append("OSS: 无法连接到 OSS 服务")
-                else:
-                    failures.append(f"OSS: {exc_str}")
-
-    if failures:
-        raise ValidationError("以下模型连通性验证失败，请检查配置后重试：" + "；".join(failures))
+        try:
+            url, headers, payload = _probe_payload(probe)
+            if payload.pop("_multipart_probe", False):
+                headers.pop("Content-Type", None)
+                resp = await client.post(
+                    url,
+                    headers=headers,
+                    data={"model": payload["model"], "response_format": "json"},
+                    files={"file": ("probe.wav", _probe_wav(), "audio/wav")},
+                )
+            else:
+                resp = await client.post(url, headers=headers, json=payload)
+            if not resp.is_success:
+                try:
+                    body = resp.json()
+                    if isinstance(body, dict):
+                        err_obj = body.get("error")
+                        msg = (
+                            err_obj.get("message") if isinstance(err_obj, dict)
+                            else body.get("message") or body.get("error") or str(body)
+                        )
+                    else:
+                        msg = str(body)
+                except ValueError:
+                    msg = resp.text[:200]
+                raise ValidationError(f"{section}: HTTP {resp.status_code}: {msg or '请求失败'}")
+        except httpx.ConnectError:
+            raise ValidationError(f"{section}: 无法连接到服务，请检查 Base URL 是否正确")
+        except httpx.TimeoutException:
+            raise ValidationError(f"{section}: 连接超时，请检查网络或 Base URL")
+        except httpx.HTTPError as exc:
+            raise ValidationError(f"{section}: {exc}")
 
 
 @router.get("/config", response_model=ModelConfigData)
@@ -471,7 +441,6 @@ async def update_model_config(
                     "上一次模型配置写入失败，请使用新的 Idempotency-Key 重试",
                 )
             data.llm.enabled = True
-            await _validate_model_connectivity(data)
             save_model_config(data)
             _notify_agent_model_config_changed()
             records.complete(
@@ -487,6 +456,84 @@ async def update_model_config(
     except IdempotencyStateConflictError as error:
         raise ConflictError("模型配置写入状态冲突") from error
     response.headers["X-Idempotent-Replay"] = "false"
+    return {"ok": True}
+
+
+@router.patch("/config/execution-authorization")
+async def patch_execution_authorization(
+    data: dict[str, Any] = Body(...),
+) -> dict[str, bool]:
+    mode = data.get("mode")
+    if mode not in ("required", "allow_all"):
+        raise ValidationError("mode 必须是 'required' 或 'allow_all'")
+
+    existing = load_model_config(include_environment=False)
+    merged = existing.model_dump()
+    merged["execution_authorization"] = {"mode": mode}
+
+    full_data = ModelConfigData.model_validate(merged)
+    save_model_config(full_data)
+    _notify_agent_model_config_changed()
+    return {"ok": True}
+
+
+@router.patch("/config/{section}")
+async def patch_model_config_section(
+    section: str,
+    data: dict[str, Any] = Body(...),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
+) -> dict[str, bool]:
+    valid_sections = {"llm", "vlm", "asr", "image", "video", "oss"}
+    if section not in valid_sections:
+        raise ValidationError(f"不支持的配置项: {section}")
+
+    key = resolve_idempotency_key(idempotency_key)
+    root = require_creator_data_root() / "config" / "runtime" / "idempotency"
+    records = IdempotencyRecordStore(root)
+    request_hash = records.request_hash({"section": section, **data})
+
+    try:
+        with records.operation_lock(
+            owner_id="creator-model-config",
+            scope="HTTP:model-config-patch",
+            idempotency_key=key,
+        ):
+            reservation = records.reserve(
+                owner_id="creator-model-config",
+                scope="HTTP:model-config-patch",
+                idempotency_key=key,
+                request_hash=request_hash,
+            )
+            if reservation.record.status is IdempotencyStatus.COMPLETED:
+                _notify_agent_model_config_changed()
+                return {"ok": True}
+            if reservation.record.status is IdempotencyStatus.FAILED:
+                raise StorageIntegrityError(
+                    "上一次模型配置写入失败，请使用新的 Idempotency-Key 重试"
+                )
+
+            existing = load_model_config(include_environment=False)
+            merged = existing.model_dump()
+            merged[section] = {**merged.get(section, {}), **data}
+
+            if section == "llm":
+                merged["llm"]["enabled"] = True
+
+            full_data = ModelConfigData.model_validate(merged)
+            save_model_config(full_data)
+            _notify_agent_model_config_changed()
+            records.complete(
+                owner_id="creator-model-config",
+                scope="HTTP:model-config-patch",
+                idempotency_key=key,
+                request_hash=request_hash,
+                response={"ok": True},
+                response_status=status.HTTP_200_OK,
+            )
+    except IdempotencyConflictError as error:
+        raise ConflictError("Idempotency-Key 已用于不同的模型配置") from error
+    except IdempotencyStateConflictError as error:
+        raise ConflictError("模型配置写入状态冲突") from error
     return {"ok": True}
 
 
