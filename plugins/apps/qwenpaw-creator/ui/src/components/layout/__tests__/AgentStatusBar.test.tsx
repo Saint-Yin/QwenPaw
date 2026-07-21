@@ -204,6 +204,7 @@ describe("AgentStatusBar origin/main state projection", () => {
     render(<AgentStatusBar />);
 
     expect(screen.getByText(/附件入库中 · 42%/)).toBeInTheDocument();
+    expect(screen.getByLabelText("制作进度 42%")).toBeInTheDocument();
     expect(screen.queryByText("镜头生成中")).not.toBeInTheDocument();
   });
 

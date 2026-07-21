@@ -22,6 +22,7 @@ import {
   elementCreationSummary,
   resolveElementOutputs,
 } from "@/selectors/timelineElementSelectors";
+import { outputLabel } from "@/lib/creatorPresentation";
 import { projectJsonPointer } from "@/lib/projectJsonPointer";
 
 interface ElementDetailProps {
@@ -120,6 +121,15 @@ function sec(tick: number, ticksPerSecond: number): number {
   return Number((tick / ticksPerSecond).toFixed(3));
 }
 
+const LOCATION_FIELDS = {
+  x: "水平位置（%）",
+  y: "垂直位置（%）",
+  width: "画面宽度（%）",
+  height: "画面高度（%）",
+  rotation_degrees: "旋转角度（°）",
+  opacity: "不透明度（%）",
+} as const;
+
 export default function ElementDetail({
   project,
   timeline,
@@ -142,7 +152,7 @@ export default function ElementDetail({
         <div className="max-w-sm px-8 text-center">
           <Layers3 className="mx-auto mb-3 h-8 w-8 text-[var(--color-text-tertiary)]" />
           <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">
-            选择一个 Element
+            选择一项时间线内容
           </h3>
           <p className="mt-2 text-xs leading-5 text-[var(--color-text-secondary)]">
             可从左侧列表或上方时间轴选择，查看其简介、创作方式、位置和产物。
@@ -206,14 +216,37 @@ export default function ElementDetail({
             {elementCreationSummary(creation) || "尚未补充创作说明"}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="icon-button shrink-0"
-          aria-label="关闭 Element 详情"
+        <div
+          data-element-detail-header-actions
+          className="flex shrink-0 items-center gap-1"
         >
-          <X className="h-4 w-4" />
-        </button>
+          <Button
+            type="text"
+            danger
+            size="small"
+            icon={<Trash2 className="h-3.5 w-3.5" />}
+            aria-label="删除当前内容"
+            onClick={() =>
+              Modal.confirm({
+                title: "删除这项时间线内容？",
+                content: `将从时间轴中删除「${element.label || "当前内容"}」。`,
+                okText: "删除",
+                okButtonProps: { danger: true },
+                onOk: () => onDelete(element),
+              })
+            }
+          >
+            删除
+          </Button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="icon-button"
+            aria-label="关闭内容详情"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </header>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 [scrollbar-gutter:stable]">
@@ -235,7 +268,7 @@ export default function ElementDetail({
               />
             </label>
           </div>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
             <label>
               <FieldLabel>开始时间（秒）</FieldLabel>
               <InputNumber
@@ -277,7 +310,7 @@ export default function ElementDetail({
               />
             </label>
             <label>
-              <FieldLabel>Z Index</FieldLabel>
+              <FieldLabel>叠放顺序</FieldLabel>
               <InputNumber
                 className="w-full"
                 value={element.z_index}
@@ -287,12 +320,6 @@ export default function ElementDetail({
                 }
               />
             </label>
-            <div>
-              <FieldLabel>Element ID</FieldLabel>
-              <div className="truncate rounded-md bg-[var(--color-bg-secondary)] px-2.5 py-[7px] font-mono text-[11px] text-[var(--color-text-secondary)]">
-                {element.element_id}
-              </div>
-            </div>
           </div>
           <div className="mt-3">
             <TextField
@@ -323,6 +350,7 @@ export default function ElementDetail({
                   }}
                 >
                   <div
+                    data-element-location-box
                     className="absolute flex items-center justify-center overflow-hidden rounded border border-white/80 bg-[var(--color-accent)]/35 text-[9px] font-semibold text-white"
                     style={{
                       left: `${
@@ -339,6 +367,9 @@ export default function ElementDetail({
                       height: `${element.location.height * 100}%`,
                       opacity: element.location.opacity,
                       transform: `rotate(${element.location.rotation_degrees}deg)`,
+                      transformOrigin: `${element.location.anchor_x * 100}% ${
+                        element.location.anchor_y * 100
+                      }%`,
                     }}
                   >
                     {element.label || element.element_id}
@@ -357,23 +388,35 @@ export default function ElementDetail({
                   ] as const
                 ).map((key) => (
                   <label key={key}>
-                    <FieldLabel>
-                      {key === "rotation_degrees" ? "rotation" : key}
-                    </FieldLabel>
+                    <FieldLabel>{LOCATION_FIELDS[key]}</FieldLabel>
                     <InputNumber
                       className="w-full"
-                      step={key === "rotation_degrees" ? 1 : 0.05}
-                      min={key === "opacity" ? 0 : undefined}
-                      max={key === "opacity" ? 1 : undefined}
-                      value={element.location![key]}
-                      onChange={(value) =>
-                        value != null &&
+                      step={1}
+                      min={
+                        key === "width" || key === "height"
+                          ? 0.1
+                          : key === "opacity"
+                          ? 0
+                          : undefined
+                      }
+                      max={key === "opacity" ? 100 : undefined}
+                      value={
+                        key === "rotation_degrees"
+                          ? element.location![key]
+                          : Number((element.location![key] * 100).toFixed(1))
+                      }
+                      onChange={(value) => {
+                        if (value == null) return;
+                        const next =
+                          key === "rotation_degrees"
+                            ? Number(value)
+                            : Number(value) / 100;
                         void patch(
                           ["location", key],
                           element.location![key],
-                          Number(value),
-                        )
-                      }
+                          next,
+                        );
+                      }}
                     />
                   </label>
                 ))}
@@ -410,7 +453,7 @@ export default function ElementDetail({
                 }
               />
               <TextField
-                label="分镜 Prompt"
+                label="分镜描述"
                 value={creation.storyboard_prompt}
                 multiline
                 path={pointer("creation", "storyboard_prompt")}
@@ -424,7 +467,7 @@ export default function ElementDetail({
                 }
               />
               <TextField
-                label="视频 Prompt"
+                label="画面生成描述"
                 value={creation.video_prompt}
                 multiline
                 path={pointer("creation", "video_prompt")}
@@ -485,12 +528,27 @@ export default function ElementDetail({
                 }
               />
               {element.render_source?.type === "source_asset_version" && (
-                <div className="rounded-lg bg-[var(--color-bg-secondary)] p-3 font-mono text-[11px] text-[var(--color-text-secondary)]">
-                  素材版本 {element.render_source.version_id}
+                <div className="rounded-lg bg-[var(--color-bg-secondary)] p-3 text-[11px] leading-5 text-[var(--color-text-secondary)]">
+                  <b className="text-[var(--color-text-primary)]">
+                    {project.assets.source_versions_by_id[
+                      element.render_source.version_id
+                    ]?.name || "当前素材"}
+                  </b>
                   <br />
-                  范围 [{element.render_source.source_in_tick},{" "}
-                  {element.render_source.source_out_tick ?? "end"}) ·{" "}
-                  {element.render_source.playback_rate}x
+                  选用{" "}
+                  {sec(
+                    element.render_source.source_in_tick,
+                    timeline.ticks_per_second,
+                  )}
+                  s –{" "}
+                  {element.render_source.source_out_tick == null
+                    ? "结尾"
+                    : `${sec(
+                        element.render_source.source_out_tick,
+                        timeline.ticks_per_second,
+                      )}s`}
+                  {" · "}
+                  {element.render_source.playback_rate} 倍速
                 </div>
               )}
             </div>
@@ -508,7 +566,7 @@ export default function ElementDetail({
                 }
               />
               <TextField
-                label="动效 Prompt"
+                label="动效描述"
                 value={creation.prompt}
                 multiline
                 path={pointer("creation", "prompt")}
@@ -521,16 +579,23 @@ export default function ElementDetail({
           )}
           {creation.type === "transition" && (
             <div className="rounded-lg bg-[var(--color-bg-secondary)] p-3 text-xs text-[var(--color-text-secondary)]">
-              {creation.from_element_id} → {creation.to_element_id}
+              {timeline.elements_by_id[creation.from_element_id]?.label ||
+                "前一画面"}{" "}
+              →{" "}
+              {timeline.elements_by_id[creation.to_element_id]?.label ||
+                "后一画面"}
               <br />
               {creation.transition_kind} · {creation.easing}
             </div>
           )}
           {creation.type === "audio" && (
             <div className="rounded-lg bg-[var(--color-bg-secondary)] p-3 text-xs text-[var(--color-text-secondary)]">
-              素材版本：{creation.source_asset_version_id}
+              音频素材：
+              {project.assets.source_versions_by_id[
+                creation.source_asset_version_id
+              ]?.name || "当前音频"}
               <br />
-              Gain {creation.gain_db} dB · Pan {creation.pan}
+              音量 {creation.gain_db} dB · 声像 {creation.pan}
             </div>
           )}
         </section>
@@ -538,11 +603,11 @@ export default function ElementDetail({
         <section className="rounded-xl border border-[var(--color-border)] p-3">
           <h4 className="mb-3 flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-primary)]">
             <Film className="h-3.5 w-3.5 text-[var(--color-accent)]" />
-            具名输出
+            生成结果
           </h4>
           {outputs.length === 0 ? (
             <p className="rounded-lg bg-[var(--color-bg-secondary)] p-3 text-xs text-[var(--color-text-tertiary)]">
-              当前还没有具名输出。
+              当前还没有生成结果。
             </p>
           ) : (
             <div className="space-y-3">
@@ -560,9 +625,9 @@ export default function ElementDetail({
                     className="overflow-hidden rounded-lg border border-[var(--color-border)]"
                   >
                     <div className="flex items-center justify-between gap-2 bg-[var(--color-bg-secondary)] px-3 py-2 text-[11px]">
-                      <b>{output.name}</b>
-                      <span className="truncate font-mono text-[var(--color-text-tertiary)]">
-                        {output.selected?.version_id || "未产出"}
+                      <b>{outputLabel(output.name)}</b>
+                      <span className="text-[var(--color-text-tertiary)]">
+                        {output.selected ? "已生成" : "未生成"}
                       </span>
                     </div>
                     {url && mediaType.startsWith("image/") && (
@@ -585,7 +650,7 @@ export default function ElementDetail({
                     )}
                     {output.selected?.stale && (
                       <p className="px-3 py-2 text-[10px] text-[var(--color-warning)]">
-                        该产物基于旧版 Project，需要重新生成。
+                        该结果基于旧版方案，需要重新生成。
                       </p>
                     )}
                   </div>
@@ -596,47 +661,18 @@ export default function ElementDetail({
         </section>
       </div>
 
-      <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border)] bg-[var(--color-bg-primary)] px-4 py-3">
-        <Button
-          danger
-          icon={<Trash2 className="h-3.5 w-3.5" />}
-          onClick={() =>
-            Modal.confirm({
-              title: "删除 Element？",
-              content: `将从 Timeline 中删除「${
-                element.label || element.element_id
-              }」。`,
-              okText: "删除",
-              okButtonProps: { danger: true },
-              onOk: () => onDelete(element),
-            })
-          }
-        >
-          删除
-        </Button>
-        <div className="flex gap-2">
-          {creation.type === "r2v" && (
-            <Button
-              icon={<ArrowUpRight className="h-3.5 w-3.5" />}
-              onClick={() =>
-                onAgent(
-                  element,
-                  "请继续完成这个 R2V Element 的分镜和视频生成。",
-                )
-              }
-            >
-              继续制作
-            </Button>
-          )}
+      {creation.type === "r2v" && (
+        <footer className="flex shrink-0 justify-end border-t border-[var(--color-border)] bg-[var(--color-bg-primary)] px-4 py-3">
           <Button
-            type="primary"
-            icon={<Sparkles className="h-3.5 w-3.5" />}
-            onClick={() => onAgent(element)}
+            icon={<ArrowUpRight className="h-3.5 w-3.5" />}
+            onClick={() =>
+              onAgent(element, "请继续完成当前 AI 生成画面的分镜和视频生成。")
+            }
           >
-            在 Agent 中修改
+            继续制作
           </Button>
-        </div>
-      </footer>
+        </footer>
+      )}
     </section>
   );
 }

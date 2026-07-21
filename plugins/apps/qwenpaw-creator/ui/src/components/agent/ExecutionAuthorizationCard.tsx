@@ -6,6 +6,7 @@ import type {
   ExecutionAuthorizationView,
 } from "@/contracts/creator";
 import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationStore";
+import { creatorTargetLabel, taskKindLabel } from "@/lib/creatorPresentation";
 
 const BUTTON_BASE =
   "rounded-md px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50";
@@ -31,9 +32,11 @@ export function authorizationDetail(
   if (typeof messageText === "string" && messageText.trim()) return messageText;
   const operation =
     typeof authorization.scope.operation === "string"
-      ? authorization.scope.operation
+      ? taskKindLabel(authorization.scope.operation)
       : "高成本媒体执行";
-  return `${operation} · ${authorization.targetRef} · ${authorization.provider}/${authorization.model}`;
+  return `${operation} · ${creatorTargetLabel(authorization.targetRef)} · ${
+    authorization.provider
+  }/${authorization.model}`;
 }
 
 export default function ExecutionAuthorizationCard({
@@ -53,7 +56,7 @@ export default function ExecutionAuthorizationCard({
         authorization.id,
         authorizationApprovalPayload(authorization),
       );
-      message.success("已确认，原 Specialist Run 将继续");
+      message.success("已确认，专业制作将继续");
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -64,7 +67,7 @@ export default function ExecutionAuthorizationCard({
     setBusy(true);
     try {
       await decline(authorization.id, authorization.authorizationToken);
-      message.success("已取消；原 Run 已终止");
+      message.success("已取消，当前制作已终止");
     } catch (error) {
       message.error((error as Error).message);
     } finally {

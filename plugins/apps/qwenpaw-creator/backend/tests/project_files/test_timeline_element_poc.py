@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# flake8: noqa: E501
+# pylint: disable=protected-access
 from __future__ import annotations
 
 import asyncio
@@ -11,6 +13,7 @@ from pydantic import ValidationError
 
 from services.media_files.image_execution import FileImageExecutionService
 from services.media_files.local_execution import (
+    FfmpegLocalMediaRunner,
     FileLocalMediaExecutionService,
     LocalMediaExecutionSpec,
 )
@@ -86,6 +89,34 @@ class _LocalRunner:
 
 def _full_canvas() -> ElementLocation:
     return ElementLocation()
+
+
+def test_default_visual_location_is_a_full_frame_with_center_transform_origin() -> (
+    None
+):
+    location = ElementLocation()
+    assert (location.x, location.y) == (0.5, 0.5)
+    assert (location.width, location.height) == (1.0, 1.0)
+    assert (location.anchor_x, location.anchor_y) == (0.5, 0.5)
+
+
+def test_ffmpeg_placement_uses_the_same_anchor_projection_as_the_ui() -> None:
+    graph = FfmpegLocalMediaRunner._placement_filter(
+        {
+            "x": 0.5,
+            "y": 0.88,
+            "width": 0.8,
+            "height": 0.1,
+            "anchor_x": 0.5,
+            "anchor_y": 0.5,
+            "rotation_degrees": 0,
+            "opacity": 1,
+        },
+        canvas_size=(1280, 720),
+        duration_seconds=4,
+    )
+    assert "scale=1024:72" in graph
+    assert "overlay=128:598" in graph
 
 
 def _r2v_element(element_id: str, *, start: int, duration: int = 4_000):
@@ -450,7 +481,10 @@ def test_each_edit_selection_is_an_element_and_timeline_executes_them(
     assert len(edit_runner.calls[0].inputs) == 7
     assert edit_runner.calls[0].inputs[0].start_seconds == 0
     assert edit_runner.calls[0].inputs[0].end_seconds == 1
+    assert edit_runner.calls[0].canvas_size == (1280, 720)
+    assert edit_runner.calls[0].inputs[0].location["x"] == 0.5
     assert edit_runner.calls[0].inputs[0].overlay["element_id"] == "overlay-1"
+    assert edit_runner.calls[0].inputs[0].overlay["location"]["x"] == 0.5
     assert all(
         item.overlay is not None for item in edit_runner.calls[0].inputs
     )

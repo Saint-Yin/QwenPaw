@@ -349,7 +349,7 @@ describe("AgentDock origin/main visible fidelity", () => {
     )!;
     expect(streamingAction).toHaveAttribute("data-streaming-action", "true");
     expect(streamingAction).toHaveAttribute("data-expanded", "true");
-    expect(streamingAction).toHaveTextContent("read_project_file...");
+    expect(streamingAction).toHaveTextContent("读取素材分析...");
     expect(
       within(streamingAction).getByText(/"path":"plan/),
     ).toBeInTheDocument();
@@ -671,7 +671,7 @@ describe("AgentDock origin/main visible fidelity", () => {
 
     expect(screen.getByText("端到端生产")).toBeInTheDocument();
     expect(
-      screen.getByText(/故事规划 · timeline:main · SUCCEEDED/),
+      screen.getByText(/故事规划 · 主时间轴 · 已完成/),
     ).toBeInTheDocument();
   });
 
@@ -819,7 +819,7 @@ describe("AgentDock origin/main visible fidelity", () => {
       responseFlow?.querySelector("[data-agent-thinking]"),
     ).not.toBeInTheDocument();
 
-    const toolStatus = screen.getByText(/✓\s+read_project_file/);
+    const toolStatus = screen.getByText(/✓\s+读取素材分析/);
     expect(toolStatus).toHaveClass("text-[var(--color-success)]");
     expect(toolStatus.parentElement?.parentElement?.parentElement).toBe(
       responseFlow,
@@ -900,7 +900,7 @@ describe("AgentDock origin/main visible fidelity", () => {
       '[data-agent-tool="call-file-runtime"]',
     )!;
     expect(tool).toBeInTheDocument();
-    expect(tool).toHaveTextContent("✓ read_project");
+    expect(tool).toHaveTextContent("✓ 查看视频方案");
     expect(tool.closest("[data-agent-response-flow]")).toBeInTheDocument();
     fireEvent.click(within(tool).getByRole("button", { name: "详情" }));
     expect(tool).toHaveTextContent('"generation": 2');
@@ -1020,16 +1020,16 @@ describe("AgentDock origin/main visible fidelity", () => {
     );
     renderDock();
 
-    expect(screen.getByText(/▸\s+委派给 视觉开发/)).toBeInTheDocument();
+    expect(screen.getByText(/▸\s+安排给 视觉开发/)).toBeInTheDocument();
     expect(
       document.querySelector('[data-agent-tool="delegate-action"]'),
     ).toHaveAttribute("data-expanded", "true");
     expect(
       screen.getByText("请完善开场视觉，并说明改动结果。"),
     ).toBeInTheDocument();
-    expect(screen.getByText("目标：project:assets")).toBeInTheDocument();
+    expect(screen.getByText("目标：素材与生成结果")).toBeInTheDocument();
     expect(screen.getByText(/## 正在规划/)).toBeInTheDocument();
-    expect(screen.getByText("SSE 实时输出中")).toBeInTheDocument();
+    expect(screen.getByText("实时输出中")).toBeInTheDocument();
     expect(screen.getByText("运行中")).toBeInTheDocument();
     const subagentMessage = document.querySelector(
       '[data-subagent-message="sub-message-1"]',
@@ -1053,7 +1053,7 @@ describe("AgentDock origin/main visible fidelity", () => {
       "overscroll-contain",
       "touch-pan-y",
     );
-    expect(screen.getByText(/✓\s+read_project_file/)).toBeInTheDocument();
+    expect(screen.getByText(/✓\s+读取素材分析/)).toBeInTheDocument();
     expect(screen.queryByText(/"role":/)).not.toBeInTheDocument();
     expect(screen.queryByText(/"target_refs":/)).not.toBeInTheDocument();
 
@@ -1170,7 +1170,7 @@ describe("AgentDock origin/main visible fidelity", () => {
       '[data-subagent-tool="call-native-tool"]',
     )!;
     expect(tool).toHaveAttribute("data-expanded", "true");
-    expect(tool).toHaveTextContent("read_project_file");
+    expect(tool).toHaveTextContent("读取素材分析");
     expect(
       tool.querySelector("[data-subagent-tool-arguments]"),
     ).toHaveTextContent('{"path":"story/');
@@ -1330,7 +1330,7 @@ describe("AgentDock origin/main visible fidelity", () => {
       '[data-agent-action="tool_call"]',
     )!;
     expect(streamingFunction).toHaveAttribute("data-expanded", "true");
-    expect(streamingFunction).toHaveTextContent("read_project_file...");
+    expect(streamingFunction).toHaveTextContent("读取素材分析...");
     expect(streamingFunction).toHaveTextContent('"path":"story/');
 
     act(() =>

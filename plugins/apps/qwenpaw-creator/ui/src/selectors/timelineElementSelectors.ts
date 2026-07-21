@@ -167,9 +167,9 @@ export function elementCreationSummary(
     case "overlay":
       return creation.text || creation.prompt || creation.overlay_kind;
     case "transition":
-      return `${creation.transition_kind} · ${creation.from_element_id} → ${creation.to_element_id}`;
+      return `${creation.transition_kind} 转场`;
     case "audio":
-      return `音频素材 ${creation.source_asset_version_id}`;
+      return "时间线音频";
   }
 }
 
@@ -181,14 +181,10 @@ export const ELEMENT_TYPE_META: Record<
     soft: string;
   }
 > = {
-  r2v: { label: "R2V 生成", color: "#ff7f16", soft: "rgba(255,127,22,.12)" },
-  edit: {
-    label: "AI 剪辑片段",
-    color: "#3b82f6",
-    soft: "rgba(59,130,246,.12)",
-  },
+  r2v: { label: "AI 生成画面", color: "#ff7f16", soft: "rgba(255,127,22,.12)" },
+  edit: { label: "素材剪辑", color: "#3b82f6", soft: "rgba(59,130,246,.12)" },
   overlay: {
-    label: "Overlay 动效",
+    label: "字幕与动效",
     color: "#8b5cf6",
     soft: "rgba(139,92,246,.12)",
   },

@@ -72,7 +72,10 @@ class ProjectCommitError(RuntimeError):
 
 class ProtectedFieldError(ProjectCommitError):
     def __init__(self, pointers: list[str]) -> None:
-        super().__init__("candidate modifies Runtime-protected Project fields")
+        super().__init__(
+            "candidate modifies Runtime-protected Project fields: "
+            + ", ".join(pointers),
+        )
         self.pointers = pointers
 
 

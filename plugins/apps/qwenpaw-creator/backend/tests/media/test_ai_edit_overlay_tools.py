@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=protected-access
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,7 +18,7 @@ class _Completed:
 
 
 def _install_render_fakes(monkeypatch, commands: list[list[str]]) -> None:
-    def render_png(*args) -> bool:
+    def render_png(*args, **_kwargs) -> bool:
         output_path = args[-1]
         Path(output_path).write_bytes(b"png")
         return True
@@ -87,3 +88,31 @@ def test_interview_renderer_uses_title_tool_and_requested_timing(
     expression = commands[0][commands[0].index("-filter_complex") + 1]
     assert "between(t,0.0,4.0)" in expression
     assert not output.with_suffix(".overlay.png").exists()
+
+
+def test_pet_os_png_uses_the_element_anchor_box(tmp_path) -> None:
+    from PIL import Image
+
+    output = tmp_path / "placed.png"
+    assert overlay_tools._render_pet_os_png(
+        "这里真的安全吗？",
+        "curious",
+        1280,
+        720,
+        output,
+        location={
+            "x": 0.9,
+            "y": 0.29,
+            "width": 0.18,
+            "height": 0.53,
+            "anchor_x": 0.5,
+            "anchor_y": 0.5,
+            "rotation_degrees": 0,
+            "opacity": 1,
+        },
+    )
+    alpha_bounds = Image.open(output).getchannel("A").getbbox()
+    assert alpha_bounds is not None
+    left, top, right, bottom = alpha_bounds
+    assert 1037 <= left < right <= 1268
+    assert 17 <= top < bottom <= 399

@@ -111,7 +111,7 @@ export default function ElementList({
       <header className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
         <div>
           <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">
-            Element
+            时间线内容
           </h3>
           <p className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">
             按开始时间排列；重叠关系以时间轴为准
@@ -130,10 +130,10 @@ export default function ElementList({
           <div className="flex h-full min-h-44 flex-col items-center justify-center px-6 text-center">
             <Sparkles className="mb-3 h-7 w-7 text-[var(--color-accent)]" />
             <p className="text-sm font-semibold text-[var(--color-text-primary)]">
-              还没有 Element
+              时间轴还是空的
             </p>
             <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
-              在 AgentDock 中描述要生成或剪辑的内容，Agent 会直接写入 Timeline。
+              可以从上方添加内容，或在 Agent 中描述想生成、剪辑和叠加的画面。
             </p>
           </div>
         ) : (

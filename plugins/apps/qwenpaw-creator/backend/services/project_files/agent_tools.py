@@ -24,7 +24,7 @@ from services.runtime_files.models import (
 )
 
 from .assets import AssetFileStore
-from .commit import ProjectCommitBoundary
+from .commit import PROTECTED_EXACT_POINTERS, ProjectCommitBoundary
 from .jq_transform import JqProjectTransformer
 from .models import Project, TimelineElement
 from .schema_prompt import ProjectSchemaPrompt, build_project_schema_prompt
@@ -249,20 +249,34 @@ AGENT_PROJECT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "在最近读取的 Project base 上运行一段 jq，"
             "Runtime 再执行字段 CAS、三方合并、"
             "Pydantic 校验和原子发布。"
-            "不要修改 Runtime 保护字段。"
+            "jq 必须输出且只输出完整 Project 根对象；不得以嵌套路径或子对象变量结束。"
+            "必须原样保留 schema_version/project_id/generation/created_at/updated_at。"
+            "批量内容通过 jsonArgs 传入，program 只负责结构化赋值。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "projectId": {"type": "string", "minLength": 1},
                 "baseEtag": {"type": "string", "minLength": 1},
-                "program": {"type": "string", "minLength": 1},
+                "program": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "作用于完整 Project 的 jq 变换；最后结果必须仍是完整 Project 根对象，"
+                        "不要以 `| .timelines...`、`| $child` 等子对象选择结束。"
+                    ),
+                },
                 "stringArgs": {
                     "type": "object",
+                    "description": "通过 --arg 传入的短字符串参数。",
                     "additionalProperties": {"type": "string"},
                 },
                 "jsonArgs": {
                     "type": "object",
+                    "description": (
+                        "通过 --argjson 传入的结构化 JSON；新增多项时间线内容时应把对象集合放这里，"
+                        "避免在 program 中拼接大段 JSON。"
+                    ),
                     "additionalProperties": True,
                 },
             },
@@ -491,6 +505,19 @@ class AgentProjectTools:
             string_args=request.string_args,
             json_args=request.json_args,
         )
+        base_data = base.project.model_dump(mode="json")
+        changed_protected = [
+            pointer
+            for pointer in sorted(PROTECTED_EXACT_POINTERS)
+            if candidate.get(pointer[1:]) != base_data[pointer[1:]]
+        ]
+        if changed_protected:
+            raise AgentProjectToolError(
+                "jq_project 必须返回完整 Project 根对象并原样保留 Runtime 保护字段；"
+                "当前输出缺失或改变了 "
+                + ", ".join(changed_protected)
+                + "。不要以 `| $child` 或嵌套路径选择结束 jq program。",
+            )
         result = self.commits.commit(
             base=base,
             candidate=candidate,

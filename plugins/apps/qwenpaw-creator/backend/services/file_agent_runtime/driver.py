@@ -2763,8 +2763,11 @@ def _specialist_terminal(content: str) -> tuple[str, str]:
 def _specialist_tool_recovery(name: str) -> str:
     if name == "jq_project":
         return (
-            "Re-read project.json, remove nonexistent references, and retry "
-            "jq_project. Not-yet-produced artifacts stay null."
+            "Re-read project.json and retry jq_project with a transform that returns the "
+            "complete Project root and preserves all Runtime-protected root fields. Put "
+            "bulk objects in jsonArgs. For every Edit item, set duration_tick to "
+            "round((source_out_tick - source_in_tick) / playback_rate). Remove nonexistent "
+            "references; not-yet-produced artifacts stay null."
         )
     if name == "ai_edit":
         return (

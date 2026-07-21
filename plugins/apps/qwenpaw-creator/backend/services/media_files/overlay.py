@@ -9,10 +9,13 @@ pixels over a prepared media segment.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+import math
 import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 # pylint: disable=no-name-in-module
 from utils.logger import setup_logger
@@ -61,13 +64,357 @@ def _vibe_emoji(vibe: str) -> str:
     }.get(vibe, "😺")
 
 
+def _placement_values(
+    location: Mapping[str, Any],
+    video_width: int,
+    video_height: int,
+) -> dict[str, float | int]:
+    defaults = {
+        "x": 0.5,
+        "y": 0.5,
+        "width": 1.0,
+        "height": 1.0,
+        "anchor_x": 0.5,
+        "anchor_y": 0.5,
+        "rotation_degrees": 0.0,
+        "opacity": 1.0,
+    }
+    values: dict[str, float] = {}
+    for key, fallback in defaults.items():
+        try:
+            value = float(location.get(key, fallback))
+        except (TypeError, ValueError):
+            value = fallback
+        values[key] = value if math.isfinite(value) else fallback
+    values["width"] = max(1 / video_width, values["width"])
+    values["height"] = max(1 / video_height, values["height"])
+    values["anchor_x"] = min(1.0, max(0.0, values["anchor_x"]))
+    values["anchor_y"] = min(1.0, max(0.0, values["anchor_y"]))
+    values["opacity"] = min(1.0, max(0.0, values["opacity"]))
+    return {
+        **values,
+        "box_width": max(1, round(video_width * values["width"])),
+        "box_height": max(1, round(video_height * values["height"])),
+        "canvas_x": round(video_width * values["x"]),
+        "canvas_y": round(video_height * values["y"]),
+    }
+
+
+def _place_layer(
+    canvas: Any,
+    layer: Any,
+    location: Mapping[str, Any],
+) -> Any:
+    """Place a PIL layer using the same anchor transform as ElementLocation."""
+
+    from PIL import Image
+
+    values = _placement_values(location, canvas.width, canvas.height)
+    anchor_x = round(layer.width * float(values["anchor_x"]))
+    anchor_y = round(layer.height * float(values["anchor_y"]))
+    padded_width = max(1, 2 * max(anchor_x, layer.width - anchor_x))
+    padded_height = max(1, 2 * max(anchor_y, layer.height - anchor_y))
+    padded = Image.new("RGBA", (padded_width, padded_height), (0, 0, 0, 0))
+    padded.alpha_composite(
+        layer,
+        (padded_width // 2 - anchor_x, padded_height // 2 - anchor_y),
+    )
+    rotation = float(values["rotation_degrees"])
+    placed = (
+        padded.rotate(
+            -rotation,
+            resample=Image.Resampling.BICUBIC,
+            expand=True,
+        )
+        if rotation
+        else padded
+    )
+    opacity = float(values["opacity"])
+    if opacity < 1:
+        alpha = placed.getchannel("A").point(
+            lambda value: round(value * opacity),
+        )
+        placed.putalpha(alpha)
+    canvas.alpha_composite(
+        placed,
+        (
+            round(int(values["canvas_x"]) - placed.width / 2),
+            round(int(values["canvas_y"]) - placed.height / 2),
+        ),
+    )
+    return canvas
+
+
+def _render_placed_text_box(
+    *,
+    text: str,
+    video_width: int,
+    video_height: int,
+    output_path: Path,
+    location: Mapping[str, Any],
+    bubble: bool,
+) -> bool:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return False
+
+    values = _placement_values(location, video_width, video_height)
+    box_width = int(values["box_width"])
+    box_height = int(values["box_height"])
+    canvas = Image.new("RGBA", (video_width, video_height), (0, 0, 0, 0))
+    layer = Image.new("RGBA", (box_width, box_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    padding = max(3, round(min(box_width, box_height) * 0.1))
+    if bubble:
+        border = max(1, round(box_height * 0.035))
+        draw.rounded_rectangle(
+            (border, border, box_width - border - 1, box_height - border - 1),
+            radius=max(4, round(box_height * 0.28)),
+            fill=(255, 255, 255, 238),
+            outline=(20, 20, 20, 255),
+            width=border,
+        )
+    font_path = _find_cjk_font()
+    font_size = max(
+        10,
+        min(
+            round(box_height * 0.42),
+            round(box_width / max(4, len(text)) * 1.55),
+        ),
+    )
+    try:
+        font = (
+            ImageFont.truetype(font_path, font_size)
+            if font_path
+            else ImageFont.load_default()
+        )
+    except Exception:
+        font = ImageFont.load_default()
+    available_width = max(1, box_width - padding * 2)
+    lines: list[str] = []
+    current = ""
+    for character in text.strip():
+        candidate = current + character
+        bounds = draw.textbbox((0, 0), candidate, font=font)
+        if current and bounds[2] - bounds[0] > available_width:
+            lines.append(current)
+            current = character
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    display_text = "\n".join(lines[:2])
+    bounds = draw.multiline_textbbox(
+        (0, 0),
+        display_text,
+        font=font,
+        spacing=2,
+        align="center",
+    )
+    text_width = bounds[2] - bounds[0]
+    text_height = bounds[3] - bounds[1]
+    text_x = (box_width - text_width) / 2
+    text_y = (box_height - text_height) / 2 - bounds[1]
+    draw.multiline_text(
+        (text_x, text_y),
+        display_text,
+        font=font,
+        spacing=2,
+        align="center",
+        fill="#111111" if bubble else "#FFFFFF",
+        stroke_width=0 if bubble else max(1, round(font_size * 0.08)),
+        stroke_fill="#000000",
+    )
+    _place_layer(canvas, layer, location)
+    try:
+        canvas.save(output_path, "PNG")
+        return True
+    except Exception as exc:
+        logger.warning("placed overlay save failed: %s", exc)
+        return False
+
+
+def _render_placed_pet_os_box(
+    *,
+    text: str,
+    vibe: str,
+    video_width: int,
+    video_height: int,
+    output_path: Path,
+    location: Mapping[str, Any],
+) -> bool:
+    """Render the original speech-bubble, tail, and emoji inside location."""
+
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return False
+
+    values = _placement_values(location, video_width, video_height)
+    box_width = int(values["box_width"])
+    box_height = int(values["box_height"])
+    canvas = Image.new("RGBA", (video_width, video_height), (0, 0, 0, 0))
+    layer = Image.new("RGBA", (box_width, box_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+
+    border = max(2, round(min(box_width, box_height) * 0.018))
+    padding = max(5, round(min(box_width, box_height) * 0.06))
+    tail_height = max(8, round(box_height * 0.09))
+    emoji_size = max(18, round(box_height * 0.2))
+    emoji_gap = max(2, round(box_height * 0.025))
+    bubble_height = max(
+        16,
+        box_height - tail_height - emoji_size - emoji_gap - border,
+    )
+    bubble_right = max(border + 2, box_width - border - 1)
+    draw.rounded_rectangle(
+        (border, border, bubble_right, bubble_height),
+        radius=max(5, round(min(box_width, bubble_height) * 0.09)),
+        fill="white",
+        outline="black",
+        width=border,
+    )
+    tail_x = min(
+        bubble_right - tail_height * 2,
+        max(border + tail_height * 2, round(box_width * 0.28)),
+    )
+    tail_tip = (
+        tail_x - round(tail_height * 0.55),
+        bubble_height + tail_height,
+    )
+    draw.polygon(
+        [
+            (tail_x, bubble_height),
+            tail_tip,
+            (tail_x + tail_height, bubble_height),
+        ],
+        fill="white",
+    )
+    draw.line(
+        [(tail_x, bubble_height), tail_tip],
+        fill="black",
+        width=border,
+    )
+    draw.line(
+        [tail_tip, (tail_x + tail_height, bubble_height)],
+        fill="black",
+        width=border,
+    )
+
+    font_path = _find_cjk_font()
+    available_width = max(1, box_width - padding * 2 - border * 2)
+    available_height = max(1, bubble_height - padding * 2 - border * 2)
+    font_size = max(
+        10,
+        min(round(video_width / 1280 * 30), round(available_height / 3.5)),
+    )
+    while font_size >= 10:
+        try:
+            font = (
+                ImageFont.truetype(font_path, font_size)
+                if font_path
+                else ImageFont.load_default()
+            )
+        except Exception:
+            font = ImageFont.load_default()
+        lines: list[str] = []
+        current = ""
+        for character in text.strip():
+            candidate = current + character
+            bounds = draw.textbbox((0, 0), candidate, font=font)
+            if current and bounds[2] - bounds[0] > available_width:
+                lines.append(current)
+                current = character
+            else:
+                current = candidate
+        if current:
+            lines.append(current)
+        display_text = "\n".join(lines)
+        bounds = draw.multiline_textbbox(
+            (0, 0),
+            display_text,
+            font=font,
+            spacing=2,
+        )
+        if bounds[3] - bounds[1] <= available_height:
+            break
+        font_size -= 1
+    text_height = bounds[3] - bounds[1]
+    draw.multiline_text(
+        (
+            border + padding,
+            border
+            + padding
+            + (available_height - text_height) / 2
+            - bounds[1],
+        ),
+        display_text,
+        font=font,
+        spacing=2,
+        fill="#111111",
+    )
+
+    emoji_font_path = _find_emoji_font()
+    try:
+        bitmap_sizes = [160, 96, 64, 48, 40, 32, 20]
+        render_size = next(
+            (size for size in bitmap_sizes if size >= emoji_size),
+            bitmap_sizes[0],
+        )
+        emoji_font = (
+            ImageFont.truetype(emoji_font_path, render_size)
+            if emoji_font_path
+            else None
+        )
+        if emoji_font:
+            cell = render_size + 4
+            emoji_image = Image.new("RGBA", (cell, cell), (0, 0, 0, 0))
+            ImageDraw.Draw(emoji_image).text(
+                (2, 2),
+                _vibe_emoji(vibe),
+                font=emoji_font,
+                embedded_color=True,
+            )
+            emoji_image = emoji_image.resize(
+                (emoji_size, emoji_size),
+                Image.Resampling.LANCZOS,
+            )
+            emoji_x = max(
+                0,
+                min(box_width - emoji_size, tail_tip[0] - emoji_size // 2),
+            )
+            emoji_y = min(box_height - emoji_size, tail_tip[1] + emoji_gap)
+            layer.alpha_composite(emoji_image, (emoji_x, emoji_y))
+    except Exception:
+        logger.debug("emoji font rendering unavailable", exc_info=True)
+
+    _place_layer(canvas, layer, location)
+    try:
+        canvas.save(output_path, "PNG")
+        return True
+    except Exception as exc:
+        logger.warning("placed pet OS overlay save failed: %s", exc)
+        return False
+
+
 def _render_pet_os_png(
     text: str,
     vibe: str,
     video_width: int,
     video_height: int,
     output_path: Path,
+    location: Mapping[str, Any] | None = None,
 ) -> bool:
+    if isinstance(location, Mapping):
+        return _render_placed_pet_os_box(
+            text=text,
+            vibe=vibe,
+            video_width=video_width,
+            video_height=video_height,
+            output_path=output_path,
+            location=location,
+        )
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError:
@@ -202,7 +549,17 @@ def _render_interview_summary_png(
     video_width: int,
     video_height: int,
     output_path: Path,
+    location: Mapping[str, Any] | None = None,
 ) -> bool:
+    if isinstance(location, Mapping):
+        return _render_placed_text_box(
+            text=text,
+            video_width=video_width,
+            video_height=video_height,
+            output_path=output_path,
+            location=location,
+            bubble=False,
+        )
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError:
@@ -330,11 +687,18 @@ def render_pet_os_overlay(
     video_size: tuple[int, int],
     appear_at: float,
     duration: float,
+    location: Mapping[str, Any] | None = None,
 ) -> OverlayRenderResult:
     """Render and composite a pet speech bubble over one prepared segment."""
 
     overlay_path = output_path.with_suffix(".overlay.png")
-    if not _render_pet_os_png(text, vibe, *video_size, overlay_path):
+    if not _render_pet_os_png(
+        text,
+        vibe,
+        *video_size,
+        overlay_path,
+        location=location,
+    ):
         return OverlayRenderResult(False, "宠物 OS PNG 渲染失败")
     try:
         return _composite_overlay(
@@ -357,11 +721,17 @@ def render_interview_summary_overlay(
     video_size: tuple[int, int],
     appear_at: float,
     duration: float,
+    location: Mapping[str, Any] | None = None,
 ) -> OverlayRenderResult:
     """Render and composite an interview summary over one prepared segment."""
 
     overlay_path = output_path.with_suffix(".overlay.png")
-    if not _render_interview_summary_png(text, *video_size, overlay_path):
+    if not _render_interview_summary_png(
+        text,
+        *video_size,
+        overlay_path,
+        location=location,
+    ):
         return OverlayRenderResult(False, "采访总结 PNG 渲染失败")
     try:
         return _composite_overlay(

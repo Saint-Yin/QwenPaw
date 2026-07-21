@@ -5,8 +5,14 @@ import { interruptCreator } from "@/api/creator";
 import type { CreatorEvent, SpecialistRunView } from "@/contracts/creator";
 import { useCreatorSessionStore } from "@/store/creatorSessionStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
+import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationStore";
 import { isTechnicalControlText } from "@/lib/creatorMessagePresentation";
+import {
+  creatorStatusLabel,
+  creatorTargetLabel,
+  creatorToolLabel,
+} from "@/lib/creatorPresentation";
 import {
   authorizationApprovalPayload,
   authorizationDetail,
@@ -114,9 +120,7 @@ function originRunStatus(
 }
 
 function runStatusLabel(status: SpecialistRunView["status"]): string {
-  if (status === "STALE") return "已被替换";
-  if (status === "CANCELLED") return "已取消";
-  return status;
+  return creatorStatusLabel(status);
 }
 
 function eventText(event: CreatorEvent): string {
@@ -182,8 +186,8 @@ function EventCard({ event }: { event: CreatorEvent }) {
         className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1.5 text-[10px]"
       >
         <div className="flex items-center justify-between gap-2">
-          <span className="font-mono text-[var(--color-text-secondary)]">
-            {String(data.tool ?? "tool")}
+          <span className="text-[var(--color-text-secondary)]">
+            {creatorToolLabel(String(data.tool ?? ""))}
           </span>
           <span
             className={
@@ -202,7 +206,7 @@ function EventCard({ event }: { event: CreatorEvent }) {
     );
   }
   if (event.type.startsWith("subagent.")) {
-    const label = String(data.roleDisplayName ?? data.role ?? "Sub-Agent");
+    const label = String(data.roleDisplayName ?? data.role ?? "专业制作");
     const completed = event.type.endsWith("completed");
     const failed =
       event.type.endsWith("failed") || event.type.endsWith("stale");
@@ -257,6 +261,7 @@ export default function AgentEventFeed() {
   const tasks = useCreatorTaskViewStore((state) => state.tasks);
   const events = useCreatorSessionStore((state) => state.events);
   const session = useCreatorSessionStore((state) => state.session);
+  const project = useProjectSnapshotStore((state) => state.project);
   const projectId = taskProjectId ?? session?.projectId ?? null;
   const authorizations = useExecutionAuthorizationStore((state) => state.items);
   const approve = useExecutionAuthorizationStore((state) => state.approve);
@@ -392,8 +397,11 @@ export default function AgentEventFeed() {
                   <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-[var(--color-text-tertiary)]" />
                 )}
                 <span className="min-w-0">
-                  {run.displayName} · {run.targetRefs.join("、") || "项目"} ·{" "}
-                  {runStatusLabel(run.status)}
+                  {run.displayName} ·{" "}
+                  {run.targetRefs
+                    .map((ref) => creatorTargetLabel(ref, project))
+                    .join("、") || "当前项目"}{" "}
+                  · {runStatusLabel(run.status)}
                 </span>
               </li>
             ))}
@@ -403,12 +411,15 @@ export default function AgentEventFeed() {
         {failedTargetRuns.length > 0 && (
           <div className="mt-2 rounded-md border border-[var(--color-danger)]/25 bg-[var(--color-danger-soft)] p-2 text-[11px] leading-4">
             <b className="text-[var(--color-danger)]">
-              {failedTargetRuns.length} 个 Timeline/Element 任务失败
+              {failedTargetRuns.length} 项专业制作失败
             </b>
             <ul className="mt-1 space-y-0.5 text-[var(--color-text-secondary)]">
               {failedTargetRuns.slice(0, 3).map(({ run, targetRefs }) => (
                 <li key={run.id} className="truncate">
-                  {targetRefs.join("、")}：{run.finalSummaryText || run.status}
+                  {targetRefs
+                    .map((ref) => creatorTargetLabel(ref, project))
+                    .join("、")}
+                  ：{run.finalSummaryText || creatorStatusLabel(run.status)}
                 </li>
               ))}
             </ul>

@@ -35,6 +35,14 @@ import { useFileProjectReviewStore } from "@/store/fileProjectReviewStore";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { selectPrimaryTimeline } from "@/selectors/timelineElementSelectors";
 import {
+  creatorEventLabel,
+  creatorRoleLabel,
+  creatorStatusLabel,
+  creatorTargetLabel,
+  creatorToolLabel,
+  taskKindLabel,
+} from "@/lib/creatorPresentation";
+import {
   actionAwareConversationContent,
   actionEnvelopeFromStreamText,
   conversationContent,
@@ -374,8 +382,8 @@ function waitingActionTitle(reason: string): string {
 function actionTitle(envelope: CreatorActionEnvelope, active: boolean): string {
   if (envelope.action === "tool_call")
     return active
-      ? `${envelope.tool || "工具调用"}...`
-      : envelope.tool || "工具调用";
+      ? `${creatorToolLabel(envelope.tool || "")}...`
+      : creatorToolLabel(envelope.tool || "");
   if (envelope.action === "yield_until_runtime_event") {
     return waitingActionTitle(actionReason(envelope));
   }
@@ -505,12 +513,12 @@ function roleDisplayName(
 ): string {
   const raw =
     activity?.role || (typeof args?.role === "string" ? args.role : "");
-  return (
+  const displayName =
     activity?.roleDisplayName ||
     (typeof args?.roleDisplayName === "string" ? args.roleDisplayName : "") ||
     raw ||
-    "Agent"
-  );
+    "Agent";
+  return creatorRoleLabel(displayName);
 }
 
 function delegationText(
@@ -620,7 +628,7 @@ function SubagentMessageBubble({
         <div className="mb-1 flex items-center gap-1.5">
           <span className="flex items-center gap-1 text-[9px] text-[var(--color-text-tertiary)]">
             <span className="h-1 w-1 animate-pulse rounded-full bg-[var(--color-warning)]" />
-            SSE 实时输出中
+            实时输出中
           </span>
         </div>
       )}
@@ -673,7 +681,7 @@ function NestedSubagentToolCard({ item }: { item: SubagentStreamTool }) {
     >
       <div className="flex items-center gap-2">
         <span className={tone}>
-          {icon} {item.tool}
+          {icon} {creatorToolLabel(item.tool)}
         </span>
         {hasDetails && (
           <button
@@ -867,9 +875,9 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
     >
       <div className="flex items-center gap-2">
         <span className={tone}>
-          {icon} {delegated ? `委派给 ${role}` : tool}
+          {icon} {delegated ? `安排给 ${role}` : creatorToolLabel(tool)}
           {!delegated && effectiveStatus === "failed" && data.error
-            ? `：${String(data.error)}`
+            ? "：执行失败，可展开查看原因"
             : ""}
         </span>
         {hasDetails && (
@@ -893,7 +901,8 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
               )}
               {targets.length > 0 && (
                 <p className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">
-                  目标：{targets.join("、")}
+                  目标：
+                  {targets.map((ref) => creatorTargetLabel(ref)).join("、")}
                 </p>
               )}
             </div>
@@ -965,7 +974,10 @@ function PlanCard({ data }: { data: PlanPresentation }) {
       )}
       {Boolean(data.scope) && (
         <p className="mt-1 text-[var(--color-text-tertiary)]">
-          范围：{String(data.scope)}
+          范围：
+          {(Array.isArray(data.scope) ? data.scope : [data.scope])
+            .map((ref) => creatorTargetLabel(String(ref)))
+            .join("、")}
         </p>
       )}
     </div>
@@ -1080,11 +1092,11 @@ function WorkspacePanel() {
         <p className="text-[var(--color-text-tertiary)]">
           阶段{" "}
           <b className="text-[var(--color-text-primary)]">
-            {status?.progress.label || status?.progress.phase || "—"}
+            {status?.progress.label || "—"}
           </b>
           {" · "}状态{" "}
           <b className="text-[var(--color-text-primary)]">
-            {session?.status || "—"}
+            {creatorStatusLabel(session?.status)}
           </b>
         </p>
         {status?.progress.latestMilestone && (
@@ -1116,17 +1128,17 @@ function WorkspacePanel() {
 
       <div>
         <p className="font-semibold text-[var(--color-text-secondary)]">
-          Timeline
+          主时间轴
         </p>
         <p className="text-[var(--color-text-tertiary)]">
-          {timeline?.timeline_id || "—"} · {elementCount} Elements
+          {elementCount} 项内容
         </p>
       </div>
 
       {(runs.length > 0 || tasks.length > 0) && (
         <div>
           <p className="font-semibold text-[var(--color-text-secondary)]">
-            Sub-Agent 运行
+            专业制作进度
           </p>
           <ul className="mt-0.5 space-y-0.5">
             {runs.slice(0, 4).map((run) => (
@@ -1135,9 +1147,14 @@ function WorkspacePanel() {
                 className="flex items-center gap-1.5 text-[var(--color-text-tertiary)]"
               >
                 <span className="min-w-0 flex-1 truncate text-[var(--color-text-secondary)]">
-                  {run.displayName} · {run.targetRefs.join("、") || "项目"}
+                  {run.displayName} ·{" "}
+                  {run.targetRefs
+                    .map((ref) => creatorTargetLabel(ref, project))
+                    .join("、") || "当前项目"}
                 </span>
-                <span className="shrink-0 text-[9px]">{run.status}</span>
+                <span className="shrink-0 text-[9px]">
+                  {creatorStatusLabel(run.status)}
+                </span>
               </li>
             ))}
             {tasks
@@ -1150,7 +1167,8 @@ function WorkspacePanel() {
                   key={task.id}
                   className="truncate text-[var(--color-text-tertiary)]"
                 >
-                  {task.kind} → {task.targetRef}
+                  {taskKindLabel(task.kind)} →{" "}
+                  {creatorTargetLabel(task.targetRef, project)}
                 </li>
               ))}
           </ul>
@@ -1169,7 +1187,7 @@ function WorkspacePanel() {
                 className="truncate text-[var(--color-text-tertiary)]"
               >
                 <span className="text-[var(--color-text-secondary)]">
-                  {event.type}
+                  {creatorEventLabel(event.type)}
                 </span>
                 {eventSummary(event.data)
                   ? ` → ${eventSummary(event.data)}`
@@ -1798,7 +1816,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
               {streaming && (
                 <span className="flex items-center gap-1 rounded-full bg-[var(--color-warning-soft)] px-2 py-0.5 text-[10px] font-semibold text-[var(--color-warning)]">
                   <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-warning)]" />
-                  streaming
+                  输出中
                 </span>
               )}
               <span className="relative inline-flex">
@@ -1895,7 +1913,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
               {runs.length > 0 && (
                 <div className="mb-2 border-b border-[var(--color-border)] pb-2">
                   <p className="px-2 pb-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-                    Sub-Agent 运行记录
+                    专业制作记录
                   </p>
                   <ul className="space-y-0.5">
                     {runs.slice(0, 8).map((run) => (
@@ -1904,15 +1922,15 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                         className="flex items-center gap-2 rounded-md px-2 py-1 text-[11px] text-[var(--color-text-secondary)]"
                       >
                         <Sparkles className="h-3 w-3 shrink-0 text-[var(--color-accent)]" />
-                        <span
-                          className="min-w-0 flex-1 truncate"
-                          title={run.targetRefs.join("、")}
-                        >
+                        <span className="min-w-0 flex-1 truncate">
                           {run.displayName} ·{" "}
-                          {run.targetRefs.join("、") || "项目"}
+                          {run.targetRefs
+                            .map((ref) => creatorTargetLabel(ref, project))
+                            .join("、") || "当前项目"}
                         </span>
                         <span className="shrink-0 text-[9px] text-[var(--color-text-tertiary)]">
-                          {run.taskRefs.length} 项 · {run.status}
+                          {run.taskRefs.length} 项 ·{" "}
+                          {creatorStatusLabel(run.status)}
                         </span>
                       </li>
                     ))}

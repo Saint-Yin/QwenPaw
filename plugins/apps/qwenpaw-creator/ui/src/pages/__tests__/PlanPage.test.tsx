@@ -71,13 +71,13 @@ describe("PlanPage Timeline/Element frontend", () => {
     expect(screen.getByText("视频方案")).toBeInTheDocument();
     expect(screen.getAllByText("20s").length).toBeGreaterThan(0);
     expect(screen.getByText("16:9")).toBeInTheDocument();
-    expect(screen.getByText("6 Elements")).toBeInTheDocument();
+    expect(screen.getByText("6 项内容")).toBeInTheDocument();
     expect(screen.getByText(/5 层/)).toHaveTextContent("可上下滚动");
     expect(
       container.querySelector('[class~="max-h-[216px]"]'),
     ).toBeInTheDocument();
     expect(screen.getAllByText("午饭名场面").length).toBeGreaterThan(0);
-    expect(screen.getByText("分镜 Prompt")).toBeInTheDocument();
+    expect(screen.getByText("分镜描述")).toBeInTheDocument();
     expect(screen.getByDisplayValue("暖色餐厅窗外的橘猫")).toBeInTheDocument();
 
     const listItems = [
@@ -96,16 +96,25 @@ describe("PlanPage Timeline/Element frontend", () => {
     seedProject(project);
     renderPage();
 
-    expect(screen.getByText("时间轴尚无 Element")).toBeInTheDocument();
-    expect(screen.getByText("还没有 Element")).toBeInTheDocument();
+    expect(screen.getByText("时间轴中还没有内容")).toBeInTheDocument();
+    expect(screen.getByText("时间轴还是空的")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "添加 Element" }),
+      screen.getByRole("button", { name: "添加内容" }),
     ).toBeInTheDocument();
   });
 
   it("shows every active Element when a collapsed point is selected and can attach that point to AgentDock", () => {
     const { container } = renderPage();
-    fireEvent.click(screen.getByRole("button", { name: "折叠" }));
+    fireEvent.click(screen.getByRole("button", { name: "收起时间轴" }));
+    expect(
+      screen.getByRole("button", { name: "展开时间轴" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("紧凑时间轴概览；点击任意时刻查看同时出现的内容"),
+    ).toBeInTheDocument();
+    expect(
+      container.querySelector("[data-element-block]"),
+    ).not.toBeInTheDocument();
     const chart = container.querySelector("[data-timeline-chart]")!;
     installTimelineRect(chart);
 
@@ -114,10 +123,13 @@ describe("PlanPage Timeline/Element frontend", () => {
     fireEvent.pointerDown(chart, { pointerId: 1, clientX: x });
     fireEvent.pointerUp(chart, { pointerId: 1, clientX: x });
 
-    expect(screen.getByText("该时刻 5 个 Element：")).toBeInTheDocument();
+    expect(screen.getByText("该时刻有 5 项内容：")).toBeInTheDocument();
+    expect(chart.nextElementSibling).toBe(
+      container.querySelector("[data-timeline-point-candidates]"),
+    );
     expect(
-      screen.getAllByRole("button", { name: "晨光到午后的转场" }).length,
-    ).toBeGreaterThanOrEqual(2);
+      screen.getByRole("button", { name: "晨光到午后的转场" }),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "添加到对话" }));
     expect(useAgentDockUiStore.getState().selection).toMatchObject({
       kind: "timeline_point",
@@ -135,7 +147,7 @@ describe("PlanPage Timeline/Element frontend", () => {
 
   it("keeps collapsed point candidates clickable and scrolls the Element list to the chosen item", async () => {
     const { container } = renderPage();
-    fireEvent.click(screen.getByRole("button", { name: "折叠" }));
+    fireEvent.click(screen.getByRole("button", { name: "收起时间轴" }));
     const chart = container.querySelector("[data-timeline-chart]")!;
     installTimelineRect(chart);
     const x = 68 + ((1000 - 68) * 7.5) / 20;
@@ -222,16 +234,33 @@ describe("PlanPage Timeline/Element frontend", () => {
       "[data-timeline-video-preview]",
     ) as HTMLElement;
     expect(preview).toBeInTheDocument();
-    expect(preview).toHaveClass("min-h-[380px]");
-    expect(preview.style.aspectRatio).toBe("16 / 9");
+    expect(preview).toHaveClass("h-[clamp(220px,40vh,400px)]");
+    expect(preview.closest("[data-timeline-panel]")).toHaveClass(
+      "max-h-[66vh]",
+    );
+    expect(preview.querySelector("video")).toHaveClass("object-contain");
     expect(preview.querySelector("video")).toHaveAttribute(
       "src",
-      "/api/creator/media/artifacts/final-v1",
+      "/api/qwenpaw-creator/media/artifacts/final-v1",
     );
     expect(screen.queryByText("Timeline 组合预览")).not.toBeInTheDocument();
   });
 
-  it("uses the main Agent for Timeline and Element actions instead of posting a legacy command", () => {
+  it("projects the Element box from its anchor coordinates", () => {
+    const { container } = renderPage("/project/p1/plan?element=overlay-os");
+    const box = container.querySelector(
+      "[data-element-location-box]",
+    ) as HTMLElement;
+
+    expect(box.style.left).toBe("51%");
+    expect(box.style.top).toBe("61%");
+    expect(box.style.width).toBe("42%");
+    expect(box.style.height).toBe("18%");
+    expect(screen.getByText("水平位置（%）")).toBeInTheDocument();
+    expect(screen.getByText("垂直位置（%）")).toBeInTheDocument();
+  });
+
+  it("keeps Agent planning at Timeline level without exposing an Element Agent shortcut", () => {
     const { calls } = installMockFetch([]);
     renderPage("/project/p1/plan?element=r2v-window");
 
@@ -240,14 +269,29 @@ describe("PlanPage Timeline/Element frontend", () => {
       "timeline:timeline:main",
     );
     expect(useAgentDockUiStore.getState().draft).toContain(
-      "用带时间范围、位置、层级和产生方式的 Element",
+      "时间范围、画面位置、叠放关系和制作方式",
     );
-    fireEvent.click(screen.getByRole("button", { name: "在 Agent 中修改" }));
-    expect(useCreatorInteractionStore.getState().selectedRef).toBe(
-      "element:r2v-window",
-    );
-    expect(useAgentDockUiStore.getState().draft).toContain("午饭名场面");
+    expect(
+      screen.queryByRole("button", { name: "在 Agent 中修改" }),
+    ).not.toBeInTheDocument();
     expect(calls.some((call) => call.url.includes("/commands"))).toBe(false);
+  });
+
+  it("places deletion in the detail header instead of the content footer", () => {
+    const { container } = renderPage("/project/p1/plan?element=overlay-os");
+
+    const actions = container.querySelector(
+      "[data-element-detail-header-actions]",
+    );
+    expect(actions).toContainElement(
+      screen.getByRole("button", { name: "删除当前内容" }),
+    );
+    expect(actions).toContainElement(
+      screen.getByRole("button", { name: "关闭内容详情" }),
+    );
+    expect(
+      container.querySelector("[data-element-detail] footer"),
+    ).not.toBeInTheDocument();
   });
 
   it("commits detail edits through the schema-v2 Project CAS Patch endpoint", async () => {

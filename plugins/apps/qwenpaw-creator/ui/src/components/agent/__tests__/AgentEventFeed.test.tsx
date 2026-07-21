@@ -37,10 +37,10 @@ describe("AgentEventFeed", () => {
     render(<AgentEventFeed />);
     expect(screen.getByText("端到端生产")).toBeInTheDocument();
     expect(
-      screen.getByText(/R2V 生成导演 · element:r2v-1 · WAITING_RUNTIME/),
+      screen.getByText(/R2V 生成导演 · 时间线内容 · 等待制作结果/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/故事规划 · timeline:main · RUNNING_MODEL/),
+      screen.getByText(/故事规划 · 主时间轴 · 正在构思/),
     ).toBeInTheDocument();
     expect(screen.getByText("后台等待中")).toBeInTheDocument();
     expect(screen.queryByText("继续轮询")).not.toBeInTheDocument();
@@ -342,10 +342,10 @@ describe("AgentEventFeed", () => {
     render(<AgentEventFeed />);
 
     expect(
-      screen.getByText(/故事规划 · project:plan · 已被替换/),
+      screen.getByText(/故事规划 · 视频方案 · 已被新版本替换/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/R2V 生成导演 · element:cancelled · 已取消/),
+      screen.getByText(/R2V 生成导演 · 时间线内容 · 已取消/),
     ).toBeInTheDocument();
     expect(
       screen.queryByText(/个 Timeline\/Element 任务失败/),
@@ -419,11 +419,9 @@ describe("AgentEventFeed", () => {
 
     render(<AgentEventFeed />);
 
-    expect(
-      screen.getByText("2 个 Timeline/Element 任务失败"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("timeline:main：剪辑失败")).toBeInTheDocument();
-    expect(screen.getByText("element:r2v-2：BLOCKED")).toBeInTheDocument();
+    expect(screen.getByText("2 项专业制作失败")).toBeInTheDocument();
+    expect(screen.getByText("主时间轴：剪辑失败")).toBeInTheDocument();
+    expect(screen.getByText("时间线内容：需要处理")).toBeInTheDocument();
     expect(
       screen.queryByText(/artifact:preview：剪辑失败/),
     ).not.toBeInTheDocument();

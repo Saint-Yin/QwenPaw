@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, message } from "antd";
-import { Film, Plus, Scissors, Sparkles } from "lucide-react";
+import { Plus, Scissors, Sparkles } from "lucide-react";
 import { navigate, useParams, useSearchParams } from "@/routing/navigation";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
@@ -116,7 +116,7 @@ export default function PlanPage() {
   if (!timeline) {
     return (
       <PageLoadError
-        message="Project 中没有可用的 Timeline"
+        message="视频方案中没有可用的时间轴"
         retry={() => void pollOnce(id)}
       />
     );
@@ -139,7 +139,7 @@ export default function PlanPage() {
       },
     ]);
     navigate(base);
-    message.success("Element 已删除");
+    message.success("时间线内容已删除");
   };
   const openElementAgent = (
     element: TimelineElementDocument,
@@ -148,15 +148,12 @@ export default function PlanPage() {
     focusAgent(
       `element:${element.element_id}`,
       instruction ||
-        `请修改 Element「${
-          element.label || element.element_id
+        `请修改时间线内容「${
+          element.label || "当前内容"
         }」，先读取现有内容并说明计划。`,
     );
   };
   const timelineTargetRef = `timeline:${timeline.timeline_id}`;
-  const activeTask = tasks.find(
-    (task) => task.status === "RUNNING" || task.status === "QUEUED",
-  );
 
   return (
     <div
@@ -170,8 +167,7 @@ export default function PlanPage() {
             视频方案
           </h2>
           <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">
-            整支片子由时间线上的 Element
-            组成——可重叠、独立创作，并在同一成片中合成。
+            画面、剪辑、字幕动效和声音都直接排列在同一时间轴上，可在同一时刻叠加呈现。
           </p>
           {(project.strategy.creative_brief ||
             project.strategy.creative_direction) && (
@@ -203,7 +199,7 @@ export default function PlanPage() {
             {project.settings.aspect_ratio}
           </span>
           <span className="rounded-full border border-[var(--color-border)] bg-white px-2.5 py-1 text-[11px] font-semibold text-[var(--color-text-secondary)]">
-            {Object.keys(timeline.elements_by_id).length} Elements
+            {Object.keys(timeline.elements_by_id).length} 项内容
           </span>
           <Button
             size="small"
@@ -211,11 +207,11 @@ export default function PlanPage() {
             onClick={() =>
               focusAgent(
                 timelineTargetRef,
-                "请在当前 Timeline 中添加新的 Element。先根据项目目标判断类型、时间位置和持续时长，再写入 Project。",
+                "请在当前时间轴中添加新的内容。先根据项目目标判断内容类型、时间位置和持续时长，再更新视频方案。",
               )
             }
           >
-            添加 Element
+            添加内容
           </Button>
           <Button
             size="small"
@@ -223,11 +219,11 @@ export default function PlanPage() {
             onClick={() =>
               focusAgent(
                 timelineTargetRef,
-                "请检查当前 Timeline 的所有 Element 和产物状态，满足条件后渲染最终成片。",
+                "请检查当前时间轴中的全部内容和制作结果，满足条件后渲染最终成片。",
               )
             }
           >
-            渲染 Timeline
+            生成成片
           </Button>
           <Button
             size="small"
@@ -236,7 +232,7 @@ export default function PlanPage() {
             onClick={() =>
               focusAgent(
                 timelineTargetRef,
-                "请根据当前项目目标规划并完善整条 Timeline。用带时间范围、位置、层级和产生方式的 Element 表达全部内容。",
+                "请根据当前项目目标规划并完善整条时间轴，用清晰的时间范围、画面位置、叠放关系和制作方式表达全部内容。",
               )
             }
           >
@@ -245,18 +241,6 @@ export default function PlanPage() {
         </div>
       </header>
 
-      {activeTask && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-accent)]/25 bg-[var(--color-accent-soft)] px-5 py-2 text-xs text-[var(--color-accent)]">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
-          <b>{activeTask.kind}</b>
-          <span className="min-w-0 flex-1 truncate text-[var(--color-text-secondary)]">
-            {activeTask.targetRef}
-          </span>
-          <span>
-            {activeTask.status === "RUNNING" ? "处理中…" : "等待执行"}
-          </span>
-        </div>
-      )}
       {syncStatus === "degraded" && (
         <div className="shrink-0 border-b border-[var(--color-warning)]/20 bg-[var(--color-warning-soft)] px-5 py-1.5 text-[11px] text-[var(--color-warning)]">
           当前显示最后一次可用快照；后台同步暂时异常。
@@ -304,14 +288,6 @@ export default function PlanPage() {
           onAgent={openElementAgent}
         />
       </main>
-      {Object.keys(timeline.elements_by_id).length === 0 && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-8 flex justify-center">
-          <div className="flex items-center gap-2 rounded-full border border-[var(--color-border)] bg-white/92 px-4 py-2 text-xs text-[var(--color-text-secondary)] shadow-lg backdrop-blur">
-            <Film className="h-3.5 w-3.5 text-[var(--color-accent)]" />从
-            AgentDock 描述第一组画面，Agent 会直接创建 Element
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -103,6 +103,11 @@ def test_creator_owns_timeline_element_planning() -> None:
     ):
         assert responsibility in prompt
     assert "结构完成后才进入视觉和媒体生产" in prompt
+    assert "完整 Project 根对象" in prompt
+    assert "jsonArgs" in prompt
+    assert "content_type=pet_video" in prompt
+    assert "overlay_kind=pet_os" in prompt
+    assert "x=0.5, y=0.5" in prompt
 
 
 def test_source_prompt_bounds_transient_analysis_retry() -> None:
@@ -122,3 +127,8 @@ def test_ai_editing_director_requires_pet_inner_monologue_not_action_labels() ->
     assert "不是镜头标题、动作标签或客观摘要" in prompt
     assert "不再使用相对某个内部对象" in prompt
     assert "多个选择就是多个 Element" in prompt
+    assert (
+        "round((source_out_tick - source_in_tick) / playback_rate)" in prompt
+    )
+    assert "jsonArgs.elements" in prompt
+    assert "不是可选项" in prompt

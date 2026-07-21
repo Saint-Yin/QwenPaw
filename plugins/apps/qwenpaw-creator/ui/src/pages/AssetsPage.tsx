@@ -353,8 +353,7 @@ export default function AssetsPage() {
             素材与产物
           </h2>
           <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">
-            Project 中的来源版本、生成产物与视觉设定；Element 只通过稳定 ID
-            引用它们。
+            当前项目中的来源素材、生成结果与视觉设定；时间线内容会引用这里的具体版本。
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -486,7 +485,7 @@ export default function AssetsPage() {
                 当前筛选下没有素材
               </p>
               <p className="mt-1 text-xs">
-                上传来源素材，或让 Agent 根据 Timeline 生成产物。
+                上传来源素材，或让 Agent 根据时间轴生成画面与成片。
               </p>
             </div>
           )}

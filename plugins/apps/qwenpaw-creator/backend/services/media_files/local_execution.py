@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
-# pylint: disable=consider-using-with,raise-missing-from,too-many-branches,unused-argument
-# pylint: disable=too-many-statements
+# pylint: disable=consider-using-with,raise-missing-from,too-many-branches
+# pylint: disable=too-many-statements,unused-argument
 """File-native local video execution for edit and composition commands.
 
 The service freezes one ``project.json`` snapshot, resolves every input through
@@ -132,6 +132,7 @@ class LocalMediaInput:
     end_seconds: float | None = None
     duration_seconds: float | None = None
     original_sound: str = "preserve"
+    location: Mapping[str, Any] | None = None
     overlay: Mapping[str, Any] | None = None
 
 
@@ -146,6 +147,7 @@ class LocalMediaExecutionSpec:
     transitions: tuple[dict[str, Any], ...]
     audio_plan: Mapping[str, Any] | str
     expected_duration_seconds: float | None
+    canvas_size: tuple[int, int]
     on_element_done: Callable[[int, int], None] | None = None
 
 
@@ -199,7 +201,9 @@ class FfmpegLocalMediaRunner:
         concat_inputs: list[Path] = []
         overlay_warnings: list[str] = []
         if spec.command is CreatorCommandType.EXECUTE_EDIT or any(
-            item.start_seconds is not None or item.overlay is not None
+            item.start_seconds is not None
+            or item.location is not None
+            or item.overlay is not None
             for item in spec.inputs
         ):
             segment_dir = _ensure_real_directory_chain(
@@ -215,22 +219,28 @@ class FfmpegLocalMediaRunner:
                             "Edit Element 缺少可执行 source range",
                         )
                     end_seconds = start_seconds + item.duration_seconds
+                segment_duration = end_seconds - start_seconds
                 segment = segment_dir / f"{index:06d}.mp4"
+                placement_filter = self._placement_filter(
+                    item.location,
+                    canvas_size=spec.canvas_size,
+                    duration_seconds=segment_duration,
+                )
                 self._run(
                     [
                         "-y",
                         "-ss",
                         f"{start_seconds:.6f}",
                         "-t",
-                        f"{end_seconds - start_seconds:.6f}",
+                        f"{segment_duration:.6f}",
                         "-i",
                         os.fspath(item.path),
+                        "-filter_complex",
+                        placement_filter,
                         "-map",
-                        "0:v:0",
+                        "[outv]",
                         "-map",
                         "0:a?",
-                        "-vf",
-                        "scale=trunc(iw/2)*2:trunc(ih/2)*2",
                         "-c:v",
                         "libx264",
                         "-preset",
@@ -258,6 +268,95 @@ class FfmpegLocalMediaRunner:
         self._concat(concat_inputs, spec.output_path, work_dir=spec.work_dir)
         return overlay_warnings
 
+    @staticmethod
+    def _normalized_location(
+        raw: Mapping[str, Any] | None,
+    ) -> dict[str, float]:
+        defaults = {
+            "x": 0.5,
+            "y": 0.5,
+            "width": 1.0,
+            "height": 1.0,
+            "anchor_x": 0.5,
+            "anchor_y": 0.5,
+            "rotation_degrees": 0.0,
+            "opacity": 1.0,
+        }
+        if not isinstance(raw, Mapping):
+            return defaults
+        normalized = dict(defaults)
+        for key, fallback in defaults.items():
+            try:
+                value = float(raw.get(key, fallback))
+            except (TypeError, ValueError):
+                value = fallback
+            normalized[key] = value if math.isfinite(value) else fallback
+        normalized["width"] = max(1e-6, normalized["width"])
+        normalized["height"] = max(1e-6, normalized["height"])
+        normalized["anchor_x"] = min(1.0, max(0.0, normalized["anchor_x"]))
+        normalized["anchor_y"] = min(1.0, max(0.0, normalized["anchor_y"]))
+        normalized["opacity"] = min(1.0, max(0.0, normalized["opacity"]))
+        return normalized
+
+    @classmethod
+    def _placement_filter(
+        cls,
+        raw: Mapping[str, Any] | None,
+        *,
+        canvas_size: tuple[int, int],
+        duration_seconds: float,
+    ) -> str:
+        """Build one anchor-based placement graph shared with the UI preview."""
+
+        location = cls._normalized_location(raw)
+        canvas_width, canvas_height = canvas_size
+        box_width = max(2, round(canvas_width * location["width"]) // 2 * 2)
+        box_height = max(2, round(canvas_height * location["height"]) // 2 * 2)
+        anchor_x = round(box_width * location["anchor_x"])
+        anchor_y = round(box_height * location["anchor_y"])
+        padded_width = max(2, 2 * max(anchor_x, box_width - anchor_x))
+        padded_height = max(2, 2 * max(anchor_y, box_height - anchor_y))
+        pad_x = padded_width // 2 - anchor_x
+        pad_y = padded_height // 2 - anchor_y
+        radians = math.radians(location["rotation_degrees"])
+        rotated_width = max(
+            2,
+            (
+                math.ceil(
+                    abs(padded_width * math.cos(radians))
+                    + abs(padded_height * math.sin(radians)),
+                )
+                + 1
+            )
+            // 2
+            * 2,
+        )
+        rotated_height = max(
+            2,
+            (
+                math.ceil(
+                    abs(padded_width * math.sin(radians))
+                    + abs(padded_height * math.cos(radians)),
+                )
+                + 1
+            )
+            // 2
+            * 2,
+        )
+        overlay_x = round(location["x"] * canvas_width - rotated_width / 2)
+        overlay_y = round(location["y"] * canvas_height - rotated_height / 2)
+        return (
+            f"[0:v]scale={box_width}:{box_height}:force_original_aspect_ratio=increase,"
+            f"crop={box_width}:{box_height},setsar=1,format=rgba,"
+            f"colorchannelmixer=aa={location['opacity']:.6f},"
+            f"pad={padded_width}:{padded_height}:{pad_x}:{pad_y}:color=0x00000000,"
+            f"rotate={location['rotation_degrees']:.6f}*PI/180:"
+            f"ow={rotated_width}:oh={rotated_height}:c=none[fg];"
+            f"color=c=black:s={canvas_width}x{canvas_height}:r=30:"
+            f"d={duration_seconds:.6f}[bg];"
+            f"[bg][fg]overlay={overlay_x}:{overlay_y}:shortest=1,format=yuv420p[outv]"
+        )
+
     def _apply_overlay(
         self,
         item: LocalMediaInput,
@@ -278,6 +377,7 @@ class FfmpegLocalMediaRunner:
                 video_size=video_size,
                 appear_at=overlay["appear_at"],
                 duration=overlay["duration"],
+                location=overlay.get("location"),
             )
         else:
             result = render_interview_summary_overlay(
@@ -288,6 +388,7 @@ class FfmpegLocalMediaRunner:
                 video_size=video_size,
                 appear_at=overlay["appear_at"],
                 duration=overlay["duration"],
+                location=overlay.get("location"),
             )
         if not result.success:
             rendered.unlink(missing_ok=True)
@@ -334,6 +435,11 @@ class FfmpegLocalMediaRunner:
             "vibe": vibe if vibe in PET_OS_VIBES else "chill",
             "appear_at": appear_at,
             "duration": duration,
+            "location": (
+                dict(raw["location"])
+                if isinstance(raw.get("location"), Mapping)
+                else None
+            ),
         }
 
     def _probe_video_size(self, path: Path) -> tuple[int, int]:
@@ -509,6 +615,7 @@ class _FrozenInput:
     end_seconds: float | None = None
     duration_seconds: float | None = None
     original_sound: str = "preserve"
+    location: Mapping[str, Any] | None = None
     overlay: Mapping[str, Any] | None = None
 
 
@@ -521,6 +628,7 @@ class _ResolvedExecution:
     transitions: tuple[dict[str, Any], ...]
     audio_plan: Mapping[str, Any] | str
     expected_duration_seconds: float | None
+    canvas_size: tuple[int, int]
     slot_id: str
     slot_kind: str
     owner_ref: str
@@ -546,6 +654,26 @@ def _target_id(target_ref: str, prefix: str) -> str:
     if not target_ref.startswith(expected) or not target_ref[len(expected) :]:
         raise ValidationError(f"targetRef 必须是 {expected}<id>")
     return target_ref[len(expected) :]
+
+
+def _canvas_size(aspect_ratio: str, resolution: str) -> tuple[int, int]:
+    """Resolve Project display settings to one even-pixel render canvas."""
+
+    try:
+        width_part, height_part = aspect_ratio.split(":", 1)
+        ratio = float(width_part) / float(height_part)
+        if not math.isfinite(ratio) or ratio <= 0:
+            raise ValueError
+    except (AttributeError, TypeError, ValueError, ZeroDivisionError):
+        ratio = 16 / 9
+    base = 1080 if "1080" in str(resolution).casefold() else 720
+    if ratio >= 1:
+        height = base
+        width = round(height * ratio)
+    else:
+        width = base
+        height = round(width / ratio)
+    return (max(2, width // 2 * 2), max(2, height // 2 * 2))
 
 
 def _ffconcat_path(path: Path) -> str:
@@ -708,6 +836,11 @@ def _edit_overlay(
         "kind": overlay.creation.overlay_kind,
         "text": overlay.creation.text,
         "vibe": overlay.creation.vibe,
+        "location": (
+            overlay.location.model_dump(mode="json")
+            if overlay.location is not None
+            else None
+        ),
         "appear_at": (intersection_start - element.span.start_tick)
         / timeline.ticks_per_second,
         "duration": (intersection_end - intersection_start)
@@ -789,6 +922,11 @@ def _timeline_execution(
                     if isinstance(element.creation, EditCreation)
                     else "preserve"
                 ),
+                location=(
+                    element.location.model_dump(mode="json")
+                    if element.location is not None
+                    else None
+                ),
                 overlay=(
                     _edit_overlay(timeline, element)
                     if isinstance(element.creation, EditCreation)
@@ -859,6 +997,10 @@ def _timeline_execution(
         transitions=transitions,
         audio_plan="",
         expected_duration_seconds=duration,
+        canvas_size=_canvas_size(
+            project.settings.aspect_ratio,
+            project.settings.resolution,
+        ),
         slot_id=f"timeline:{timeline.timeline_id}:render",
         slot_kind="final_video",
         owner_ref=f"timeline:{timeline.timeline_id}",
@@ -929,12 +1071,14 @@ def _resolved_fingerprint(
                     "start": item.start_seconds,
                     "end": item.end_seconds,
                     "originalSound": item.original_sound,
+                    "location": item.location,
                     "overlay": item.overlay,
                 }
                 for item in resolved.inputs
             ],
             "transitions": list(resolved.transitions),
             "audioPlan": resolved.audio_plan,
+            "canvasSize": list(resolved.canvas_size),
             "inputGeneration": generation,
             "inputEtag": etag,
         },
@@ -1513,6 +1657,7 @@ class FileLocalMediaExecutionService:
                     end_seconds=frozen.end_seconds,
                     duration_seconds=frozen.duration_seconds,
                     original_sound=frozen.original_sound,
+                    location=frozen.location,
                     overlay=frozen.overlay,
                 ),
             )
@@ -1546,6 +1691,7 @@ class FileLocalMediaExecutionService:
             transitions=resolved.transitions,
             audio_plan=resolved.audio_plan,
             expected_duration_seconds=resolved.expected_duration_seconds,
+            canvas_size=resolved.canvas_size,
             on_element_done=(
                 on_element_done
                 if resolved.command is CreatorCommandType.EXECUTE_EDIT
@@ -1568,11 +1714,13 @@ class FileLocalMediaExecutionService:
                         "start": item.start_seconds,
                         "end": item.end_seconds,
                         "originalSound": item.original_sound,
+                        "location": item.location,
                         "overlay": item.overlay,
                     }
                     for item in local_inputs
                 ],
                 "outputPath": output_path.relative_to(project_root).as_posix(),
+                "canvasSize": list(resolved.canvas_size),
             },
         )
         return spec

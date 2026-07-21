@@ -41,7 +41,7 @@ FILE_AGENT_PROMPT_SPECS = {
         _spec(
             "creator_agent.system",
             "creator_agent.system.txt",
-            "4e4d8fdb9bd1f200d03ccabf70fd625f15d9dc333114657d77f410b9238e303c",
+            "31dbd75eaed15a1f9738ca6135e526449aa5abcef7e909a1c5810cd2a6d8ec24",
             "project_id",
             "workspace_schema",
         ),
@@ -69,7 +69,7 @@ FILE_AGENT_PROMPT_SPECS = {
         _spec(
             "ai_editing_director.system",
             "ai_editing_director.system.txt",
-            "f03eb3572c92b3589f1232b1956de1253705c63a577f436dc1f19c02b7d16f3e",
+            "3aa71d53741ce488906cc06781baba62a81bb511d9008dcbf5042bd165623b79",
             "project_id",
             "workspace_schema",
             "content_type",

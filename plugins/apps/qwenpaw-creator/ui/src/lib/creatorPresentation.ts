@@ -1,0 +1,157 @@
+import type {
+  ProjectDocument,
+  SpecialistRunStatus,
+  TaskStatus,
+  TaskView,
+} from "@/contracts/creator";
+
+const TASK_KIND_LABELS: Record<TaskView["kind"], string> = {
+  asset_ingest: "素材入库",
+  asset_import: "素材导入",
+  source_intelligence: "素材理解",
+  image_generation: "画面生成",
+  r2v_generation: "视频生成",
+  ai_edit_plan: "剪辑规划",
+  ai_edit_execute: "剪辑合成",
+  compose: "成片合成",
+};
+
+export function taskKindLabel(kind: string): string {
+  return TASK_KIND_LABELS[kind as TaskView["kind"]] ?? "视频制作";
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  IDLE: "待命",
+  QUEUED: "等待中",
+  QUEUED_CAPACITY: "排队等待资源",
+  RUNNING: "处理中",
+  RUNNING_MODEL: "正在构思",
+  WAITING_RUNTIME: "等待制作结果",
+  WAITING_AUTHORIZATION: "等待确认",
+  WAITING_USER_INPUT: "等待补充信息",
+  WAITING_EXECUTION_AUTH: "等待执行确认",
+  PENDING_REVIEW: "等待审阅",
+  RESUMING: "继续处理中",
+  INTERRUPT_REQUESTED: "正在停止",
+  SUCCEEDED: "已完成",
+  BLOCKED: "需要处理",
+  FAILED: "失败",
+  STALE: "已被新版本替换",
+  CANCELLED: "已取消",
+  QUARANTINED: "需要复核",
+  ERROR: "发生错误",
+};
+
+export function creatorStatusLabel(
+  status: SpecialistRunStatus | TaskStatus | string | null | undefined,
+): string {
+  return status ? STATUS_LABELS[status] ?? "处理中" : "—";
+}
+
+function elementName(
+  project: ProjectDocument | null | undefined,
+  elementId: string,
+): string | null {
+  if (!project) return null;
+  for (const timeline of Object.values(project.timelines.items)) {
+    const element = timeline.elements_by_id[elementId];
+    if (element) return element.label || "时间线内容";
+  }
+  return null;
+}
+
+export function creatorTargetLabel(
+  ref: string,
+  project?: ProjectDocument | null,
+): string {
+  if (!ref || ref === "project") return "当前项目";
+  if (ref === "project:assets") return "素材与生成结果";
+  if (ref === "project:plan") return "视频方案";
+  if (ref.startsWith("element:"))
+    return elementName(project, ref.slice("element:".length)) ?? "时间线内容";
+  if (ref.startsWith("timeline:")) return "主时间轴";
+  if (ref.startsWith("source:")) {
+    const sourceId = ref.slice("source:".length);
+    return project?.sources.sources.items[sourceId]?.display_name || "当前素材";
+  }
+  if (ref.startsWith("asset:")) {
+    const logicalAssetId = ref.slice("asset:".length);
+    return (
+      Object.values(project?.assets.source_versions_by_id ?? {}).find(
+        (version) => version.logical_asset_id === logicalAssetId,
+      )?.name || "当前素材"
+    );
+  }
+  if (ref.startsWith("asset-version:")) {
+    return (
+      project?.assets.source_versions_by_id[ref.slice("asset-version:".length)]
+        ?.name || "素材版本"
+    );
+  }
+  if (ref.startsWith("artifact-version:")) {
+    return (
+      project?.assets.artifact_versions_by_id[
+        ref.slice("artifact-version:".length)
+      ]?.name || "生成结果"
+    );
+  }
+  if (ref.startsWith("file:")) return "素材文件";
+  if (ref.startsWith("artifact:")) return "生成结果";
+  return "当前项目";
+}
+
+export function creatorToolLabel(name: string): string {
+  const labels: Record<string, string> = {
+    read_project: "查看视频方案",
+    read_project_file: "读取素材分析",
+    jq_project: "更新视频方案",
+    elements_at: "查看当前时间点",
+    delegate_to_agent: "安排专业制作",
+    analyze_source_media: "理解素材",
+    source_intelligence: "理解素材",
+    ai_edit: "执行剪辑",
+    r2v_generation: "生成视频",
+    image_generation: "生成画面",
+  };
+  return labels[name] ?? "制作工具";
+}
+
+export function creatorRoleLabel(name: string): string {
+  const labels: Record<string, string> = {
+    source_intelligence_agent: "素材理解",
+    visual_development_agent: "视觉开发",
+    v_generation_director: "视频生成",
+    ai_editing_director: "剪辑导演",
+  };
+  return labels[name] ?? (name || "专业制作");
+}
+
+export function creatorEventLabel(type: string): string {
+  const labels: Record<string, string> = {
+    "workspace.project_committed": "视频方案已更新",
+    "workspace.project_changed": "视频方案已更新",
+    "review.created": "已生成待审改动",
+    "review.applied": "改动已应用",
+    "review.resolved": "审阅已完成",
+    "task.queued": "制作任务已排队",
+    "task.started": "制作任务已开始",
+    "task.completed": "制作任务已完成",
+    "task.failed": "制作任务失败",
+  };
+  if (labels[type]) return labels[type];
+  if (type.startsWith("workspace.")) return "视频方案已更新";
+  if (type.startsWith("review.")) return "审阅状态已更新";
+  if (type.startsWith("task.")) return "制作状态已更新";
+  return "项目动态";
+}
+
+export function outputLabel(name: string): string {
+  const labels: Record<string, string> = {
+    storyboard: "分镜图",
+    main: "主画面",
+    overlay: "字幕与动效",
+    render: "成片",
+    audio: "音频",
+  };
+  return labels[name] ?? "生成结果";
+}

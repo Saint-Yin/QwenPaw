@@ -99,10 +99,7 @@ export default function TimelineCanvas({
   const renderUrl = renderedVersion
     ? getArtifactVersionMediaUrl(renderedVersion.version_id)
     : null;
-  const visibleLanes = collapsed
-    ? [{ id: "ALL", elements: Object.values(timeline.elements_by_id) }]
-    : lanes;
-  const scrollable = visibleLanes.length > 4;
+  const scrollable = lanes.length > 4;
   const timelineDuration = Math.max(1, durationTick);
 
   const tickAt = (clientX: number): number => {
@@ -188,8 +185,8 @@ export default function TimelineCanvas({
     const attachment = {
       kind: isPoint ? ("timeline_point" as const) : ("timeline_range" as const),
       text: isPoint
-        ? `${startText}s · ${selectedElements.length} 个活跃 Element`
-        : `${startText}s – ${endText}s · ${selectedElements.length} 个 Element`,
+        ? `${startText}s · ${selectedElements.length} 项同时出现的内容`
+        : `${startText}s – ${endText}s · ${selectedElements.length} 项时间线内容`,
       ref: timelineRef(timeline),
       field: isPoint
         ? `${timelineRef(timeline)}@${selection.startTick}`
@@ -247,17 +244,16 @@ export default function TimelineCanvas({
   return (
     <section
       data-timeline-panel
-      className="mx-4 mt-3 shrink-0 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] shadow-sm"
+      className={`mx-4 mt-3 shrink-0 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] shadow-sm ${
+        previewOpen ? "flex max-h-[66vh] flex-col" : ""
+      }`}
     >
       <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] px-3 py-1.5 text-[11px] text-[var(--color-text-tertiary)]">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <b className="text-[var(--color-text-primary)]">时间轴</b>
-          <span>{timeline.timeline_id}</span>
-          <span>·</span>
-          <span>{timeline.ticks_per_second} tick/s</span>
           <span className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 font-semibold text-[var(--color-accent)]">
             {seconds(playheadTick, timeline.ticks_per_second)}s ·{" "}
-            {active.length} 个活跃 Element
+            {active.length} 项同时出现
           </span>
           <span
             className={`rounded-full bg-[var(--color-bg-secondary)] px-2 py-0.5 ${
@@ -308,7 +304,7 @@ export default function TimelineCanvas({
             }}
             className="rounded-md border border-[var(--color-border)] px-2 py-1 font-semibold text-[var(--color-text-secondary)]"
           >
-            {collapsed ? "展开" : "折叠"}
+            {collapsed ? "展开时间轴" : "收起时间轴"}
           </button>
         </div>
       </div>
@@ -316,10 +312,7 @@ export default function TimelineCanvas({
       {previewOpen && (
         <div
           data-timeline-video-preview
-          className="relative flex min-h-[380px] w-full items-center justify-center overflow-hidden bg-[#12100f]"
-          style={{
-            aspectRatio: project.settings.aspect_ratio.replace(":", " / "),
-          }}
+          className="relative flex h-[clamp(220px,40vh,400px)] min-h-0 w-full shrink items-center justify-center overflow-hidden bg-[#12100f]"
         >
           {renderUrl ? (
             <video
@@ -345,7 +338,7 @@ export default function TimelineCanvas({
             />
           ) : (
             <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_center,#28221e_0,#151210_64%,#0d0b0a_100%)] text-center text-sm text-white/58">
-              <span>尚无 Timeline 成片</span>
+              <span>暂无成片预览</span>
             </div>
           )}
           <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 bg-gradient-to-b from-transparent to-black/80 px-4 pb-3 pt-12">
@@ -398,39 +391,12 @@ export default function TimelineCanvas({
         </div>
       )}
 
-      {collapsed && pointCandidates.length > 0 && (
-        <div
-          data-timeline-point-candidates
-          className="flex flex-wrap items-center gap-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)]/70 px-3 py-2 text-[11px]"
-        >
-          <span className="mr-1 text-[var(--color-text-tertiary)]">
-            该时刻 {pointCandidates.length} 个 Element：
-          </span>
-          {pointCandidates.map((element) => {
-            const meta = ELEMENT_TYPE_META[element.creation.type];
-            return (
-              <button
-                key={element.element_id}
-                type="button"
-                onClick={() => onSelectElement(element.element_id)}
-                className={`rounded-full border px-2 py-0.5 font-medium ${
-                  selectedElementId === element.element_id
-                    ? "border-[var(--color-accent)] text-[var(--color-accent)]"
-                    : "border-[var(--color-border)] text-[var(--color-text-secondary)]"
-                }`}
-                style={{ background: meta.soft }}
-              >
-                {element.label || element.element_id}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
       <div
         ref={chartRef}
         data-timeline-chart
-        className="relative cursor-crosshair select-none px-3 pb-2"
+        className={`relative shrink-0 cursor-crosshair select-none px-3 pb-2 ${
+          previewOpen ? "max-h-[190px] overflow-hidden" : ""
+        }`}
         onPointerDown={beginSelection}
         onPointerMove={moveSelection}
         onPointerUp={endSelection}
@@ -449,82 +415,119 @@ export default function TimelineCanvas({
             </span>
           ))}
         </div>
-        <div
-          className={
-            scrollable
-              ? "max-h-[216px] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
-              : ""
-          }
-        >
-          {visibleLanes.length === 0 ? (
-            <div className="flex h-14 items-center justify-center text-xs text-[var(--color-text-tertiary)]">
-              时间轴尚无 Element
+        {collapsed ? (
+          <div className="relative flex h-8 border-b border-[var(--color-border)]/65">
+            <div className="flex w-[68px] shrink-0 items-center justify-center text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+              概览
             </div>
-          ) : (
-            visibleLanes.map((lane) => (
-              <div
-                key={lane.id}
-                className="relative flex h-[54px] border-b border-[var(--color-border)]/65 last:border-b-0"
-              >
-                <div className="flex w-[68px] shrink-0 items-center justify-center text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-                  {collapsed ? "全部" : lane.id}
-                </div>
-                <div className="relative min-w-0 flex-1">
-                  {lane.elements.map((element) => {
-                    const meta = ELEMENT_TYPE_META[element.creation.type];
-                    const left = percent(
-                      element.span.start_tick,
-                      timelineDuration,
-                    );
-                    const width = Math.max(
-                      0.7,
-                      (element.span.duration_tick / timelineDuration) * 100,
-                    );
-                    const selected = element.element_id === selectedElementId;
-                    return (
-                      <button
-                        key={element.element_id}
-                        type="button"
-                        data-element-block={element.element_id}
-                        title={`${
-                          element.label || element.element_id
-                        } · ${seconds(
-                          element.span.start_tick,
-                          timeline.ticks_per_second,
-                        )}s – ${seconds(
-                          element.span.start_tick + element.span.duration_tick,
-                          timeline.ticks_per_second,
-                        )}s`}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onSelectElement(element.element_id);
-                        }}
-                        className={`absolute top-1.5 flex h-[42px] min-w-3 items-center overflow-hidden rounded-lg border px-2 text-left text-[11px] font-semibold shadow-sm transition ${
-                          selected
-                            ? "z-20 border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/20"
-                            : "z-10"
-                        } ${element.enabled ? "" : "opacity-45"}`}
-                        style={{
-                          left: `${left}%`,
-                          width: `${Math.min(100 - left, width)}%`,
-                          color: meta.color,
-                          borderColor: selected ? undefined : `${meta.color}80`,
-                          background: meta.soft,
-                          pointerEvents: collapsed ? "none" : "auto",
-                        }}
-                      >
-                        <span className="min-w-0 truncate">
-                          {element.label || element.element_id}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
+            <div
+              className="relative min-w-0 flex-1"
+              aria-label="紧凑时间轴概览；点击任意时刻查看同时出现的内容"
+            >
+              {Object.values(timeline.elements_by_id).map((element) => {
+                const meta = ELEMENT_TYPE_META[element.creation.type];
+                const left = percent(element.span.start_tick, timelineDuration);
+                const width = Math.max(
+                  0.7,
+                  (element.span.duration_tick / timelineDuration) * 100,
+                );
+                return (
+                  <i
+                    key={element.element_id}
+                    aria-hidden
+                    className={`pointer-events-none absolute inset-y-2 rounded-sm ${
+                      element.enabled ? "opacity-55" : "opacity-20"
+                    }`}
+                    style={{
+                      left: `${left}%`,
+                      width: `${Math.min(100 - left, width)}%`,
+                      background: meta.color,
+                    }}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div
+            className={
+              scrollable
+                ? `${
+                    previewOpen ? "max-h-[108px]" : "max-h-[216px]"
+                  } overflow-y-auto overscroll-contain [scrollbar-gutter:stable]`
+                : ""
+            }
+          >
+            {lanes.length === 0 ? (
+              <div className="flex h-14 items-center justify-center text-xs text-[var(--color-text-tertiary)]">
+                时间轴中还没有内容
               </div>
-            ))
-          )}
-        </div>
+            ) : (
+              lanes.map((lane) => (
+                <div
+                  key={lane.id}
+                  className="relative flex h-[54px] border-b border-[var(--color-border)]/65 last:border-b-0"
+                >
+                  <div className="flex w-[68px] shrink-0 items-center justify-center text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                    {lane.id}
+                  </div>
+                  <div className="relative min-w-0 flex-1">
+                    {lane.elements.map((element) => {
+                      const meta = ELEMENT_TYPE_META[element.creation.type];
+                      const left = percent(
+                        element.span.start_tick,
+                        timelineDuration,
+                      );
+                      const width = Math.max(
+                        0.7,
+                        (element.span.duration_tick / timelineDuration) * 100,
+                      );
+                      const selected = element.element_id === selectedElementId;
+                      return (
+                        <button
+                          key={element.element_id}
+                          type="button"
+                          data-element-block={element.element_id}
+                          title={`${element.label || "时间线内容"} · ${seconds(
+                            element.span.start_tick,
+                            timeline.ticks_per_second,
+                          )}s – ${seconds(
+                            element.span.start_tick +
+                              element.span.duration_tick,
+                            timeline.ticks_per_second,
+                          )}s`}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onSelectElement(element.element_id);
+                          }}
+                          className={`absolute top-1.5 flex h-[42px] min-w-3 items-center overflow-hidden rounded-lg border px-2 text-left text-[11px] font-semibold shadow-sm transition ${
+                            selected
+                              ? "z-20 border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/20"
+                              : "z-10"
+                          } ${element.enabled ? "" : "opacity-45"}`}
+                          style={{
+                            left: `${left}%`,
+                            width: `${Math.min(100 - left, width)}%`,
+                            color: meta.color,
+                            borderColor: selected
+                              ? undefined
+                              : `${meta.color}80`,
+                            background: meta.soft,
+                          }}
+                        >
+                          <span className="min-w-0 truncate">
+                            {element.label || "时间线内容"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
 
         <div
           aria-hidden
@@ -591,6 +594,35 @@ export default function TimelineCanvas({
           </>
         )}
       </div>
+
+      {collapsed && pointCandidates.length > 0 && (
+        <div
+          data-timeline-point-candidates
+          className="flex flex-nowrap items-center gap-1.5 overflow-x-auto border-t border-[var(--color-border)] bg-[var(--color-bg-secondary)]/70 px-3 py-2 text-[11px]"
+        >
+          <span className="mr-1 shrink-0 text-[var(--color-text-tertiary)]">
+            该时刻有 {pointCandidates.length} 项内容：
+          </span>
+          {pointCandidates.map((element) => {
+            const meta = ELEMENT_TYPE_META[element.creation.type];
+            return (
+              <button
+                key={element.element_id}
+                type="button"
+                onClick={() => onSelectElement(element.element_id)}
+                className={`max-w-48 shrink-0 truncate rounded-full border px-2 py-0.5 font-medium ${
+                  selectedElementId === element.element_id
+                    ? "border-[var(--color-accent)] text-[var(--color-accent)]"
+                    : "border-[var(--color-border)] text-[var(--color-text-secondary)]"
+                }`}
+                style={{ background: meta.soft }}
+              >
+                {element.label || element.element_id}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }

@@ -493,11 +493,17 @@ class TimelineSpan(StrictModel):
 
 
 class ElementLocation(StrictModel):
-    """Normalized canvas placement; values may extend beyond the canvas."""
+    """Normalized placement with ``x/y`` as the box anchor on the canvas.
+
+    ``anchor_x/anchor_y`` select which point inside the content box is placed
+    at ``x/y`` and is also the transform origin. A full-frame visual is
+    therefore ``x=0.5, y=0.5, width=1, height=1``. Values may extend beyond the
+    frame for intentional crops and motion.
+    """
 
     coordinate_space: Literal["normalized_canvas"] = "normalized_canvas"
-    x: float = 0.0
-    y: float = 0.0
+    x: float = 0.5
+    y: float = 0.5
     width: float = Field(default=1.0, gt=0)
     height: float = Field(default=1.0, gt=0)
     anchor_x: float = Field(default=0.5, ge=0, le=1)
@@ -992,7 +998,13 @@ class Project(StrictModel):
                 )
                 if rendered_duration_tick != element.span.duration_tick:
                     raise ValueError(
-                        "Edit Element span must match its selected source range",
+                        f"Edit content {element.element_id!r} duration mismatch: "
+                        f"span.duration_tick={element.span.duration_tick}, but "
+                        f"source range [{element.render_source.source_in_tick}, "
+                        f"{element.render_source.source_out_tick}) at playback_rate="
+                        f"{element.render_source.playback_rate} renders "
+                        f"{rendered_duration_tick} ticks; set duration_tick to "
+                        f"{rendered_duration_tick} or adjust the source range",
                     )
                 if creation.source_intelligence_version_id is not None:
                     intelligence = _require_key(

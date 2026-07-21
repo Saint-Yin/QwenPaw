@@ -103,6 +103,27 @@ def test_cached_base_enables_base_candidate_latest_three_way_merge(tmp_path):
     assert store.read("project-1").etag == result.etag
 
 
+def test_jq_project_rejects_a_nested_object_instead_of_opaque_protected_diff(
+    tmp_path,
+):
+    store, base = _store(tmp_path)
+    tools = _tools(store)
+    observed = tools.read_project("project-1")
+
+    with pytest.raises(
+        AgentProjectToolError,
+        match="完整 Project 根对象",
+    ) as caught:
+        tools.jq_project(
+            project_id="project-1",
+            base_etag=observed.etag,
+            program='.timelines.items["timeline:main"]',
+        )
+
+    assert "/project_id" in str(caught.value)
+    assert store.read("project-1").etag == base.etag
+
+
 def test_cached_stale_base_still_detects_same_field_cas_conflict(tmp_path):
     store, base = _store(tmp_path)
     tools = _tools(store)
@@ -205,6 +226,8 @@ def test_manifest_and_invoke_expose_only_model_owned_arguments(tmp_path):
         "jsonArgs",
     }
     assert jq_parameters["additionalProperties"] is False
+    assert "完整 Project 根对象" in schemas["jq_project"]["description"]
+    assert "jsonArgs" in schemas["jq_project"]["description"]
     elements_parameters = schemas["elements_at"]["parameters"]
     assert set(elements_parameters["properties"]) == {
         "projectId",

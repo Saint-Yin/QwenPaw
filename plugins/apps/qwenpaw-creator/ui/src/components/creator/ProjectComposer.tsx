@@ -21,6 +21,7 @@ import {
   sendCreatorMessage,
 } from "@/api/creator";
 import { taskErrorMessage } from "@/lib/taskPresentation";
+import { creatorStatusLabel } from "@/lib/creatorPresentation";
 import { useRouter } from "@/routing/navigation";
 
 const { TextArea } = Input;
@@ -90,7 +91,10 @@ async function waitForTask(
     if (terminal.has(task.status)) {
       if (task.status !== "SUCCEEDED") {
         throw new Error(
-          taskErrorMessage(task.error, `素材处理失败（${task.status}）`),
+          taskErrorMessage(
+            task.error,
+            `素材处理失败（${creatorStatusLabel(task.status)}）`,
+          ),
         );
       }
       return task.resultRefs;
@@ -336,7 +340,9 @@ export function ProjectComposer({ open, onClose }: ProjectComposerProps) {
             );
             if (terminal.has(view.status)) {
               if (view.status !== "SUCCEEDED")
-                throw new Error(`文件夹导入失败（${view.status}）`);
+                throw new Error(
+                  `文件夹导入失败（${creatorStatusLabel(view.status)}）`,
+                );
               refs.push(
                 ...view.items.map(
                   (item) => `asset-version:${item.assetVersionId}`,
