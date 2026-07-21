@@ -7,13 +7,12 @@
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import time
-import wave
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Body, Header, Request, Response, status
@@ -59,16 +58,6 @@ router = APIRouter(
     tags=["models"],
     route_class=CreatorErrorRoute,
 )
-
-
-def _probe_wav() -> bytes:
-    output = io.BytesIO()
-    with wave.open(output, "wb") as audio:
-        audio.setnchannels(1)
-        audio.setsampwidth(2)
-        audio.setframerate(16000)
-        audio.writeframes(b"\x00\x00" * 1600)
-    return output.getvalue()
 
 
 _SECTIONS = ("llm", "vlm", "asr", "image", "video", "oss")
@@ -372,14 +361,9 @@ async def _validate_section_connectivity(section: str, config: dict[str, Any]) -
     async with httpx.AsyncClient(timeout=30) as client:
         try:
             url, headers, payload = _probe_payload(probe)
-            if payload.pop("_multipart_probe", False):
+            if payload.pop("_get_probe", False):
                 headers.pop("Content-Type", None)
-                resp = await client.post(
-                    url,
-                    headers=headers,
-                    data={"model": payload["model"], "response_format": "json"},
-                    files={"file": ("probe.wav", _probe_wav(), "audio/wav")},
-                )
+                resp = await client.get(url, headers=headers, params=payload)
             else:
                 resp = await client.post(url, headers=headers, json=payload)
             if not resp.is_success:
@@ -537,6 +521,38 @@ async def patch_model_config_section(
     return {"ok": True}
 
 
+def _dashscope_policy_probe(
+    body: ModelConnectionTestRequest,
+    headers: dict[str, str],
+) -> tuple[str, dict[str, str], dict[str, Any]]:
+    """Zero-cost DashScope probe via the model-bound upload-policy API.
+
+    ``GET /api/v1/uploads?action=getPolicy&model=...`` verifies the
+    endpoint, the API key and the model binding without submitting a
+    billable task (task-submission pings are rejected with HTTP 403
+    "current user api does not support asynchronous calls").
+    """
+    parsed = urlparse(body.base_url)
+    return (
+        f"{parsed.scheme}://{parsed.netloc}/api/v1/uploads",
+        headers,
+        {"_get_probe": True, "action": "getPolicy", "model": body.model_name},
+    )
+
+
+def _openai_model_probe(
+    body: ModelConnectionTestRequest,
+    headers: dict[str, str],
+) -> tuple[str, dict[str, str], dict[str, Any]]:
+    """Zero-cost OpenAI-compatible probe via the model-retrieve API."""
+    base = body.base_url.rstrip("/")
+    return (
+        f"{base}/models/{body.model_name}",
+        headers,
+        {"_get_probe": True},
+    )
+
+
 def _probe_payload(
     body: ModelConnectionTestRequest,
 ) -> tuple[str, dict[str, str], dict[str, Any]]:
@@ -550,25 +566,8 @@ def _probe_payload(
             "whisper" if "whisper" in body.protocol.casefold() else "fun-asr"
         )
         if provider == "whisper":
-            return (
-                f"{base}/audio/transcriptions",
-                headers,
-                {"_multipart_probe": True, "model": body.model_name},
-            )
-        headers["X-DashScope-Async"] = "enable"
-        return (
-            f"{base}/services/audio/asr/transcription",
-            headers,
-            {
-                "model": body.model_name,
-                "input": {
-                    "file_urls": [
-                        "https://dashscope.oss-cn-beijing.aliyuncs.com/samples/audio/paraformer/hello_world_female2.wav",
-                    ],
-                },
-                "parameters": {},
-            },
-        )
+            return _openai_model_probe(body, headers)
+        return _dashscope_policy_probe(body, headers)
     if body.type in {"llm", "vlm"}:
         content: Any = "Reply with pong only."
         if body.type == "vlm":
@@ -592,51 +591,17 @@ def _probe_payload(
         )
     if body.type == "image":
         if "dashscope" in body.protocol.casefold() or "百炼" in body.protocol:
-            return (
-                base,
-                headers,
-                {
-                    "model": body.model_name,
-                    "input": {
-                        "messages": [
-                            {"role": "user", "content": [{"text": "一枚红色圆点"}]},
-                        ],
-                    },
-                    "parameters": {"size": "1024*1024", "n": 1},
-                },
-            )
-        return (
-            f"{base}/images/generations",
-            headers,
-            {
-                "model": body.model_name,
-                "prompt": "a red dot",
-                "n": 1,
-                "size": "1024x1024",
-            },
-        )
+            return _dashscope_policy_probe(body, headers)
+        return _openai_model_probe(body, headers)
     if "volcano" in body.protocol.casefold() or "火山" in body.protocol:
+        # Zero-cost Ark probe: the task-list API is read-only and free,
+        # unlike posting a real generation task.
         return (
             f"{base}/api/v3/contents/generations/tasks",
             headers,
-            {
-                "model": body.model_name,
-                "content": [{"type": "text", "text": "a static red circle"}],
-                "duration": 4,
-                "resolution": "720p",
-                "ratio": "16:9",
-            },
+            {"_get_probe": True, "page_size": 1},
         )
-    headers["X-DashScope-Async"] = "enable"
-    return (
-        f"{base}/services/aigc/video-generation/video-synthesis",
-        headers,
-        {
-            "model": body.model_name,
-            "input": {"prompt": "a static red circle"},
-            "parameters": {"duration": 4},
-        },
-    )
+    return _dashscope_policy_probe(body, headers)
 
 
 # Semantic diagnostic read: this performs no Creator/runtime/config mutation,
@@ -673,16 +638,12 @@ async def test_model_connection(
     try:
         url, headers, payload = _probe_payload(selected)
         async with httpx.AsyncClient(timeout=30) as client:
-            if payload.pop("_multipart_probe", False):
+            if payload.pop("_get_probe", False):
                 headers.pop("Content-Type", None)
-                response = await client.post(
+                response = await client.get(
                     url,
                     headers=headers,
-                    data={
-                        "model": payload["model"],
-                        "response_format": "json",
-                    },
-                    files={"file": ("probe.wav", _probe_wav(), "audio/wav")},
+                    params=payload,
                 )
             else:
                 response = await client.post(
