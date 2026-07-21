@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# pylint: disable=use-implicit-booleaness-not-comparison
+# pylint: disable=unused-argument,use-implicit-booleaness-not-comparison
 from __future__ import annotations
 
 import asyncio
@@ -241,3 +241,38 @@ def test_removed_whole_project_put_is_404_and_not_registered(app):
     assert removed_put.status_code == 404
     assert ordinary_method_mismatch.status_code == 405
     assert "put" not in app.openapi()["paths"]["/projects/{project_id}"]
+
+
+def test_project_create_rejects_duplicate_name(app, api_runtime_root):
+    async def scenario():
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            first = await client.post(
+                "/projects",
+                json={
+                    "clientRequestId": "dup-name-first",
+                    "name": "同名项目",
+                    "scenario": "general",
+                    "aspectRatio": "16:9",
+                    "resolution": "720P",
+                },
+            )
+            duplicate = await client.post(
+                "/projects",
+                json={
+                    "clientRequestId": "dup-name-second",
+                    "name": "同名项目",
+                    "scenario": "general",
+                    "aspectRatio": "16:9",
+                    "resolution": "720P",
+                },
+            )
+            return first, duplicate
+
+    first, duplicate = asyncio.run(scenario())
+    assert first.status_code == 201
+    assert duplicate.status_code == 422
+    assert duplicate.json()["code"] == "VALIDATION_ERROR"
+    assert "同名项目" in duplicate.json()["message"]

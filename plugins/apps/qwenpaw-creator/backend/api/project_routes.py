@@ -21,7 +21,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.routing import Match
 from starlette.types import Scope
 
-from domain.errors import ConflictError, StorageIntegrityError
+from domain.errors import ConflictError, StorageIntegrityError, ValidationError
 from schemas.projects import (
     ExecutionPreauthorizationPolicy,
     ProjectCreateRequest,
@@ -192,7 +192,11 @@ async def list_projects(
     services: CreatorFileServices = Depends(project_file_services),
 ) -> dict[str, Any]:
     try:
-        records = await asyncio.to_thread(services.projects.list, sort_by, sort_order)
+        records = await asyncio.to_thread(
+            services.projects.list,
+            sort_by,
+            sort_order,
+        )
     except (ProjectIntegrityError, ProjectStoreError) as exc:
         raise StorageIntegrityError(str(exc)) from exc
     page = records[offset : offset + limit]
@@ -254,6 +258,11 @@ async def create_project(
     )
 
     def operation() -> ProjectCreateResponse:
+        existing = services.projects.list()
+        target_name = request.name.strip()
+        if any(item.name == target_name for item in existing):
+            raise ValidationError(f"项目名称「{target_name}」已存在，请使用其他名称")
+
         holder: list[ProjectRuntimeBootstrap] = []
 
         def initialize(staged_project_root) -> None:
