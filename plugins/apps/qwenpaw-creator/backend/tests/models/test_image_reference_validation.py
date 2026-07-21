@@ -28,15 +28,22 @@ def test_dashscope_skips_corrupt_local_reference(
 
     uploaded: list[str] = []
 
-    async def fake_upload(content: bytes, filename: str, backend: str) -> str:
+    async def fake_upload(
+        content: bytes,
+        filename: str,
+        *,
+        api_key: str,
+        model_name: str,
+    ) -> str:
         assert content == _png_bytes()
         assert filename == "valid.png"
-        assert backend == "wan"
+        assert api_key == "test"
+        assert model_name == "qwen-image-2.0-pro"
         uploaded.append(filename)
-        return "https://assets.test/valid.png"
+        return "oss://dashscope-instant/valid.png"
 
     monkeypatch.setattr(
-        "models.image.dashscope_provider.upload_reference_media_to_creator_oss",
+        "models.image.dashscope_provider.upload_reference_bytes_to_dashscope_temp",
         fake_upload,
     )
     model = DashScopeImageModel(
@@ -56,6 +63,6 @@ def test_dashscope_skips_corrupt_local_reference(
 
     assert uploaded == ["valid.png"]
     assert body["input"]["messages"][0]["content"] == [
-        {"image": "https://assets.test/valid.png"},
+        {"image": "oss://dashscope-instant/valid.png"},
         {"text": "portrait"},
     ]

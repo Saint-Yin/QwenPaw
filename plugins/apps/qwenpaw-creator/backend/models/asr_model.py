@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from urllib.parse import unquote, urlparse
 import httpx
 
 from models import config
+from models.media_transport import upload_local_file_to_dashscope_temp
 from utils.logger import setup_logger
 from utils.remote_download import download_remote_file
 
@@ -78,6 +80,33 @@ def _sentences(payload: Mapping[str, Any]) -> tuple[ASRSegment, ...]:
     return tuple(values)
 
 
+async def _fun_asr_file_url(media_url: str, api_key: str, model: str) -> str:
+    """Return a URL Fun-ASR can fetch, uploading local media when needed.
+
+    Local files go through DashScope's official model-bound temporary upload
+    (48h TTL) and come back as ``oss://`` URLs which the transcription API
+    resolves via the ``X-DashScope-OssResourceResolve: enable`` header.
+    """
+    parsed = urlparse(media_url)
+    if parsed.scheme == "file" and not parsed.netloc:
+        local_path = Path(unquote(parsed.path))
+        media_type = (
+            mimetypes.guess_type(local_path.name)[0]
+            or "application/octet-stream"
+        )
+        return await upload_local_file_to_dashscope_temp(
+            local_path,
+            api_key=api_key,
+            model_name=model,
+            media_type=media_type,
+        )
+    if parsed.scheme in {"http", "https"}:
+        return media_url
+    raise ValueError(
+        "Fun-ASR input must be a local file or HTTP(S) media URL",
+    )
+
+
 async def _fun_asr(media_url: str) -> ASRResult:
     base = config.get_asr_base_url()
     key = config.get_asr_api_key()
@@ -86,10 +115,12 @@ async def _fun_asr(media_url: str) -> ASRResult:
         raise ValueError(
             "Fun-ASR requires ASR API key or enabled LLM key reuse",
         )
+    file_url = await _fun_asr_file_url(media_url, key, model)
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
         "X-DashScope-Async": "enable",
+        "X-DashScope-OssResourceResolve": "enable",
     }
     timeout = config.get_asr_timeout_seconds()
     async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=60)) as client:
@@ -98,7 +129,7 @@ async def _fun_asr(media_url: str) -> ASRResult:
             headers=headers,
             json={
                 "model": model,
-                "input": {"file_urls": [media_url]},
+                "input": {"file_urls": [file_url]},
                 "parameters": {},
             },
         )

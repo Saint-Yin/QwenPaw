@@ -1593,9 +1593,9 @@ def test_ground_prompt_context_can_verify_visual_sources_with_vlm(
             if isinstance(part, dict) and part.get("type") == "image_url"
         ]
         assert image_urls
-        assert all(
-            url.startswith("data:image/png;base64,") for url in image_urls
-        )
+        # Staged screenshots keep their local URLs at build time; the real
+        # chat_completion transports them through the provider-bound channel.
+        assert all(url.startswith("file://") for url in image_urls)
         return '{"selected":[{"index":1,"fit_score":0.92,"usage":"identity","reason":"clear match"}],"rejected":[{"index":2,"reason":"wrong player"}],"summary":"selected one visual ref"}'
 
     monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path))

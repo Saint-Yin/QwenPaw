@@ -42,6 +42,44 @@ def test_fun_asr_can_reuse_llm_key(monkeypatch) -> None:
         config.reset_request_tool_configs(token)
 
 
+def test_fun_asr_uploads_local_media_via_dashscope_temp(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    media = tmp_path / "voiceover.mp3"
+    media.write_bytes(b"audio")
+    observed = {}
+
+    async def fake_upload(path, *, api_key, model_name, media_type):
+        observed["call"] = (path, api_key, model_name, media_type)
+        return "oss://dashscope-instant/voiceover.mp3"
+
+    monkeypatch.setattr(
+        asr_model,
+        "upload_local_file_to_dashscope_temp",
+        fake_upload,
+    )
+
+    url = asyncio.run(
+        asr_model._fun_asr_file_url(media.as_uri(), "asr-key", "fun-asr"),
+    )
+
+    assert url == "oss://dashscope-instant/voiceover.mp3"
+    assert observed["call"] == (media, "asr-key", "fun-asr", "audio/mpeg")
+
+
+def test_fun_asr_passes_public_urls_through() -> None:
+    url = asyncio.run(
+        asr_model._fun_asr_file_url(
+            "https://cdn.test/a.mp3",
+            "asr-key",
+            "fun-asr",
+        ),
+    )
+
+    assert url == "https://cdn.test/a.mp3"
+
+
 def test_whisper_posts_extracted_audio_and_normalizes_chunk_offsets(
     monkeypatch,
     tmp_path,

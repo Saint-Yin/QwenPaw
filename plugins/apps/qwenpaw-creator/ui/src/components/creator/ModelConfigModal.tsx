@@ -10,7 +10,6 @@ import {
   PictureOutlined,
   VideoCameraOutlined,
   AudioOutlined,
-  CloudOutlined,
   ReloadOutlined,
   CloseOutlined,
 } from "@ant-design/icons";
@@ -20,12 +19,10 @@ import {
   patchModelConfigSection,
   patchExecutionAuthorization,
   testModelConnection,
-  testOssConnection,
 } from "@/api/creator";
 import type {
   ModelConfigData,
   ModelConfigItem,
-  OssConfig,
 } from "@/contracts/creator";
 
 const LLM_PROTOCOLS = [
@@ -52,7 +49,7 @@ const ASR_PROTOCOLS = ["DashScope Fun-ASR", "OpenAI Whisper"];
 const IMAGE_PROTOCOLS = ["OpenAI 协议", "DashScope（百炼）"];
 const VIDEO_PROTOCOLS = ["DashScope（百炼）", "Volcano Engine（火山引擎）"];
 type ModelType = "llm" | "vlm" | "asr" | "image" | "video";
-type TabType = ModelType | "oss";
+type TabType = ModelType;
 const DEFAULT_CONFIG: ModelConfigData = {
   llm: {
     enabled: true,
@@ -184,7 +181,6 @@ export default function ModelConfigModal({ open, onClose }: Props) {
   });
   const [testing, setTesting] = useState<Record<string, boolean>>({});
   const [tested, setTested] = useState<Record<string, boolean>>({});
-  const [ossTesting, setOssTesting] = useState(false);
   const [testingLlmMultimodal, setTestingLlmMultimodal] = useState(false);
   const [testingVlmMultimodal, setTestingVlmMultimodal] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -215,7 +211,6 @@ export default function ModelConfigModal({ open, onClose }: Props) {
         const item = merged[meta.type] as ModelConfigItem;
         if (item?.enabled) initialTested[meta.type] = true;
       });
-      if (merged.oss.enabled) initialTested.oss = true;
       setConfig(merged);
       setTested(initialTested);
       snapshotRef.current = JSON.parse(JSON.stringify(merged));
@@ -277,19 +272,6 @@ export default function ModelConfigModal({ open, onClose }: Props) {
   const handleTabChange = useCallback((tab: TabType) => {
     setActiveTab(tab);
     setExpanded((prev) => ({ ...prev, [tab]: true }));
-  }, []);
-
-  const updateOss = useCallback((field: keyof OssConfig, value: unknown) => {
-    setConfig((prev) => {
-      const updated = { ...prev, oss: { ...prev.oss, [field]: value } };
-      if (field === "bucket" && prev.vlm.enabled && !prev.vlm.use_llm) {
-        updated.vlm = { ...updated.vlm, enabled: false };
-      }
-      return updated;
-    });
-    if (field !== "enabled") {
-      setTested((prev) => ({ ...prev, oss: false }));
-    }
   }, []);
 
   const handleVlmToggle = useCallback(
@@ -457,66 +439,15 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     [config, updateItem],
   );
 
-  const handleOssTest = useCallback(async (): Promise<boolean> => {
-    let item = config["oss"] as OssConfig;
-    if (
-      !item.access_key_id ||
-      !item.access_key_secret ||
-      !item.endpoint ||
-      !item.bucket
-    ) {
-      message.warning(
-        "请先填写完整的OSS配置（access_key_id, access_key_secret, endpoint, bucket）",
-      );
-      return false;
-    }
-
-    setOssTesting(true);
-    try {
-      const response = await testOssConnection({
-        access_key_id: item.access_key_id,
-        access_key_secret: item.access_key_secret,
-        endpoint: item.endpoint,
-        bucket: item.bucket,
-        // the following values do not matter
-        enabled: false,
-        public_base_url: "",
-        policy_api_key: "",
-      });
-      if (response.ok) {
-        message.success("连接测试成功");
-        updateOss("enabled", true);
-        setTested((prev) => ({ ...prev, oss: true }));
-        return true;
-      } else {
-        message.warning(response.error || "连接测试失败");
-        setTested((prev) => ({ ...prev, oss: false }));
-        return false;
-      }
-    } catch (err) {
-      message.error((err as Error).message || "测试连接时发生错误");
-      setTested((prev) => ({ ...prev, oss: false }));
-      return false;
-    } finally {
-      setOssTesting(false);
-    }
-  }, [config, updateOss]);
-
   const handleSave = useCallback(async () => {
     if (saving) return;
     setSaving(true);
     try {
       const section = activeTab;
-      const sectionData =
-        section === "oss" ? config.oss : config[section as ModelType];
+      const sectionData = config[section];
 
-      const isTested =
-        section === "oss" ? tested.oss : tested[section as ModelType];
-      if (!isTested) {
-        const ok =
-          section === "oss"
-            ? await handleOssTest()
-            : await handleTest(section as ModelType);
+      if (!tested[section]) {
+        const ok = await handleTest(section);
         if (!ok) return;
       }
 
@@ -532,7 +463,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [activeTab, config, tested, saving, handleTest, handleOssTest]);
+  }, [activeTab, config, tested, saving, handleTest]);
 
   const handleCancel = useCallback(() => {
     if (snapshotRef.current)
@@ -847,195 +778,6 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     );
   };
 
-  const renderOssCard = () => {
-    const oss = config.oss;
-    const configured = Boolean(oss.endpoint && oss.access_key_id);
-    const isTested = tested.oss === true;
-    const statusColor = !configured
-      ? "var(--color-border)"
-      : isTested
-      ? "var(--color-success)"
-      : "var(--color-danger)";
-    return (
-      <div className="glass-card">
-        <div
-          onClick={() => toggleExpand("oss")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "14px 18px",
-            cursor: "pointer",
-            userSelect: "none",
-            borderBottom: expanded.oss
-              ? "1px solid var(--color-border)"
-              : "none",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <CloudOutlined
-              style={{ color: "var(--color-text-tertiary)", fontSize: 16 }}
-            />
-            <span
-              style={{
-                fontSize: 14,
-                fontWeight: 600,
-                color: "var(--color-text-primary)",
-              }}
-            >
-              OSS（存储上传的项目数据）
-            </span>
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                fontSize: 10,
-                fontWeight: 500,
-                color: "var(--color-text-tertiary)",
-                background: "var(--color-bg-secondary)",
-                padding: "1px 7px",
-                borderRadius: 4,
-              }}
-            >
-              可选
-            </span>
-            {configured && (
-              <span
-                className="text-ellipsis"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  fontSize: 10,
-                  fontWeight: 500,
-                  color: isTested
-                    ? "var(--color-success)"
-                    : "var(--color-danger)",
-                  background: "var(--color-success-soft)",
-                  padding: "1px 7px",
-                  borderRadius: 4,
-                  maxWidth: 220,
-                }}
-              >
-                {oss.endpoint}
-                {!isTested && "（未测试）"}
-              </span>
-            )}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
-                background: statusColor,
-                flexShrink: 0,
-              }}
-            />
-            <label
-              className="desktop-toggle"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <input
-                type="checkbox"
-                checked={oss.enabled}
-                onChange={(e) => updateOss("enabled", e.target.checked)}
-              />
-              <div className="track" />
-              <div className="thumb" />
-            </label>
-            <DownOutlined
-              style={{
-                fontSize: 10,
-                color: "var(--color-text-tertiary)",
-                transition: "transform 0.2s",
-                transform: expanded.oss ? "rotate(180deg)" : "rotate(0deg)",
-              }}
-            />
-          </div>
-        </div>
-        {expanded.oss && (
-          <div
-            style={{
-              padding: "16px 18px 32px",
-              display: "flex",
-              flexDirection: "column",
-              gap: 14,
-            }}
-          >
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: "0 16px",
-              }}
-            >
-              <div>
-                <label className="field-label">Access Key ID</label>
-                <Input
-                  placeholder="LTAI..."
-                  value={oss.access_key_id}
-                  onChange={(e) => updateOss("access_key_id", e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="field-label">Access Key Secret</label>
-                <Input.Password
-                  placeholder="secret"
-                  value={oss.access_key_secret}
-                  onChange={(e) =>
-                    updateOss("access_key_secret", e.target.value)
-                  }
-                />
-              </div>
-              <div>
-                <label className="field-label">Endpoint</label>
-                <Input
-                  placeholder="https://oss-cn-hangzhou.aliyuncs.com"
-                  value={oss.endpoint}
-                  onChange={(e) => updateOss("endpoint", e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="field-label">Bucket</label>
-                <Input
-                  placeholder="creator-store"
-                  value={oss.bucket}
-                  onChange={(e) => updateOss("bucket", e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="field-label">Public Base URL（可选）</label>
-                <Input
-                  placeholder="https://cdn.example.com"
-                  value={oss.public_base_url}
-                  onChange={(e) => updateOss("public_base_url", e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="field-label">Policy API Key（可选）</label>
-                <Input.Password
-                  placeholder="用于 DashScope upload policy"
-                  value={oss.policy_api_key}
-                  onChange={(e) => updateOss("policy_api_key", e.target.value)}
-                />
-              </div>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <Button
-                className="test-btn"
-                icon={<LinkOutlined />}
-                loading={ossTesting}
-                onClick={handleOssTest}
-              >
-                测试连通性
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
   return (
     <Modal
       open={open}
@@ -1229,46 +971,12 @@ export default function ModelConfigModal({ open, onClose }: Props) {
               </button>
             );
           })}
-          <button
-            className={`segmented-tab ${activeTab === "oss" ? "active" : ""}`}
-            onClick={() => handleTabChange("oss")}
-            style={{ flexDirection: "column", padding: "5px 6px 4px", gap: 2 }}
-          >
-            <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <CloudOutlined style={{ fontSize: 12 }} /> OSS
-              <span style={{ fontSize: 9, opacity: 0.5, fontWeight: 400 }}>
-                可选
-              </span>
-            </span>
-            <span
-              className="text-ellipsis"
-              style={{
-                fontSize: 10,
-                lineHeight: "14px",
-                color: tested.oss
-                  ? "var(--color-success)"
-                  : config.oss.endpoint
-                  ? "var(--color-danger)"
-                  : "var(--color-text-tertiary)",
-                fontWeight: activeTab === "oss" ? 600 : 400,
-                maxWidth: 120,
-              }}
-            >
-              {!config.oss.endpoint
-                ? "未配置"
-                : tested.oss
-                ? "已配置"
-                : "未测试"}
-            </span>
-          </button>
         </div>
 
         {/* Active tab card */}
-        {activeTab === "oss"
-          ? renderOssCard()
-          : CARD_META.filter((meta) => meta.type === activeTab).map((meta) =>
-              renderCard(meta),
-            )}
+        {CARD_META.filter((meta) => meta.type === activeTab).map((meta) =>
+          renderCard(meta),
+        )}
       </div>
 
       {/* Footer */}

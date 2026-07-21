@@ -2,6 +2,7 @@
 # flake8: noqa: E501
 # pylint: disable=line-too-long,too-many-return-statements
 import asyncio
+import base64
 import io
 import mimetypes
 import re
@@ -24,6 +25,9 @@ WAN_MEDIA_PREFIX = "wan_media"
 SD2_MEDIA_PREFIX = "sd2_media"
 DASHSCOPE_TEMP_UPLOAD_MAX_BYTES = 1024 * 1024 * 1024
 DASHSCOPE_TEMP_UPLOAD_CACHE_SECONDS = 47 * 60 * 60
+# Ark (Volcengine) Seedance accepts Base64 data URLs for reference images:
+# a single image must stay below 30MB and the request body below 64MB.
+SEEDANCE_REFERENCE_IMAGE_MAX_BYTES = 30 * 1024 * 1024
 
 _dashscope_temp_upload_cache: dict[
     tuple[str, int, int, str, str],
@@ -123,6 +127,72 @@ def _dashscope_temp_upload_cache_key(
     )
 
 
+def _fetch_dashscope_upload_policy(
+    client: httpx.Client,
+    *,
+    api_key: str,
+    model_name: str,
+    size: int,
+) -> dict:
+    """Fetch the model-bound upload policy and enforce its size limit."""
+    policy_response = client.get(
+        OSS_POLICY_URL,
+        params={"action": "getPolicy", "model": model_name},
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+    policy_response.raise_for_status()
+    payload = policy_response.json()
+    policy = payload.get("data", payload)
+    try:
+        max_policy_bytes = int(
+            float(policy["max_file_size_mb"]) * 1024 * 1024,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "DashScope upload policy missing max_file_size_mb",
+        ) from exc
+    if size > max_policy_bytes:
+        raise RuntimeError(
+            "media exceeds the current model-bound DashScope upload "
+            f"policy ({size} bytes > {max_policy_bytes} bytes); provide a safe "
+            "public nativeModelUrl/publicSourceUrl",
+        )
+    return policy
+
+
+def _post_dashscope_temp_upload(
+    client: httpx.Client,
+    policy: dict,
+    filename: str,
+    file_source: object,
+    media_type: str,
+) -> str:
+    """POST one payload to the policy's temporary OSS. Returns oss:// URL."""
+    upload_dir = str(policy["upload_dir"]).rstrip("/")
+    key = f"{upload_dir}/{uuid.uuid4().hex}-{filename}"
+    form = {
+        "OSSAccessKeyId": str(policy["oss_access_key_id"]),
+        "Signature": str(policy["signature"]),
+        "policy": str(policy["policy"]),
+        "x-oss-object-acl": str(policy.get("x_oss_object_acl", "private")),
+        "x-oss-forbid-overwrite": str(
+            policy.get("x_oss_forbid_overwrite", "true"),
+        ),
+        "key": key,
+        "success_action_status": "200",
+    }
+    upload_response = client.post(
+        str(policy["upload_host"]),
+        data=form,
+        files={"file": (filename, file_source, media_type)},
+    )
+    upload_response.raise_for_status()
+    return f"oss://{key}"
+
+
 def _upload_local_file_to_dashscope_temp_sync(
     path: Path,
     *,
@@ -138,56 +208,23 @@ def _upload_local_file_to_dashscope_temp_sync(
             "DashScope temporary upload rejects files larger than 1GB; "
             "provide a safe public nativeModelUrl/publicSourceUrl instead",
         )
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
     timeout = httpx.Timeout(connect=30.0, read=300.0, write=3600.0, pool=30.0)
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-        policy_response = client.get(
-            OSS_POLICY_URL,
-            params={"action": "getPolicy", "model": model_name},
-            headers=headers,
+        policy = _fetch_dashscope_upload_policy(
+            client,
+            api_key=api_key,
+            model_name=model_name,
+            size=size,
         )
-        policy_response.raise_for_status()
-        payload = policy_response.json()
-        policy = payload.get("data", payload)
-        try:
-            max_policy_bytes = int(
-                float(policy["max_file_size_mb"]) * 1024 * 1024,
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError(
-                "DashScope upload policy missing max_file_size_mb",
-            ) from exc
-        if size > max_policy_bytes:
-            raise RuntimeError(
-                "selected local media exceeds the current model-bound DashScope upload "
-                f"policy ({size} bytes > {max_policy_bytes} bytes); provide a safe "
-                "public nativeModelUrl/publicSourceUrl",
-            )
         filename = _dashscope_transport_filename(path, media_type)
-        upload_dir = str(policy["upload_dir"]).rstrip("/")
-        key = f"{upload_dir}/{uuid.uuid4().hex}-{filename}"
-        form = {
-            "OSSAccessKeyId": str(policy["oss_access_key_id"]),
-            "Signature": str(policy["signature"]),
-            "policy": str(policy["policy"]),
-            "x-oss-object-acl": str(policy.get("x_oss_object_acl", "private")),
-            "x-oss-forbid-overwrite": str(
-                policy.get("x_oss_forbid_overwrite", "true"),
-            ),
-            "key": key,
-            "success_action_status": "200",
-        }
         with path.open("rb") as file_handle:
-            upload_response = client.post(
-                str(policy["upload_host"]),
-                data=form,
-                files={"file": (filename, file_handle, media_type)},
+            return _post_dashscope_temp_upload(
+                client,
+                policy,
+                filename,
+                file_handle,
+                media_type,
             )
-        upload_response.raise_for_status()
-    return f"oss://{key}"
 
 
 async def upload_local_file_to_dashscope_temp(
@@ -235,6 +272,89 @@ async def upload_local_file_to_dashscope_temp(
             now + DASHSCOPE_TEMP_UPLOAD_CACHE_SECONDS,
         )
         return url
+
+
+def _reference_media_type(filename: str, content: bytes) -> str:
+    media_type = mimetypes.guess_type(filename or "")[0]
+    if not media_type:
+        media_type = mimetypes.guess_type(
+            f"reference{_suffix_from_magic(content)}",
+        )[0]
+    return media_type or "application/octet-stream"
+
+
+def _upload_reference_bytes_to_dashscope_temp_sync(
+    content: bytes,
+    filename: str,
+    *,
+    api_key: str,
+    model_name: str,
+) -> str:
+    size = len(content)
+    if size > DASHSCOPE_TEMP_UPLOAD_MAX_BYTES:
+        raise RuntimeError(
+            "DashScope temporary upload rejects files larger than 1GB",
+        )
+    media_type = _reference_media_type(filename, content)
+    timeout = httpx.Timeout(connect=30.0, read=300.0, write=3600.0, pool=30.0)
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        policy = _fetch_dashscope_upload_policy(
+            client,
+            api_key=api_key,
+            model_name=model_name,
+            size=size,
+        )
+        return _post_dashscope_temp_upload(
+            client,
+            policy,
+            _safe_filename(filename),
+            content,
+            media_type,
+        )
+
+
+async def upload_reference_bytes_to_dashscope_temp(
+    content: bytes,
+    filename: str,
+    *,
+    api_key: str,
+    model_name: str,
+) -> str:
+    """Upload in-memory reference media to DashScope's model-bound temp OSS.
+
+    Official Bailian temporary-file upload (getPolicy + form POST). The URL is
+    an ``oss://`` reference valid for 48 hours (files up to 1GB) and is only
+    resolvable by the bound model when the request carries the
+    ``X-DashScope-OssResourceResolve: enable`` header.
+    """
+    if not api_key.strip() or not model_name.strip():
+        raise RuntimeError(
+            "DashScope temporary upload requires API key and model name",
+        )
+    return await asyncio.to_thread(
+        _upload_reference_bytes_to_dashscope_temp_sync,
+        content,
+        filename,
+        api_key=api_key,
+        model_name=model_name,
+    )
+
+
+def reference_media_data_url(content: bytes, filename: str) -> str:
+    """Inline reference media as a Base64 data URL for the Ark Seedance API.
+
+    Volcengine's video-generation task API accepts ``data:<mime>;base64,...``
+    reference images directly (the Ark File API's file_id is only usable by
+    Chat/Responses), so no upload or extra storage configuration is needed.
+    """
+    if len(content) >= SEEDANCE_REFERENCE_IMAGE_MAX_BYTES:
+        raise RuntimeError(
+            "Seedance reference images must be smaller than 30MB; "
+            "downscale the media or provide a public HTTPS URL",
+        )
+    media_type = _reference_media_type(filename, content)
+    encoded = base64.b64encode(content).decode("ascii")
+    return f"data:{media_type};base64,{encoded}"
 
 
 def _creator_media_bucket() -> str:

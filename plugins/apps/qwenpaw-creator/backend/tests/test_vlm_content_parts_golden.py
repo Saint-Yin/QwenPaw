@@ -37,23 +37,17 @@ def test_remote_image_and_video_content_parts_are_provider_compatible():
     }
 
 
-def test_local_image_and_video_are_encoded_as_typed_data_urls(
+def test_local_image_and_video_keep_urls_for_request_time_transport(
     tmp_path,
-    monkeypatch,
 ):
     image = tmp_path / "reference.png"
     video = tmp_path / "clip.mp4"
     image.write_bytes(b"png")
     video.write_bytes(b"mp4")
-    monkeypatch.setattr(
-        vlm_model.model_config,
-        "get_vlm_max_inline_bytes",
-        lambda: 1024,
-    )
 
     assert vlm_model.multimodal_media_part(image.as_uri(), "image") == {
         "type": "image_url",
-        "image_url": {"url": "data:image/png;base64,cG5n"},
+        "image_url": {"url": image.as_uri()},
     }
     assert vlm_model.multimodal_media_part(
         video.as_uri(),
@@ -61,8 +55,78 @@ def test_local_image_and_video_are_encoded_as_typed_data_urls(
         fps=1.0,
     ) == {
         "type": "video_url",
-        "video_url": {"url": "data:video/mp4;base64,bXA0"},
+        "video_url": {"url": video.as_uri()},
         "fps": 1.0,
+    }
+
+
+def test_local_media_transport_uploads_to_dashscope_temp(
+    tmp_path,
+    monkeypatch,
+):
+    image = tmp_path / "reference.png"
+    image.write_bytes(b"png")
+    observed = {}
+
+    async def fake_upload(path, *, api_key, model_name, media_type):
+        observed["call"] = (path, api_key, model_name, media_type)
+        return "oss://dashscope-instant/reference.png"
+
+    monkeypatch.setattr(
+        vlm_model.model_config,
+        "get_vlm_base_url",
+        lambda: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+    monkeypatch.setattr(
+        vlm_model,
+        "upload_local_file_to_dashscope_temp",
+        fake_upload,
+    )
+
+    part = vlm_model.multimodal_media_part(image.as_uri(), "image")
+    transported, uses_temp_oss = asyncio.run(
+        vlm_model._transport_local_media_part(part, "vlm-key", "qwen3-vl"),
+    )
+
+    assert uses_temp_oss is True
+    assert transported == {
+        "type": "image_url",
+        "image_url": {"url": "oss://dashscope-instant/reference.png"},
+    }
+    assert observed["call"] == (
+        image.resolve(),
+        "vlm-key",
+        "qwen3-vl",
+        "image/png",
+    )
+
+
+def test_local_media_transport_falls_back_to_data_url_off_dashscope(
+    tmp_path,
+    monkeypatch,
+):
+    image = tmp_path / "reference.png"
+    image.write_bytes(b"png")
+    monkeypatch.setattr(
+        vlm_model.model_config,
+        "get_vlm_base_url",
+        lambda: "https://api.openai.example/v1",
+    )
+    monkeypatch.setattr(
+        vlm_model.model_config,
+        "get_vlm_max_inline_bytes",
+        lambda: 1024,
+    )
+
+    part = vlm_model.multimodal_media_part(image.as_uri(), "image")
+    transported, uses_temp_oss = asyncio.run(
+        vlm_model._transport_local_media_part(part, "vlm-key", "gpt-vision"),
+    )
+
+    assert uses_temp_oss is False
+    assert transported == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,cG5n"},
     }
 
 

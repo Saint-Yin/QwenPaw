@@ -4,8 +4,13 @@
 """DashScope Bailian VLM wrapper for multimodal understanding.
 
 The Bailian vision API is OpenAI Chat compatible: image inputs use
-``image_url`` content parts, video inputs use ``video_url`` content parts,
-and local files can be sent as ``data:<mime>;base64,...`` URLs.
+``image_url`` content parts and video inputs use ``video_url`` content
+parts. Local files are transported through the provider-bound channel
+right before the request: DashScope models use the official model-bound
+temporary upload (``oss://`` URL, 48h TTL, <=1GB) resolved via the
+``X-DashScope-OssResourceResolve: enable`` header, while other
+OpenAI-compatible providers fall back to inline
+``data:<mime>;base64,...`` URLs.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ import httpx
 
 from models import config as model_config
 from models.concurrency import model_slot
+from models.media_transport import upload_local_file_to_dashscope_temp
 from models.model_capability_cache import get_capability_cache
 from utils.exceptions import ModelError
 from utils.logger import setup_logger
@@ -68,18 +74,20 @@ def multimodal_media_part(
     the compatibility argument is intentionally not serialized. Callers bound
     long-video sampling through ``fps`` instead. Both options are ignored for
     images.
+
+    Local media keeps its original URL here; ``chat_completion`` transports
+    it through the provider-bound channel right before the request.
     """
     media_type = media_type.lower()
     source_url = url
     local_path = _local_path_from_url(url)
-    if local_path is not None:
-        if not local_path.exists() or not local_path.is_file():
-            raise ModelError(
-                f"VLM local media not found: {url}",
-                model_name=model_config.get_vlm_model_name(),
-            )
-        fallback = "video/mp4" if media_type == "video" else "image/png"
-        source_url = _data_url(local_path, fallback)
+    if local_path is not None and (
+        not local_path.exists() or not local_path.is_file()
+    ):
+        raise ModelError(
+            f"VLM local media not found: {url}",
+            model_name=model_config.get_vlm_model_name(),
+        )
 
     if media_type == "video":
         del max_frames
@@ -134,6 +142,56 @@ def _is_media_related_error(text: str) -> bool:
     return any(phrase in text_lower for phrase in _MEDIA_REJECT_PHRASES)
 
 
+def _is_dashscope_provider() -> bool:
+    host = urlparse(model_config.get_vlm_base_url()).hostname or ""
+    return "dashscope" in host
+
+
+async def _transport_local_media_part(
+    part: dict,
+    api_key: str,
+    model_name: str,
+) -> tuple[dict, bool]:
+    """Replace a local media URL with a provider-transportable URL.
+
+    Returns ``(part, uses_temp_oss)``. DashScope-bound requests use the
+    official model-bound temporary upload (cached, 48h TTL, <=1GB); other
+    OpenAI-compatible providers fall back to an inline Base64 data URL.
+    """
+    part_type = part.get("type")
+    if part_type not in ("image_url", "video_url"):
+        return part, False
+    media_obj = part.get(part_type)
+    if not isinstance(media_obj, dict):
+        return part, False
+    url = str(media_obj.get("url") or "")
+    local_path = _local_path_from_url(url)
+    if local_path is None:
+        return part, False
+    fallback = "video/mp4" if part_type == "video_url" else "image/png"
+    transported = dict(part)
+    if _is_dashscope_provider():
+        try:
+            resolved = await upload_local_file_to_dashscope_temp(
+                local_path,
+                api_key=api_key,
+                model_name=model_name,
+                media_type=_mime_for_path(local_path, fallback),
+            )
+        except Exception as exc:
+            raise ModelError(
+                f"VLM local media transport failed for {local_path.name}: {exc}",
+                model_name=model_name,
+            ) from exc
+        transported[part_type] = {**media_obj, "url": resolved}
+        return transported, True
+    transported[part_type] = {
+        **media_obj,
+        "url": _data_url(local_path, fallback),
+    }
+    return transported, False
+
+
 async def chat_completion(
     content: list[dict],
     *,
@@ -167,11 +225,19 @@ async def chat_completion(
     # ``max_frames``/``max_frame`` are DashScope-SDK-only controls. Strip them
     # defensively from OpenAI-compatible content supplied by older durable
     # Tasks while preserving every supported field and the caller's objects.
+    # Local media is transported through the provider-bound channel here.
     provider_content: list[dict] = []
+    uses_temp_oss = False
     for item in content:
         normalized = dict(item)
         normalized.pop("max_frames", None)
         normalized.pop("max_frame", None)
+        normalized, is_temp_oss = await _transport_local_media_part(
+            normalized,
+            api_key,
+            model_name,
+        )
+        uses_temp_oss = uses_temp_oss or is_temp_oss
         provider_content.append(normalized)
 
     messages: list[dict] = []
@@ -214,6 +280,11 @@ async def chat_completion(
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
+                        **(
+                            {"X-DashScope-OssResourceResolve": "enable"}
+                            if uses_temp_oss
+                            else {}
+                        ),
                     },
                     json=body,
                 )

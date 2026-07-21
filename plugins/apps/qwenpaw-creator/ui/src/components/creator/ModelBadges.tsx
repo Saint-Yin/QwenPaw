@@ -6,13 +6,12 @@ import {
   PictureOutlined,
   VideoCameraOutlined,
   AudioOutlined,
-  CloudOutlined,
 } from "@ant-design/icons";
 import { getModelConfig } from "@/api/creator";
 import type { ModelConfigData, ModelConfigItem } from "@/contracts/creator";
 import ModelConfigModal from "./ModelConfigModal";
 
-type ModelType = "llm" | "vlm" | "asr" | "image" | "video" | "oss";
+type ModelType = "llm" | "vlm" | "asr" | "image" | "video";
 
 const BADGE_META: { type: ModelType; icon: React.ReactNode }[] = [
   { type: "llm", icon: <Brain size={12} /> },
@@ -20,7 +19,6 @@ const BADGE_META: { type: ModelType; icon: React.ReactNode }[] = [
   { type: "asr", icon: <AudioOutlined style={{ fontSize: 12 }} /> },
   { type: "image", icon: <PictureOutlined style={{ fontSize: 12 }} /> },
   { type: "video", icon: <VideoCameraOutlined style={{ fontSize: 12 }} /> },
-  { type: "oss", icon: <CloudOutlined style={{ fontSize: 12 }} /> },
 ];
 
 export default function ModelBadges() {
@@ -46,7 +44,6 @@ export default function ModelBadges() {
 
   const status = (type: ModelType): "on" | "off" | "none" => {
     if (!config) return "none";
-    if (type === "oss") return config.oss?.enabled ? "on" : "none";
     const item = config[type] as ModelConfigItem | undefined;
     if (!item) return "none";
     if (type === "vlm" && config.vlm.use_llm && config.llm.model_name)

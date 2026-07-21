@@ -8,7 +8,9 @@ Endpoint:  POST {IMAGE_BASE_URL}
            /api/v1/services/aigc/multimodal-generation/generation path)
 
 Reference images must be publicly reachable URLs; local/generated images are
-uploaded to creator-media OSS before the request is sent.
+uploaded through DashScope's model-bound temporary storage (official Bailian
+temporary-file upload, 48h TTL) and referenced as ``oss://`` URLs resolved by
+the ``X-DashScope-OssResourceResolve: enable`` header.
 """
 
 import httpx
@@ -17,7 +19,7 @@ import os
 
 from models.media_transport import (
     read_reference_media,
-    upload_reference_media_to_creator_oss,
+    upload_reference_bytes_to_dashscope_temp,
     validate_reference_image_bytes,
 )
 from utils.exceptions import ModelError
@@ -143,6 +145,8 @@ class DashScopeImageModel(BaseImageModel):
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.api_key}",
+                # Resolve oss:// temp-upload references server-side.
+                "X-DashScope-OssResourceResolve": "enable",
             },
             json=body,
         )
@@ -174,10 +178,11 @@ class DashScopeImageModel(BaseImageModel):
                     # whole generation. Continue with the remaining references,
                     # or as text-to-image when none are usable.
                     continue
-                public_url = await upload_reference_media_to_creator_oss(
+                public_url = await upload_reference_bytes_to_dashscope_temp(
                     media_bytes,
                     filename,
-                    "wan",
+                    api_key=self.api_key,
+                    model_name=self.model_name,
                 )
             content.append({"image": public_url})
         content.append({"text": prompt})

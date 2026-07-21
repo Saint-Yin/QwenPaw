@@ -56,8 +56,8 @@ describe("ModelConfigModal configuration lifecycle", () => {
     const onClose = vi.fn();
     const { calls } = installMockFetch([
       {
-        match: "/models/config",
-        method: "POST",
+        match: "/models/config/llm",
+        method: "PATCH",
         response: { json: { ok: true } },
       },
       {
@@ -73,7 +73,7 @@ describe("ModelConfigModal configuration lifecycle", () => {
     ]);
     render(<ModelConfigModal open onClose={onClose} />);
 
-    await waitFor(() => expect(screen.getAllByText("未配置")).toHaveLength(5));
+    await waitFor(() => expect(screen.getAllByText("未配置")).toHaveLength(4));
     const keyInput = screen.getByPlaceholderText("sk-...");
     expect(keyInput).toHaveAttribute("type", "password");
     expect(
@@ -95,16 +95,21 @@ describe("ModelConfigModal configuration lifecycle", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /保存配置/ }));
-    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
-    const save = calls.find(
-      (call) => call.method === "POST" && call.url.endsWith("/models/config"),
-    );
-    expect(save?.body).toMatchObject({
-      llm: {
+    // 分段保存只 PATCH 当前标签页的 section，modal 保持打开
+    await waitFor(() => {
+      const save = calls.find(
+        (call) =>
+          call.method === "PATCH" && call.url.endsWith("/models/config/llm"),
+      );
+      expect(save?.body).toMatchObject({
         model_name: "saved-model",
         api_key: "saved-secret",
         base_url: "https://provider.test/v1",
-      },
+      });
     });
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
   });
 });

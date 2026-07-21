@@ -18,7 +18,7 @@
     "imageio-ffmpeg"
   ],
   "qwenpaw_version": {
-    "min": "2.0.0.post2",
+    "min": "2.0.1",
     "max": "2.1.0"
   },
   "meta": {
@@ -213,58 +213,6 @@
             "default": 30,
             "min": 10,
             "max": 300
-          }
-        ]
-      },
-      {
-        "name": "creator_media_oss",
-        "description": "QwenPaw Creator OSS configuration for video reference media and upload policy",
-        "icon": "🪣",
-        "requires_config": true,
-        "config_fields": [
-          {
-            "name": "policy_api_key",
-            "label": "OSS Policy API Key",
-            "type": "password",
-            "required": false,
-            "placeholder": "sk-...",
-            "help": "Used only for DashScope upload policy. Environment fallback: OSS_POLICY_API_KEY."
-          },
-          {
-            "name": "access_key_id",
-            "label": "OSS Access Key ID",
-            "type": "password",
-            "required": true,
-            "placeholder": "LTAI..."
-          },
-          {
-            "name": "access_key_secret",
-            "label": "OSS Access Key Secret",
-            "type": "password",
-            "required": true,
-            "placeholder": "secret"
-          },
-          {
-            "name": "endpoint",
-            "label": "OSS Endpoint",
-            "type": "text",
-            "required": true,
-            "placeholder": "https://oss-cn-hangzhou.aliyuncs.com"
-          },
-          {
-            "name": "bucket",
-            "label": "OSS Bucket",
-            "type": "text",
-            "required": false,
-            "default": "creator-store",
-            "placeholder": "creator-store"
-          },
-          {
-            "name": "public_base_url",
-            "label": "Public Base URL",
-            "type": "text",
-            "required": false,
-            "placeholder": "https://cdn.example.com"
           }
         ]
       }

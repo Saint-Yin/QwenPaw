@@ -15,7 +15,8 @@ from models.concurrency import model_slot
 from models import config as model_config
 from models.media_transport import (
     read_reference_media,
-    upload_reference_media_to_creator_oss,
+    reference_media_data_url,
+    upload_reference_bytes_to_dashscope_temp,
 )
 from utils.logger import setup_logger
 from utils.exceptions import ModelError
@@ -26,14 +27,36 @@ MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 15  # seconds
 SEEDANCE_RESOLUTIONS = {"480p", "720p", "1080p"}
 SEEDANCE_RATIOS = {"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "auto"}
+VIDEO_REFERENCE_SUFFIXES = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
+
+
+def _reference_media_kind(filename: str) -> str:
+    suffix = Path(filename or "").suffix.lower()
+    return "video" if suffix in VIDEO_REFERENCE_SUFFIXES else "image"
 
 
 def _uses_seedance_protocol() -> bool:
     return model_config.get_video_backend() == "seedance2"
 
 
-async def _resolve_reference_media_url(url: str, backend: str) -> str:
-    """Upload reference media to creator-media and return a public URL."""
+async def _resolve_reference_media_url(
+    url: str,
+    backend: str,
+) -> tuple[str, str]:
+    """Transport reference media through the provider-bound channel.
+
+    Returns ``(resolved_url, media_kind)`` where *media_kind* is ``image`` or
+    ``video``.
+
+    wan (Bailian): official model-bound temporary upload -> ``oss://`` URL
+    (48h TTL, <=1GB) for any media kind; the submit request already carries
+    ``X-DashScope-OssResourceResolve: enable``.
+    seedance2 (Volcengine Ark): reference images may be inlined as Base64
+    data URLs (<30MB per image), but the task API only accepts public URLs
+    or ``asset://`` IDs for ``video_url`` parts, so public HTTP(S) media is
+    passed through untouched and local reference videos are rejected with
+    an actionable error.
+    """
     model_name = model_config.get_video_model_name()
     if url.startswith("/generated/"):
         filename = (
@@ -51,25 +74,52 @@ async def _resolve_reference_media_url(url: str, backend: str) -> str:
         )
     else:
         raise ModelError(
-            f"Reference media must be /generated, file://, http://, or https:// before creator-media upload: {url}",
+            f"Reference media must be /generated, file://, http://, or https:// before provider-bound transport: {url}",
             model_name=model_name,
         )
 
     try:
+        if backend == "seedance2" and url.startswith(("http://", "https://")):
+            # Public URLs are the officially supported form for both image
+            # and video reference parts; pass them through untouched.
+            kind = _reference_media_kind(filename)
+            logger.info(
+                f"Passing public reference media through | backend={backend}, "
+                f"filename={filename}, kind={kind}",
+            )
+            return url, kind
         content, filename = await read_reference_media(url)
-        public_url = await upload_reference_media_to_creator_oss(
-            content,
-            filename,
-            backend,
-        )
-        logger.info(
-            f"Uploaded reference media to creator-media | backend={backend}, "
-            f"filename={filename}, url={public_url[:100]}",
-        )
-        return public_url
+        kind = _reference_media_kind(filename)
+        if backend == "seedance2":
+            if kind == "video":
+                raise ModelError(
+                    "Seedance reference videos must be public HTTP(S) URLs: "
+                    "the Ark task API does not accept Base64-encoded video "
+                    f"and local uploads have no provider channel ({filename})",
+                    model_name=model_name,
+                )
+            resolved_url = reference_media_data_url(content, filename)
+            logger.info(
+                f"Inlined reference media as data URL | backend={backend}, "
+                f"filename={filename}, bytes={len(content)}",
+            )
+        else:
+            resolved_url = await upload_reference_bytes_to_dashscope_temp(
+                content,
+                filename,
+                api_key=model_config.get_video_api_key(),
+                model_name=model_name,
+            )
+            logger.info(
+                f"Uploaded reference media to DashScope temp storage | backend={backend}, "
+                f"filename={filename}, url={resolved_url[:100]}",
+            )
+        return resolved_url, kind
+    except ModelError:
+        raise
     except Exception as exc:
         raise ModelError(
-            f"Reference media upload to creator-media failed for {filename}: {exc}",
+            f"Reference media transport failed for {filename}: {exc}",
             model_name=model_name,
         ) from exc
 
@@ -132,13 +182,17 @@ async def submit_video_task(
     upload_backend = "seedance2" if uses_seedance else "wan"
     for img_url in dict.fromkeys(all_images):
         if img_url and img_url.strip():
-            resolved_url = await _resolve_reference_media_url(
+            resolved_url, media_kind = await _resolve_reference_media_url(
                 img_url.strip(),
                 upload_backend,
             )
             media.append(
                 {
-                    "type": "reference_image",
+                    "type": (
+                        "reference_video"
+                        if media_kind == "video"
+                        else "reference_image"
+                    ),
                     "url": resolved_url,
                 },
             )
@@ -149,11 +203,19 @@ async def submit_video_task(
         seedance_duration = _normalize_seedance_duration(duration, model_name)
         content = [{"type": "text", "text": prompt}]
         content.extend(
-            {
-                "type": "image_url",
-                "role": "reference_image",
-                "image_url": {"url": item["url"]},
-            }
+            (
+                {
+                    "type": "video_url",
+                    "role": "reference_video",
+                    "video_url": {"url": item["url"]},
+                }
+                if item["type"] == "reference_video"
+                else {
+                    "type": "image_url",
+                    "role": "reference_image",
+                    "image_url": {"url": item["url"]},
+                }
+            )
             for item in media
             if item.get("url")
         )
