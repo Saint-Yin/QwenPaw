@@ -40,6 +40,7 @@ class SpecialistToolWait(StrEnum):
 
 _PROJECT_ASSETS_TARGET_REF = "project:assets"
 _ASSET_TARGET_REF_PATTERN = r"^asset:.+$"
+_SOURCE_PROJECT_TOOL_NAMES = frozenset({"read_project", "read_project_file"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,7 +396,12 @@ class FileSpecialistToolRegistry:
         *,
         admitted_target_refs: Sequence[str],
     ) -> tuple[dict[str, Any], ...]:
-        project_tools = list(agent_project_tool_manifest())
+        project_tools = [
+            item
+            for item in agent_project_tool_manifest()
+            if role is not SpecialistRole.SOURCE_INTELLIGENCE
+            or item["function"]["name"] in _SOURCE_PROJECT_TOOL_NAMES
+        ]
         business_tools = [
             spec.manifest(role=role, admitted_target_refs=admitted_target_refs)
             for spec in _SPECS

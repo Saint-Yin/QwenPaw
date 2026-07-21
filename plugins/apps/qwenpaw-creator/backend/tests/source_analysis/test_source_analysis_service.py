@@ -7,6 +7,7 @@ import asyncio
 from datetime import UTC, datetime
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 from fastapi import FastAPI
@@ -21,9 +22,13 @@ from api.file_asset_routes import (
 from api.file_execution_routes import _cancel_task_sync
 from api.file_source_intelligence_routes import router as source_router
 from domain.enums import SpecialistRole, SpecialistRunStatus, TaskStatus
-from domain.errors import StorageIntegrityError
+from domain.errors import StorageIntegrityError, ValidationError
 from models.asr_model import ASRResult, ASRSegment
-from schemas.assets import SourceMediaMetadata, SourceModelRunRef
+from schemas.assets import (
+    SourceAgentIntelligenceInput,
+    SourceMediaMetadata,
+    SourceModelRunRef,
+)
 from services.project_files.facade import CreatorFileServices
 from services.project_files.models import (
     IndexedFile,
@@ -653,6 +658,109 @@ def test_outer_vlm_commit_persists_timeline_and_merges_exact_asr_result(
     assert index.transcript[0].text == "保持向前走"
     assert index.transcript[0].model_run_id == asr["modelRun"]["id"]
     assert [item.model for item in index.model_runs] == ["vlm-v1", "asr-v1"]
+
+
+def test_outer_vlm_commit_resolves_remote_cache_media_metadata(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    services = CreatorFileServices.create(tmp_path.resolve())
+    services.projects.create(Project.new(project_id="project-1", name="One"))
+    item = _register_remote_asset_sync(
+        services,
+        project_id="project-1",
+        key="remote-cached-source",
+        url="https://assets.example/cat.mp4",
+        requested_name="cat.mp4",
+        attach_source=True,
+        scope="POST-assets",
+    )
+    cache_path = tmp_path / "cat-cache.mp4"
+    cache_path.write_bytes(b"cached-source")
+    monkeypatch.setattr(
+        "services.source_analysis.service.resolve_remote_cache",
+        lambda *_args, **_kwargs: SimpleNamespace(path=cache_path),
+    )
+    monkeypatch.setattr(
+        "services.source_analysis.service._probe_media",
+        lambda path, version: SourceMediaMetadata(
+            mediaKind=version.media_kind,
+            mediaType=version.media_type,
+            durationMs=3_502_567,
+            width=640,
+            height=360,
+        ),
+    )
+    service = SourceMediaAnalysisService(services)
+
+    resolved = service._resolve_agent_source_sync(
+        "project-1",
+        f"asset:{item['assetId']}",
+    )
+
+    assert resolved[2].version_id == item["assetVersionId"]
+    assert resolved[4] == cache_path
+    assert resolved[6].duration_ms == 3_502_567
+
+
+def test_long_video_commit_requires_fine_shots_and_precise_semantics() -> None:
+    media = SourceMediaMetadata(
+        mediaKind="video",
+        mediaType="video/mp4",
+        durationMs=600_000,
+        width=640,
+        height=360,
+    )
+
+    def payload(shot_count: int, precise_semantic_count: int):
+        boundaries = [
+            round(index * 600_000 / shot_count) for index in range(shot_count + 1)
+        ]
+        shots = [
+            {
+                "startMs": boundaries[index],
+                "endMs": boundaries[index + 1],
+                "description": (
+                    f"连续场景 {index + 1}，记录主体动作、构图和画质变化。"
+                ),
+                "events": [f"状态变化 {index + 1}"],
+                "confidence": 0.9,
+            }
+            for index in range(shot_count)
+        ]
+        semantics = [
+            {
+                "startMs": index * 30_000,
+                "endMs": index * 30_000 + 20_000,
+                "text": f"精确事件 {index + 1}",
+                "tags": ["event", f"event-{index + 1}"],
+                "confidence": 0.9,
+            }
+            for index in range(precise_semantic_count)
+        ]
+        semantics.append(
+            {
+                "startMs": 0,
+                "endMs": 600_000,
+                "text": "全局镜头特征",
+                "tags": ["global", "camera"],
+                "confidence": 0.8,
+            },
+        )
+        return SourceAgentIntelligenceInput.model_validate(
+            {
+                "summary": "十分钟长视频的完整多粒度理解。",
+                "shots": shots,
+                "entities": [],
+                "semanticEntries": semantics,
+            },
+        )
+
+    with pytest.raises(ValidationError, match="至少需要 7 个连续 shots"):
+        SourceMediaAnalysisService._assert_agent_ranges(payload(6, 4), media)
+    with pytest.raises(ValidationError, match="至少需要 4 条"):
+        SourceMediaAnalysisService._assert_agent_ranges(payload(7, 3), media)
+    assert SourceMediaAnalysisService._assert_agent_ranges(payload(7, 4), media) == 1.0
 
 
 def test_analyze_endpoint_rejects_removed_inner_vlm_path(

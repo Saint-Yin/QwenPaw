@@ -276,7 +276,9 @@ class FileCreatorAgentRuntime:
         injected_model_client = model_client is not None
         self.model_client = model_client or AgentScopeAgentChatClient()
         self.source_model_client = source_model_client or (
-            self.model_client if injected_model_client else AgentScopeVlmChatClient()
+            self.model_client
+            if injected_model_client
+            else AgentScopeVlmChatClient(max_tokens=24_000)
         )
         self.poll_interval_seconds = poll_interval_seconds
         self.max_model_turns = max_model_turns
@@ -1449,6 +1451,26 @@ class FileCreatorAgentRuntime:
                 f"共 {len(native_media_parts)} 份。必须基于这些原生媒体进行观察，"
                 "不能把消息中的 URL 文本当作已经完成素材理解。"
             )
+            runtime_media_facts = []
+            for part in native_media_parts:
+                video = part.get("video_url")
+                if isinstance(video, Mapping) and video.get("durationMs") is not None:
+                    runtime_media_facts.append(
+                        {
+                            "assetVersionId": video.get("versionId"),
+                            "durationMs": video.get("durationMs"),
+                        },
+                    )
+            if runtime_media_facts:
+                user_text += (
+                    "\n\nRuntime 已通过本地缓存和 ffprobe 核验以下媒体事实；"
+                    "时间段必须落在这些真实时长内：\n"
+                    + json.dumps(
+                        runtime_media_facts,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
         user_content: list[dict[str, Any]] = [
             {"type": "text", "text": user_text},
             *native_media_parts,
@@ -1608,10 +1630,32 @@ class FileCreatorAgentRuntime:
                             self.services.projects.read,
                             project_id,
                         )
-                        _require_source_intelligence_associations(
-                            latest.project,
-                            delegated.target_refs,
-                        )
+                        try:
+                            _require_source_intelligence_associations(
+                                latest.project,
+                                delegated.target_refs,
+                            )
+                        except FileAgentRuntimeError as error:
+                            correction = (
+                                "你刚才直接输出了 [SUCCESS]，但没有通过 "
+                                "commit_source_intelligence 写入素材理解文件，"
+                                f"因此该成功被 Runtime 拒绝：{error}。"
+                                "现在禁止再次返回自然语言分析或 [SUCCESS]；"
+                                "请把你已经观察到的完整视觉理解转换成工具要求的"
+                                "结构化 summary、shots、entities、semanticEntries，"
+                                "并在本回合调用 commit_source_intelligence。"
+                            )
+                            await asyncio.to_thread(
+                                self.executions.append_specialist_message,
+                                project_id,
+                                specialist_run_id,
+                                message_id=f"specialist-message-{uuid4().hex}",
+                                role="user",
+                                content_parts=[{"type": "text", "text": correction}],
+                                metadata={"parentActionId": parent_action_id},
+                            )
+                            messages.append({"role": "user", "content": correction})
+                            continue
                     status = {
                         "SUCCESS": SpecialistRunStatus.SUCCEEDED,
                         "BLOCKED": SpecialistRunStatus.BLOCKED,

@@ -48,7 +48,9 @@ def test_specialist_registry_owns_role_specific_media_tools(tmp_path) -> None:
     assert "ai_edit" in editing
     assert "transcribe_source_audio" in source
     assert "commit_source_intelligence" in source
-    assert "jq_project" in source
+    assert {"read_project", "read_project_file"} <= source
+    assert "jq_project" not in source
+    assert "elements_at" not in source
     assert "r2v_generation" not in visual
     assert "image_generation" not in editing
 

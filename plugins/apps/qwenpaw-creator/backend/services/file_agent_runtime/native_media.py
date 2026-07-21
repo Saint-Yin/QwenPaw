@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,13 @@ from models import config as model_config
 from models.media_transport import upload_local_file_to_dashscope_temp
 from services.project_files.assets import AssetFileStore
 from services.project_files.facade import CreatorFileServices
+from services.project_files.remote_cache import resolve_remote_cache
+from services.runtime_files.execution_store import ProjectExecutionStore
+from services.runtime_files.media_probe import (
+    MediaProbeError,
+    MediaProbeUnavailable,
+    probe_media,
+)
 from services.runtime_files.models import CreatorMessageRecord
 
 _MEDIA_PART_TYPES = frozenset({"image_url", "video_url"})
@@ -65,9 +73,27 @@ def _source_video_sampling_fps(duration_seconds: float | None) -> float:
         return 2.0
     if duration_seconds <= 600:
         return 1.0
-    if duration_seconds <= 1800:
-        return 0.5
-    return 0.2
+    return 0.5
+
+
+def _runtime_duration_seconds(
+    services: CreatorFileServices,
+    project_id: str,
+    version: Any,
+) -> float | None:
+    if version.duration_seconds is not None:
+        return version.duration_seconds
+    cache = resolve_remote_cache(
+        services.projects.project_root(project_id),
+        version,
+        ProjectExecutionStore(services.root).list_tasks(project_id),
+    )
+    if cache is None:
+        return None
+    try:
+        return probe_media(str(cache.path)).duration_seconds
+    except (MediaProbeError, MediaProbeUnavailable):
+        return None
 
 
 async def source_intelligence_content_parts(
@@ -175,9 +201,17 @@ async def source_intelligence_content_parts(
             "checksum": version.checksum,
         }
         if part_type == "video_url":
-            native_payload["fps"] = _source_video_sampling_fps(
-                version.duration_seconds,
+            duration_seconds = await asyncio.to_thread(
+                _runtime_duration_seconds,
+                services,
+                project_id,
+                version,
             )
+            native_payload["fps"] = _source_video_sampling_fps(
+                duration_seconds,
+            )
+            if duration_seconds is not None:
+                native_payload["durationMs"] = round(duration_seconds * 1000)
         parts.append(
             {
                 "type": part_type,

@@ -113,6 +113,10 @@ def test_source_prompt_requires_outer_vlm_timeline_and_controlled_commit() -> No
     assert "整数毫秒半开区间 `[startMs,endMs)`" in prompt
     assert "transcribe_source_audio" in prompt
     assert "commit_source_intelligence" in prompt
+    assert "ceil(durationMs / 90000)" in prompt
+    assert "跨度不超过 30000ms" in prompt
+    assert "不得创建 Timeline Element" in prompt
+    assert "`jq_project`" not in prompt
     assert "不得降低为一条 summary" in prompt
 
 

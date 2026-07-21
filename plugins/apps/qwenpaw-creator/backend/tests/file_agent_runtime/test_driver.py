@@ -665,7 +665,9 @@ def test_source_intelligence_receives_every_user_media_part_directly(
     tmp_path,
 ) -> None:
     parent_turn = 0
+    source_turn = 0
     observed_source_content: list[dict[str, object]] = []
+    observed_correction = ""
 
     async def parent_callback(messages, tools):
         nonlocal parent_turn
@@ -688,13 +690,20 @@ def test_source_intelligence_receives_every_user_media_part_directly(
         return AgentModelTurn(content="素材理解 Agent 已收到原生素材。")
 
     async def source_callback(messages, tools):
+        nonlocal source_turn, observed_correction
         assert "commit_source_intelligence" in {
             item["function"]["name"] for item in tools
         }
-        content = messages[1]["content"]
-        assert isinstance(content, list)
-        observed_source_content.extend(content)
-        return AgentModelTurn(content="[SUCCESS]\n已直接观察全部用户素材。")
+        assert "jq_project" not in {item["function"]["name"] for item in tools}
+        source_turn += 1
+        if source_turn == 1:
+            content = messages[1]["content"]
+            assert isinstance(content, list)
+            observed_source_content.extend(content)
+            return AgentModelTurn(content="[SUCCESS]\n已直接观察全部用户素材。")
+        assert messages[-1]["role"] == "user"
+        observed_correction = str(messages[-1]["content"])
+        return AgentModelTurn(content="[FAILED]\n测试未提供可提交的 ProjectSource。")
 
     async def scenario():
         services, _snapshot = _create_project(tmp_path, initial_goal=None)
@@ -760,9 +769,9 @@ def test_source_intelligence_receives_every_user_media_part_directly(
     }
     assert len(specialist_runs) == 1
     assert specialist_runs[0].status.value == "FAILED"
-    assert "current_intelligence_version_id" in (
-        specialist_runs[0].final_summary_text or ""
-    ) or "exactly one ProjectSource" in (specialist_runs[0].final_summary_text or "")
+    assert "commit_source_intelligence" in observed_correction
+    assert "禁止再次返回自然语言分析" in observed_correction
+    assert specialist_runs[0].final_summary_text == "测试未提供可提交的 ProjectSource。"
 
 
 def test_parent_reads_persisted_source_intelligence_and_links_project_structure(

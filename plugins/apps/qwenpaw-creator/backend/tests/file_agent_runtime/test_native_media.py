@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -161,3 +162,63 @@ def test_url_backed_version_uses_public_source_without_local_cache(
             "video_url": {"url": "https://assets.example/input.mp4"},
         },
     ]
+
+
+def test_url_backed_version_uses_runtime_cache_probe_for_duration(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    services = CreatorFileServices.create(tmp_path.resolve())
+    services.projects.create(
+        Project.new(project_id="project-1", name="Project"),
+    )
+    item = _register_remote_asset_sync(
+        services,
+        project_id="project-1",
+        key="remote-media-cached",
+        url="https://assets.example/cached.mp4",
+        requested_name="cached.mp4",
+        attach_source=True,
+        scope="POST-assets",
+    )
+    cache_path = tmp_path / "cached.mp4"
+    cache_path.write_bytes(b"cached-video")
+    monkeypatch.setattr(
+        native_media,
+        "resolve_remote_cache",
+        lambda *_args, **_kwargs: SimpleNamespace(path=cache_path),
+    )
+    monkeypatch.setattr(
+        native_media,
+        "probe_media",
+        lambda _path: SimpleNamespace(duration_seconds=3502.567),
+    )
+    request = CreatorMessageRecord(
+        message_id="message-cached",
+        project_id="project-1",
+        creator_session_id="session-1",
+        conversation_id="conversation-1",
+        message_seq=1,
+        role="user",
+        content_parts=[{"type": "text", "text": "理解远程长视频"}],
+        metadata={
+            "assetVersionRefs": [f"asset-version:{item['assetVersionId']}"],
+        },
+    )
+
+    parts = asyncio.run(
+        native_media.source_intelligence_content_parts(
+            services,
+            project_id="project-1",
+            request=request,
+        ),
+    )
+
+    assert parts[0]["video_url"] == {
+        "url": "https://assets.example/cached.mp4",
+        "mediaType": "video/mp4",
+        "versionId": item["assetVersionId"],
+        "checksum": item["checksum"],
+        "fps": 0.5,
+        "durationMs": 3_502_567,
+    }

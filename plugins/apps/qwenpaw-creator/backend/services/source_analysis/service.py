@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -66,7 +67,10 @@ from services.project_files.models import (
     SourceAssetVersion,
     SourceIntelligenceVersion,
 )
-from services.project_files.remote_cache import public_source_url
+from services.project_files.remote_cache import (
+    public_source_url,
+    resolve_remote_cache,
+)
 from services.project_files.serialization import canonical_json_bytes
 from services.runtime_files.execution_models import (
     SpecialistRunRecord,
@@ -384,15 +388,24 @@ class SourceMediaAnalysisService:
             local_path = Path(file_store.project_root, indexed.relative_uri)
             media = _probe_media(local_path, version)
         elif source_url is not None:
-            media = SourceMediaMetadata(
-                mediaKind=version.media_kind,
-                mediaType=version.media_type,
-                durationMs=(
-                    round(version.duration_seconds * 1000)
-                    if version.duration_seconds is not None
-                    else None
-                ),
+            cache = resolve_remote_cache(
+                self.services.projects.project_root(project_id),
+                version,
+                self.executions.list_tasks(project_id),
             )
+            if cache is not None:
+                local_path = cache.path
+                media = _probe_media(local_path, version)
+            else:
+                media = SourceMediaMetadata(
+                    mediaKind=version.media_kind,
+                    mediaType=version.media_type,
+                    durationMs=(
+                        round(version.duration_seconds * 1000)
+                        if version.duration_seconds is not None
+                        else None
+                    ),
+                )
         else:
             raise StorageIntegrityError(
                 "SourceAssetVersion 缺少本地文件与公网 URL",
@@ -568,6 +581,29 @@ class SourceMediaAnalysisService:
             raise ValidationError(
                 "视频 shots 时间线覆盖不足 90%，必须记录开头、过渡、静止/黑屏和结尾",
             )
+        if duration_ms >= 600_000:
+            minimum_shots = math.ceil(duration_ms / 90_000)
+            if len(payload.shots) < minimum_shots:
+                raise ValidationError(
+                    "长视频素材理解粒度不足："
+                    f"{duration_ms}ms 至少需要 {minimum_shots} 个连续 shots，"
+                    f"当前仅 {len(payload.shots)} 个",
+                )
+            minimum_precise_semantics = min(
+                12,
+                max(4, math.ceil(duration_ms / 600_000)),
+            )
+            precise_semantics = sum(
+                1
+                for item in payload.semantic_entries
+                if item.start_ms is not None and item.end_ms - item.start_ms <= 30_000
+            )
+            if precise_semantics < minimum_precise_semantics:
+                raise ValidationError(
+                    "长视频素材理解缺少可剪辑的精确事件时间段："
+                    f"至少需要 {minimum_precise_semantics} 条不超过 30000ms 的 "
+                    f"semanticEntries，当前仅 {precise_semantics} 条",
+                )
         return ratio
 
     async def commit_agent_intelligence(
