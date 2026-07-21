@@ -8,7 +8,6 @@ import hashlib
 from pathlib import Path
 import re
 
-
 _PROMPT_ROOT = Path(__file__).resolve().parent
 _PLACEHOLDER = re.compile(r"\{\{([a-zA-Z0-9_]+)\}\}")
 
@@ -48,7 +47,7 @@ FILE_AGENT_PROMPT_SPECS = {
         _spec(
             "source_intelligence_agent.system",
             "source_intelligence_agent.system.txt",
-            "7f44d6ce7ed2ccbc33db6047222e20d7c853bb3ad56db941b729655a99de5a86",
+            "5b1a1799b7df0f189ffd7017f7cd30e85a3f047067baba9e24f659d216b05fc3",
             "project_id",
             "workspace_schema",
         ),
