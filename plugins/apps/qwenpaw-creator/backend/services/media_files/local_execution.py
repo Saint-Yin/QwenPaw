@@ -866,6 +866,30 @@ def _edit_overlay(
     }
 
 
+def _validate_contiguous_edit_elements(
+    elements: Sequence[TimelineElement],
+) -> None:
+    """Match Timeline edit positions to the concat-based local runner.
+
+    The runner emits selected source ranges back-to-back; it does not render
+    leading or interstitial blank media. Reject a Timeline that claims gaps or
+    overlaps instead of publishing an artifact whose duration disagrees with
+    the Timeline and preview playhead.
+    """
+
+    expected_start_tick = 0
+    for element in elements:
+        if element.span.start_tick != expected_start_tick:
+            raise ValidationError(
+                "Edit Timeline 必须从 0 开始并连续排列；"
+                f"{element.element_id} 的 span.start_tick="
+                f"{element.span.start_tick}，期望 {expected_start_tick}。"
+                "span 表示片段在成片中的位置；源素材时间只写在 "
+                "render_source.source_in_tick/source_out_tick。",
+            )
+        expected_start_tick = element.span.end_tick
+
+
 def _timeline_execution(
     *,
     project: Project,
@@ -893,6 +917,8 @@ def _timeline_execution(
             else "R2V/Edit"
         )
         raise ConflictError(f"Timeline 没有可执行的 {label} Element")
+    if command is CreatorCommandType.EXECUTE_EDIT:
+        _validate_contiguous_edit_elements(visual_elements)
     inputs: list[_FrozenInput] = []
     read_set: list[dict[str, Any]] = []
     selections: list[dict[str, Any]] = []

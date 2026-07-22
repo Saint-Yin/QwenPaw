@@ -60,6 +60,7 @@ def test_pet_os_renderer_uses_bubble_tool_and_requested_timing(
 
     assert result.success is True
     expression = commands[0][commands[0].index("-filter_complex") + 1]
+    assert "overlay=0:0:shortest=1" in expression
     assert "between(t,0.5,3.0)" in expression
     assert not output.with_suffix(".overlay.png").exists()
 
@@ -86,6 +87,7 @@ def test_interview_renderer_uses_title_tool_and_requested_timing(
 
     assert result.success is True
     expression = commands[0][commands[0].index("-filter_complex") + 1]
+    assert "overlay=0:0:shortest=1" in expression
     assert "between(t,0.0,4.0)" in expression
     assert not output.with_suffix(".overlay.png").exists()
 

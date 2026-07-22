@@ -278,6 +278,11 @@ describe("PlanPage Timeline/Element frontend", () => {
     expect(preview.closest("[data-timeline-panel]")).toHaveClass(
       "max-h-[66vh]",
     );
+    expect(container.querySelector("[data-plan-page]")).toHaveClass(
+      "h-full",
+      "min-h-0",
+      "overflow-y-auto",
+    );
     expect(preview.querySelector("video")).toHaveClass("object-contain");
     expect(preview.querySelector("video")).toHaveAttribute(
       "src",

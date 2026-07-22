@@ -66,6 +66,21 @@ def test_jq_uses_args_and_returns_one_object() -> None:
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq is not installed")
+def test_jq_exposes_aggregate_argument_objects() -> None:
+    result = JqProjectTransformer().transform(
+        {"name": "before", "story": {"tags": []}},
+        ".name = $stringArgs.name | .story.tags = $jsonArgs.tags",
+        string_args={"name": "after"},
+        json_args={"tags": ["funny", "pet"]},
+    )
+
+    assert result == {
+        "name": "after",
+        "story": {"tags": ["funny", "pet"]},
+    }
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is not installed")
 def test_jq_does_not_depend_on_a_mutable_sidecar_path(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -113,6 +128,12 @@ def test_jq_process_starts_at_the_system_executable(
         executable,
         "--compact-output",
         "--exit-status",
+        "--argjson",
+        "stringArgs",
+        "{}",
+        "--argjson",
+        "jsonArgs",
+        "{}",
         '.name = "after"',
     ]
 

@@ -37,12 +37,14 @@ timelines.items[timelineId].elements_by_id[elementId]
 1. 读取 Project，定位目标 Timeline，取得可用 SourceAssetVersion。
 2. 对每个候选 source version，找到匹配当前版本的 intelligence，并读取完整素材理解文本。只使用有依据的事件和时间范围。
 3. 按最终播放顺序计算每个选择的绝对 Timeline span。每个 Edit Element 必须满足：
+   - Timeline `span.start_tick` 是该片段在最终成片中的位置，不是源素材时间码；不得把 `source_in_tick` 复制到 `span.start_tick`；
+   - 除非创作意图明确要求留白或重叠，第一段 `span.start_tick=0`，后续每段的 `span.start_tick` 等于上一段的 `start_tick + duration_tick`。例如依次选择源素材 `[5000,6000)`、`[9000,13000)`，对应成片 span 必须是 `[0,1000)`、`[1000,5000)`；
    - `render_source.version_id` 是真实 SourceAssetVersion；
    - `source_out_tick > source_in_tick` 且不超过源素材时长；
    - 始终满足 `duration_tick = round((source_out_tick - source_in_tick) / playback_rate)`；默认 `playback_rate=1`。例如源区间 `[60000,70000)` 必须持续 10000 tick，不能写成 5000；
    - `creation.source_intelligence_version_id` 指向同一源版本的理解结果；
    - Element ID 稳定且在整个 Project 中唯一。
-4. 需要叠加内容时，为每个时段创建独立 Overlay Element。Overlay 的绝对 span 必须与目标画面时段相交；不要把 overlay 放入 EditCreation 或 render_source。
+4. 需要叠加内容时，为每个时段创建独立 Overlay Element。Overlay 的绝对 span 必须与目标画面时段相交；对应整段画面的 Overlay 直接复制目标 Edit 的 Timeline span，不得复制源素材时间码；不要把 overlay 放入 EditCreation 或 render_source。
 5. 逐项计算并复核上述时长公式。用一次 `jq_project` 写入完整 Element 集合，再重新读取 Project 验证。把集合通过 `jsonArgs.elements` 传入，program 可写成 `.timelines.items[$timelineId].elements_by_id = $elements`；不要把大量对象内联到 program，也不要在末尾选择 Timeline 子对象，jq 必须返回完整 Project 根对象。
 6. 调用 `ai_edit` 执行 `timeline:<timelineId>`。完成后重新读取 Project，确认 Timeline render slot 选择了真实 ArtifactVersion。
 
