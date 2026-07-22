@@ -241,6 +241,38 @@ describe("deriveAgentLiveStatus", () => {
     expect(result.label).toBe("画面设计中…");
   });
 
+  it("does not show '正在安排' once the delegated subagent has completed (e.g. cancelled)", () => {
+    // Reproduces the manual-stop state: the delegate tool call is still
+    // marked "started" (no terminal event arrived for it), but the
+    // specialist activity has already terminated as CANCELLED. The status
+    // bar must not claim "正在安排「视觉开发」…" — that would contradict the
+    // activity card's "已取消" state. It should fall through instead.
+    const result = deriveAgentLiveStatus(
+      baseInput({
+        toolCalls: [
+          {
+            ...mainToolCall("delegate_to_agent", {
+              role: "visual_development_agent",
+            }),
+            actionId: "action-1",
+          },
+        ],
+        subagentActivities: {
+          "action-1": {
+            ...subagentActivity("unknown_tool"),
+            tools: {},
+            completed: true,
+            terminalKind: "CANCELLED",
+          },
+        },
+        agentStatusBar: statusBar({ label: "后端进度" }),
+      }),
+    );
+    expect(result.label).not.toBe("正在安排「视觉开发」…");
+    expect(result.label).not.toBe("正在安排专业制作…");
+    expect(result.label).toBe("后端进度");
+  });
+
   it("maps specialist tools to fine-grained sub-states", () => {
     const writing = deriveAgentLiveStatus(
       baseInput({

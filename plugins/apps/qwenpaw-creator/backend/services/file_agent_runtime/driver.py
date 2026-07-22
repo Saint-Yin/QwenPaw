@@ -127,7 +127,11 @@ def _grounding_extension(path: Path, media_type: str) -> str:
     if suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
         return suffix
     guessed = mimetypes.guess_extension(media_type)
-    return guessed if guessed in {".jpg", ".jpeg", ".png", ".webp", ".gif"} else ".img"
+    return (
+        guessed
+        if guessed in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+        else ".img"
+    )
 
 
 def _grounding_local_path(source: Mapping[str, Any]) -> Path | None:
@@ -481,7 +485,8 @@ class FileCreatorAgentRuntime:
         if session.active_run_id is not None and handle is None:
             interrupted = any(
                 item.review_boundary is not None
-                and item.review_boundary.interrupted_run_id == session.active_run_id
+                and item.review_boundary.interrupted_run_id
+                == session.active_run_id
                 for item in user_messages
             )
             if not interrupted:
@@ -1150,7 +1155,9 @@ class FileCreatorAgentRuntime:
                 continue
             source["workspace_ref"] = entry["workspace_ref"]
             source["assetVersionRef"] = entry["workspace_ref"]
-            source["source_asset_version_id"] = entry["source_asset_version_id"]
+            source["source_asset_version_id"] = entry[
+                "source_asset_version_id"
+            ]
             source["logical_asset_id"] = entry["logical_asset_id"]
             source["indexed_file_id"] = entry["file_id"]
         context_lines = [
@@ -1262,7 +1269,8 @@ class FileCreatorAgentRuntime:
                     version_id=version_id,
                     logical_asset_id=logical_asset_id,
                     name=str(
-                        raw_source.get("title") or f"Grounding visual {index + 1}",
+                        raw_source.get("title")
+                        or f"Grounding visual {index + 1}",
                     )[:160],
                     file_id=file_id,
                     checksum=checksum,
@@ -1477,7 +1485,10 @@ class FileCreatorAgentRuntime:
             runtime_media_facts = []
             for part in native_media_parts:
                 video = part.get("video_url")
-                if isinstance(video, Mapping) and video.get("durationMs") is not None:
+                if (
+                    isinstance(video, Mapping)
+                    and video.get("durationMs") is not None
+                ):
                     runtime_media_facts.append(
                         {
                             "assetVersionId": video.get("versionId"),
@@ -1674,10 +1685,14 @@ class FileCreatorAgentRuntime:
                                 specialist_run_id,
                                 message_id=f"specialist-message-{uuid4().hex}",
                                 role="user",
-                                content_parts=[{"type": "text", "text": correction}],
+                                content_parts=[
+                                    {"type": "text", "text": correction},
+                                ],
                                 metadata={"parentActionId": parent_action_id},
                             )
-                            messages.append({"role": "user", "content": correction})
+                            messages.append(
+                                {"role": "user", "content": correction},
+                            )
                             continue
                     status = {
                         "SUCCESS": SpecialistRunStatus.SUCCEEDED,
@@ -1852,6 +1867,20 @@ class FileCreatorAgentRuntime:
                 status=SpecialistRunStatus.CANCELLED,
                 updates={"final_marker": "CANCELLED"},
             )
+            # Disk is now CANCELLED
+            # Emit subagent.failed so the frontend can disarm.
+            await self._event(
+                project_id,
+                session_id,
+                "subagent.failed",
+                parent_run_id,
+                request,
+                {
+                    **common,
+                    "cancelled": True,
+                    "error": "specialist run cancelled",
+                },
+            )
             raise
         except Exception as exc:
             await asyncio.to_thread(
@@ -1902,7 +1931,8 @@ class FileCreatorAgentRuntime:
         if (
             spec is not None
             and spec.requires_execution_authorization
-            and get_execution_authorization_mode() != EXECUTION_AUTHORIZATION_ALLOW_ALL
+            and get_execution_authorization_mode()
+            != EXECUTION_AUTHORIZATION_ALLOW_ALL
         ):
             authorization_id = await self._await_execution_authorization(
                 project_id=project_id,
@@ -2442,7 +2472,9 @@ class FileCreatorAgentRuntime:
     ) -> None:
         handle = self._active.get(project_id)
         superseded = bool(
-            handle is not None and handle.run_id == run_id and handle.superseded,
+            handle is not None
+            and handle.run_id == run_id
+            and handle.superseded,
         )
         try:
             await asyncio.to_thread(
@@ -2715,7 +2747,9 @@ def _message_text(message: CreatorMessageRecord) -> str:
             )
     refs = message.metadata.get("assetVersionRefs")
     if isinstance(refs, list):
-        exact_refs = [str(value).strip() for value in refs if str(value).strip()]
+        exact_refs = [
+            str(value).strip() for value in refs if str(value).strip()
+        ]
         if exact_refs:
             chunks.append(
                 "本轮已入库素材（本轮消息附件的 exact AssetVersion refs，"
@@ -2828,7 +2862,8 @@ def _require_source_intelligence_associations(
         )
         if (
             intelligence is None
-            or intelligence.source_asset_version_id != source.selected_asset_version_id
+            or intelligence.source_asset_version_id
+            != source.selected_asset_version_id
         ):
             raise FileAgentRuntimeError(
                 "Source Intelligence selection does not match the current Source version "
