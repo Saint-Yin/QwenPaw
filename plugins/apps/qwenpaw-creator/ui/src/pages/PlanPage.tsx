@@ -159,8 +159,11 @@ export default function PlanPage() {
 
   return (
     <div
-      className={`flex min-h-full flex-col bg-[var(--color-bg-layout)] ${
-        previewOpen ? "overflow-y-auto" : "h-full overflow-hidden"
+      data-plan-page
+      className={`flex h-full min-h-0 flex-col bg-[var(--color-bg-layout)] ${
+        previewOpen
+          ? "overflow-y-auto overscroll-contain"
+          : "overflow-hidden"
       }`}
     >
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]/60 px-5 py-3 backdrop-blur">

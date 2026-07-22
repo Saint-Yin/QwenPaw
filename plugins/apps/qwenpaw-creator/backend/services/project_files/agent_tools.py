@@ -251,7 +251,13 @@ AGENT_PROJECT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "Pydantic 校验和原子发布。"
             "jq 必须输出且只输出完整 Project 根对象；不得以嵌套路径或子对象变量结束。"
             "必须原样保留 schema_version/project_id/generation/created_at/updated_at。"
+            "绝不能在 program 中给这些保护字段赋值；updated_at 由 Runtime 自动维护。"
+            "不要以 `$jsonArgs | ...` 开始变换；输入 Project `.` 必须始终作为输出根对象。"
             "批量内容通过 jsonArgs 传入，program 只负责结构化赋值。"
+            "动态加法表达式在绑定 jq 变量前必须加括号，例如 "
+            "(\"source:\" + $logicalId) as $sourceKey；对象字段值中的运算也必须加括号。"
+            "修改后自然返回当前完整 Project；不要在结尾返回修改前保存的根对象，"
+            "否则会丢弃全部修改。"
         ),
         "parameters": {
             "type": "object",
@@ -268,14 +274,18 @@ AGENT_PROJECT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "stringArgs": {
                     "type": "object",
-                    "description": "通过 --arg 传入的短字符串参数。",
+                    "description": (
+                        "通过 --arg 传入的短字符串参数；program 可使用 "
+                        "$stringArgs.name，也兼容按 key 使用 $name。"
+                    ),
                     "additionalProperties": {"type": "string"},
                 },
                 "jsonArgs": {
                     "type": "object",
                     "description": (
                         "通过 --argjson 传入的结构化 JSON；新增多项时间线内容时应把对象集合放这里，"
-                        "避免在 program 中拼接大段 JSON。"
+                        "避免在 program 中拼接大段 JSON。program 可使用 "
+                        "$jsonArgs.elements，也兼容按 key 使用 $elements。"
                     ),
                     "additionalProperties": True,
                 },

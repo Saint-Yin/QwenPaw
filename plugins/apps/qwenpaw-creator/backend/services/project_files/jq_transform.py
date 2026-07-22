@@ -50,9 +50,35 @@ class JqProjectTransformer:
             raise JqTransformError("jq program must be non-empty")
 
         jq_command = [self.executable, "--compact-output", "--exit-status"]
-        for name, value in sorted((string_args or {}).items()):
+        normalized_string_args = dict(string_args or {})
+        normalized_json_args = dict(json_args or {})
+        # Preserve per-key variables ($name, $elements, ...) and also expose
+        # the argument objects named by the tool schema. Models naturally use
+        # forms such as `$jsonArgs.elements`; accepting both avoids needless
+        # jq compile failures without breaking existing programs.
+        jq_command.extend(
+            [
+                "--argjson",
+                "stringArgs",
+                json.dumps(
+                    normalized_string_args,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "--argjson",
+                "jsonArgs",
+                json.dumps(
+                    normalized_json_args,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            ],
+        )
+        for name, value in sorted(normalized_string_args.items()):
             jq_command.extend(["--arg", name, value])
-        for name, value in sorted((json_args or {}).items()):
+        for name, value in sorted(normalized_json_args.items()):
             jq_command.extend(
                 [
                     "--argjson",

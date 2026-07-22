@@ -104,6 +104,7 @@ def test_creator_owns_timeline_element_planning() -> None:
     assert "结构完成后才进入视觉和媒体生产" in prompt
     assert "完整 Project 根对象" in prompt
     assert "jsonArgs" in prompt
+    assert "`updated_at` 由 Runtime 自动维护" in prompt
     assert "content_type=pet_video" in prompt
     assert "overlay_kind=pet_os" in prompt
     assert "x=0.5, y=0.5" in prompt
@@ -176,5 +177,7 @@ def test_ai_editing_director_requires_pet_inner_monologue_not_action_labels() ->
     assert (
         "round((source_out_tick - source_in_tick) / playback_rate)" in prompt
     )
+    assert "不得把 `source_in_tick` 复制到 `span.start_tick`" in prompt
+    assert "第一段 `span.start_tick=0`" in prompt
     assert "jsonArgs.elements" in prompt
     assert "不是可选项" in prompt

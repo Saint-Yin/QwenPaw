@@ -2892,10 +2892,15 @@ def _specialist_tool_recovery(name: str) -> str:
     if name == "jq_project":
         return (
             "Re-read project.json and retry jq_project with a transform that returns the "
-            "complete Project root and preserves all Runtime-protected root fields. Put "
-            "bulk objects in jsonArgs. For every Edit item, set duration_tick to "
+            "complete Project root and preserves all Runtime-protected root fields. "
+            "Never assign schema_version, project_id, generation, created_at, or updated_at; "
+            "the Runtime maintains them. Start from the input Project `.`, not `$jsonArgs`. "
+            "Put bulk objects in jsonArgs. For every Edit item, set duration_tick to "
             "round((source_out_tick - source_in_tick) / playback_rate). Remove nonexistent "
-            "references; not-yet-produced artifacts stay null."
+            "references; not-yet-produced artifacts stay null. Parenthesize computed jq "
+            "values before binding them, for example (\"source:\" + $logicalId) as "
+            "$sourceKey, and parenthesize expressions used as object values. Never finish "
+            "with a saved pre-edit root such as $project because that discards mutations."
         )
     if name == "ai_edit":
         return (

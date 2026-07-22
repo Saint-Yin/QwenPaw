@@ -7,15 +7,19 @@ import asyncio
 from datetime import UTC, datetime
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
+
+from domain.errors import ValidationError as DomainValidationError
 
 from services.media_files.image_execution import FileImageExecutionService
 from services.media_files.local_execution import (
     FfmpegLocalMediaRunner,
     FileLocalMediaExecutionService,
     LocalMediaExecutionSpec,
+    _validate_contiguous_edit_elements,
 )
 from services.media_files.r2v_execution import FileR2VExecutionService
 from services.project_files.agent_tools import (
@@ -98,6 +102,19 @@ def test_default_visual_location_is_a_full_frame_with_center_transform_origin() 
     assert (location.x, location.y) == (0.5, 0.5)
     assert (location.width, location.height) == (1.0, 1.0)
     assert (location.anchor_x, location.anchor_y) == (0.5, 0.5)
+
+
+def test_edit_execution_rejects_source_time_used_as_timeline_position() -> None:
+    misplaced = SimpleNamespace(
+        element_id="edit:source-9-13",
+        span=TimelineSpan(start_tick=9_000, duration_tick=4_000),
+    )
+
+    with pytest.raises(
+        DomainValidationError,
+        match=r"span\.start_tick=9000，期望 0",
+    ):
+        _validate_contiguous_edit_elements([misplaced])
 
 
 def test_ffmpeg_placement_uses_the_same_anchor_projection_as_the_ui() -> None:

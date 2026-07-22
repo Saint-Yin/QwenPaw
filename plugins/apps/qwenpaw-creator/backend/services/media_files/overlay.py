@@ -649,7 +649,7 @@ def _composite_overlay(
         str(overlay_path),
         "-filter_complex",
         (
-            "[1:v]format=rgba[ov],[0:v][ov]overlay=0:0:"
+            "[1:v]format=rgba[ov],[0:v][ov]overlay=0:0:shortest=1:"
             f"enable='{enable_expression}',"
             "scale=trunc(iw/2)*2:trunc(ih/2)*2"
         ),
