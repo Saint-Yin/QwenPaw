@@ -668,6 +668,8 @@ def _execution_task_view(task: TaskRecord) -> dict[str, Any]:
         "targetRef": str(task.metadata.get("targetRef") or ""),
         "status": task.status.value,
         "progress": task.progress,
+        "completedElements": task.metadata.get("completedElements"),
+        "totalElements": task.metadata.get("totalElements"),
         "resultRefs": task.output_refs,
         "result": task.result,
         "error": task.error,

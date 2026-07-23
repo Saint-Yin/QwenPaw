@@ -213,13 +213,30 @@ export default function PlanPage() {
     requestedComposeTaskId !== null && requestedComposeTask === null;
   const isComposing =
     composing || composePendingAdmission || activeComposeTask !== null;
-  const composeProgress =
-    activeComposeTask?.progress != null
-      ? Math.round(
-          Math.max(0, Math.min(1, activeComposeTask.progress)) * 100,
-        )
-      : null;
-  const displayedComposeProgress = composeProgress ?? 0;
+  const composeElementProgress = useMemo(() => {
+    const completed = activeComposeTask?.completedElements;
+    const total = activeComposeTask?.totalElements;
+    if (
+      !Number.isInteger(completed) ||
+      !Number.isInteger(total) ||
+      completed == null ||
+      total == null ||
+      total <= 0 ||
+      completed < 0 ||
+      completed > total
+    )
+      return null;
+    return {
+      completed,
+      total,
+      fraction: completed / total,
+    };
+  }, [activeComposeTask]);
+  const composeLabel = composeElementProgress
+    ? `合成中 · ${composeElementProgress.completed}/${composeElementProgress.total}`
+    : activeComposeTask
+      ? "合成中"
+      : "合成准备中";
 
   const composeNow = useCallback(async () => {
     if (!timeline || isComposing) return;
@@ -444,7 +461,9 @@ export default function PlanPage() {
               freshRender
                 ? "下载成片视频文件"
                 : isComposing
-                  ? `正在合成成片，当前进度 ${displayedComposeProgress}%，完成后可下载`
+                  ? composeElementProgress
+                    ? `正在合成成片，已完成 ${composeElementProgress.completed}/${composeElementProgress.total} 个 Element`
+                    : "正在准备成片合成，完成后可下载"
                   : readiness.total === 0
                     ? "时间轴还没有可合成的画面内容"
                     : readiness.notReady > 0
@@ -457,14 +476,22 @@ export default function PlanPage() {
             {isComposing && (
               <span
                 aria-hidden="true"
-                data-compose-progress-track
-                className="absolute inset-x-0 bottom-0 h-0.5 bg-[var(--color-border)]"
+                className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-[var(--color-border)]"
               >
-                <span
-                  data-compose-progress
-                  className="block h-full bg-[var(--color-accent)] transition-[width] duration-500 ease-out"
-                  style={{ width: `${displayedComposeProgress}%` }}
-                />
+                {composeElementProgress ? (
+                  <span
+                    data-compose-progress
+                    className="block h-full bg-[var(--color-accent)] transition-[width] duration-300 ease-out"
+                    style={{
+                      width: `${composeElementProgress.fraction * 100}%`,
+                    }}
+                  />
+                ) : (
+                  <span
+                    data-compose-activity
+                    className="block h-full w-full animate-pulse bg-[var(--color-accent)]"
+                  />
+                )}
               </span>
             )}
             <span className="relative z-[1] inline-flex items-center gap-1.5">
@@ -473,9 +500,7 @@ export default function PlanPage() {
               ) : (
                 <Download className="h-3.5 w-3.5" />
               )}
-              {isComposing
-                ? `合成中 · ${displayedComposeProgress}%`
-                : "下载成片"}
+              {isComposing ? composeLabel : "下载成片"}
             </span>
           </button>
         </div>

@@ -148,6 +148,9 @@ def test_overlay_copy_edit_invalidates_only_timeline_render() -> None:
     assert "brand new copy" in re.sub(r"<[^>]+>", "", html)
     assert impact.regeneration_required is False
     assert impact.render_timeline_ids == {"timeline:main"}
+    assert versions["final-v1"]["metadata"][
+        "pendingAffectedElementIds"
+    ] == ["overlay-1"]
 
 
 def test_overlay_prompt_edit_drops_inline_motion_and_requires_generation() -> None:

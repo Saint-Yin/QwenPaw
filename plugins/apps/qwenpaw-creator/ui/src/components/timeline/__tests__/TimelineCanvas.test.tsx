@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import TimelineCanvas from "@/components/timeline/TimelineCanvas";
 import { projectDocument } from "@/test/creatorFixtures";
@@ -268,5 +268,79 @@ describe("TimelineCanvas preview scrubber", () => {
     expect(
       container.querySelector("[data-final-preview-incomplete]"),
     ).toBeInTheDocument();
+  });
+
+  it("recovers when media becomes ready without another canplay event", async () => {
+    const project = structuredClone(projectDocument);
+    const timeline = project.timelines.items["timeline:main"];
+    const { container } = render(
+      <TimelineCanvas
+        project={project}
+        timeline={timeline}
+        durationTick={20000}
+        playheadTick={0}
+        selectedElementId={null}
+        activeElementIds={[]}
+        previewOpen
+        tasks={[]}
+        onPreviewOpenChange={vi.fn()}
+        onPlayheadChange={vi.fn()}
+        onSelectElement={vi.fn()}
+        onActiveElementIdsChange={vi.fn()}
+      />,
+    );
+    const video = container.querySelector(
+      "[data-timeline-video-preview] video",
+    ) as HTMLVideoElement;
+
+    Object.defineProperties(video, {
+      duration: { configurable: true, value: 20 },
+      readyState: { configurable: true, value: 4 },
+    });
+
+    await waitFor(
+      () =>
+        expect(
+          container.querySelector("[data-final-preview-incomplete]"),
+        ).not.toBeInTheDocument(),
+      { timeout: 1000 },
+    );
+  });
+
+  it("uses completed stale frames outside the Element changed by the latest edit", () => {
+    const project = structuredClone(projectDocument);
+    const timeline = project.timelines.items["timeline:main"];
+    const finalRender =
+      project.assets.artifact_versions_by_id["final-v1"];
+    finalRender.stale = true;
+    finalRender.stale_reason = "时间线内容已修改，需要重新合成";
+    finalRender.metadata.pendingAffectedElementIds = ["overlay-os"];
+    const props = {
+      project,
+      timeline,
+      durationTick: 20000,
+      selectedElementId: null,
+      activeElementIds: [],
+      previewOpen: true,
+      tasks: [],
+      onPreviewOpenChange: vi.fn(),
+      onPlayheadChange: vi.fn(),
+      onSelectElement: vi.fn(),
+      onActiveElementIdsChange: vi.fn(),
+    };
+
+    const { container, rerender } = render(
+      <TimelineCanvas {...props} playheadTick={5000} />,
+    );
+    const sourceChip = () =>
+      container.querySelector("[data-preview-source-chip]");
+
+    expect(sourceChip()).toHaveTextContent("未受影响 · 已完成画面");
+
+    rerender(<TimelineCanvas {...props} playheadTick={6000} />);
+    expect(sourceChip()).toHaveTextContent("内容已更新 · 实时预览");
+
+    rerender(<TimelineCanvas {...props} playheadTick={10500} />);
+    expect(sourceChip()).toHaveTextContent("未受影响 · 已完成画面");
   });
 });

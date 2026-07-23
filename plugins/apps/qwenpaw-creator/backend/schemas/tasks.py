@@ -24,6 +24,12 @@ class TaskView(StrictModel):
     target_ref: str = Field(alias="targetRef")
     status: TaskStatus
     progress: float | None = None
+    completed_elements: int | None = Field(
+        None,
+        alias="completedElements",
+        ge=0,
+    )
+    total_elements: int | None = Field(None, alias="totalElements", ge=0)
     result_refs: list[str] = Field(default_factory=list, alias="resultRefs")
 
 

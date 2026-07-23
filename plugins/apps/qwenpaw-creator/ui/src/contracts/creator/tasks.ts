@@ -54,6 +54,8 @@ export interface TaskView {
   targetRef: string;
   status: TaskStatus;
   progress: number | null;
+  completedElements?: number | null;
+  totalElements?: number | null;
   resultRefs: string[];
   result?: Record<string, unknown> | null;
   error?: Record<string, unknown> | null;

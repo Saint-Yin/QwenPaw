@@ -107,6 +107,8 @@ def _task_view(task: TaskRecord) -> dict[str, Any]:
         "targetRef": target_ref,
         "status": task.status.value,
         "progress": task.progress,
+        "completedElements": task.metadata.get("completedElements"),
+        "totalElements": task.metadata.get("totalElements"),
         "resultRefs": task.output_refs,
         "result": task.result,
         "error": task.error,

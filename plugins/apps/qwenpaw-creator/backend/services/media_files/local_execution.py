@@ -16,6 +16,7 @@ outputs remain immutable but unindexed and are recorded in Runtime quarantine.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -162,6 +163,33 @@ class LocalMediaExecutionSpec:
     on_element_done: Callable[[int, int], None] | None = None
 
 
+def _input_render_element_ids(item: LocalMediaInput) -> frozenset[str]:
+    ids: set[str] = set()
+    if item.source_ref.startswith("element:"):
+        ids.add(item.source_ref.removeprefix("element:"))
+    else:
+        ids.add(f"input:{item.version_id}")
+    if isinstance(item.overlay, Mapping):
+        element_id = item.overlay.get("element_id")
+        if isinstance(element_id, str) and element_id:
+            ids.add(element_id)
+    for motion in item.motions:
+        element_id = motion.get("element_id")
+        if isinstance(element_id, str) and element_id:
+            ids.add(element_id)
+    return frozenset(ids)
+
+
+def _render_element_total(inputs: Sequence[LocalMediaInput]) -> int:
+    return len(
+        {
+            element_id
+            for item in inputs
+            for element_id in _input_render_element_ids(item)
+        },
+    )
+
+
 class LocalMediaRunner(Protocol):
     """Runner boundary.  Implementations write exactly ``spec.output_path``."""
 
@@ -211,6 +239,15 @@ class FfmpegLocalMediaRunner:
             raise ValidationError("本地媒体执行至少需要一个输入")
         concat_inputs: list[Path] = []
         overlay_warnings: list[str] = []
+        input_element_ids = tuple(
+            _input_render_element_ids(item) for item in spec.inputs
+        )
+        remaining_element_occurrences = Counter(
+            element_id
+            for element_ids in input_element_ids
+            for element_id in element_ids
+        )
+        total_elements = len(remaining_element_occurrences)
         if spec.command in (
             CreatorCommandType.EXECUTE_EDIT,
             CreatorCommandType.COMPOSE_FINAL_VIDEO,
@@ -281,7 +318,16 @@ class FfmpegLocalMediaRunner:
                     )
                 concat_inputs.append(segment)
                 if spec.on_element_done is not None:
-                    spec.on_element_done(index + 1, len(spec.inputs))
+                    for element_id in input_element_ids[index]:
+                        remaining_element_occurrences[element_id] -= 1
+                    completed_elements = sum(
+                        remaining == 0
+                        for remaining in remaining_element_occurrences.values()
+                    )
+                    spec.on_element_done(
+                        completed_elements,
+                        total_elements,
+                    )
         else:
             concat_inputs.extend(item.path for item in spec.inputs)
         self._concat(concat_inputs, spec.output_path, work_dir=spec.work_dir)
@@ -1496,6 +1542,9 @@ class FileLocalMediaExecutionService:
                 resolved,
                 task,
             )
+            total_elements = _render_element_total(spec.inputs)
+            if spec.on_element_done is not None and total_elements > 0:
+                spec.on_element_done(0, total_elements)
             runner_output = await self.runner.render(spec)
             published_result = await asyncio.to_thread(
                 self._materialize_and_publish,
@@ -1935,10 +1984,13 @@ class FileLocalMediaExecutionService:
                     task.task_id,
                     expected_status=TaskStatus.RUNNING,
                     status=TaskStatus.RUNNING,
-                    # 逐片段处理占 5%–85%；后续 concat、发布与 Project
-                    # 收敛仍需保留可见进度，避免处理中提前显示 100%。
                     updates={
-                        "progress": min(0.85, 0.05 + (done / total) * 0.8),
+                        "progress": min(1.0, done / total),
+                        "metadata": {
+                            **task.metadata,
+                            "completedElements": done,
+                            "totalElements": total,
+                        },
                     },
                 )
             except ExecutionStateConflict:

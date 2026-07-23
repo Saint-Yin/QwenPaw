@@ -163,6 +163,32 @@ def _mark_timeline_render_stale(
             reason="时间线内容已修改，需要重新合成",
             impact=impact,
         )
+        version_id = _selected_version_id(document, slot_id)
+        version = _items(
+            document,
+            "assets",
+            "artifact_versions_by_id",
+        ).get(version_id)
+        if not isinstance(version, dict):
+            continue
+        metadata = dict(_record(version.get("metadata")))
+        raw_pending_ids = metadata.get("pendingAffectedElementIds")
+        pending_ids = (
+            {
+                value
+                for value in raw_pending_ids
+                if isinstance(value, str) and value
+            }
+            if isinstance(raw_pending_ids, list)
+            else set()
+        )
+        pending_ids.update(impact.affected_element_ids)
+        if pending_ids:
+            # Keep the invalidation scope with the stale render itself.  The
+            # frontend can then continue using completed frames outside these
+            # Element spans after navigation or a full page refresh.
+            metadata["pendingAffectedElementIds"] = sorted(pending_ids)
+            version["metadata"] = metadata
 
 
 def _invalidate_r2v_outputs(

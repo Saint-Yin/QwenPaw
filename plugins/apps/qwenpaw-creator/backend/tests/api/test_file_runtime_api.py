@@ -213,6 +213,11 @@ def test_file_execution_routes_list_and_cancel(tmp_path) -> None:
             input_generation=snapshot.generation,
             input_etag=snapshot.etag,
             input_refs=["project:story"],
+            metadata={
+                "targetRef": "timeline:timeline:main",
+                "completedElements": 3,
+                "totalElements": 10,
+            },
         ),
     )
 
@@ -241,6 +246,8 @@ def test_file_execution_routes_list_and_cancel(tmp_path) -> None:
     assert runs.json()["items"][0]["taskRefs"] == ["task-1"]
     assert tasks.status_code == 200
     assert tasks.json()["items"][0]["status"] == "QUEUED"
+    assert tasks.json()["items"][0]["completedElements"] == 3
+    assert tasks.json()["items"][0]["totalElements"] == 10
     assert cancelled.status_code == 202
     assert cancelled.json()["status"] == "CANCELLED"
     assert replay.status_code == 202

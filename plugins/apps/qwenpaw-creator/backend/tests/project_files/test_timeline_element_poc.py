@@ -12,13 +12,16 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from domain.enums import CreatorCommandType
 from domain.errors import ValidationError as DomainValidationError
 
 from services.media_files.image_execution import FileImageExecutionService
 from services.media_files.local_execution import (
     FfmpegLocalMediaRunner,
     FileLocalMediaExecutionService,
+    LocalMediaInput,
     LocalMediaExecutionSpec,
+    _render_element_total,
     _validate_contiguous_edit_elements,
 )
 from services.media_files.r2v_execution import FileR2VExecutionService
@@ -84,6 +87,9 @@ class _LocalRunner:
 
     async def render(self, spec: LocalMediaExecutionSpec):
         self.calls.append(spec)
+        if spec.on_element_done is not None:
+            total_elements = _render_element_total(spec.inputs)
+            spec.on_element_done(total_elements, total_elements)
         spec.output_path.write_bytes(_MP4 + spec.command.value.encode())
         return {
             "media_type": "video/mp4",
@@ -136,6 +142,72 @@ def test_ffmpeg_placement_uses_the_same_anchor_projection_as_the_ui() -> None:
     )
     assert "scale=1024:72" in graph
     assert "overlay=128:598" in graph
+
+
+def test_ffmpeg_progress_counts_unique_elements_across_segments(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(_MP4)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    progress: list[tuple[int, int]] = []
+    runner = FfmpegLocalMediaRunner(executable="ffmpeg")
+
+    def fake_run(args, *, cwd):
+        del cwd
+        segment = work_dir / "segments" / str(args[-1]).split("/")[-1]
+        segment.write_bytes(_MP4)
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    monkeypatch.setattr(runner, "_apply_overlay", lambda *_args: None)
+    monkeypatch.setattr(runner, "_apply_motion_overlays", lambda *_args: [])
+    monkeypatch.setattr(
+        runner,
+        "_concat",
+        lambda _inputs, output_path, *, work_dir: output_path.write_bytes(
+            _MP4,
+        ),
+    )
+    shared_overlay = {
+        "element_id": "overlay-shared",
+        "kind": "pet_os",
+        "text": "跨片段",
+    }
+
+    runner._render_sync(
+        LocalMediaExecutionSpec(
+            command=CreatorCommandType.COMPOSE_FINAL_VIDEO,
+            target_ref="timeline:timeline:main",
+            task_id="task-element-progress",
+            work_dir=work_dir,
+            output_path=work_dir / "output.mp4",
+            inputs=tuple(
+                LocalMediaInput(
+                    version_id=f"version-{index}",
+                    file_id=f"file-{index}",
+                    checksum=str(index) * 64,
+                    media_type="video/mp4",
+                    path=source,
+                    source_ref=f"element:edit-{index}",
+                    start_seconds=index - 1,
+                    end_seconds=index,
+                    overlay=shared_overlay,
+                )
+                for index in (1, 2)
+            ),
+            transitions=(),
+            audio_plan={},
+            expected_duration_seconds=2,
+            canvas_size=(1280, 720),
+            on_element_done=lambda done, total: progress.append(
+                (done, total),
+            ),
+        ),
+    )
+
+    assert progress == [(1, 3), (3, 3)]
 
 
 def _r2v_element(element_id: str, *, start: int, duration: int = 4_000):

@@ -30,7 +30,11 @@ function seedProject(project = cloneProject()) {
   });
 }
 
-function composeTask(progress: number, status: TaskView["status"] = "RUNNING") {
+function composeTask(
+  progress: number,
+  status: TaskView["status"] = "RUNNING",
+  elementProgress?: { completed: number; total: number },
+) {
   return {
     id: "task-compose",
     projectId: "p1",
@@ -40,6 +44,8 @@ function composeTask(progress: number, status: TaskView["status"] = "RUNNING") {
     targetRef: "timeline:timeline:main",
     status,
     progress,
+    completedElements: elementProgress?.completed ?? null,
+    totalElements: elementProgress?.total ?? null,
     resultRefs: [],
     createdAt: "2026-07-20T00:00:00Z",
   } satisfies TaskView;
@@ -549,14 +555,17 @@ describe("PlanPage Timeline/Element frontend", () => {
     }
   });
 
-  it("adopts an existing compose task and shows its live progress without dispatching a duplicate", async () => {
+  it("adopts an existing compose task and shows verified Element counts", async () => {
     const project = cloneProject();
     delete project.assets.artifact_slots_by_id[
       "timeline:timeline:main:render"
     ];
     delete project.assets.artifact_versions_by_id["final-v1"];
     seedProject(project);
-    const task = composeTask(0.4);
+    const task = composeTask(0.4, "RUNNING", {
+      completed: 4,
+      total: 10,
+    });
     useCreatorTaskViewStore.setState({
       projectId: "p1",
       tasks: [task],
@@ -585,11 +594,12 @@ describe("PlanPage Timeline/Element frontend", () => {
     const { container, unmount } = renderPage();
 
     expect(
-      screen.getByRole("button", { name: "合成中 · 40%" }),
+      screen.getByRole("button", { name: "合成中 · 4/10" }),
     ).toBeDisabled();
     expect(
       container.querySelector("[data-compose-progress]"),
     ).toHaveStyle({ width: "40%" });
+    expect(screen.queryByText(/40%/)).not.toBeInTheDocument();
     expect(
       calls.some(
         (call) =>
@@ -600,15 +610,50 @@ describe("PlanPage Timeline/Element frontend", () => {
 
     act(() => {
       useCreatorTaskViewStore.setState({
-        tasks: [{ ...task, progress: 0.65 }],
+        tasks: [
+          {
+            ...task,
+            progress: 0.7,
+            completedElements: 7,
+          },
+        ],
       });
     });
     expect(
-      screen.getByRole("button", { name: "合成中 · 65%" }),
+      screen.getByRole("button", { name: "合成中 · 7/10" }),
     ).toBeDisabled();
     expect(
       container.querySelector("[data-compose-progress]"),
-    ).toHaveStyle({ width: "65%" });
+    ).toHaveStyle({ width: "70%" });
+    expect(screen.queryByText(/70%/)).not.toBeInTheDocument();
+    unmount();
+  });
+
+  it("shows zero completed Elements without inventing a percentage", () => {
+    const project = cloneProject();
+    delete project.assets.artifact_slots_by_id[
+      "timeline:timeline:main:render"
+    ];
+    delete project.assets.artifact_versions_by_id["final-v1"];
+    seedProject(project);
+    const task = composeTask(0, "RUNNING", {
+      completed: 0,
+      total: 10,
+    });
+    useCreatorTaskViewStore.setState({
+      projectId: "p1",
+      tasks: [task],
+    });
+    installMockFetch([]);
+    const { container, unmount } = renderPage();
+
+    expect(
+      screen.getByRole("button", { name: "合成中 · 0/10" }),
+    ).toBeDisabled();
+    expect(
+      container.querySelector("[data-compose-progress]"),
+    ).toHaveStyle({ width: "0%" });
+    expect(screen.queryByText(/%/)).not.toBeInTheDocument();
     unmount();
   });
 

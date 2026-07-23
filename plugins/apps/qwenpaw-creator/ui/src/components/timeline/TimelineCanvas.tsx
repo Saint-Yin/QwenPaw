@@ -139,9 +139,30 @@ export default function TimelineCanvas({
   const renderUrl = renderedVersion
     ? getArtifactVersionMediaUrl(renderedVersion.version_id)
     : null;
-  // 单一预览自动选源：有新鲜成片直接播成片；否则用成片同口径的
-  // 实时拼装，成片合成/过期后由快照轮询自动切换，无需用户选择。
-  const previewMode = renderUrl && !renderedVersion?.stale ? "final" : "live";
+  const pendingAffectedElementIds = useMemo(() => {
+    const raw = renderedVersion?.metadata.pendingAffectedElementIds;
+    return new Set(
+      Array.isArray(raw)
+        ? raw.filter(
+            (value): value is string =>
+              typeof value === "string" && value.length > 0,
+          )
+        : [],
+    );
+  }, [renderedVersion]);
+  const staleFrameIsUnaffected =
+    Boolean(renderedVersion?.stale) &&
+    pendingAffectedElementIds.size > 0 &&
+    active.every(
+      (element) => !pendingAffectedElementIds.has(element.element_id),
+    );
+  // 新鲜成片始终优先。成片仅因局部 Element 修改而过期时，未落入该
+  // Element 时间段的旧成片帧仍是完整且正确的；受影响时间段则切换到
+  // 实时拼装，绝不拿修改前的旧画面冒充新结果。
+  const previewMode =
+    renderUrl && (!renderedVersion?.stale || staleFrameIsUnaffected)
+      ? "final"
+      : "live";
   // 实时拼装预览里的就绪态，同时驱动轨道块的生成中/失败样式。
   const playbackStates = useMemo(() => {
     const states = new Map<string, ElementPlaybackStatus>();
@@ -332,6 +353,38 @@ export default function TimelineCanvas({
     seekPreviewToPlayhead(video);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playheadTick, previewOpen, renderUrl, timeline.ticks_per_second]);
+
+  useEffect(() => {
+    if (!previewOpen || previewMode !== "final" || !renderUrl) return;
+    const synchronizeReadyState = () => {
+      const video = videoRef.current;
+      const ready = Boolean(
+        video &&
+          !video.error &&
+          video.readyState >= 2 &&
+          !video.seeking &&
+          (playing ||
+            Math.abs(
+              video.currentTime -
+                playheadTick / timeline.ticks_per_second,
+            ) <= 0.35),
+      );
+      setFinalFrameReady((current) => (current === ready ? current : ready));
+    };
+    // Some browsers recover from waiting/stalled with readyState=4 without
+    // emitting another canplay event.  Reconcile against the media element so
+    // a complete frame cannot remain hidden behind a stale loading cover.
+    synchronizeReadyState();
+    const timer = window.setInterval(synchronizeReadyState, 250);
+    return () => window.clearInterval(timer);
+  }, [
+    playheadTick,
+    playing,
+    previewMode,
+    previewOpen,
+    renderUrl,
+    timeline.ticks_per_second,
+  ]);
 
   useEffect(() => {
     if (!previewOpen) setPlaying(false);
@@ -655,7 +708,9 @@ export default function TimelineCanvas({
             className="absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-full border border-white/20 bg-black/45 px-2.5 py-1 text-[11px] font-semibold text-white/85 backdrop-blur"
             title={
               previewMode === "final"
-                ? "正在播放已合成的成片"
+                ? renderedVersion?.stale
+                  ? "当前时间点未受本次修改影响，显示上一版已完成成片"
+                  : "正在播放已合成的成片"
                 : "实时拼装与成片同口径渲染；成片合成后自动切换"
             }
           >
@@ -667,7 +722,9 @@ export default function TimelineCanvas({
               }`}
             />
             {previewMode === "final"
-              ? "成片"
+              ? renderedVersion?.stale
+                ? "未受影响 · 已完成画面"
+                : "成片"
               : renderedVersion?.stale
               ? "内容已更新 · 实时预览"
               : "实时预览"}
