@@ -37,9 +37,11 @@ export interface FileProjectReviewOperation {
 export interface FileProjectReviewRecord {
   review_id: string;
   round_id: string;
-  request_id: string;
-  request_message_seq: number;
-  interrupted_run_id: string;
+  // Optional for media/runtime reviews that have no originating AgentDock
+  // message (e.g. an autonomously generated image or video).
+  request_id: string | null;
+  request_message_seq: number | null;
+  interrupted_run_id: string | null;
   baseline_generation: number;
   baseline_etag: string;
   candidate_generation: number;

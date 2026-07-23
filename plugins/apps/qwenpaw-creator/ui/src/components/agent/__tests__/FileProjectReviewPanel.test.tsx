@@ -4,6 +4,21 @@ import FileProjectReviewPanel from "@/components/agent/FileProjectReviewPanel";
 import type { FileProjectReviewRecord } from "@/contracts/creator";
 import { useFileProjectReviewStore } from "@/store/fileProjectReviewStore";
 
+const navigateToLocator = vi.fn();
+
+vi.mock("@/routing/locators", () => ({
+  navigateToLocator: (...args: unknown[]) => navigateToLocator(...args),
+}));
+
+vi.mock("@/api/creator", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/creator")>();
+  return {
+    ...actual,
+    getArtifactVersionMediaUrl: (versionId: string) =>
+      `https://media.test/${versionId}`,
+  };
+});
+
 function review(operationCount = 1): FileProjectReviewRecord {
   return {
     review_id: "review-1",
@@ -19,7 +34,7 @@ function review(operationCount = 1): FileProjectReviewRecord {
     status: "PENDING",
     operations: Array.from({ length: operationCount }, (_, index) => ({
       kind: "update",
-      json_pointer: index === 0 ? "/story/title" : `/story/scenes/${index}`,
+      json_pointer: index === 0 ? "/description" : `/story/scenes/${index}`,
       file_id: null,
       target_ref: null,
       before_hash: `before-${index}`,
@@ -27,14 +42,46 @@ function review(operationCount = 1): FileProjectReviewRecord {
       before: index === 0 ? "Old title" : { index, enabled: false },
       after:
         index === 0
-          ? { title: "New title", text: "x".repeat(300) }
+          ? "New title"
           : { index, enabled: true },
       operation_id: `operation-${index + 1}`,
-      ui_locator: {},
+      ui_locator: {
+        page: "plan",
+        mediaType: "text",
+        field: index === 0 ? "/description" : `/story/scenes/${index}`,
+      },
       decision: "PENDING",
     })),
     created_at: "2026-07-15T00:00:00Z",
     updated_at: "2026-07-15T00:00:01Z",
+  };
+}
+
+function mediaReview(): FileProjectReviewRecord {
+  return {
+    ...review(),
+    operations: [
+      {
+        kind: "update",
+        json_pointer:
+          "/assets/artifact_slots_by_id/element:el-1:main/selected_version_id",
+        file_id: null,
+        target_ref: null,
+        before_hash: "before-media",
+        after_hash: "after-media",
+        before: "ver-old",
+        after: "ver-new",
+        operation_id: "operation-media",
+        ui_locator: {
+          page: "element",
+          elementId: "el-1",
+          mediaType: "video",
+          artifactKind: "r2v_video",
+          artifactVersionId: "ver-new",
+        },
+        decision: "PENDING",
+      },
+    ],
   };
 }
 
@@ -54,7 +101,10 @@ function seed(
   return decide;
 }
 
-afterEach(() => useFileProjectReviewStore.getState().reset());
+afterEach(() => {
+  useFileProjectReviewStore.getState().reset();
+  navigateToLocator.mockClear();
+});
 
 describe("FileProjectReviewPanel", () => {
   it("only renders for the active Project file Review", () => {
@@ -64,16 +114,19 @@ describe("FileProjectReviewPanel", () => {
 
     rerender(<FileProjectReviewPanel projectId="p1" />);
     expect(screen.getByText("文件项目修改")).toBeInTheDocument();
-    expect(screen.getByText("/story/title")).toBeInTheDocument();
+    expect(screen.getByText("/description")).toBeInTheDocument();
+    expect(document.querySelector("[data-review-diff]")).toBeTruthy();
     expect(screen.getByText("Old title")).toBeInTheDocument();
-    expect(screen.getByText("展开完整值")).toBeInTheDocument();
+    expect(screen.getByText("New title")).toBeInTheDocument();
   });
 
   it("submits an individual Keep decision by operation_id", async () => {
     const decide = seed(review());
     render(<FileProjectReviewPanel projectId="p1" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Keep /story/title" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Keep /description" }),
+    );
     await waitFor(() =>
       expect(decide).toHaveBeenCalledWith("p1", [
         {
@@ -95,6 +148,34 @@ describe("FileProjectReviewPanel", () => {
         { operation_id: "operation-1", decision: "REJECT" },
         { operation_id: "operation-2", decision: "REJECT" },
       ]),
+    );
+  });
+
+  it("navigates to the ui_locator when a text operation is inspected", () => {
+    seed(review());
+    render(<FileProjectReviewPanel projectId="p1" />);
+    fireEvent.click(screen.getByRole("button", { name: "查看 /description" }));
+    expect(navigateToLocator).toHaveBeenCalledWith(
+      "p1",
+      expect.objectContaining({ field: "/description" }),
+      expect.objectContaining({ review: true, field: "/description" }),
+    );
+  });
+
+  it("renders a media preview and opens the generation detail locator", () => {
+    seed(mediaReview());
+    render(<FileProjectReviewPanel projectId="p1" />);
+    expect(screen.getByText("视频审阅")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "查看生成详情" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "查看生成详情" }));
+    expect(navigateToLocator).toHaveBeenCalledWith(
+      "p1",
+      expect.objectContaining({
+        page: "element",
+        elementId: "el-1",
+        artifactVersionId: "ver-new",
+      }),
+      expect.objectContaining({ review: true }),
     );
   });
 });

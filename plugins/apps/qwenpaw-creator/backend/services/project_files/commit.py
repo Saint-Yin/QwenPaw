@@ -61,6 +61,7 @@ from .json_pointer import (
     merge_candidate,
     pointers_overlap,
 )
+from .locator_map import derive_ui_locator
 from .models import Project
 from .serialization import project_etag
 from .store import ProjectSnapshot, ProjectStore
@@ -266,6 +267,42 @@ class ProjectCommitBoundary:
     ) -> None:
         self.store = store
         self.lock_timeout_seconds = lock_timeout_seconds
+
+    def runtime_review_boundary(
+        self,
+        project_id: str,
+        *,
+        run_id: str,
+        request_id: str | None = None,
+    ) -> ReviewBoundary:
+        """Build a ReviewBoundary for an autonomously generated artifact.
+
+        Media generation (images/videos) has no originating AgentDock message,
+        so the boundary anchors on the run that produced the artifact and the
+        Project's current *accepted* baseline.  Anchoring on the accepted
+        baseline (rather than the pre-commit generation) keeps the accepted
+        pointer put while several media reviews are pending at once.
+        """
+
+        runtime_root = self.store.project_root(project_id) / "runtime"
+        state = AtomicJsonRecordStore(
+            runtime_root / "state.json",
+            RuntimeProjectState,
+        ).read_or_none()
+        if state is not None:
+            accepted_generation = state.accepted_generation
+            accepted_etag = state.accepted_etag
+        else:
+            snapshot = self.store.read(project_id)
+            accepted_generation = snapshot.generation
+            accepted_etag = snapshot.etag
+        return ReviewBoundary(
+            request_message_seq=None,
+            request_id=request_id,
+            interrupted_run_id=run_id,
+            accepted_generation=accepted_generation,
+            accepted_etag=accepted_etag,
+        )
 
     def commit(
         self,
@@ -882,11 +919,13 @@ class ProjectCommitBoundary:
                 "Runtime state references a missing active Review: "
                 f"{state.active_round_id}",
             )
-        if review.status is ReviewStatus.PENDING:
-            raise ActiveReviewConflictError(
-                "another Review is still pending for this Project: "
-                f"{review.review_id}",
-            )
+        # Multiple pending reviews may coexist on disk: media/runtime tasks and
+        # AgentDock interventions each publish their own review round.  The read
+        # path (ProjectReviewService.active) scans runtime/reviews and always
+        # surfaces a still-pending review, and decisions are keyed by review id,
+        # so a second review boundary no longer needs to block the first.  We
+        # keep the missing-review recovery guard above, but a still-pending
+        # active review is now an accepted, self-healing state.
 
     @staticmethod
     def _assert_no_pending_publication(
@@ -1058,6 +1097,10 @@ class ProjectCommitBoundary:
         review_path = runtime_root / "reviews" / review_id / "review.json"
         store = AtomicJsonRecordStore(review_path, ReviewRecord)
         existing = store.read_or_none()
+        # Resolve every locator against the committed Project so the review
+        # panel can jump to the exact place a change lives (text field, or the
+        # storyboard/video/character detail that produced a media artifact).
+        project_data = snapshot.project.model_dump(mode="json")
         operations_by_pointer = {
             operation.json_pointer: operation
             for operation in (
@@ -1078,6 +1121,11 @@ class ProjectCommitBoundary:
                     previous.operation_id
                     if previous is not None
                     else _review_operation_id(round_record.round_id, change)
+                ),
+                ui_locator=(
+                    previous.ui_locator
+                    if previous is not None and previous.ui_locator
+                    else derive_ui_locator(pointer, project_data)
                 ),
             )
             if previous is not None:
@@ -1125,71 +1173,95 @@ class ProjectCommitBoundary:
         snapshot: ProjectSnapshot,
         changes: list[ProjectChange],
     ) -> tuple[bool, bool, str | None]:
-        """Keep a pending Review coherent when another accepted writer commits.
+        """Keep every pending Review coherent when another accepted writer commits.
 
-        Unrelated frontend edits remain immediately valid while the Review's
+        Unrelated frontend edits remain immediately valid while a Review's
         accepted baseline stays put.  A direct user edit of a reviewed pointer
         supersedes that operation, so stale Keep/Undo can never overwrite it.
+        Media/runtime reviews and AgentDock reviews may be pending at the same
+        time, so reconciliation walks all of them, not just the round that
+        ``active_round_id`` happens to point at.
         """
 
         state = AtomicJsonRecordStore(
             runtime_root / "state.json",
             RuntimeProjectState,
         ).read_or_none()
-        if state is None or not state.active_round_id:
-            return False, False, None
-        review_store = AtomicJsonRecordStore(
-            runtime_root
-            / "reviews"
-            / f"review-{state.active_round_id}"
-            / "review.json",
-            ReviewRecord,
-        )
-        review = review_store.read_or_none()
-        if review is None or review.status is not ReviewStatus.PENDING:
+        reviews_root = runtime_root / "reviews"
+        if not reviews_root.is_dir():
             return False, False, None
         touched = [
             change.json_pointer
             for change in changes
             if change.json_pointer is not None
         ]
-        operations = []
-        for operation in review.operations:
-            if (
-                origin is ChangeOrigin.FRONTEND_EDIT
-                and operation.decision is ReviewOperationDecision.PENDING
-                and operation.json_pointer is not None
-                and any(
-                    pointers_overlap(operation.json_pointer, pointer)
-                    for pointer in touched
-                )
-            ):
-                operation = operation.model_copy(
+        examined = False
+        still_pending: list[ReviewRecord] = []
+        for review_root in sorted(
+            reviews_root.iterdir(),
+            key=lambda item: item.name,
+        ):
+            if review_root.is_symlink() or not review_root.is_dir():
+                continue
+            review_store = AtomicJsonRecordStore(
+                review_root / "review.json",
+                ReviewRecord,
+            )
+            review = review_store.read_or_none()
+            if review is None or review.status is not ReviewStatus.PENDING:
+                continue
+            examined = True
+            operations = []
+            for operation in review.operations:
+                if (
+                    origin is ChangeOrigin.FRONTEND_EDIT
+                    and operation.decision is ReviewOperationDecision.PENDING
+                    and operation.json_pointer is not None
+                    and any(
+                        pointers_overlap(operation.json_pointer, pointer)
+                        for pointer in touched
+                    )
+                ):
+                    operation = operation.model_copy(
+                        update={
+                            "decision": ReviewOperationDecision.SUPERSEDED_BY_USER_EDIT,
+                        },
+                    )
+                operations.append(operation)
+            pending = any(
+                operation.decision is ReviewOperationDecision.PENDING
+                for operation in operations
+            )
+            updated = ReviewRecord.model_validate(
+                review.model_copy(
                     update={
-                        "decision": ReviewOperationDecision.SUPERSEDED_BY_USER_EDIT,
+                        "candidate_generation": snapshot.generation,
+                        "candidate_etag": snapshot.etag,
+                        "decision_token": secrets.token_urlsafe(24),
+                        "status": ReviewStatus.PENDING
+                        if pending
+                        else ReviewStatus.RESOLVED,
+                        "operations": operations,
+                        "updated_at": _now(),
                     },
-                )
-            operations.append(operation)
-        pending = any(
-            operation.decision is ReviewOperationDecision.PENDING
-            for operation in operations
-        )
-        updated = ReviewRecord.model_validate(
-            review.model_copy(
-                update={
-                    "candidate_generation": snapshot.generation,
-                    "candidate_etag": snapshot.etag,
-                    "decision_token": secrets.token_urlsafe(24),
-                    "status": ReviewStatus.PENDING
-                    if pending
-                    else ReviewStatus.RESOLVED,
-                    "operations": operations,
-                    "updated_at": _now(),
-                },
-            ).model_dump(mode="python"),
-        )
-        review_store.write(updated)
-        return pending, not pending, review.round_id
+                ).model_dump(mode="python"),
+            )
+            review_store.write(updated)
+            if pending:
+                still_pending.append(updated)
+        if not examined:
+            return False, False, None
+        if not still_pending:
+            return False, True, None
+        # Keep the currently surfaced round when it is still live; otherwise
+        # promote the most recently updated pending review.
+        active_round_id = state.active_round_id if state is not None else None
+        if active_round_id and any(
+            review.round_id == active_round_id for review in still_pending
+        ):
+            return True, False, active_round_id
+        freshest = max(still_pending, key=lambda item: item.updated_at)
+        return True, False, freshest.round_id
 
     @staticmethod
     def _update_runtime_state(

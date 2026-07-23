@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { message } from "antd";
-import { Check, FileDiff, Undo2 } from "lucide-react";
+import { Check, Eye, FileDiff, Image as ImageIcon, Undo2, Video } from "lucide-react";
 import type {
   FileProjectReviewDecision,
   FileProjectReviewOperation,
   FileProjectReviewOperationDecision,
+  FileProjectReviewRecord,
 } from "@/contracts/creator";
+import { getArtifactVersionMediaUrl } from "@/api/creator";
+import { navigateToLocator } from "@/routing/locators";
 import { useFileProjectReviewStore } from "@/store/fileProjectReviewStore";
 import OnboardingHint from "@/components/onboarding/OnboardingHint";
 
@@ -17,47 +20,11 @@ const DECISION_LABELS: Record<FileProjectReviewOperationDecision, string> = {
   SUPERSEDED_BY_USER_EDIT: "已被用户编辑替代",
 };
 
-function formattedValue(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value === undefined) return "undefined";
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function ReviewValue({ label, value }: { label: string; value: unknown }) {
-  const text = formattedValue(value);
-  const long = text.length > 240 || text.split("\n").length > 8;
-  const preview = text.length > 120 ? `${text.slice(0, 120)}…` : text;
-  return (
-    <div className="min-w-0 rounded-md bg-[var(--color-bg-secondary)] p-2">
-      <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-[var(--color-text-tertiary)]">
-        {label}
-      </p>
-      {long ? (
-        <details>
-          <summary className="cursor-pointer list-none text-[10px] leading-4 text-[var(--color-text-secondary)]">
-            <span className="line-clamp-3 whitespace-pre-wrap break-all">
-              {preview}
-            </span>
-            <span className="mt-1 inline-block text-[var(--color-accent)]">
-              展开完整值
-            </span>
-          </summary>
-          <pre className="mt-1 max-h-52 overflow-auto whitespace-pre-wrap break-all text-[10px] leading-4 text-[var(--color-text-secondary)]">
-            {text}
-          </pre>
-        </details>
-      ) : (
-        <pre className="whitespace-pre-wrap break-all text-[10px] leading-4 text-[var(--color-text-secondary)]">
-          {text}
-        </pre>
-      )}
-    </div>
-  );
-}
+const ARTIFACT_KIND_LABELS: Record<string, string> = {
+  r2v_storyboard_image: "分镜图",
+  visual_asset_image: "角色 / 视觉资产图",
+  r2v_video: "视频",
+};
 
 function operationLocation(operation: FileProjectReviewOperation): string {
   return (
@@ -66,6 +33,26 @@ function operationLocation(operation: FileProjectReviewOperation): string {
     operation.target_ref ??
     "unknown"
   );
+}
+
+/** The media artifact locator for a media-generation review, if any. */
+function mediaLocatorOf(
+  review: FileProjectReviewRecord,
+): Record<string, string> | null {
+  for (const operation of review.operations) {
+    const locator = operation.ui_locator;
+    if (locator && (locator.mediaType === "image" || locator.mediaType === "video")) {
+      return locator;
+    }
+  }
+  return null;
+}
+
+function mediaLabel(locator: Record<string, string>): string {
+  if (locator.artifactKind && ARTIFACT_KIND_LABELS[locator.artifactKind]) {
+    return ARTIFACT_KIND_LABELS[locator.artifactKind];
+  }
+  return locator.mediaType === "video" ? "视频" : "图片";
 }
 
 export default function FileProjectReviewPanel({
@@ -88,6 +75,7 @@ export default function FileProjectReviewPanel({
     (operation) => operation.decision === "PENDING",
   );
   const busy = decisionInFlight || localBusy;
+  const mediaLocator = mediaLocatorOf(review);
 
   const submit = async (
     operations: FileProjectReviewOperation[],
@@ -115,6 +103,18 @@ export default function FileProjectReviewPanel({
     }
   };
 
+  const openLocator = (
+    locator: Record<string, string>,
+    fallbackField?: string | null,
+  ) => {
+    const field = locator.field ?? fallbackField ?? undefined;
+    navigateToLocator(projectId, locator, {
+      review: true,
+      field: field ?? undefined,
+      description: "审阅 / 查看修改",
+    });
+  };
+
   return (
     <section
       data-file-project-review={review.review_id}
@@ -126,8 +126,16 @@ export default function FileProjectReviewPanel({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-primary)]">
-            <FileDiff className="h-3.5 w-3.5 text-[var(--color-accent)]" />
-            文件项目修改
+            {mediaLocator ? (
+              mediaLocator.mediaType === "video" ? (
+                <Video className="h-3.5 w-3.5 text-[var(--color-accent)]" />
+              ) : (
+                <ImageIcon className="h-3.5 w-3.5 text-[var(--color-accent)]" />
+              )
+            ) : (
+              <FileDiff className="h-3.5 w-3.5 text-[var(--color-accent)]" />
+            )}
+            {mediaLocator ? `${mediaLabel(mediaLocator)}审阅` : "文件项目修改"}
             <span className="rounded-full bg-[var(--color-accent-soft)] px-1.5 py-0.5 text-[9px] text-[var(--color-accent)]">
               {pending.length} 待审
             </span>
@@ -169,58 +177,137 @@ export default function FileProjectReviewPanel({
         </p>
       )}
 
-      <ul className="mt-2 space-y-2">
-        {review.operations.map((operation) => {
-          const operationPending = operation.decision === "PENDING";
-          const location = operationLocation(operation);
-          return (
-            <li
-              key={operation.operation_id}
-              data-file-review-operation={operation.operation_id}
-              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-2"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="break-all font-mono text-[10px] font-semibold text-[var(--color-text-primary)]">
-                    {location}
-                  </p>
-                  <p className="mt-0.5 text-[9px] text-[var(--color-text-tertiary)]">
-                    {operation.kind} · {DECISION_LABELS[operation.decision]}
-                  </p>
-                </div>
-                {operationPending && (
-                  <div className="flex shrink-0 gap-1">
-                    <button
-                      type="button"
-                      aria-label={`Keep ${location}`}
-                      disabled={busy}
-                      onClick={() => void submit([operation], "ACCEPT")}
-                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)] disabled:opacity-50"
-                    >
-                      <Check className="h-3 w-3" />
-                      Keep
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Undo ${location}`}
-                      disabled={busy}
-                      onClick={() => void submit([operation], "REJECT")}
-                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] disabled:opacity-50"
-                    >
-                      <Undo2 className="h-3 w-3" />
-                      Undo
-                    </button>
+      {mediaLocator ? (
+        <MediaReviewBody
+          locator={mediaLocator}
+          onOpen={() => openLocator(mediaLocator)}
+        />
+      ) : (
+        <ul className="mt-2 space-y-2">
+          {review.operations.map((operation) => {
+            const operationPending = operation.decision === "PENDING";
+            const location = operationLocation(operation);
+            const locator = operation.ui_locator ?? {};
+            const canJump =
+              Boolean(locator.field) || Boolean(operation.json_pointer);
+            return (
+              <li
+                key={operation.operation_id}
+                data-file-review-operation={operation.operation_id}
+                className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-2"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="break-all font-mono text-[10px] font-semibold text-[var(--color-text-primary)]">
+                      {location}
+                    </p>
+                    <p className="mt-0.5 text-[9px] text-[var(--color-text-tertiary)]">
+                      {operation.kind} · {DECISION_LABELS[operation.decision]}
+                    </p>
                   </div>
-                )}
-              </div>
-              <div className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                <ReviewValue label="Before" value={operation.before} />
-                <ReviewValue label="After" value={operation.after} />
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+                  <div className="flex shrink-0 gap-1">
+                    {canJump && (
+                      <button
+                        type="button"
+                        aria-label={`查看 ${location}`}
+                        onClick={() =>
+                          openLocator(locator, operation.json_pointer)
+                        }
+                        className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-[var(--color-text-secondary)] hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent)]"
+                      >
+                        <Eye className="h-3 w-3" />
+                        查看
+                      </button>
+                    )}
+                    {operationPending && (
+                      <>
+                        <button
+                          type="button"
+                          aria-label={`Keep ${location}`}
+                          disabled={busy}
+                          onClick={() => void submit([operation], "ACCEPT")}
+                          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)] disabled:opacity-50"
+                        >
+                          <Check className="h-3 w-3" />
+                          Keep
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Undo ${location}`}
+                          disabled={busy}
+                          onClick={() => void submit([operation], "REJECT")}
+                          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] disabled:opacity-50"
+                        >
+                          <Undo2 className="h-3 w-3" />
+                          Undo
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-2">
+                  <DiffView before={operation.before} after={operation.after} />
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </section>
+  );
+}
+
+function MediaReviewBody({
+  locator,
+  onOpen,
+}: {
+  locator: Record<string, string>;
+  onOpen: () => void;
+}) {
+  const versionId = locator.artifactVersionId;
+  const mediaUrl = versionId ? getArtifactVersionMediaUrl(versionId) : null;
+  const isVideo = locator.mediaType === "video";
+  return (
+    <div
+      data-file-review-media={versionId ?? ""}
+      className="mt-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-2"
+    >
+      <div className="overflow-hidden rounded-md bg-[var(--color-bg-secondary)]">
+        {mediaUrl ? (
+          isVideo ? (
+            <video
+              src={mediaUrl}
+              controls
+              className="max-h-48 w-full object-contain"
+            />
+          ) : (
+            <img
+              src={mediaUrl}
+              alt={mediaLabel(locator)}
+              className="max-h-48 w-full object-contain"
+            />
+          )
+        ) : (
+          <p className="p-4 text-center text-[10px] text-[var(--color-text-tertiary)]">
+            预览不可用
+          </p>
+        )}
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <p className="min-w-0 truncate text-[10px] text-[var(--color-text-secondary)]">
+          {mediaLabel(locator)}
+          {locator.elementId ? ` · 分镜 ${locator.elementId}` : ""}
+          {locator.assetId ? ` · 资产 ${locator.assetId}` : ""}
+        </p>
+        <button
+          type="button"
+          onClick={onOpen}
+          className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)]"
+        >
+          <Eye className="h-3 w-3" />
+          查看生成详情
+        </button>
+      </div>
+    </div>
   );
 }

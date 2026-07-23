@@ -62,12 +62,20 @@ from .models import (
 from .path_safety import require_safe_runtime_segment
 
 
+# Statuses whose AgentDock mutation requests capture a ReviewBoundary.  A
+# running Session yields an interrupt boundary; an idle/settled Session yields
+# an idle-goal boundary so user feedback after a run still gates its related
+# changes behind a review.  Hard-stop transitions (INTERRUPT_REQUESTED) and
+# terminal failures stay out: their next request is a restart, not feedback.
 _REVIEW_ACTIVE_STATUSES = frozenset(
     {
         CreatorSessionStatus.RUNNING,
         CreatorSessionStatus.RESUMING,
         CreatorSessionStatus.WAITING_RUNTIME,
         CreatorSessionStatus.WAITING_EXECUTION_AUTH,
+        CreatorSessionStatus.IDLE,
+        CreatorSessionStatus.PENDING_REVIEW,
+        CreatorSessionStatus.WAITING_USER_INPUT,
     },
 )
 _REVIEW_MUTATING_CLASSIFICATIONS = frozenset(
@@ -1713,22 +1721,31 @@ class ProjectRuntimeSessionStore:
         initial_creation: bool,
         hard_stop: bool,
     ) -> bool:
-        return bool(
-            channel is MessageChannel.AGENTDOCK
-            and classification in _REVIEW_MUTATING_CLASSIFICATIONS
-            and not initial_creation
-            and not hard_stop
-            and session.status in _REVIEW_ACTIVE_STATUSES
-            and session.active_goal_id
-            and session.active_run_id,
-        )
+        if (
+            channel is not MessageChannel.AGENTDOCK
+            or classification not in _REVIEW_MUTATING_CLASSIFICATIONS
+            or initial_creation
+            or hard_stop
+            or session.status not in _REVIEW_ACTIVE_STATUSES
+        ):
+            return False
+        # A running Session must expose a coherent Goal/Run pair before an
+        # interrupt boundary may be captured.  An idle Session has neither and
+        # still requires review: the request is feedback on completed work.
+        if session.active_run_id:
+            return bool(session.active_goal_id)
+        return True
 
     def _assert_review_active_goal_unlocked(
         self,
         project_id: str,
         session: CreatorSessionRecord,
     ) -> None:
-        if session.active_goal_id is None or session.active_run_id is None:
+        if session.active_run_id is None:
+            # Idle-goal boundary: no Run is interrupted and the driver will
+            # admit a fresh Goal for this feedback request.
+            return
+        if session.active_goal_id is None:
             raise RequestAdmissionConflict(
                 "Review admission requires an active Goal and Run",
             )

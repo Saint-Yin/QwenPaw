@@ -98,10 +98,15 @@ export function parseFileProjectReview(
     !item ||
     !nonEmptyString(item.review_id) ||
     !nonEmptyString(item.round_id) ||
-    !nonEmptyString(item.request_id) ||
-    !Number.isInteger(item.request_message_seq) ||
-    Number(item.request_message_seq) < 1 ||
-    !nonEmptyString(item.interrupted_run_id) ||
+    // request_id / request_message_seq / interrupted_run_id are only present
+    // for AgentDock-originated reviews; media/runtime reviews leave them null.
+    !nullableString(item.request_id) ||
+    !(
+      item.request_message_seq === null ||
+      (Number.isInteger(item.request_message_seq) &&
+        Number(item.request_message_seq) >= 1)
+    ) ||
+    !nullableString(item.interrupted_run_id) ||
     !generation(item.baseline_generation) ||
     !nonEmptyString(item.baseline_etag) ||
     !generation(item.candidate_generation) ||

@@ -8,7 +8,12 @@ import {
   Video,
   Wand2,
 } from "lucide-react";
-import { navigate, useParams } from "@/routing/navigation";
+import {
+  navigate,
+  useParams,
+  useSearchParams,
+} from "@/routing/navigation";
+import { useReviewFieldFocus } from "@/routing/reviewFocus";
 import {
   useProjectSnapshotStore,
   type ProjectEditOperation,
@@ -141,6 +146,17 @@ function referenceVersionName(
 
 export default function R2VWorkbenchPage() {
   const { id = "", elementId = "" } = useParams();
+  const query = useSearchParams();
+  const reviewMode = query.get("review") === "1";
+  const reviewField = query.get("field");
+  const reviewPulse = query.get("reviewPulse");
+  const versionFromUrl = query.get("version");
+  useReviewFieldFocus({
+    path: `/project/${id}/plan/element/${elementId}`,
+    field: reviewField,
+    enabled: reviewMode,
+    pulse: reviewPulse,
+  });
   const project = useProjectSnapshotStore((state) =>
     state.projectId === id ? state.project : null,
   );
@@ -173,6 +189,20 @@ export default function R2VWorkbenchPage() {
   const [resolvedVideoModel, setResolvedVideoModel] = useState<string | null>(
     null,
   );
+
+  useEffect(() => {
+    if (!versionFromUrl || !project) return;
+    const version = project.assets.artifact_versions_by_id[versionFromUrl];
+    if (!version || version.owner_ref !== `element:${elementId}`) return;
+    if (
+      version.kind === "r2v_storyboard_image" ||
+      version.slot_id.endsWith(":storyboard")
+    ) {
+      setViewedSbId(versionFromUrl);
+      return;
+    }
+    setViewedVideoId(versionFromUrl);
+  }, [versionFromUrl, project, elementId]);
 
   useEffect(() => {
     let cancelled = false;

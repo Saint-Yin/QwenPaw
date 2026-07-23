@@ -628,10 +628,58 @@ def test_only_active_agentdock_mutation_persists_review_boundary(tmp_path):
         SESSION_ID,
         "request-review",
     ).is_file()
-    for result in (read_only, hard_stop, initial, idle):
+    # Post-run feedback on a settled Session is still a review boundary: the
+    # user is commenting on completed work, so its related changes must be
+    # gated behind a review exactly like an interrupt.
+    assert idle.review_policy is ReviewPolicy.REQUIRE_REVIEW
+    assert idle.review_boundary is not None
+    assert idle.message.review_boundary == idle.review_boundary
+    assert store.review_boundary_path(
+        PROJECT_ID,
+        SESSION_ID,
+        "request-idle",
+    ).is_file()
+    for result in (read_only, hard_stop, initial):
         assert result.review_policy is ReviewPolicy.AUTO_FIX
         assert result.review_boundary is None
         assert result.message.review_boundary is None
+
+
+def test_idle_agentdock_mutation_without_run_captures_feedback_boundary(
+    tmp_path,
+):
+    """Feedback sent after a run settles must still gate behind a review."""
+
+    root, snapshot, store, _bootstrap = _runtime(tmp_path)
+    _activate_runtime(root, snapshot, store)
+    store.clear_active_run(
+        PROJECT_ID,
+        SESSION_ID,
+        expected_run_id="run-1",
+        status=CreatorSessionStatus.IDLE,
+    )
+
+    idle = store.admit_user_request(
+        PROJECT_ID,
+        SESSION_ID,
+        CONVERSATION_ID,
+        request_id="request-idle-feedback",
+        client_message_id="client-idle-feedback",
+        content_parts=_text("把第二个分镜改成夜景"),
+        channel=MessageChannel.AGENTDOCK,
+        classification=MessageClassification.MUTATION_INSTRUCTION,
+    )
+
+    assert idle.review_policy is ReviewPolicy.REQUIRE_REVIEW
+    assert idle.review_boundary is not None
+    assert idle.review_boundary.interrupted_run_id is None
+    assert idle.review_boundary.request_id == "request-idle-feedback"
+    assert idle.message.review_boundary == idle.review_boundary
+    assert store.review_boundary_path(
+        PROJECT_ID,
+        SESSION_ID,
+        "request-idle-feedback",
+    ).is_file()
 
 
 def test_active_review_admission_requires_durable_project_baseline(tmp_path):

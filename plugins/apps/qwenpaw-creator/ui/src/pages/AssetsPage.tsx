@@ -26,6 +26,7 @@ import type {
   VisualEntityDocument,
 } from "@/contracts/creator";
 import { navigate, useParams, useSearchParams } from "@/routing/navigation";
+import { useReviewFieldFocus } from "@/routing/reviewFocus";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
@@ -283,6 +284,15 @@ export default function AssetsPage() {
   const [inputName, setInputName] = useState("");
   const [inputValue, setInputValue] = useState("");
   const selectedId = query.get("asset");
+  const reviewMode = query.get("review") === "1";
+  const reviewField = query.get("field");
+  const reviewPulse = query.get("reviewPulse");
+  useReviewFieldFocus({
+    path: `/project/${id}/assets`,
+    field: reviewField,
+    enabled: reviewMode,
+    pulse: reviewPulse,
+  });
   const allItems = useMemo(
     () => (project ? assetItems(project) : []),
     [project],

@@ -2473,7 +2473,14 @@ class FileCreatorAgentRuntime:
     ) -> AgentProjectToolContext:
         boundary = message.review_boundary
         if boundary is not None:
-            origin = ChangeOrigin.AGENTDOCK_INTERRUPT
+            # A boundary captured while a Run was active is an interrupt; one
+            # captured on an idle Session is post-run feedback.  Both gate all
+            # related changes behind the same review flow.
+            origin = (
+                ChangeOrigin.AGENTDOCK_INTERRUPT
+                if boundary.interrupted_run_id is not None
+                else ChangeOrigin.AGENTDOCK_IDLE_GOAL
+            )
             policy = ReviewPolicy.REQUIRE_REVIEW
             request_id = boundary.request_id
             message_seq = boundary.request_message_seq

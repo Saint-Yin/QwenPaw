@@ -2416,11 +2416,19 @@ class FileLocalMediaExecutionService:
                 else:
                     candidate = current.project.model_dump(mode="json")
                     self._apply_result(candidate, result)
+                    review_boundary = (
+                        self.services.commits.runtime_review_boundary(
+                            task.project_id,
+                            run_id=str(task.run_id),
+                            request_id=latest.caused_by_request_id,
+                        )
+                    )
                     commit = self.services.commits.commit(
                         base=current,
                         candidate=candidate,
                         origin=ChangeOrigin.RUNTIME_TASK,
-                        review_policy=ReviewPolicy.AUTO_FIX,
+                        review_policy=ReviewPolicy.REQUIRE_REVIEW,
+                        review_boundary=review_boundary,
                         caused_by_request_id=latest.caused_by_request_id,
                         round_id=ids["round_id"],
                         transaction_id=ids["transaction_id"],

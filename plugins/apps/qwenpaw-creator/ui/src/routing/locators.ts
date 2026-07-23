@@ -11,7 +11,13 @@ export function pathForLocator(
     case "assets":
       return `/project/${projectId}/assets`;
     case "element":
-      return `/project/${projectId}/plan`;
+      // Generated storyboard/video is produced in the Element workbench; jump
+      // straight to it so the review "查看" lands on the generation detail.
+      return locator.elementId
+        ? `/project/${projectId}/plan/element/${encodeURIComponent(
+            locator.elementId,
+          )}`
+        : `/project/${projectId}/plan`;
     default:
       return `/project/${projectId}/plan`;
   }
@@ -31,7 +37,8 @@ export function navigateToLocator(
   const params = new URLSearchParams();
   if (locator.elementId) params.set("element", locator.elementId);
   if (locator.assetId) params.set("asset", locator.assetId);
-  if (locator.versionId) params.set("version", locator.versionId);
+  const versionId = locator.versionId || locator.artifactVersionId;
+  if (versionId) params.set("version", versionId);
   if (locator.focus) params.set("focus", locator.focus);
   if (options.review) params.set("review", "1");
   if (options.field) params.set("field", options.field);

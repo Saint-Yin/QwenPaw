@@ -30,15 +30,20 @@ export function findCreatorFieldElement(
   field: string,
   root: ParentNode = document,
 ): HTMLElement | null {
+  // A review operation's locator field is the RFC 6901 JSON pointer of the
+  // change.  DOM fields expose that pointer via data-creator-path, plus a
+  // human data-creator-field/data-review-field alias.  Match any of them so a
+  // backend-derived locator (which uses the pointer) can find the node.
   return (
     Array.from(
       root.querySelectorAll<HTMLElement>(
-        "[data-review-field], [data-creator-field]",
+        "[data-review-field], [data-creator-field], [data-creator-path]",
       ),
     ).find(
       (element) =>
         element.getAttribute("data-review-field") === field ||
-        element.getAttribute("data-creator-field") === field,
+        element.getAttribute("data-creator-field") === field ||
+        element.getAttribute("data-creator-path") === field,
     ) ?? null
   );
 }
