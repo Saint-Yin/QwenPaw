@@ -40,7 +40,7 @@ describe("TimelineCanvas preview scrubber", () => {
     expect(playhead.style.left).toContain("0.6");
   });
 
-  it("positions the selection toolbar above the Timeline with extra clearance", () => {
+  it("positions the selection toolbar beside the selected line's upper-right", () => {
     const project = structuredClone(projectDocument);
     const timeline = project.timelines.items["timeline:main"];
     const { container } = render(
@@ -85,11 +85,53 @@ describe("TimelineCanvas preview scrubber", () => {
       clientX: 300,
     });
 
+    const toolbar = document.querySelector(
+      "[data-timeline-selection-toolbar]",
+    ) as HTMLDivElement;
+    expect(toolbar).toHaveStyle({ top: "262px" });
+    expect(Number.parseFloat(toolbar.style.left)).toBeCloseTo(308, 0);
     expect(
-      document.querySelector(
-        "[data-timeline-selection-toolbar]",
-      ) as HTMLDivElement,
-    ).toHaveStyle({ top: "200px" });
+      container.querySelector("[data-timeline-selection-range]"),
+    ).not.toBeInTheDocument();
+    expect(
+      container.querySelectorAll("[data-timeline-playhead]"),
+    ).toHaveLength(1);
+  });
+
+  it("renders adaptive major and minor scale ticks with aligned track guides", () => {
+    const project = structuredClone(projectDocument);
+    const timeline = project.timelines.items["timeline:main"];
+    const { container } = render(
+      <TimelineCanvas
+        project={project}
+        timeline={timeline}
+        durationTick={20000}
+        playheadTick={2000}
+        selectedElementId={null}
+        activeElementIds={[]}
+        previewOpen={false}
+        tasks={[]}
+        onPreviewOpenChange={vi.fn()}
+        onPlayheadChange={vi.fn()}
+        onSelectElement={vi.fn()}
+        onActiveElementIdsChange={vi.fn()}
+      />,
+    );
+
+    const scale = container.querySelector("[data-timeline-scale]");
+    const majorTicks = scale?.querySelectorAll(
+      '[data-timeline-scale-tick][data-major="true"]',
+    );
+    const minorTicks = scale?.querySelectorAll(
+      '[data-timeline-scale-tick][data-major="false"]',
+    );
+
+    expect(scale).toBeInTheDocument();
+    expect(majorTicks?.length).toBeGreaterThanOrEqual(5);
+    expect(minorTicks?.length).toBeGreaterThan(0);
+    expect(
+      container.querySelector("[data-timeline-grid]"),
+    ).toBeInTheDocument();
   });
 
   it("moves the shared playhead throughout a real pointer drag", () => {

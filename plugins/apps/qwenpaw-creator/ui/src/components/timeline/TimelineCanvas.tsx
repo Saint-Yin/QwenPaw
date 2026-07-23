@@ -57,8 +57,8 @@ interface TimelineCanvasProps {
 }
 
 const LABEL_WIDTH = 68;
-const SELECTION_TOOLBAR_GAP = 16;
-const PREVIEW_SELECTION_TOOLBAR_GAP = 68;
+const CHART_PADDING = 12;
+const SELECTION_TOOLBAR_GAP = 6;
 
 function seconds(tick: number, ticksPerSecond: number, digits = 1): string {
   return (tick / ticksPerSecond).toFixed(digits).replace(/\.0$/, "");
@@ -72,6 +72,15 @@ function percent(tick: number, durationTick: number): number {
 
 function timelineRef(timeline: TimelineDocument): string {
   return `timeline:${timeline.timeline_id}`;
+}
+
+function niceScaleStep(secondsValue: number): number {
+  if (!Number.isFinite(secondsValue) || secondsValue <= 0) return 1;
+  const power = 10 ** Math.floor(Math.log10(secondsValue));
+  const normalized = secondsValue / power;
+  const nice =
+    normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return nice * power;
 }
 
 export default function TimelineCanvas({
@@ -152,8 +161,17 @@ export default function TimelineCanvas({
   const tickAt = (clientX: number): number => {
     const rect = chartRef.current?.getBoundingClientRect();
     if (!rect) return 0;
-    const inner = Math.max(1, rect.width - LABEL_WIDTH);
-    const x = Math.min(inner, Math.max(0, clientX - rect.left - LABEL_WIDTH));
+    const inner = Math.max(
+      1,
+      rect.width - LABEL_WIDTH - CHART_PADDING * 2,
+    );
+    const x = Math.min(
+      inner,
+      Math.max(
+        0,
+        clientX - rect.left - CHART_PADDING - LABEL_WIDTH,
+      ),
+    );
     return Math.round((x / inner) * timelineDuration);
   };
 
@@ -209,13 +227,9 @@ export default function TimelineCanvas({
       );
       setPointCandidates([]);
       const selectedElements =
-        selection.kind === "point"
-          ? elementsAtTick(timeline, selection.startTick)
-          : elementsOverlappingRange(
-              timeline,
-              selection.startTick,
-              selection.endTick,
-            );
+        endTick > startTick
+          ? elementsOverlappingRange(timeline, startTick, endTick)
+          : elementsAtTick(timeline, startTick);
       const elementIds = selectedElements.map((element) => element.element_id);
       onActiveElementIdsChange(elementIds);
       return;
@@ -293,7 +307,7 @@ export default function TimelineCanvas({
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || document.activeElement === video) return;
+    if (!video) return;
     seekPreviewToPlayhead(video);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playheadTick, previewOpen, renderUrl, timeline.ticks_per_second]);
@@ -408,24 +422,32 @@ export default function TimelineCanvas({
       if (!rect || !bar) return;
       const width = bar.offsetWidth || 116;
       const height = bar.offsetHeight || 32;
-      const centerTick =
+      const anchorTick =
         selection.kind === "point"
           ? selection.startTick
-          : (selection.startTick + selection.endTick) / 2;
-      const inner = Math.max(1, rect.width - LABEL_WIDTH - 24);
-      const x =
-        rect.left +
-        LABEL_WIDTH +
-        (inner * percent(centerTick, timelineDuration)) / 100;
-      const left = Math.min(
-        Math.max(x - width / 2, 8),
-        Math.max(8, window.innerWidth - width - 8),
+          : selection.endTick;
+      const inner = Math.max(
+        1,
+        rect.width - LABEL_WIDTH - CHART_PADDING * 2,
       );
-      // 预览展开时越过底部播放控制条；收起时只需避开 Timeline 轨道。
-      const gap = previewOpen
-        ? PREVIEW_SELECTION_TOOLBAR_GAP
-        : SELECTION_TOOLBAR_GAP;
-      const top = Math.max(8, rect.top - height - gap);
+      const anchorX =
+        rect.left +
+        CHART_PADDING +
+        LABEL_WIDTH +
+        (inner * percent(anchorTick, timelineDuration)) / 100;
+      const rightSide = anchorX + 8;
+      const left =
+        rightSide + width <= window.innerWidth - 8
+          ? rightSide
+          : Math.max(8, anchorX - width - 8);
+      const above = rect.top - height - SELECTION_TOOLBAR_GAP;
+      const top =
+        above >= 8
+          ? above
+          : Math.min(
+              Math.max(8, rect.top + SELECTION_TOOLBAR_GAP),
+              window.innerHeight - height - 8,
+            );
       setToolbarPos({ left, top });
     };
     update();
@@ -435,11 +457,32 @@ export default function TimelineCanvas({
       window.removeEventListener("resize", update);
       document.removeEventListener("scroll", update, true);
     };
-  }, [previewOpen, selection, timelineDuration]);
+  }, [selection, timelineDuration]);
 
-  const rulerTicks = Array.from({ length: 7 }, (_, index) =>
-    Math.round((timelineDuration * index) / 6),
-  );
+  const scale = useMemo(() => {
+    const ticksPerSecond = Math.max(1, timeline.ticks_per_second);
+    const durationSeconds = timelineDuration / ticksPerSecond;
+    const majorStepSeconds = niceScaleStep(durationSeconds / 6);
+    const majorStepTick = Math.max(
+      1,
+      Math.round(majorStepSeconds * ticksPerSecond),
+    );
+    const minorStepTick = Math.max(1, Math.round(majorStepTick / 5));
+    const ticks: Array<{ tick: number; major: boolean }> = [];
+    for (let tick = 0; tick <= timelineDuration; tick += minorStepTick) {
+      ticks.push({
+        tick,
+        major: tick % majorStepTick === 0,
+      });
+    }
+    if (ticks[ticks.length - 1]?.tick !== timelineDuration) {
+      ticks.push({ tick: timelineDuration, major: true });
+    }
+    return {
+      ticks,
+      labelDigits: majorStepSeconds < 1 ? 1 : 0,
+    };
+  }, [timeline.ticks_per_second, timelineDuration]);
 
   return (
     <section
@@ -677,16 +720,60 @@ export default function TimelineCanvas({
           drag.current = null;
         }}
       >
-        <div className="relative ml-[68px] h-6 border-b border-[var(--color-border)]">
-          {rulerTicks.map((tick) => (
+        <div
+          data-timeline-scale
+          className="relative ml-[68px] h-7 border-b border-[var(--color-border)]"
+        >
+          {scale.ticks.map(({ tick, major }) => (
             <span
               key={tick}
-              className="absolute top-1 -translate-x-1/2 text-[10px] text-[var(--color-text-tertiary)]"
+              data-timeline-scale-tick
+              data-major={major ? "true" : "false"}
+              aria-hidden={!major}
+              className="absolute inset-y-0 -translate-x-1/2"
               style={{ left: `${percent(tick, timelineDuration)}%` }}
             >
-              {seconds(tick, timeline.ticks_per_second, 0)}s
+              <i
+                className={`absolute bottom-0 left-1/2 w-px -translate-x-1/2 ${
+                  major
+                    ? "h-2.5 bg-[var(--color-border-strong)]"
+                    : "h-1.5 bg-[var(--color-border)]"
+                }`}
+              />
+              {major && (
+                <b className="absolute left-1/2 top-0 -translate-x-1/2 whitespace-nowrap text-[9px] font-medium text-[var(--color-text-tertiary)]">
+                  {seconds(
+                    tick,
+                    timeline.ticks_per_second,
+                    scale.labelDigits,
+                  )}
+                  s
+                </b>
+              )}
             </span>
           ))}
+        </div>
+        <div
+          aria-hidden
+          data-timeline-grid
+          className="pointer-events-none absolute bottom-2 top-7 z-0"
+          style={{
+            left: CHART_PADDING + LABEL_WIDTH,
+            right: CHART_PADDING,
+          }}
+        >
+          {scale.ticks
+            .filter(
+              ({ major, tick }) =>
+                major && tick > 0 && tick < timelineDuration,
+            )
+            .map(({ tick }) => (
+              <i
+                key={tick}
+                className="absolute inset-y-0 w-px bg-[var(--color-border)]/45"
+                style={{ left: `${percent(tick, timelineDuration)}%` }}
+              />
+            ))}
         </div>
         {collapsed ? (
           <div className="relative flex h-8 border-b border-[var(--color-border)]/65">
@@ -803,6 +890,9 @@ export default function TimelineCanvas({
                           onPointerDown={(event) => event.stopPropagation()}
                           onClick={(event) => {
                             event.stopPropagation();
+                            // Element 选中复用唯一的播放头；旧的点/区间选择不再
+                            // 留下一根独立标记线。
+                            clearSelection();
                             onSelectElement(element.element_id);
                             onActiveElementIdsChange([element.element_id]);
                           }}
@@ -873,37 +963,39 @@ export default function TimelineCanvas({
         <div
           aria-hidden
           data-timeline-playhead
-          className="pointer-events-none absolute bottom-2 top-6 z-[22] w-0 -translate-x-1/2 border-l-2 border-[var(--color-accent)] drop-shadow-[0_0_3px_var(--color-accent)]"
+          className="pointer-events-none absolute bottom-2 top-7 z-[22] w-0 -translate-x-1/2 border-l-2 border-[var(--color-accent)] drop-shadow-[0_0_3px_var(--color-accent)]"
           style={{
-            left: `calc(${LABEL_WIDTH}px + (100% - ${LABEL_WIDTH + 24}px) * ${
-              percent(playheadTick, timelineDuration) / 100
-            })`,
+            left: `calc(${
+              CHART_PADDING + LABEL_WIDTH
+            }px + (100% - ${
+              LABEL_WIDTH + CHART_PADDING * 2
+            }px) * ${percent(playheadTick, timelineDuration) / 100})`,
           }}
         />
         {selection && (
           <>
-            <div
-              aria-hidden
-              className={`pointer-events-none absolute bottom-2 top-6 z-[21] border border-[var(--color-accent)] ${
-                selection.kind === "point"
-                  ? "w-1 bg-[var(--color-accent)]/30"
-                  : "bg-[var(--color-accent)]/15"
-              }`}
-              style={{
-                left: `calc(${LABEL_WIDTH}px + (100% - ${
-                  LABEL_WIDTH + 24
-                }px) * ${
-                  percent(selection.startTick, timelineDuration) / 100
-                })`,
-                width:
-                  selection.kind === "range"
-                    ? `calc((100% - ${LABEL_WIDTH + 24}px) * ${
-                        (selection.endTick - selection.startTick) /
-                        timelineDuration
-                      })`
-                    : undefined,
-              }}
-            />
+            {selection.kind === "range" && (
+              <div
+                aria-hidden
+                data-timeline-selection-range
+                className="pointer-events-none absolute bottom-2 top-7 z-[21] border border-[var(--color-accent)] bg-[var(--color-accent)]/15"
+                style={{
+                  left: `calc(${
+                    CHART_PADDING + LABEL_WIDTH
+                  }px + (100% - ${
+                    LABEL_WIDTH + CHART_PADDING * 2
+                  }px) * ${
+                    percent(selection.startTick, timelineDuration) / 100
+                  })`,
+                  width: `calc((100% - ${
+                    LABEL_WIDTH + CHART_PADDING * 2
+                  }px) * ${
+                    (selection.endTick - selection.startTick) /
+                    timelineDuration
+                  })`,
+                }}
+              />
+            )}
             {createPortal(
               <div
                 ref={toolbarRef}
