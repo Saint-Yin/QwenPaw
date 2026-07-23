@@ -225,4 +225,48 @@ describe("TimelineCanvas preview scrubber", () => {
       3000, 20000,
     ]);
   });
+
+  it("covers the final render until the requested frame finishes seeking", () => {
+    const project = structuredClone(projectDocument);
+    const timeline = project.timelines.items["timeline:main"];
+    const { container } = render(
+      <TimelineCanvas
+        project={project}
+        timeline={timeline}
+        durationTick={20000}
+        playheadTick={2000}
+        selectedElementId={null}
+        activeElementIds={[]}
+        previewOpen
+        tasks={[]}
+        onPreviewOpenChange={vi.fn()}
+        onPlayheadChange={vi.fn()}
+        onSelectElement={vi.fn()}
+        onActiveElementIdsChange={vi.fn()}
+      />,
+    );
+    const video = container.querySelector(
+      "[data-timeline-video-preview] video",
+    ) as HTMLVideoElement;
+
+    expect(
+      container.querySelector("[data-final-preview-incomplete]"),
+    ).toHaveTextContent("该时间点尚未渲染完成");
+
+    Object.defineProperties(video, {
+      duration: { configurable: true, value: 20 },
+      readyState: { configurable: true, value: 2 },
+    });
+    fireEvent.loadedData(video);
+    fireEvent.seeked(video);
+
+    expect(
+      container.querySelector("[data-final-preview-incomplete]"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.seeking(video);
+    expect(
+      container.querySelector("[data-final-preview-incomplete]"),
+    ).toBeInTheDocument();
+  });
 });

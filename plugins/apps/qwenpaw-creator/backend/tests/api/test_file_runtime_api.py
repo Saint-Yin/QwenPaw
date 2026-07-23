@@ -247,6 +247,67 @@ def test_file_execution_routes_list_and_cancel(tmp_path) -> None:
     assert replay.json() == cancelled.json()
 
 
+def test_timeline_render_dispatches_once_and_returns_before_completion(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    app, _services, _snapshot, _bootstrap = _app(tmp_path)
+
+    async def scenario():
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls: list[tuple[str, str]] = []
+
+        async def fake_execute(
+            _services,
+            *,
+            project_id,
+            target_ref,
+            **_kwargs,
+        ):
+            calls.append((project_id, target_ref))
+            started.set()
+            await release.wait()
+
+        monkeypatch.setattr(
+            "services.media_files.local_execution.execute_file_local_media_command",
+            fake_execute,
+        )
+        monkeypatch.setattr(
+            "services.media_files.local_execution.file_local_media_task_id",
+            lambda _project_id, _key: "task-compose-1",
+        )
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            first = await client.post(
+                "/projects/project-1/timelines/timeline%3Amain/render",
+                headers={"Idempotency-Key": "render-1"},
+            )
+            # The 202 response has already returned even though the renderer
+            # is deliberately blocked.
+            await asyncio.wait_for(started.wait(), timeout=1)
+            second = await client.post(
+                "/projects/project-1/timelines/timeline%3Amain/render",
+                headers={"Idempotency-Key": "render-2"},
+            )
+            release.set()
+            await asyncio.sleep(0)
+        return first, second, calls
+
+    first, second, calls = _run(scenario())
+    assert first.status_code == 202
+    assert first.json()["taskId"] == "task-compose-1"
+    assert first.json()["replayed"] is False
+    assert second.status_code == 202
+    assert second.json()["taskId"] == "task-compose-1"
+    assert second.json()["replayed"] is True
+    assert calls == [("project-1", "timeline:timeline:main")]
+
+
 def test_file_session_status_bar_projects_task_progress(tmp_path) -> None:
     app, services, _snapshot, _bootstrap = _app(tmp_path)
     executions = ProjectExecutionStore(services.root)

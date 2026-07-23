@@ -11,7 +11,7 @@ import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { projectDocument } from "@/test/creatorFixtures";
 import { installMockFetch } from "@/test/mockFetch";
-import type { ProjectDocument } from "@/contracts/creator";
+import type { ProjectDocument, TaskView } from "@/contracts/creator";
 
 function cloneProject(): ProjectDocument {
   return structuredClone(projectDocument);
@@ -28,6 +28,21 @@ function seedProject(project = cloneProject()) {
     syncError: null,
     lastGoodAt: "2026-07-20T00:02:00Z",
   });
+}
+
+function composeTask(progress: number, status: TaskView["status"] = "RUNNING") {
+  return {
+    id: "task-compose",
+    projectId: "p1",
+    transactionId: null,
+    specialistRunId: null,
+    kind: "compose" as const,
+    targetRef: "timeline:timeline:main",
+    status,
+    progress,
+    resultRefs: [],
+    createdAt: "2026-07-20T00:00:00Z",
+  } satisfies TaskView;
 }
 
 function renderPage(entry = "/project/p1/plan") {
@@ -495,6 +510,25 @@ describe("PlanPage Timeline/Element frontend", () => {
             },
           },
         },
+        {
+          match: "/specialist-runs",
+          response: { json: { items: [] } },
+        },
+        {
+          match: "/tasks",
+          response: { json: { items: [] } },
+        },
+        {
+          match: "/projects/p1/project",
+          response: {
+            status: 304,
+            headers: {
+              ETag: '"sha256:g3"',
+              "X-Project-Generation": "3",
+              "X-Project-Sync-Status": "healthy",
+            },
+          },
+        },
       ]);
       renderPage();
 
@@ -513,6 +547,69 @@ describe("PlanPage Timeline/Element frontend", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("adopts an existing compose task and shows its live progress without dispatching a duplicate", async () => {
+    const project = cloneProject();
+    delete project.assets.artifact_slots_by_id[
+      "timeline:timeline:main:render"
+    ];
+    delete project.assets.artifact_versions_by_id["final-v1"];
+    seedProject(project);
+    const task = composeTask(0.4);
+    useCreatorTaskViewStore.setState({
+      projectId: "p1",
+      tasks: [task],
+    });
+    const { calls } = installMockFetch([
+      {
+        match: "/specialist-runs",
+        response: { json: { items: [] } },
+      },
+      {
+        match: "/tasks",
+        response: { json: { items: [task] } },
+      },
+      {
+        match: "/projects/p1/project",
+        response: {
+          status: 304,
+          headers: {
+            ETag: '"sha256:g3"',
+            "X-Project-Generation": "3",
+            "X-Project-Sync-Status": "healthy",
+          },
+        },
+      },
+    ]);
+    const { container, unmount } = renderPage();
+
+    expect(
+      screen.getByRole("button", { name: "合成中 · 40%" }),
+    ).toBeDisabled();
+    expect(
+      container.querySelector("[data-compose-progress]"),
+    ).toHaveStyle({ width: "40%" });
+    expect(
+      calls.some(
+        (call) =>
+          call.method === "POST" &&
+          call.url.includes("/timelines/timeline%3Amain/render"),
+      ),
+    ).toBe(false);
+
+    act(() => {
+      useCreatorTaskViewStore.setState({
+        tasks: [{ ...task, progress: 0.65 }],
+      });
+    });
+    expect(
+      screen.getByRole("button", { name: "合成中 · 65%" }),
+    ).toBeDisabled();
+    expect(
+      container.querySelector("[data-compose-progress]"),
+    ).toHaveStyle({ width: "65%" });
+    unmount();
   });
 
   it("keeps download disabled while any compose element is still not ready", () => {

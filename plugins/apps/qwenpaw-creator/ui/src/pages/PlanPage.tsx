@@ -38,6 +38,7 @@ export default function PlanPage() {
   const patchProject = useProjectSnapshotStore((state) => state.patch);
   const pollOnce = useProjectSnapshotStore((state) => state.pollOnce);
   const tasks = useCreatorTaskViewStore((state) => state.tasks);
+  const refreshTasks = useCreatorTaskViewStore((state) => state.refresh);
   const timeline = useMemo(() => selectPrimaryTimeline(project), [project]);
   const selectedElementId = query.get("element");
   const selectedElement =
@@ -58,8 +59,12 @@ export default function PlanPage() {
   const [playheadTick, setPlayheadTick] = useState(0);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [composing, setComposing] = useState(false);
+  const [requestedComposeTaskId, setRequestedComposeTaskId] = useState<
+    string | null
+  >(null);
   const [composeFailed, setComposeFailed] = useState(false);
   const composeAttemptedGeneration = useRef<number | null>(null);
+  const handledComposeTask = useRef<string | null>(null);
   const generation = useProjectSnapshotStore((state) => state.generation);
   const [activeElementIds, setActiveElementIds] = useState<string[]>([]);
   const durationTick = timelineEndTick(timeline);
@@ -182,27 +187,126 @@ export default function PlanPage() {
       ? renderOutput.selected
       : null;
   const allReady = readiness.total > 0 && readiness.notReady === 0;
+  const timelineTargetRef = timeline
+    ? `timeline:${timeline.timeline_id}`
+    : null;
+  const activeComposeTask = useMemo(
+    () =>
+      timelineTargetRef
+        ? tasks.find(
+            (task) =>
+              task.kind === "compose" &&
+              task.targetRef === timelineTargetRef &&
+              (task.status === "QUEUED" || task.status === "RUNNING"),
+          ) ?? null
+        : null,
+    [tasks, timelineTargetRef],
+  );
+  const requestedComposeTask = useMemo(
+    () =>
+      requestedComposeTaskId
+        ? tasks.find((task) => task.id === requestedComposeTaskId) ?? null
+        : null,
+    [requestedComposeTaskId, tasks],
+  );
+  const composePendingAdmission =
+    requestedComposeTaskId !== null && requestedComposeTask === null;
+  const isComposing =
+    composing || composePendingAdmission || activeComposeTask !== null;
+  const composeProgress =
+    activeComposeTask?.progress != null
+      ? Math.round(
+          Math.max(0, Math.min(1, activeComposeTask.progress)) * 100,
+        )
+      : null;
+  const displayedComposeProgress = composeProgress ?? 0;
 
   const composeNow = useCallback(async () => {
-    if (!timeline) return;
+    if (!timeline || isComposing) return;
     setComposing(true);
     setComposeFailed(false);
     try {
-      // 合成是确定性后端操作；完成后立即拉新快照，预览自动切成片。
-      await renderTimeline(id, timeline.timeline_id);
-      await pollOnce(id);
+      // 接口只负责派发持久化 Task；进度与最终产物通过轮询恢复，
+      // 页面切换、刷新或另一个标签页接管都不会丢失合成状态。
+      const dispatch = await renderTimeline(id, timeline.timeline_id);
+      setRequestedComposeTaskId(dispatch.taskId);
+      await Promise.allSettled([refreshTasks(id), pollOnce(id)]);
     } catch (error) {
-      setComposeFailed(true);
-      message.error(`成片合成失败：${(error as Error).message}`);
+      await refreshTasks(id).catch(() => undefined);
+      const adopted = useCreatorTaskViewStore
+        .getState()
+        .tasks.find(
+          (task) =>
+            task.kind === "compose" &&
+            task.targetRef === `timeline:${timeline.timeline_id}` &&
+            (task.status === "QUEUED" || task.status === "RUNNING"),
+        );
+      if (adopted) {
+        setRequestedComposeTaskId(adopted.id);
+      } else {
+        setComposeFailed(true);
+        message.error(`成片合成失败：${(error as Error).message}`);
+      }
     } finally {
       setComposing(false);
     }
-  }, [id, pollOnce, timeline]);
+  }, [id, isComposing, pollOnce, refreshTasks, timeline]);
+
+  useEffect(() => {
+    if (!isComposing) return;
+    let disposed = false;
+    const refresh = async () => {
+      await Promise.allSettled([refreshTasks(id), pollOnce(id)]);
+      if (disposed) return;
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 750);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [id, isComposing, pollOnce, refreshTasks]);
+
+  useEffect(() => {
+    if (requestedComposeTaskId || !activeComposeTask) return;
+    // 接管其他标签页或刷新前已经发起的任务，使它的终态也走统一处理。
+    composeAttemptedGeneration.current = generation;
+    setRequestedComposeTaskId(activeComposeTask.id);
+  }, [activeComposeTask, generation, requestedComposeTaskId]);
+
+  useEffect(() => {
+    if (
+      !requestedComposeTask ||
+      requestedComposeTask.status === "QUEUED" ||
+      requestedComposeTask.status === "RUNNING" ||
+      handledComposeTask.current === requestedComposeTask.id
+    )
+      return;
+    handledComposeTask.current = requestedComposeTask.id;
+    composeAttemptedGeneration.current = generation;
+    setRequestedComposeTaskId(null);
+    // 当前轮询中的 Project 请求可能早于 Task 终态返回旧快照；串行再拉
+    // 一次，确保成功任务已经发布的成片会进入页面，而不是只停在 100%。
+    void pollOnce(id).then(() => pollOnce(id));
+    if (requestedComposeTask.status === "SUCCEEDED") {
+      setComposeFailed(false);
+      message.success("成片合成完成");
+      return;
+    }
+    setComposeFailed(true);
+    const detail =
+      typeof requestedComposeTask.error?.message === "string"
+        ? requestedComposeTask.error.message
+        : requestedComposeTask.status === "QUARANTINED"
+          ? "合成期间项目内容发生变化，结果未采用"
+          : "合成任务未能完成";
+    message.error(`成片合成失败：${detail}`);
+  }, [id, pollOnce, requestedComposeTask]);
 
   // 全部主轨元素就绪且没有新鲜成片时自动合成；同一 generation 只尝试
   // 一次（失败不自动重试，留手动重试入口）；短防抖吸收连续编辑。
   useEffect(() => {
-    if (!allReady || freshRender || composing) return;
+    if (!allReady || freshRender || isComposing) return;
     if (
       generation !== null &&
       composeAttemptedGeneration.current === generation
@@ -213,7 +317,7 @@ export default function PlanPage() {
       void composeNow();
     }, 1500);
     return () => window.clearTimeout(timer);
-  }, [allReady, freshRender, composing, generation, composeNow]);
+  }, [allReady, freshRender, isComposing, generation, composeNow]);
 
   const downloadRender = useCallback(() => {
     if (!freshRender) return;
@@ -321,7 +425,7 @@ export default function PlanPage() {
           <span className="rounded-full border border-[var(--color-border)] bg-white px-2.5 py-1 text-[11px] font-semibold text-[var(--color-text-secondary)]">
             {Object.keys(timeline.elements_by_id).length} 项内容
           </span>
-          {composeFailed && !composing && (
+          {composeFailed && !isComposing && (
             <button
               type="button"
               title="上次自动合成失败，点击重新合成"
@@ -339,23 +443,40 @@ export default function PlanPage() {
             title={
               freshRender
                 ? "下载成片视频文件"
-                : composing
-                  ? "正在合成成片，完成后可下载"
+                : isComposing
+                  ? `正在合成成片，当前进度 ${displayedComposeProgress}%，完成后可下载`
                   : readiness.total === 0
                     ? "时间轴还没有可合成的画面内容"
                     : readiness.notReady > 0
                       ? `还有 ${readiness.notReady} 项内容生成中，全部就绪后自动合成`
                       : "等待成片合成"
             }
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-bg-secondary)] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-[var(--color-border)] disabled:hover:bg-[var(--color-bg-primary)]"
+            className="relative inline-flex items-center gap-1.5 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-bg-secondary)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-[var(--color-border)] disabled:hover:bg-[var(--color-bg-primary)]"
             onClick={downloadRender}
           >
-            {composing ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Download className="h-3.5 w-3.5" />
+            {isComposing && (
+              <span
+                aria-hidden="true"
+                data-compose-progress-track
+                className="absolute inset-x-0 bottom-0 h-0.5 bg-[var(--color-border)]"
+              >
+                <span
+                  data-compose-progress
+                  className="block h-full bg-[var(--color-accent)] transition-[width] duration-500 ease-out"
+                  style={{ width: `${displayedComposeProgress}%` }}
+                />
+              </span>
             )}
-            {composing ? "合成中…" : "下载成片"}
+            <span className="relative z-[1] inline-flex items-center gap-1.5">
+              {isComposing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+              {isComposing
+                ? `合成中 · ${displayedComposeProgress}%`
+                : "下载成片"}
+            </span>
           </button>
         </div>
       </header>

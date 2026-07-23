@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Clock3, ImageOff, Loader2 } from "lucide-react";
 import type {
   ElementLocationDocument,
@@ -234,11 +241,15 @@ function MotionOverlayLayer({
   playheadTick,
   ticksPerSecond,
   playing,
+  visualKey,
+  onVisualReadyChange,
 }: {
   layer: ElementPlayback;
   playheadTick: number;
   ticksPerSecond: number;
   playing: boolean;
+  visualKey: string;
+  onVisualReadyChange: (visualKey: string, ready: boolean) => void;
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { element } = layer;
@@ -276,6 +287,9 @@ function MotionOverlayLayer({
   };
 
   useEffect(syncAnimations, [playing, pausedSeekTimeMs]);
+  useEffect(() => {
+    return () => onVisualReadyChange(visualKey, false);
+  }, [onVisualReadyChange, visualKey]);
 
   if (!motion?.html) return null;
   const motif = motionDataSetting(motion.html, "motif");
@@ -288,7 +302,10 @@ function MotionOverlayLayer({
       title={element.label || "动态动效"}
       // 不开放脚本；allow-same-origin 仅用于父页面同步 CSS 动画时间轴。
       sandbox="allow-same-origin"
-      onLoad={syncAnimations}
+      onLoad={() => {
+        syncAnimations();
+        onVisualReadyChange(visualKey, true);
+      }}
       className="pointer-events-none absolute border-0 bg-transparent"
       style={{
         ...boxStyle,
@@ -302,7 +319,8 @@ function MotionOverlayLayer({
 
 /**
  * 实时拼装预览：无需等待成片合成，按 element 的 span/z_index/location
- * 把已就绪的媒体直接分层播放；未就绪的层用占位符标出生成状态。
+ * 把已就绪的媒体直接分层播放。任何可见图层尚未生成、加载或完成寻帧时，
+ * 用不透明的整帧提示遮住后台预挂载层，避免把缺层的半成品暴露给用户。
  */
 export default function TimelineLivePreview({
   project,
@@ -317,10 +335,43 @@ export default function TimelineLivePreview({
 }: TimelineLivePreviewProps) {
   const ticksPerSecond = timeline.ticks_per_second || 1;
   const mediaRefs = useRef(new Map<string, HTMLVideoElement>());
+  const imageRefs = useRef(new Map<string, HTMLImageElement>());
+  const mediaRefCallbacks = useRef(
+    new Map<
+      string,
+      (node: HTMLVideoElement | null) => void
+    >(),
+  );
+  const imageRefCallbacks = useRef(
+    new Map<
+      string,
+      (node: HTMLImageElement | null) => void
+    >(),
+  );
   const clock = useRef<{ baseTick: number; baseTime: number } | null>(null);
   const lastEmittedTick = useRef(playheadTick);
   const stageRef = useRef<HTMLDivElement>(null);
   const [stageWidth, setStageWidth] = useState(1280);
+  const [visualRevision, setVisualRevision] = useState(0);
+  const [readyMotionKeys, setReadyMotionKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const refreshVisualReadiness = useCallback(
+    () => setVisualRevision((revision) => revision + 1),
+    [],
+  );
+  const handleMotionVisualReady = useCallback(
+    (visualKey: string, ready: boolean) => {
+      setReadyMotionKeys((current) => {
+        if (current.has(visualKey) === ready) return current;
+        const next = new Set(current);
+        if (ready) next.add(visualKey);
+        else next.delete(visualKey);
+        return next;
+      });
+    },
+    [],
+  );
 
   useLayoutEffect(() => {
     const node = stageRef.current;
@@ -342,18 +393,22 @@ export default function TimelineLivePreview({
       ),
     [playheadTick, project, tasks, timeline],
   );
-  const visibleIds = useMemo(() => {
-    const ids = new Set<string>();
-    layers.forEach((layer) => {
-      const { span } = layer.element;
-      if (
-        span.start_tick <= playheadTick &&
-        playheadTick < span.start_tick + span.duration_tick
-      )
-        ids.add(layer.element.element_id);
-    });
-    return ids;
-  }, [layers, playheadTick]);
+  const visibleLayers = useMemo(
+    () =>
+      layers.filter((layer) => {
+        const { span } = layer.element;
+        return (
+          span.start_tick <= playheadTick &&
+          playheadTick < span.start_tick + span.duration_tick
+        );
+      }),
+    [layers, playheadTick],
+  );
+  const visibleIds = useMemo(
+    () =>
+      new Set(visibleLayers.map((layer) => layer.element.element_id)),
+    [visibleLayers],
+  );
 
   // rAF 主时钟：播放中按真实时间推进播放头；video 层只做跟随与纠偏。
   useEffect(() => {
@@ -429,12 +484,97 @@ export default function TimelineLivePreview({
     return () => refs.forEach((media) => media.pause());
   }, []);
 
-  const registerMedia = (elementId: string) => (node: HTMLVideoElement | null) => {
-    if (node) mediaRefs.current.set(elementId, node);
-    else mediaRefs.current.delete(elementId);
-  };
+  const registerMedia = useCallback(
+    (elementId: string) => {
+      let callback = mediaRefCallbacks.current.get(elementId);
+      if (!callback) {
+        callback = (node: HTMLVideoElement | null) => {
+          if (node) mediaRefs.current.set(elementId, node);
+          else mediaRefs.current.delete(elementId);
+          refreshVisualReadiness();
+        };
+        mediaRefCallbacks.current.set(elementId, callback);
+      }
+      return callback;
+    },
+    [refreshVisualReadiness],
+  );
+  const registerImage = useCallback(
+    (elementId: string) => {
+      let callback = imageRefCallbacks.current.get(elementId);
+      if (!callback) {
+        callback = (node: HTMLImageElement | null) => {
+          if (node) imageRefs.current.set(elementId, node);
+          else imageRefs.current.delete(elementId);
+          refreshVisualReadiness();
+        };
+        imageRefCallbacks.current.set(elementId, callback);
+      }
+      return callback;
+    },
+    [refreshVisualReadiness],
+  );
 
   const anyVisible = visibleIds.size > 0;
+  const semanticIncompleteLayers = useMemo(
+    () => visibleLayers.filter((layer) => layer.status !== "ready"),
+    [visibleLayers],
+  );
+  const visualIncompleteLayers = useMemo(
+    () =>
+      visibleLayers.filter((layer) => {
+        if (layer.status !== "ready") return false;
+        const { element, media } = layer;
+        if (media?.mediaKind === "video") {
+          const node = mediaRefs.current.get(element.element_id);
+          if (!node || node.error || node.readyState < 2 || node.seeking)
+            return true;
+          if (playing) return false;
+          return (
+            Math.abs(
+              node.currentTime -
+                mediaTargetSeconds(layer, playheadTick, ticksPerSecond),
+            ) > DRIFT_TOLERANCE_SECONDS
+          );
+        }
+        if (media?.mediaKind === "image") {
+          const node = imageRefs.current.get(element.element_id);
+          return !node?.complete || node.naturalWidth <= 0;
+        }
+        if (media) return true;
+        if (
+          element.creation.type === "overlay" &&
+          element.creation.motion?.html
+        ) {
+          const motif = motionDataSetting(
+            element.creation.motion.html,
+            "motif",
+          );
+          if (motif && RETIRED_MOTION_MOTIFS.has(motif)) return false;
+          return !readyMotionKeys.has(
+            `${element.element_id}:${element.creation.motion.html}`,
+          );
+        }
+        return false;
+      }),
+    [
+      playheadTick,
+      playing,
+      readyMotionKeys,
+      ticksPerSecond,
+      visibleLayers,
+      visualRevision,
+    ],
+  );
+  const previewIncomplete =
+    anyVisible &&
+    (semanticIncompleteLayers.length > 0 ||
+      visualIncompleteLayers.length > 0);
+  const incompleteLayerCount = new Set(
+    [...semanticIncompleteLayers, ...visualIncompleteLayers].map(
+      (layer) => layer.element.element_id,
+    ),
+  ).size;
 
   return (
     <div
@@ -477,6 +617,14 @@ export default function TimelineLivePreview({
                 loop={media.loop}
                 playsInline
                 preload="auto"
+                onLoadedData={refreshVisualReadiness}
+                onCanPlay={refreshVisualReadiness}
+                onSeeking={refreshVisualReadiness}
+                onSeeked={refreshVisualReadiness}
+                onWaiting={refreshVisualReadiness}
+                onStalled={refreshVisualReadiness}
+                onEmptied={refreshVisualReadiness}
+                onError={refreshVisualReadiness}
               />
             );
           }
@@ -485,12 +633,15 @@ export default function TimelineLivePreview({
             return (
               <img
                 key={`${elementId}:${media.versionId}`}
+                ref={registerImage(elementId)}
                 data-live-layer={elementId}
                 data-live-layer-state={status}
                 src={media.url}
                 alt={element.label || elementId}
                 className="absolute object-contain"
                 style={locationBoxStyle(element.location)}
+                onLoad={refreshVisualReadiness}
+                onError={refreshVisualReadiness}
               />
             );
           }
@@ -506,6 +657,8 @@ export default function TimelineLivePreview({
                   playheadTick={playheadTick}
                   ticksPerSecond={ticksPerSecond}
                   playing={playing}
+                  visualKey={`${elementId}:${element.creation.motion.html}`}
+                  onVisualReadyChange={handleMotionVisualReady}
                 />
               );
             }
@@ -519,6 +672,24 @@ export default function TimelineLivePreview({
           }
           return <PlaceholderLayer key={elementId} layer={layer} />;
         })}
+        {previewIncomplete && (
+          <div
+            data-live-preview-incomplete
+            role="status"
+            aria-live="polite"
+            className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-[radial-gradient(circle_at_center,#2b2521_0,#161210_62%,#0d0b0a_100%)] px-6 text-center"
+          >
+            <Loader2 className="h-7 w-7 animate-spin text-white/75" />
+            <span className="text-sm font-semibold text-white/90">
+              该时间点尚未渲染完成
+            </span>
+            <span className="max-w-md text-xs leading-5 text-white/60">
+              {semanticIncompleteLayers.length > 0
+                ? `${incompleteLayerCount} 个图层仍在生成、排队或等待重新渲染，完整画面就绪后才能预览。`
+                : `正在准备该时间点的 ${incompleteLayerCount} 个图层，完整画面就绪前不会显示未完成的预览。`}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

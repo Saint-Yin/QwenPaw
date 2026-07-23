@@ -524,7 +524,7 @@ export default function R2VWorkbenchPage() {
             size="small"
             disabled={!elementDraft.dirty || patching}
             onClick={elementDraft.discard}
-            className="!text-xs"
+            className="!h-[22px] !px-2 !font-[inherit] !text-[11px] !font-semibold !leading-[20px]"
           >
             放弃修改
           </Button>
@@ -536,7 +536,7 @@ export default function R2VWorkbenchPage() {
               !elementDraft.dirty || elementDraft.conflictPaths.length > 0
             }
             onClick={() => void applyDraft()}
-            className="!text-xs"
+            className="!h-[22px] !px-2 !font-[inherit] !text-[11px] !font-semibold !leading-[20px]"
           >
             {elementDraft.dirty
               ? `应用修改（${elementDraft.dirtyCount}）`

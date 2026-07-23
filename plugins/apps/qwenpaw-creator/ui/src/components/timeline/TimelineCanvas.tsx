@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import {
   ChevronDown,
   ChevronUp,
+  Loader2,
   MessageSquarePlus,
   Pause,
   Play,
@@ -100,6 +101,7 @@ export default function TimelineCanvas({
   const [collapsed, setCollapsed] = useState(false);
   const [muted, setMuted] = useState(false);
   const [playing, setPlaying] = useState(false);
+  const [finalFrameReady, setFinalFrameReady] = useState(false);
   const [selection, setSelection] = useState<TimelineSelection | null>(null);
 
   const agentWorking = useAgentWorkingState();
@@ -153,6 +155,20 @@ export default function TimelineCanvas({
   }, [project, tasks, timeline]);
   const scrollable = lanes.length > 4;
   const timelineDuration = Math.max(1, durationTick);
+  const finalVideo = videoRef.current;
+  const finalPreviewReady =
+    finalFrameReady &&
+    Boolean(
+      finalVideo &&
+        !finalVideo.error &&
+        finalVideo.readyState >= 2 &&
+        !finalVideo.seeking &&
+        (playing ||
+          Math.abs(
+            finalVideo.currentTime -
+              playheadTick / timeline.ticks_per_second,
+          ) <= 0.35),
+    );
 
   useEffect(() => {
     onActiveElementIdsChange(active.map((element) => element.element_id));
@@ -301,9 +317,14 @@ export default function TimelineCanvas({
     if (!Number.isFinite(video.duration)) return;
     const target = playheadTick / timeline.ticks_per_second;
     if (Math.abs(video.currentTime - target) > 0.35) {
+      setFinalFrameReady(false);
       video.currentTime = Math.min(video.duration || target, target);
+    } else if (video.readyState >= 2 && !video.seeking) {
+      setFinalFrameReady(true);
     }
   };
+
+  useEffect(() => setFinalFrameReady(false), [renderUrl]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -576,11 +597,25 @@ export default function TimelineCanvas({
               className="h-full w-full bg-black object-contain"
               muted={muted}
               playsInline
-              preload="metadata"
+              preload="auto"
               onLoadedMetadata={(event) =>
                 seekPreviewToPlayhead(event.currentTarget)
               }
-              onPlay={() => setPlaying(true)}
+              onLoadedData={(event) =>
+                seekPreviewToPlayhead(event.currentTarget)
+              }
+              onCanPlay={(event) => {
+                if (!event.currentTarget.seeking) setFinalFrameReady(true);
+              }}
+              onSeeking={() => setFinalFrameReady(false)}
+              onSeeked={() => setFinalFrameReady(true)}
+              onWaiting={() => setFinalFrameReady(false)}
+              onStalled={() => setFinalFrameReady(false)}
+              onError={() => setFinalFrameReady(false)}
+              onPlay={() => {
+                setFinalFrameReady(true);
+                setPlaying(true);
+              }}
               onPause={() => setPlaying(false)}
               onTimeUpdate={(event) =>
                 onPlayheadChange(
@@ -597,6 +632,22 @@ export default function TimelineCanvas({
           ) : (
             <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_center,#28221e_0,#151210_64%,#0d0b0a_100%)] text-center text-sm text-white/58">
               <span>暂无成片预览</span>
+            </div>
+          )}
+          {previewMode === "final" && renderUrl && !finalPreviewReady && (
+            <div
+              data-final-preview-incomplete
+              role="status"
+              aria-live="polite"
+              className="absolute inset-0 z-[5] flex flex-col items-center justify-center gap-2 bg-[radial-gradient(circle_at_center,#2b2521_0,#161210_62%,#0d0b0a_100%)] px-6 text-center"
+            >
+              <Loader2 className="h-7 w-7 animate-spin text-white/75" />
+              <span className="text-sm font-semibold text-white/90">
+                该时间点尚未渲染完成
+              </span>
+              <span className="text-xs leading-5 text-white/60">
+                正在准备该时间点的完整画面，就绪前不会显示未完成的预览。
+              </span>
             </div>
           )}
           <div

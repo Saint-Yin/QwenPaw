@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import TimelineLivePreview, {
   motionExitProgress,
@@ -178,6 +178,92 @@ describe("TimelineLivePreview", () => {
     expect(bubble.textContent).toContain("😺");
   });
 
+  it("covers the whole composite until every visible video has decoded the requested frame", () => {
+    const { container } = renderPreview(cloneProject(), 7000);
+    const visibleVideos = [
+      ...container.querySelectorAll<HTMLVideoElement>(
+        '[data-live-layer]:not(.invisible)',
+      ),
+    ];
+
+    expect(visibleVideos).toHaveLength(2);
+    expect(
+      container.querySelector("[data-live-preview-incomplete]"),
+    ).toHaveTextContent("该时间点尚未渲染完成");
+
+    visibleVideos.forEach((video) => {
+      Object.defineProperty(video, "readyState", {
+        configurable: true,
+        value: 2,
+      });
+      fireEvent.loadedData(video);
+      fireEvent.seeked(video);
+    });
+
+    expect(
+      container.querySelector("[data-live-preview-incomplete]"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("recognizes an already-decoded cached video again after the layer remounts", () => {
+    const originalReadyState = Object.getOwnPropertyDescriptor(
+      HTMLMediaElement.prototype,
+      "readyState",
+    );
+    Object.defineProperty(HTMLMediaElement.prototype, "readyState", {
+      configurable: true,
+      get: () => 2,
+    });
+    try {
+      const project = cloneProject();
+      const timeline = project.timelines.items["timeline:main"];
+      const props = {
+        project,
+        timeline,
+        durationTick: 20000,
+        playing: false,
+        muted: false,
+        tasks: [] as TaskView[],
+        onPlayheadChange: vi.fn(),
+        onPlayingChange: vi.fn(),
+      };
+      const { container, rerender } = render(
+        <TimelineLivePreview {...props} playheadTick={0} />,
+      );
+
+      expect(
+        container.querySelector('[data-live-layer="edit-opening"]'),
+      ).toBeInTheDocument();
+      expect(
+        container.querySelector("[data-live-preview-incomplete]"),
+      ).not.toBeInTheDocument();
+
+      rerender(<TimelineLivePreview {...props} playheadTick={19000} />);
+      expect(
+        container.querySelector('[data-live-layer="edit-opening"]'),
+      ).not.toBeInTheDocument();
+
+      rerender(<TimelineLivePreview {...props} playheadTick={0} />);
+      expect(
+        container.querySelector('[data-live-layer="edit-opening"]'),
+      ).toBeInTheDocument();
+      expect(
+        container.querySelector("[data-live-preview-incomplete]"),
+      ).not.toBeInTheDocument();
+    } finally {
+      if (originalReadyState) {
+        Object.defineProperty(
+          HTMLMediaElement.prototype,
+          "readyState",
+          originalReadyState,
+        );
+      } else {
+        delete (HTMLMediaElement.prototype as { readyState?: number })
+          .readyState;
+      }
+    }
+  });
+
   it("premounts upcoming video layers invisibly for seamless handover", () => {
     const { container } = renderPreview(cloneProject(), 2000);
     const upcoming = container.querySelector(
@@ -284,10 +370,13 @@ describe("TimelineLivePreview", () => {
     );
     expect(placeholder).toHaveTextContent("画面生成中");
     expect(placeholder.style.width).toBe("100%");
-    // 已就绪的同刻文字层仍然正常显示。
+    // 图层仍在后台挂载，但整帧提示会遮住半成品组合。
     expect(
       container.querySelector('[data-live-text-overlay="overlay-os"]'),
     ).toBeInTheDocument();
+    expect(
+      container.querySelector("[data-live-preview-incomplete]"),
+    ).toHaveTextContent("该时间点尚未渲染完成");
   });
 
   it("keeps unready located overlays visible as positioned dashed placeholders", () => {
@@ -308,10 +397,13 @@ describe("TimelineLivePreview", () => {
     expect(placeholder.className).toContain("border-dashed");
     expect(placeholder.style.left).toBe("51%");
     expect(placeholder.style.width).toBe("42%");
-    // 底下的已就绪视频层不受影响。
+    // 底下的已就绪视频层保留预挂载，视觉上由整帧提示完全遮住。
     expect(
       container.querySelector('[data-live-layer="edit-opening"]'),
     ).not.toHaveClass("invisible");
+    expect(
+      container.querySelector("[data-live-preview-incomplete]"),
+    ).toHaveTextContent("完整画面就绪后才能预览");
   });
 
   it("hot-swaps a placeholder into a real media layer once the artifact arrives", () => {

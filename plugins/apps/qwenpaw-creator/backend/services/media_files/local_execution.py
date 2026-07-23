@@ -1935,7 +1935,11 @@ class FileLocalMediaExecutionService:
                     task.task_id,
                     expected_status=TaskStatus.RUNNING,
                     status=TaskStatus.RUNNING,
-                    updates={"progress": done / total},
+                    # 逐片段处理占 5%–85%；后续 concat、发布与 Project
+                    # 收敛仍需保留可见进度，避免处理中提前显示 100%。
+                    updates={
+                        "progress": min(0.85, 0.05 + (done / total) * 0.8),
+                    },
                 )
             except ExecutionStateConflict:
                 # Cancellation or another terminal transition won the Runtime
@@ -1953,11 +1957,7 @@ class FileLocalMediaExecutionService:
             audio_plan=resolved.audio_plan,
             expected_duration_seconds=resolved.expected_duration_seconds,
             canvas_size=resolved.canvas_size,
-            on_element_done=(
-                on_element_done
-                if resolved.command is CreatorCommandType.EXECUTE_EDIT
-                else None
-            ),
+            on_element_done=on_element_done,
         )
         AtomicJsonRecordStore(work_dir / "spec.json").write(
             {
@@ -2521,6 +2521,18 @@ async def execute_file_local_media_command(
     )
 
 
+def file_local_media_task_id(
+    project_id: str,
+    idempotency_key: str,
+) -> str:
+    """Return the durable Task ID before an asynchronous runner is scheduled."""
+
+    return FileLocalMediaExecutionService._ids(
+        project_id,
+        idempotency_key,
+    )["task_id"]
+
+
 async def recover_file_local_media_project(
     services: CreatorFileServices,
     project_id: str,
@@ -2540,5 +2552,6 @@ __all__ = [
     "LocalMediaInput",
     "LocalMediaRunner",
     "execute_file_local_media_command",
+    "file_local_media_task_id",
     "recover_file_local_media_project",
 ]

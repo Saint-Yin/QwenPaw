@@ -48,6 +48,12 @@ router = APIRouter(
     route_class=CreatorErrorRoute,
 )
 
+_TIMELINE_RENDER_JOBS: dict[
+    tuple[str, str, str],
+    tuple[str, asyncio.Task[None]],
+] = {}
+_TIMELINE_RENDER_LOCKS: dict[tuple[str, str, str], asyncio.Lock] = {}
+
 
 class TaskCancelRequest(StrictModel):
     reason: str = Field(default="用户取消", min_length=1, max_length=1000)
@@ -106,6 +112,41 @@ def _task_view(task: TaskRecord) -> dict[str, Any]:
         "error": task.error,
         "createdAt": task.created_at.isoformat(),
         "updatedAt": task.updated_at.isoformat(),
+    }
+
+
+def _active_timeline_compose_task(
+    services: CreatorFileServices,
+    project_id: str,
+    target_ref: str,
+) -> TaskRecord | None:
+    return next(
+        (
+            task
+            for task in _store(services).list_tasks(project_id)
+            if task.kind is TaskKind.COMPOSE
+            and task.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}
+            and str(task.metadata.get("targetRef") or "") == target_ref
+        ),
+        None,
+    )
+
+
+def _render_dispatch_view(
+    services: CreatorFileServices,
+    project_id: str,
+    *,
+    task_id: str,
+    replayed: bool,
+) -> dict[str, Any]:
+    snapshot = services.projects.read(project_id)
+    return {
+        "ok": True,
+        "taskId": task_id,
+        "artifactVersionId": None,
+        "generation": snapshot.generation,
+        "etag": snapshot.etag,
+        "replayed": replayed,
     }
 
 
@@ -321,26 +362,79 @@ async def render_timeline(
     """
 
     key = resolve_idempotency_key(idempotency_key)
+    target_ref = f"timeline:{timeline_id}"
     from services.media_files.local_execution import (
         execute_file_local_media_command,
+        file_local_media_task_id,
     )
 
-    execution = await execute_file_local_media_command(
-        services,
-        project_id=project_id,
-        command=CreatorCommandType.COMPOSE_FINAL_VIDEO,
-        target_ref=f"timeline:{timeline_id}",
-        arguments={},
-        idempotency_key=key,
-    )
-    return {
-        "ok": True,
-        "taskId": execution.task_id,
-        "artifactVersionId": execution.artifact_version_id,
-        "generation": execution.project_generation,
-        "etag": execution.project_etag,
-        "replayed": execution.replayed,
-    }
+    identity = (str(services.root), project_id, timeline_id)
+    lock = _TIMELINE_RENDER_LOCKS.setdefault(identity, asyncio.Lock())
+    async with lock:
+        running = _TIMELINE_RENDER_JOBS.get(identity)
+        if running is not None and not running[1].done():
+            return await asyncio.to_thread(
+                _render_dispatch_view,
+                services,
+                project_id,
+                task_id=running[0],
+                replayed=True,
+            )
+
+        active = await asyncio.to_thread(
+            _active_timeline_compose_task,
+            services,
+            project_id,
+            target_ref,
+        )
+        if active is not None:
+            return await asyncio.to_thread(
+                _render_dispatch_view,
+                services,
+                project_id,
+                task_id=active.task_id,
+                replayed=True,
+            )
+
+        task_id = file_local_media_task_id(project_id, key)
+
+        async def drive() -> None:
+            try:
+                await execute_file_local_media_command(
+                    services,
+                    project_id=project_id,
+                    command=CreatorCommandType.COMPOSE_FINAL_VIDEO,
+                    target_ref=target_ref,
+                    arguments={},
+                    idempotency_key=key,
+                )
+            except asyncio.CancelledError:
+                raise
+            except BaseException:
+                # The execution service persists terminal failure details on
+                # the durable Task; clients observe them through task polling.
+                return
+
+        background = asyncio.create_task(
+            drive(),
+            name=f"timeline-render:{project_id}:{timeline_id}:{task_id}",
+        )
+        _TIMELINE_RENDER_JOBS[identity] = (task_id, background)
+
+        def completed(done: asyncio.Task[None]) -> None:
+            if _TIMELINE_RENDER_JOBS.get(identity) == (task_id, done):
+                _TIMELINE_RENDER_JOBS.pop(identity, None)
+            if not done.cancelled():
+                done.exception()
+
+        background.add_done_callback(completed)
+        return await asyncio.to_thread(
+            _render_dispatch_view,
+            services,
+            project_id,
+            task_id=task_id,
+            replayed=False,
+        )
 
 
 @router.get("/execution-authorizations")

@@ -208,7 +208,7 @@ export default function ElementDetail({
             size="small"
             disabled={dirtyCount === 0 || applying}
             onClick={onDiscard}
-            className="!font-[inherit] !font-semibold"
+            className="!h-[22px] !px-2 !font-[inherit] !text-[11px] !font-semibold !leading-[20px]"
           >
             放弃修改
           </Button>
@@ -218,7 +218,7 @@ export default function ElementDetail({
             loading={applying}
             disabled={dirtyCount === 0 || conflictPaths.length > 0}
             onClick={onApply}
-            className="!font-[inherit] !font-semibold"
+            className="!h-[22px] !px-2 !font-[inherit] !text-[11px] !font-semibold !leading-[20px]"
           >
             {dirtyCount > 0 ? `应用修改（${dirtyCount}）` : "应用修改"}
           </Button>
