@@ -405,7 +405,7 @@ export default function PlanPage() {
       }`}
     >
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]/60 px-5 py-3 backdrop-blur">
-        <div className="min-w-0">
+        <div data-onboarding-id="creative-brief" className="min-w-0">
           {project.strategy.creative_brief ||
           project.strategy.creative_direction ? (
             <details className="max-w-3xl">

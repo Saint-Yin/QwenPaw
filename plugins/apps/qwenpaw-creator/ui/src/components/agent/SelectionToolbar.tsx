@@ -10,6 +10,7 @@ import {
   type SelectionAttachment,
 } from "@/store/agentDockUiStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
+import { useOnboardingStore } from "@/store/onboardingStore";
 
 interface ToolbarAnchor {
   left: number;
@@ -236,7 +237,11 @@ export default function SelectionToolbar() {
 
   if (!state) return null;
 
+  const hintSeen =
+    useOnboardingStore.getState().hints.addToConversation === true;
+
   const addToConversation = () => {
+    useOnboardingStore.getState().markHintSeen("addToConversation");
     setDockSelection(state.sel);
     useCreatorInteractionStore.getState().setSelection(state.sel);
     setState(null);
@@ -251,9 +256,10 @@ export default function SelectionToolbar() {
         top: pos?.top ?? -9999,
         left: pos?.left ?? -9999,
         visibility: pos ? "visible" : "hidden",
-        zIndex: 50,
+        // 高于导览遮罩与气泡（antd Tour 默认 1001），新手引导的真实选区演示也能看到浮条。
+        zIndex: 1100,
       }}
-      className="agent-dock-enter flex items-center overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-0.5 shadow-lg"
+      className="agent-dock-enter flex flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-0.5 shadow-lg"
     >
       <button
         type="button"
@@ -264,6 +270,11 @@ export default function SelectionToolbar() {
         <MessageSquarePlus className="h-3.5 w-3.5" />
         添加到对话
       </button>
+      {!hintSeen && (
+        <span className="max-w-[200px] px-2.5 pb-1 text-[10px] leading-4 text-[var(--color-text-tertiary)]">
+          把选中内容作为上下文发给 Agent，精准描述你想改哪里
+        </span>
+      )}
     </div>
   );
 }

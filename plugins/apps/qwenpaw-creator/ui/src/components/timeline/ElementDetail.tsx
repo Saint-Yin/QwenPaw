@@ -151,7 +151,10 @@ export default function ElementDetail({
 
   if (!element) {
     return (
-      <section className="flex min-h-0 items-center justify-center overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] shadow-sm">
+      <section
+        data-onboarding-id="element-detail"
+        className="flex min-h-0 items-center justify-center overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] shadow-sm"
+      >
         <div className="max-w-sm px-8 text-center">
           <Layers3 className="mx-auto mb-3 h-8 w-8 text-[var(--color-text-tertiary)]" />
           <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">
@@ -181,6 +184,7 @@ export default function ElementDetail({
   return (
     <section
       data-element-detail={element.element_id}
+      data-onboarding-id="element-detail"
       className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] shadow-sm"
     >
       <header className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3">

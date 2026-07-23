@@ -55,6 +55,7 @@ export default function ModelBadges() {
   return (
     <>
       <div
+        data-onboarding-id="model-badges"
         style={{
           display: "flex",
           alignItems: "center",

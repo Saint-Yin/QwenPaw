@@ -62,6 +62,7 @@ import AgentDecisionCenter from "./AgentDecisionCenter";
 import AgentEventFeed from "./AgentEventFeed";
 import MentionInput, { type MentionInputHandle } from "./MentionInput";
 import FileProjectReviewPanel from "./FileProjectReviewPanel";
+import OnboardingHint from "@/components/onboarding/OnboardingHint";
 
 interface DockSize {
   width: number;
@@ -2282,6 +2283,9 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                   </div>
                 )}
 
+                <OnboardingHint hintKey="mention" className="mb-2">
+                  输入 @ 可引用分镜、素材等对象作为上下文；当前选中的对象也会自动带入对话。
+                </OnboardingHint>
                 <div className="flex items-end gap-2">
                   <MentionInput
                     ref={inputRef}

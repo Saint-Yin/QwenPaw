@@ -1,8 +1,9 @@
 import { LeftOutlined } from "@ant-design/icons";
 import { Tooltip } from "antd";
-import { Images, LayoutList } from "lucide-react";
-import { Link, useParams, usePathname } from "@/routing/navigation";
+import { CircleHelp, Images, LayoutList } from "lucide-react";
+import { Link, useParams, usePathname, useRouter } from "@/routing/navigation";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
+import { useOnboardingStore } from "@/store/onboardingStore";
 import Breadcrumb from "./Breadcrumb";
 import ModelBadges from "@/components/creator/ModelBadges";
 
@@ -18,11 +19,27 @@ function activeTabKey(routeSection: string): string {
 export default function TopNav() {
   const { id = "" } = useParams();
   const pathname = usePathname();
+  const router = useRouter();
   const project = useProjectSnapshotStore((state) => state.project);
+  const requestProjectTour = useOnboardingStore(
+    (state) => state.requestProjectTour,
+  );
+  const requestAssetsTour = useOnboardingStore(
+    (state) => state.requestAssetsTour,
+  );
 
   if (!project) return null;
   const routeSection = pathname.split("/").filter(Boolean)[2] || "plan";
   const activeKey = activeTabKey(routeSection);
+  const replayTour = () => {
+    // 按当前所在页唤起对应导览；工作区导览的锚点在视频方案页。
+    if (activeKey === "assets") {
+      requestAssetsTour();
+      return;
+    }
+    if (activeKey !== "plan") router.push(`/project/${id}/plan`);
+    requestProjectTour();
+  };
   const masterScript = project.description || "";
   const masterScriptPreview =
     masterScript.length > 20 ? `${masterScript.slice(0, 20)}…` : masterScript;
@@ -63,6 +80,7 @@ export default function TopNav() {
             <Link
               key={tab.key}
               href={`/project/${id}/${tab.key}`}
+              data-onboarding-id={tab.key === "assets" ? "assets-tab" : undefined}
               className={`inline-flex h-[31px] items-center gap-1.5 rounded-full px-3 text-xs font-bold transition-colors md:px-4 ${
                 isActive
                   ? "bg-[var(--color-accent-soft)] text-[var(--color-text-primary)] shadow-[inset_0_0_0_1px_rgba(255,127,22,0.18)]"
@@ -77,6 +95,16 @@ export default function TopNav() {
       </nav>
 
       <div className="flex min-w-0 items-center justify-end gap-2">
+        <Tooltip title="重新查看新手引导">
+          <button
+            type="button"
+            onClick={replayTour}
+            className="icon-button shrink-0"
+            aria-label="重新查看新手引导"
+          >
+            <CircleHelp className="h-3.5 w-3.5" />
+          </button>
+        </Tooltip>
         <ModelBadges />
       </div>
     </header>

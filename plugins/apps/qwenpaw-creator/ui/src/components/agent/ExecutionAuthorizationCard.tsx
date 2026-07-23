@@ -8,6 +8,7 @@ import type {
 } from "@/contracts/creator";
 import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationStore";
 import { creatorTargetLabel, taskKindLabel } from "@/lib/creatorPresentation";
+import OnboardingHint from "@/components/onboarding/OnboardingHint";
 
 const BUTTON_BASE =
   "rounded-md px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50";
@@ -139,6 +140,9 @@ export default function ExecutionAuthorizationCard({
       data-execution-authorization-card={authorization.id}
       className="rounded-xl border border-[var(--color-warning)]/50 bg-[var(--color-warning-soft)]/40 p-2.5"
     >
+      <OnboardingHint hintKey="executionAuthorization" className="mb-2">
+        首次说明：Agent 即将调用付费生成模型，下方已给出预估费用。点击「继续」才会真正执行，「取消」则终止本次制作；可在模型配置中关闭此确认。
+      </OnboardingHint>
       <div className="flex items-start gap-2.5">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">

@@ -34,6 +34,7 @@ import TimelineLivePreview from "@/components/timeline/TimelineLivePreview";
 import { projectJsonPointer } from "@/lib/projectJsonPointer";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
+import { useOnboardingStore } from "@/store/onboardingStore";
 import { useAgentWorkingState } from "@/selectors/agentWorkingSelectors";
 
 interface TimelineSelection {
@@ -1108,13 +1109,14 @@ export default function TimelineCanvas({
               <div
                 ref={toolbarRef}
                 data-timeline-selection-toolbar
-                className="rounded-lg border border-[var(--color-border)] bg-white p-0.5 shadow-lg"
+                className="flex flex-col rounded-lg border border-[var(--color-border)] bg-white p-0.5 shadow-lg"
                 style={{
                   position: "fixed",
                   top: toolbarPos?.top ?? -9999,
                   left: toolbarPos?.left ?? -9999,
                   visibility: toolbarPos ? "visible" : "hidden",
-                  zIndex: 50,
+                  // 高于导览遮罩（antd Tour 默认 1001），导览中框选时间段也能看到浮条。
+                  zIndex: 1100,
                 }}
               >
                 <button
@@ -1122,6 +1124,7 @@ export default function TimelineCanvas({
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
+                    useOnboardingStore.getState().markHintSeen("addToConversation");
                     addSelectionToConversation();
                   }}
                   className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent)]"
@@ -1129,6 +1132,12 @@ export default function TimelineCanvas({
                   <MessageSquarePlus className="h-3.5 w-3.5" />
                   添加到对话
                 </button>
+                {useOnboardingStore.getState().hints.addToConversation !==
+                  true && (
+                  <span className="max-w-[200px] px-2.5 pb-1 text-[10px] leading-4 text-[var(--color-text-tertiary)]">
+                    把选中的时间点/时间段作为上下文发给 Agent
+                  </span>
+                )}
               </div>,
               document.body,
             )}

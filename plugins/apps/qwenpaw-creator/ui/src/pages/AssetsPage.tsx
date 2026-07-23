@@ -389,7 +389,10 @@ export default function AssetsPage() {
             当前项目中的来源素材、生成结果与视觉设定；时间线内容会引用这里的具体版本。
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div
+          data-onboarding-id="assets-upload"
+          className="flex items-center gap-2"
+        >
           <input
             ref={fileInputRef}
             type="file"
@@ -417,7 +420,10 @@ export default function AssetsPage() {
         </div>
       </header>
 
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)] px-5 py-2.5">
+      <div
+        data-onboarding-id="assets-filters"
+        className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)] px-5 py-2.5"
+      >
         <div className="flex flex-wrap gap-1">
           {FILTERS.map((candidate) => (
             <button
@@ -449,7 +455,10 @@ export default function AssetsPage() {
       </div>
 
       <main className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_340px] gap-4 overflow-hidden p-4">
-        <section className="min-h-0 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3">
+        <section
+          data-onboarding-id="assets-grid"
+          className="min-h-0 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3"
+        >
           {items.length > 0 ? (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-3">
               {items.map((item) => {
@@ -516,7 +525,10 @@ export default function AssetsPage() {
           )}
         </section>
 
-        <aside className="min-h-0 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)]">
+        <aside
+          data-onboarding-id="assets-detail"
+          className="min-h-0 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)]"
+        >
           {selected ? (
             <div>
               <div className="flex aspect-video items-center justify-center overflow-hidden bg-black">

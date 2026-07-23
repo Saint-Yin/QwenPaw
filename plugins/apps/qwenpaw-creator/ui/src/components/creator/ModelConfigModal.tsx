@@ -21,6 +21,7 @@ import {
   testModelConnection,
 } from "@/api/creator";
 import type { ModelConfigData, ModelConfigItem } from "@/contracts/creator";
+import ModelSetupGuide from "@/components/onboarding/ModelSetupGuide";
 
 const LLM_PROTOCOLS = [
   "Anthropic Claude",
@@ -867,6 +868,22 @@ export default function ModelConfigModal({ open, onClose }: Props) {
           overflowY: "auto",
         }}
       >
+        <details className="glass-card" style={{ padding: "10px 18px" }}>
+          <summary
+            style={{
+              cursor: "pointer",
+              userSelect: "none",
+              fontSize: 12,
+              fontWeight: 600,
+              color: "var(--color-accent)",
+            }}
+          >
+            不知道该配什么？查看各场景的模型要求与支持的提供商
+          </summary>
+          <div style={{ marginTop: 10 }}>
+            <ModelSetupGuide />
+          </div>
+        </details>
         <div
           className="glass-card"
           style={{

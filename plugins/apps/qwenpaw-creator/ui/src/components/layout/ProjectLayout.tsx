@@ -17,6 +17,7 @@ import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationSt
 import TopNav from "./TopNav";
 import ReturnBanner from "@/components/creator/ReturnBanner";
 import { AgentDock, SelectionToolbar } from "@/components/agent";
+import { ProjectTour, AssetsTour } from "@/components/onboarding";
 import PageSkeleton from "@/components/PageSkeleton";
 
 const SUBAGENT_LIFECYCLE_EVENTS = new Set([
@@ -340,6 +341,8 @@ export default function ProjectLayout() {
         <AgentDock sidebar />
       </div>
       <SelectionToolbar />
+      <ProjectTour />
+      <AssetsTour />
     </div>
   );
 }

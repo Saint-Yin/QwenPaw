@@ -8,16 +8,20 @@ import {
   Clock3,
   ArrowUp,
   ArrowDown,
+  CircleHelp,
 } from "lucide-react";
-import type { ProjectSummary } from "@/contracts/creator";
-import { deleteProject, listProjects } from "@/api/creator";
+import type { ModelConfigData, ProjectSummary } from "@/contracts/creator";
+import { deleteProject, getModelConfig, listProjects } from "@/api/creator";
 import { useRouter } from "@/routing/navigation";
 import ModelBadges from "@/components/creator/ModelBadges";
+import ModelConfigModal from "@/components/creator/ModelConfigModal";
 import {
   ProjectComposer,
   SCENARIO_OPTIONS,
   CONTENT_TYPE_OPTIONS,
 } from "@/components/creator/ProjectComposer";
+import { HomeTour } from "@/components/onboarding";
+import { useOnboardingStore } from "@/store/onboardingStore";
 
 interface ProjectCardProps {
   project: ProjectSummary;
@@ -120,6 +124,24 @@ export default function HomePage() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [sortBy, setSortBy] = useState<SortField>("updated_at");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const requestHomeTour = useOnboardingStore((state) => state.requestHomeTour);
+  const [modelConfig, setModelConfig] = useState<ModelConfigData | null>(null);
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+
+  const refreshModelConfig = useCallback(() => {
+    getModelConfig()
+      .then(setModelConfig)
+      .catch(() => setModelConfig(null));
+  }, []);
+
+  useEffect(() => {
+    refreshModelConfig();
+  }, [refreshModelConfig]);
+
+  // LLM 是所有创作场景的必选模型，未配置时在首页持续提醒。
+  const llmReady =
+    modelConfig === null ||
+    Boolean(modelConfig.llm.enabled && modelConfig.llm.model_name);
 
   const fetchProjects = useCallback(
     async (sort: SortField = sortBy, order: "asc" | "desc" = sortOrder) => {
@@ -208,11 +230,39 @@ export default function HomePage() {
               </span>
             </div>
           </div>
-          <ModelBadges />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={requestHomeTour}
+              className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent)]"
+              title="重新查看新手引导"
+              aria-label="重新查看新手引导"
+            >
+              <CircleHelp className="h-4 w-4" />
+            </button>
+            <ModelBadges />
+          </div>
         </div>
       </header>
 
       <main className="page-container py-4">
+        {!llmReady && (
+          <button
+            type="button"
+            onClick={() => setConfigModalOpen(true)}
+            className="mb-4 flex w-full flex-wrap items-center gap-2 rounded-lg border border-[var(--color-warning)]/40 bg-[var(--color-warning-soft)]/50 px-3 py-2 text-left transition-colors hover:bg-[var(--color-warning-soft)]"
+          >
+            <span className="text-xs font-semibold text-[var(--color-warning)]">
+              还未配置 LLM 模型
+            </span>
+            <span className="min-w-0 flex-1 text-[11px] text-[var(--color-text-secondary)]">
+              LLM 是所有创作场景的必选模型，配置并通过连通性测试后才能启动 Agent。
+            </span>
+            <span className="shrink-0 text-[11px] font-semibold text-[var(--color-accent)]">
+              立即配置 →
+            </span>
+          </button>
+        )}
         <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[rgba(255,255,255,0.5)] p-4">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-3">
@@ -244,24 +294,41 @@ export default function HomePage() {
                 </button>
               </div>
             </div>
-            <button
-              onClick={() => setComposerOpen(true)}
-              className="btn-primary cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              新建项目
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={requestHomeTour}
+                className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2.5 py-1.5 text-xs text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+                title="重新查看新手引导"
+              >
+                <CircleHelp className="h-3.5 w-3.5" />
+                新手引导
+              </button>
+              <button
+                onClick={() => setComposerOpen(true)}
+                data-onboarding-id="create-project"
+                className="btn-primary cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                新建项目
+              </button>
+            </div>
           </div>
         </section>
 
         {loading ? (
-          <div className="surface flex items-center justify-center py-28">
+          <div
+            data-onboarding-id="project-list"
+            className="surface flex items-center justify-center py-28"
+          >
             <div className="text-[var(--color-text-secondary)] text-sm">
               加载中...
             </div>
           </div>
         ) : projects.length === 0 ? (
-          <div className="surface flex flex-col items-center justify-center px-6 py-28 text-center">
+          <div
+            data-onboarding-id="project-list"
+            className="surface flex flex-col items-center justify-center px-6 py-28 text-center"
+          >
             <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-lg bg-[var(--color-accent-soft)]">
               <Film className="h-7 w-7 text-[var(--color-accent)]" />
             </div>
@@ -270,7 +337,10 @@ export default function HomePage() {
             </h2>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div
+            data-onboarding-id="project-list"
+            className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
+          >
             {projects.map((project) => (
               <ProjectCard
                 key={project.projectId}
@@ -288,6 +358,14 @@ export default function HomePage() {
         open={composerOpen}
         onClose={() => setComposerOpen(false)}
       />
+      <ModelConfigModal
+        open={configModalOpen}
+        onClose={() => {
+          setConfigModalOpen(false);
+          refreshModelConfig();
+        }}
+      />
+      <HomeTour />
     </div>
   );
 }

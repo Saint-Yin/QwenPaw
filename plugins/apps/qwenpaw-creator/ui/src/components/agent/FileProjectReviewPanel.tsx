@@ -7,6 +7,7 @@ import type {
   FileProjectReviewOperationDecision,
 } from "@/contracts/creator";
 import { useFileProjectReviewStore } from "@/store/fileProjectReviewStore";
+import OnboardingHint from "@/components/onboarding/OnboardingHint";
 
 const DECISION_LABELS: Record<FileProjectReviewOperationDecision, string> = {
   PENDING: "待审",
@@ -119,6 +120,9 @@ export default function FileProjectReviewPanel({
       data-file-project-review={review.review_id}
       className="mb-3 rounded-xl border border-[var(--color-accent)]/35 bg-[var(--color-bg-primary)]/70 p-2.5"
     >
+      <OnboardingHint hintKey="review" className="mb-2">
+        首次说明：Agent 对项目的每处修改都会在这里待你审阅：「保留」采纳修改，「撤销」回退到修改前；也可逐条处理。
+      </OnboardingHint>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-primary)]">
