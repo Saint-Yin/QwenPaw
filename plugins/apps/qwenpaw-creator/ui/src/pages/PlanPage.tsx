@@ -101,7 +101,14 @@ export default function PlanPage() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [elementDraft.dirty]);
 
+  // 只在选中对象的身份变化时把播放头对齐到元素开头（URL 直达兜底）。
+  // 快照轮询会刷新 selectedElement 的对象引用；若依赖引用，播放中
+  // 每次轮询都会把播放头拽回选中元素起点，表现为“播几秒就停/回跳”。
+  const lastAlignedElementId = useRef<string | null>(null);
   useEffect(() => {
+    const elementId = selectedElement?.element_id ?? null;
+    if (elementId === lastAlignedElementId.current) return;
+    lastAlignedElementId.current = elementId;
     if (
       !selectedElement ||
       (playheadTick >= selectedElement.span.start_tick &&
@@ -110,6 +117,7 @@ export default function PlanPage() {
     )
       return;
     setPlayheadTick(selectedElement.span.start_tick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedElement]);
 
   const base = `/project/${id}/plan`;

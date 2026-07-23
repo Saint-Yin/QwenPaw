@@ -50,6 +50,13 @@ from services.media_files.overlay import (
     render_pet_os_overlay,
 )
 from services.media_files.motion_overlay import render_motion_overlay
+from services.media_files.transitions import (
+    SUPPORTED_XFADE_KINDS,
+    TransitionClip,
+    TransitionJoin,
+    build_transition_filter_chain,
+    normalize_transition_kind,
+)
 from services.project_files.assets import (
     AssetAlreadyExists,
     AssetFileError,
@@ -210,7 +217,9 @@ class FfmpegLocalMediaRunner:
         if not spec.inputs:
             raise ValidationError("本地媒体执行至少需要一个输入")
         concat_inputs: list[Path] = []
+        segment_durations: list[float] = []
         overlay_warnings: list[str] = []
+        tail_trims, joins_by_pair = self._transition_directives(spec)
         if spec.command in (
             CreatorCommandType.EXECUTE_EDIT,
             CreatorCommandType.COMPOSE_FINAL_VIDEO,
@@ -234,7 +243,13 @@ class FfmpegLocalMediaRunner:
                             "Edit Element 缺少可执行 source range",
                         )
                     end_seconds = start_seconds + item.duration_seconds
-                segment_duration = end_seconds - start_seconds
+                # 转场对的 from 片段尾部被 to 片段覆盖的部分直接不渲染，
+                # 剩下的重叠由 xfade blend 消耗。
+                tail_trim = tail_trims.get(item.source_ref, 0.0)
+                segment_duration = max(
+                    1 / 30,
+                    end_seconds - start_seconds - tail_trim,
+                )
                 segment = segment_dir / f"{index:06d}.mp4"
                 placement_filter = self._placement_filter(
                     item.location,
@@ -280,12 +295,144 @@ class FfmpegLocalMediaRunner:
                         f"{item.source_ref or item.version_id}: {warning}",
                     )
                 concat_inputs.append(segment)
+                segment_durations.append(segment_duration)
                 if spec.on_element_done is not None:
                     spec.on_element_done(index + 1, len(spec.inputs))
         else:
             concat_inputs.extend(item.path for item in spec.inputs)
-        self._concat(concat_inputs, spec.output_path, work_dir=spec.work_dir)
+        joins = self._resolve_segment_joins(spec, joins_by_pair)
+        if (
+            any(join.effective_blend() > 0 for join in joins)
+            and len(segment_durations) == len(concat_inputs)
+        ):
+            self._compose_with_transitions(
+                concat_inputs,
+                segment_durations,
+                joins,
+                spec.output_path,
+                work_dir=spec.work_dir,
+                canvas_size=spec.canvas_size,
+            )
+        else:
+            self._concat(concat_inputs, spec.output_path, work_dir=spec.work_dir)
         return overlay_warnings
+
+    @staticmethod
+    def _transition_directives(
+        spec: LocalMediaExecutionSpec,
+    ) -> tuple[dict[str, float], dict[tuple[str, str], TransitionJoin]]:
+        """把 spec.transitions 投影为每个输入的尾部裁剪与相邻对衔接方式。"""
+
+        tail_trims: dict[str, float] = {}
+        joins: dict[tuple[str, str], TransitionJoin] = {}
+        for transition in spec.transitions:
+            from_ref = f"element:{transition.get('fromElementId')}"
+            to_ref = f"element:{transition.get('toElementId')}"
+            raw_trim = transition.get("tail_trim_ms", 0)
+            raw_duration = transition.get("duration_ms", 0)
+            trim_ms = (
+                float(raw_trim)
+                if isinstance(raw_trim, (int, float))
+                and not isinstance(raw_trim, bool)
+                else 0.0
+            )
+            duration_ms = (
+                float(raw_duration)
+                if isinstance(raw_duration, (int, float))
+                and not isinstance(raw_duration, bool)
+                else 0.0
+            )
+            if trim_ms > 0:
+                tail_trims[from_ref] = (
+                    tail_trims.get(from_ref, 0.0) + trim_ms / 1000
+                )
+            joins[(from_ref, to_ref)] = TransitionJoin(
+                kind=str(transition.get("kind") or "cut"),
+                blend_seconds=duration_ms / 1000,
+            )
+        return tail_trims, joins
+
+    @staticmethod
+    def _resolve_segment_joins(
+        spec: LocalMediaExecutionSpec,
+        joins_by_pair: Mapping[tuple[str, str], TransitionJoin],
+    ) -> list[TransitionJoin]:
+        return [
+            joins_by_pair.get(
+                (
+                    spec.inputs[index - 1].source_ref,
+                    spec.inputs[index].source_ref,
+                ),
+                TransitionJoin(),
+            )
+            for index in range(1, len(spec.inputs))
+        ]
+
+    def _probe_has_audio(self, path: Path) -> bool:
+        try:
+            return bool(
+                probe_media(
+                    os.fspath(path),
+                    ffmpeg_path=self.executable,
+                    timeout=min(self.timeout_seconds, 30.0),
+                ).has_audio,
+            )
+        except MediaProbeError:
+            # 探测失败时用 anullsrc 兑底，避免引用不存在的音轨。
+            return False
+
+    def _compose_with_transitions(
+        self,
+        segments: Sequence[Path],
+        durations: Sequence[float],
+        joins: Sequence[TransitionJoin],
+        output: Path,
+        *,
+        work_dir: Path,
+        canvas_size: tuple[int, int],
+    ) -> None:
+        """用一条 xfade/acrossfade 滤镜链合成带转场的成片。"""
+
+        clips = [
+            TransitionClip(
+                duration_seconds=duration,
+                has_audio=self._probe_has_audio(path),
+            )
+            for path, duration in zip(segments, durations)
+        ]
+        try:
+            chain = build_transition_filter_chain(
+                clips,
+                list(joins),
+                canvas_size=canvas_size,
+            )
+        except ValueError as exc:
+            raise ValidationError(f"转场布局无法合成: {exc}") from exc
+        arguments: list[str] = ["-y"]
+        for path in segments:
+            arguments.extend(["-i", os.fspath(path)])
+        arguments.extend(
+            [
+                "-filter_complex",
+                chain,
+                "-map",
+                "[vout]",
+                "-map",
+                "[aout]",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-movflags",
+                "+faststart",
+                os.fspath(output),
+            ],
+        )
+        self._run(arguments, cwd=work_dir)
 
     @staticmethod
     def _normalized_location(
@@ -617,20 +764,13 @@ class FfmpegLocalMediaRunner:
         unsupported_transitions: list[str] = []
         for transition in spec.transitions:
             kind = str(transition.get("kind") or "cut").strip().casefold()
-            raw_duration = transition.get("duration_ms", 0)
-            duration_ms = (
-                int(raw_duration)
-                if isinstance(raw_duration, (int, float))
-                and not isinstance(raw_duration, bool)
-                else 0
-            )
-            if kind != "cut" or duration_ms != 0:
-                unsupported_transitions.append(
-                    f"{kind or '<empty>'}:{duration_ms}ms",
-                )
+            if kind != "cut" and kind not in SUPPORTED_XFADE_KINDS:
+                unsupported_transitions.append(kind or "<empty>")
         if unsupported_transitions:
             raise ValidationError(
-                "默认 ffmpeg runner 尚不支持非硬切 transition: "
+                "默认 ffmpeg runner 仅支持 cut/"
+                + "/".join(sorted(SUPPORTED_XFADE_KINDS))
+                + " 转场: "
                 + ", ".join(unsupported_transitions),
             )
 
@@ -1033,28 +1173,125 @@ def _edit_overlay(
     }
 
 
+def _plan_timeline_transitions(
+    timeline: Timeline,
+    visual_elements: Sequence[TimelineElement],
+) -> tuple[dict[str, Any], ...]:
+    """Project transition Elements onto adjacent main-track segment pairs.
+
+    每个转场必须连接主轨中相邻的两个可视 Element。模型层已保证两端 span
+    重叠且转场 span 落在交集内；这里把重叠拆成 blend（xfade 时长）与
+    tail trim（from 片段尾部被 to 片段直接覆盖的部分），两者之和恰为
+    重叠量，保证成片总时长回到 Timeline 末端。
+    """
+
+    order_by_id = {
+        element.element_id: index
+        for index, element in enumerate(visual_elements)
+    }
+    ticks_per_second = timeline.ticks_per_second
+    plans: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for element in sorted(
+        (
+            item
+            for item in timeline.elements_by_id.values()
+            if item.enabled and isinstance(item.creation, TransitionCreation)
+        ),
+        key=lambda item: (item.span.start_tick, item.element_id),
+    ):
+        creation = element.creation
+        assert isinstance(creation, TransitionCreation)
+        from_index = order_by_id.get(creation.from_element_id)
+        to_index = order_by_id.get(creation.to_element_id)
+        if from_index is None or to_index is None:
+            raise ValidationError(
+                f"转场 {element.element_id} 引用的端点不在可执行主轨中："
+                f"{creation.from_element_id} -> {creation.to_element_id}",
+            )
+        if to_index != from_index + 1:
+            raise ValidationError(
+                f"转场 {element.element_id} 只能连接主轨上相邻的两个 Element；"
+                f"{creation.from_element_id} 与 {creation.to_element_id} "
+                "在播放顺序中不相邻。",
+            )
+        pair = (creation.from_element_id, creation.to_element_id)
+        if pair in seen_pairs:
+            raise ValidationError(
+                f"同一对 Element 只支持一个转场：{pair[0]} -> {pair[1]}",
+            )
+        seen_pairs.add(pair)
+        from_element = visual_elements[from_index]
+        to_element = visual_elements[to_index]
+        overlap_tick = (
+            min(from_element.span.end_tick, to_element.span.end_tick)
+            - to_element.span.start_tick
+        )
+        kind = normalize_transition_kind(creation.transition_kind)
+        # blend 不得吞掉任一端片段，否则 xfade offset 会倒退。
+        blend_tick = (
+            0
+            if kind == "cut"
+            else max(
+                0,
+                min(
+                    element.span.duration_tick,
+                    overlap_tick,
+                    from_element.span.duration_tick - 1,
+                    to_element.span.duration_tick - 1,
+                ),
+            )
+        )
+        plans.append(
+            {
+                "elementId": element.element_id,
+                "fromElementId": creation.from_element_id,
+                "toElementId": creation.to_element_id,
+                "kind": kind,
+                "duration_ms": round(blend_tick * 1000 / ticks_per_second),
+                "tail_trim_ms": round(
+                    (overlap_tick - blend_tick) * 1000 / ticks_per_second,
+                ),
+            },
+        )
+    return tuple(plans)
+
+
 def _validate_contiguous_edit_elements(
     elements: Sequence[TimelineElement],
+    transitions: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     """Match Timeline edit positions to the concat-based local runner.
 
     The runner emits selected source ranges back-to-back; it does not render
     leading or interstitial blank media. Reject a Timeline that claims gaps or
     overlaps instead of publishing an artifact whose duration disagrees with
-    the Timeline and preview playhead.
+    the Timeline and preview playhead.  相邻对之间存在转场 Element 时，
+    两端按模型约定重叠，属于合法布局。
     """
 
+    transitioned_pairs = {
+        (str(item.get("fromElementId")), str(item.get("toElementId")))
+        for item in transitions
+    }
     expected_start_tick = 0
+    previous_id: str | None = None
     for element in elements:
-        if element.span.start_tick != expected_start_tick:
+        overlapped = (
+            previous_id is not None
+            and (previous_id, element.element_id) in transitioned_pairs
+            and element.span.start_tick < expected_start_tick
+        )
+        if element.span.start_tick != expected_start_tick and not overlapped:
             raise ValidationError(
-                "Edit Timeline 必须从 0 开始并连续排列；"
+                "Edit Timeline 必须从 0 开始并连续排列（转场对允许重叠）；"
                 f"{element.element_id} 的 span.start_tick="
                 f"{element.span.start_tick}，期望 {expected_start_tick}。"
                 "span 表示片段在成片中的位置；源素材时间只写在 "
                 "render_source.source_in_tick/source_out_tick。",
             )
         expected_start_tick = element.span.end_tick
+        previous_id = element.element_id
 
 
 def _edit_motion_overlays(
@@ -1134,8 +1371,9 @@ def _timeline_execution(
             else "R2V/Edit"
         )
         raise ConflictError(f"Timeline 没有可执行的 {label} Element")
+    transitions = _plan_timeline_transitions(timeline, visual_elements)
     if command is CreatorCommandType.EXECUTE_EDIT:
-        _validate_contiguous_edit_elements(visual_elements)
+        _validate_contiguous_edit_elements(visual_elements, transitions)
     inputs: list[_FrozenInput] = []
     read_set: list[dict[str, Any]] = []
     selections: list[dict[str, Any]] = []
@@ -1229,24 +1467,18 @@ def _timeline_execution(
         durations.append(
             element.span.duration_tick / timeline.ticks_per_second,
         )
-    transitions = tuple(
-        {
-            "elementId": element.element_id,
-            "fromElementId": element.creation.from_element_id,
-            "toElementId": element.creation.to_element_id,
-            "kind": element.creation.transition_kind,
-            "duration_ms": round(
-                element.span.duration_tick * 1000 / timeline.ticks_per_second,
-            ),
-        }
-        for element in sorted(
-            timeline.elements_by_id.values(),
-            key=lambda item: (item.span.start_tick, item.element_id),
-        )
-        if element.enabled and isinstance(element.creation, TransitionCreation)
+    # 转场在链上消耗两端 Element 的重叠（blend + tail trim），成片总时长
+    # 回到 Timeline 末端，与预览播放头保持一致。
+    consumed_seconds = sum(
+        (item["duration_ms"] + item["tail_trim_ms"]) / 1000
+        for item in transitions
     )
     duration = (
-        sum(item for item in durations if item is not None)
+        max(
+            0.0,
+            sum(item for item in durations if item is not None)
+            - consumed_seconds,
+        )
         if all(item is not None for item in durations)
         else None
     )

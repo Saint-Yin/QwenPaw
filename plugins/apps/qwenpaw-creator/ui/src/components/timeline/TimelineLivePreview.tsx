@@ -17,6 +17,7 @@ import type { ElementPlayback } from "@/selectors/elementPlaybackSelectors";
 import {
   ELEMENT_PLAYBACK_STATUS_LABEL,
   playbackLayersInWindow,
+  transitionOpacityAtTick,
 } from "@/selectors/elementPlaybackSelectors";
 import { ELEMENT_TYPE_META } from "@/selectors/timelineElementSelectors";
 import {
@@ -599,9 +600,18 @@ export default function TimelineLivePreview({
           const { element, media, status } = layer;
           const elementId = element.element_id;
           const visible = visibleIds.has(elementId);
+          // 转场窗口内 to 端图层淡入，与后端 xfade 合成同口径。
+          const transitionOpacity = transitionOpacityAtTick(
+            timeline,
+            element,
+            playheadTick,
+          );
           if (media && media.mediaKind === "video") {
             // 声音策略与成片一致：仅主轨视频保留原声，overlay 媒体静音。
             const silent = muted || element.creation.type === "overlay";
+            const boxStyle = locationBoxStyle(element.location);
+            const baseOpacity =
+              typeof boxStyle.opacity === "number" ? boxStyle.opacity : 1;
             return (
               <video
                 key={`${elementId}:${media.versionId}`}
@@ -612,7 +622,10 @@ export default function TimelineLivePreview({
                 className={`absolute object-contain ${
                   visible ? "" : "invisible"
                 }`}
-                style={locationBoxStyle(element.location)}
+                style={{
+                  ...boxStyle,
+                  opacity: baseOpacity * transitionOpacity,
+                }}
                 muted={silent}
                 loop={media.loop}
                 playsInline
@@ -630,6 +643,9 @@ export default function TimelineLivePreview({
           }
           if (!visible) return null;
           if (media && media.mediaKind === "image") {
+            const boxStyle = locationBoxStyle(element.location);
+            const baseOpacity =
+              typeof boxStyle.opacity === "number" ? boxStyle.opacity : 1;
             return (
               <img
                 key={`${elementId}:${media.versionId}`}
@@ -639,7 +655,10 @@ export default function TimelineLivePreview({
                 src={media.url}
                 alt={element.label || elementId}
                 className="absolute object-contain"
-                style={locationBoxStyle(element.location)}
+                style={{
+                  ...boxStyle,
+                  opacity: baseOpacity * transitionOpacity,
+                }}
                 onLoad={refreshVisualReadiness}
                 onError={refreshVisualReadiness}
               />

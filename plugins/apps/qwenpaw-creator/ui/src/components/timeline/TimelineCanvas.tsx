@@ -920,6 +920,10 @@ export default function TimelineCanvas({
                         (element.span.duration_tick / timelineDuration) * 100,
                       );
                       const selected = element.element_id === selectedElementId;
+                      // 转场块通常只有不到 2% 宽，两行文本会被裁剪成纯色块；
+                      // 改用居中的交叉三角转场符号，悬停仍有完整 title 提示。
+                      const isTransition =
+                        element.creation.type === "transition";
                       return (
                         <button
                           key={element.element_id}
@@ -947,7 +951,11 @@ export default function TimelineCanvas({
                             onSelectElement(element.element_id);
                             onActiveElementIdsChange([element.element_id]);
                           }}
-                          className={`absolute top-1.5 flex h-[30px] min-w-3 flex-col justify-center overflow-hidden rounded-[7px] border px-2 text-left text-[10px] font-semibold shadow-sm transition ${
+                          className={`absolute top-1.5 flex h-[30px] min-w-3 overflow-hidden rounded-[7px] border text-[10px] font-semibold shadow-sm transition ${
+                            isTransition
+                              ? "items-center justify-center px-0"
+                              : "flex-col justify-center px-2 text-left"
+                          } ${
                             selected
                               ? "z-20 border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/20"
                               : "z-10"
@@ -973,35 +981,51 @@ export default function TimelineCanvas({
                               style={{ color: meta.color }}
                             />
                           )}
-                          <span className="min-w-0 truncate">
-                            {(playbackState === "generating" ||
-                              playbackState === "queued") && (
-                              <span
-                                aria-hidden
-                                className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-warning)] align-middle"
-                              />
-                            )}
-                            {playbackState === "failed" && (
-                              <span
-                                aria-hidden
-                                className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-danger)] align-middle"
-                              />
-                            )}
-                            {element.label || "时间线内容"}
-                          </span>
-                          <span className="truncate whitespace-nowrap text-[9px] font-medium opacity-75">
-                            {seconds(
-                              element.span.start_tick,
-                              timeline.ticks_per_second,
-                            )}
-                            s –{" "}
-                            {seconds(
-                              element.span.start_tick +
-                                element.span.duration_tick,
-                              timeline.ticks_per_second,
-                            )}
-                            s
-                          </span>
+                          {isTransition ? (
+                            // 剪辑软件惯用的交叉三角转场符号，窄块内也始终可识别。
+                            <svg
+                              aria-hidden
+                              data-transition-glyph
+                              viewBox="0 0 20 12"
+                              className="h-3 w-5 shrink-0"
+                              fill="currentColor"
+                            >
+                              <path d="M1 1 L9 6 L1 11 Z" opacity="0.9" />
+                              <path d="M19 1 L11 6 L19 11 Z" opacity="0.45" />
+                            </svg>
+                          ) : (
+                            <>
+                              <span className="min-w-0 truncate">
+                                {(playbackState === "generating" ||
+                                  playbackState === "queued") && (
+                                  <span
+                                    aria-hidden
+                                    className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-warning)] align-middle"
+                                  />
+                                )}
+                                {playbackState === "failed" && (
+                                  <span
+                                    aria-hidden
+                                    className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-danger)] align-middle"
+                                  />
+                                )}
+                                {element.label || "时间线内容"}
+                              </span>
+                              <span className="truncate whitespace-nowrap text-[9px] font-medium opacity-75">
+                                {seconds(
+                                  element.span.start_tick,
+                                  timeline.ticks_per_second,
+                                )}
+                                s –{" "}
+                                {seconds(
+                                  element.span.start_tick +
+                                    element.span.duration_tick,
+                                  timeline.ticks_per_second,
+                                )}
+                                s
+                              </span>
+                            </>
+                          )}
                         </button>
                       );
                     })}

@@ -51,6 +51,14 @@
 
 Overlay 是独立 Element，拥有自己的 span、location 与 z-index；不要把 Overlay 嵌进别的 Element。Transition 也是独立 Element，显式引用 `from_element_id` 与 `to_element_id`，其 span 必须完全位于两个端点的时间交集。
 
+创建转场时遵守以下 authoring 约定：
+
+1. 转场只能连接主轨上播放顺序相邻的两个 R2V/Edit Element，同一对端点只创建一个转场。
+2. 先把 `to` Element 的 `start_tick` 提前，使两端 span 重叠恰好等于转场时长；再把转场的 span 写成这段交集（`start_tick = to.start_tick`，`duration_tick = 重叠量`）。重叠会被合成链消耗，成片总时长仍等于 Timeline 末端。
+3. `transition_kind` 只使用：`crossfade`（交叉溶解，默认首选）、`fadeblack`（经黑场）、`fadewhite`（经白场）、`dissolve`（颗粒溶解）、`wipeleft`（左划）、`cut`（硬切，一般无需显式创建）；其他值会回退为 crossfade。
+4. 转场时长建议 300–500ms，不得长于任一端点 Element。相邻片段默认硬切；仅在场景/时空/情绪切换需要缓冲时使用转场，不要滥用。
+5. 转场是程序化 Element：没有 location、outputs 与 render_source，不需要委派任何 Specialist 生成。
+
 同一批 Element 应在一次连贯 jq 修改中写入，避免悬空引用。`outputs` 和 `render_source` 由媒体执行工具在真实 ArtifactVersion 发布后回写，不创建占位版本。
 
 ## 4. 验证结果
