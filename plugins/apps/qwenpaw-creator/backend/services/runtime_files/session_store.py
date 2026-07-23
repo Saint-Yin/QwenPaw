@@ -1159,6 +1159,7 @@ class ProjectRuntimeSessionStore:
                     )
 
                 boundary: ReviewBoundary | None = None
+                project_state: RuntimeProjectState | None = None
                 requires_review = self._requires_review(
                     session,
                     channel=resolved_channel,
@@ -1175,13 +1176,20 @@ class ProjectRuntimeSessionStore:
                         project_id,
                     ).read_or_none()
                     if project_state is None:
-                        raise RequestAdmissionConflict(
-                            "Cannot capture review boundary without runtime/state.json",
-                        )
-                    if project_state.project_id != project_id:
+                        if session.active_run_id is not None:
+                            raise RequestAdmissionConflict(
+                                "Cannot capture review boundary without runtime/state.json",
+                            )
+                        # A brand-new Project has no accepted baseline yet, so
+                        # an idle feedback request has nothing to diff against.
+                        # Admit it as a plain auto-fix instruction instead of
+                        # failing the request.
+                        requires_review = False
+                    elif project_state.project_id != project_id:
                         raise SessionStoreIntegrityError(
                             "RuntimeProjectState belongs to another Project",
                         )
+                if requires_review and project_state is not None:
                     next_message_seq = (
                         self._messages_store(project_id, session_id).last_seq()
                         + 1
