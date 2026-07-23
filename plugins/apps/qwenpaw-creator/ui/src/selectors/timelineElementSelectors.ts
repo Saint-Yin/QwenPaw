@@ -156,6 +156,17 @@ export function resolveTimelineRender(
   );
 }
 
+/** 本地合成器支持的转场类型与展示文案；fade 是 crossfade 的同义写法。 */
+export const TRANSITION_KIND_LABEL: Record<string, string> = {
+  crossfade: "交叉溶解",
+  fade: "交叉溶解",
+  fadeblack: "经黑场",
+  fadewhite: "经白场",
+  dissolve: "颗粒溶解",
+  wipeleft: "左划",
+  cut: "硬切",
+};
+
 export function elementCreationSummary(
   creation: ElementCreationDocument,
 ): string {
@@ -167,7 +178,10 @@ export function elementCreationSummary(
     case "overlay":
       return creation.text || creation.prompt || creation.overlay_kind;
     case "transition":
-      return `${creation.transition_kind} 转场`;
+      return `${
+        TRANSITION_KIND_LABEL[creation.transition_kind] ??
+        creation.transition_kind
+      } 转场`;
     case "audio":
       return "时间线音频";
   }
@@ -190,8 +204,8 @@ export const ELEMENT_TYPE_META: Record<
   },
   transition: {
     label: "转场",
-    color: "#9a9188",
-    soft: "rgba(154,145,136,.12)",
+    color: "#0d9488",
+    soft: "rgba(13,148,136,.12)",
   },
   audio: { label: "音频", color: "#12b76a", soft: "rgba(18,183,106,.12)" },
 };

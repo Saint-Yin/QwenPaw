@@ -8,6 +8,7 @@ import {
   playbackLayersAtTick,
   playbackLayersInWindow,
   resolveElementPlayback,
+  transitionOpacityAtTick,
 } from "@/selectors/elementPlaybackSelectors";
 import { projectDocument } from "@/test/creatorFixtures";
 
@@ -75,9 +76,8 @@ describe("resolveElementPlayback", () => {
     const project = cloneProject();
     const timeline = timelineOf(project);
     project.assets.artifact_versions_by_id["r2v-window-v1"].stale = true;
-    project.assets.artifact_versions_by_id[
-      "r2v-window-v1"
-    ].stale_reason = "生成输入已修改";
+    project.assets.artifact_versions_by_id["r2v-window-v1"].stale_reason =
+      "生成输入已修改";
 
     const playback = resolveElementPlayback(
       project,
@@ -231,5 +231,66 @@ describe("playbackLayersInWindow", () => {
       "overlay-title",
       "overlay-os",
     ]);
+  });
+});
+
+describe("transitionOpacityAtTick", () => {
+  // 固定事实：转场窗口 [7000, 8000)，edit-opening → r2v-window，
+  // easing 为 ease-in-out。
+  it("fades the incoming element across the transition window", () => {
+    const timeline = timelineOf(cloneProject());
+    const incoming = timeline.elements_by_id["r2v-window"];
+    expect(transitionOpacityAtTick(timeline, incoming, 7000)).toBe(0);
+    expect(transitionOpacityAtTick(timeline, incoming, 7500)).toBeCloseTo(0.5);
+    expect(transitionOpacityAtTick(timeline, incoming, 8000)).toBe(1);
+  });
+
+  it("hides the incoming element during the pre-blend overlap", () => {
+    const timeline = timelineOf(cloneProject());
+    const incoming = timeline.elements_by_id["r2v-window"];
+    // r2v-window 从 5000 开始重叠，但 blend 7000 才开始：保持隐藏。
+    expect(transitionOpacityAtTick(timeline, incoming, 6000)).toBe(0);
+  });
+
+  it("keeps the outgoing element and unrelated elements fully opaque", () => {
+    const timeline = timelineOf(cloneProject());
+    expect(
+      transitionOpacityAtTick(
+        timeline,
+        timeline.elements_by_id["edit-opening"],
+        7500,
+      ),
+    ).toBe(1);
+    expect(
+      transitionOpacityAtTick(
+        timeline,
+        timeline.elements_by_id["overlay-os"],
+        7500,
+      ),
+    ).toBe(1);
+  });
+
+  it("ignores disabled transitions and hard cuts", () => {
+    const timeline = timelineOf(cloneProject());
+    const incoming = timeline.elements_by_id["r2v-window"];
+    timeline.elements_by_id.transition.enabled = false;
+    expect(transitionOpacityAtTick(timeline, incoming, 7500)).toBe(1);
+    timeline.elements_by_id.transition.enabled = true;
+    if (timeline.elements_by_id.transition.creation.type === "transition") {
+      timeline.elements_by_id.transition.creation.transition_kind = "cut";
+    }
+    expect(transitionOpacityAtTick(timeline, incoming, 7500)).toBe(1);
+  });
+
+  it("applies the declared easing to the fade progress", () => {
+    const timeline = timelineOf(cloneProject());
+    const incoming = timeline.elements_by_id["r2v-window"];
+    if (timeline.elements_by_id.transition.creation.type === "transition") {
+      timeline.elements_by_id.transition.creation.easing = "ease-in";
+    }
+    // ease-in 在 25% 进度处为 0.0625。
+    expect(transitionOpacityAtTick(timeline, incoming, 7250)).toBeCloseTo(
+      0.0625,
+    );
   });
 });

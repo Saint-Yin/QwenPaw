@@ -47,7 +47,9 @@ export default function PlanPage() {
       : null;
   const elementDraft = useProjectDraft(
     selectedElement,
-    `${id}:${timeline?.timeline_id ?? "missing"}:${selectedElementId ?? "none"}:detail`,
+    `${id}:${timeline?.timeline_id ?? "missing"}:${
+      selectedElementId ?? "none"
+    }:detail`,
     [
       "timelines",
       "items",
@@ -101,7 +103,14 @@ export default function PlanPage() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [elementDraft.dirty]);
 
+  // 只在选中对象的身份变化时把播放头对齐到元素开头（URL 直达兜底）。
+  // 快照轮询会刷新 selectedElement 的对象引用；若依赖引用，播放中
+  // 每次轮询都会把播放头拽回选中元素起点，表现为“播几秒就停/回跳”。
+  const lastAlignedElementId = useRef<string | null>(null);
   useEffect(() => {
+    const elementId = selectedElement?.element_id ?? null;
+    if (elementId === lastAlignedElementId.current) return;
+    lastAlignedElementId.current = elementId;
     if (
       !selectedElement ||
       (playheadTick >= selectedElement.span.start_tick &&
@@ -110,6 +119,7 @@ export default function PlanPage() {
     )
       return;
     setPlayheadTick(selectedElement.span.start_tick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedElement]);
 
   const base = `/project/${id}/plan`;
@@ -235,8 +245,8 @@ export default function PlanPage() {
   const composeLabel = composeElementProgress
     ? `合成中 · ${composeElementProgress.completed}/${composeElementProgress.total}`
     : activeComposeTask
-      ? "合成中"
-      : "合成准备中";
+    ? "合成中"
+    : "合成准备中";
 
   const composeNow = useCallback(async () => {
     if (!timeline || isComposing) return;
@@ -315,8 +325,8 @@ export default function PlanPage() {
       typeof requestedComposeTask.error?.message === "string"
         ? requestedComposeTask.error.message
         : requestedComposeTask.status === "QUARANTINED"
-          ? "合成期间项目内容发生变化，结果未采用"
-          : "合成任务未能完成";
+        ? "合成期间项目内容发生变化，结果未采用"
+        : "合成任务未能完成";
     message.error(`成片合成失败：${detail}`);
   }, [id, pollOnce, requestedComposeTask]);
 
@@ -461,14 +471,14 @@ export default function PlanPage() {
               freshRender
                 ? "下载成片视频文件"
                 : isComposing
-                  ? composeElementProgress
-                    ? `正在合成成片，已完成 ${composeElementProgress.completed}/${composeElementProgress.total} 个 Element`
-                    : "正在准备成片合成，完成后可下载"
-                  : readiness.total === 0
-                    ? "时间轴还没有可合成的画面内容"
-                    : readiness.notReady > 0
-                      ? `还有 ${readiness.notReady} 项内容生成中，全部就绪后自动合成`
-                      : "等待成片合成"
+                ? composeElementProgress
+                  ? `正在合成成片，已完成 ${composeElementProgress.completed}/${composeElementProgress.total} 个 Element`
+                  : "正在准备成片合成，完成后可下载"
+                : readiness.total === 0
+                ? "时间轴还没有可合成的画面内容"
+                : readiness.notReady > 0
+                ? `还有 ${readiness.notReady} 项内容生成中，全部就绪后自动合成`
+                : "等待成片合成"
             }
             className="relative inline-flex items-center gap-1.5 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-bg-secondary)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-[var(--color-border)] disabled:hover:bg-[var(--color-bg-primary)]"
             onClick={downloadRender}

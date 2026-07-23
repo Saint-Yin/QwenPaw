@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Alert, Button, Input, InputNumber } from "antd";
+import { Alert, Button, Input, InputNumber, Select } from "antd";
 import {
   ArrowUpRight,
   Box,
@@ -18,6 +18,7 @@ import type {
 import { getArtifactVersionMediaUrl } from "@/api/creator";
 import {
   ELEMENT_TYPE_META,
+  TRANSITION_KIND_LABEL,
   elementCreationSummary,
   resolveElementOutputs,
 } from "@/selectors/timelineElementSelectors";
@@ -90,6 +91,25 @@ function TextField({
     </label>
   );
 }
+
+const TRANSITION_KIND_OPTIONS = [
+  "crossfade",
+  "fadeblack",
+  "fadewhite",
+  "dissolve",
+  "wipeleft",
+  "cut",
+].map((kind) => ({
+  value: kind,
+  label: `${TRANSITION_KIND_LABEL[kind]}（${kind}）`,
+}));
+
+const TRANSITION_EASING_OPTIONS = [
+  { value: "linear", label: "匀速（linear）" },
+  { value: "ease-in", label: "渐入（ease-in）" },
+  { value: "ease-out", label: "渐出（ease-out）" },
+  { value: "ease-in-out", label: "缓入缓出（ease-in-out）" },
+];
 
 function taskStatus(element: TimelineElementDocument, tasks: TaskView[]) {
   const task = tasks.find(
@@ -557,8 +577,19 @@ export default function ElementDetail({
               />
               {element.render_source?.type === "source_asset_version" && (
                 <div className="rounded-lg bg-[var(--color-bg-secondary)] p-3 text-[11px] leading-5 text-[var(--color-text-secondary)]">
-                  <b className="block truncate text-[var(--color-text-primary)]" title={decodeURIComponent(project.assets.source_versions_by_id[element.render_source.version_id]?.name || "当前素材")}>
-                    {decodeURIComponent(project.assets.source_versions_by_id[element.render_source.version_id]?.name || "当前素材")}
+                  <b
+                    className="block truncate text-[var(--color-text-primary)]"
+                    title={decodeURIComponent(
+                      project.assets.source_versions_by_id[
+                        element.render_source.version_id
+                      ]?.name || "当前素材",
+                    )}
+                  >
+                    {decodeURIComponent(
+                      project.assets.source_versions_by_id[
+                        element.render_source.version_id
+                      ]?.name || "当前素材",
+                    )}
                   </b>
                   <br />
                   选用{" "}
@@ -612,14 +643,79 @@ export default function ElementDetail({
             </div>
           )}
           {creation.type === "transition" && (
-            <div className="rounded-lg bg-[var(--color-bg-secondary)] p-3 text-xs text-[var(--color-text-secondary)]">
-              {timeline.elements_by_id[creation.from_element_id]?.label ||
-                "前一画面"}{" "}
-              →{" "}
-              {timeline.elements_by_id[creation.to_element_id]?.label ||
-                "后一画面"}
-              <br />
-              {creation.transition_kind} · {creation.easing}
+            <div className="space-y-3">
+              <div className="rounded-lg bg-[var(--color-bg-secondary)] p-3 text-xs text-[var(--color-text-secondary)]">
+                {timeline.elements_by_id[creation.from_element_id]?.label ||
+                  "前一画面"}{" "}
+                →{" "}
+                {timeline.elements_by_id[creation.to_element_id]?.label ||
+                  "后一画面"}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <label
+                  data-creator-field={`element:${element.element_id}/creation/transition_kind`}
+                  data-creator-path={pointer("creation", "transition_kind")}
+                  className="block"
+                >
+                  <FieldLabel>转场类型</FieldLabel>
+                  <Select
+                    className="w-full"
+                    disabled={applying}
+                    value={creation.transition_kind}
+                    options={
+                      TRANSITION_KIND_OPTIONS.some(
+                        (option) => option.value === creation.transition_kind,
+                      )
+                        ? TRANSITION_KIND_OPTIONS
+                        : [
+                            {
+                              value: creation.transition_kind,
+                              label: creation.transition_kind,
+                            },
+                            ...TRANSITION_KIND_OPTIONS,
+                          ]
+                    }
+                    onChange={(value) =>
+                      onChange((draft) => {
+                        if (draft.creation.type === "transition")
+                          draft.creation.transition_kind = value;
+                      })
+                    }
+                  />
+                </label>
+                <label
+                  data-creator-field={`element:${element.element_id}/creation/easing`}
+                  data-creator-path={pointer("creation", "easing")}
+                  className="block"
+                >
+                  <FieldLabel>缓动</FieldLabel>
+                  <Select
+                    className="w-full"
+                    disabled={applying}
+                    value={creation.easing}
+                    options={
+                      TRANSITION_EASING_OPTIONS.some(
+                        (option) => option.value === creation.easing,
+                      )
+                        ? TRANSITION_EASING_OPTIONS
+                        : [
+                            { value: creation.easing, label: creation.easing },
+                            ...TRANSITION_EASING_OPTIONS,
+                          ]
+                    }
+                    onChange={(value) =>
+                      onChange((draft) => {
+                        if (draft.creation.type === "transition")
+                          draft.creation.easing = value;
+                      })
+                    }
+                  />
+                </label>
+              </div>
+              <p className="text-[10px] leading-4 text-[var(--color-text-tertiary)]">
+                转场时长即上方“持续时间”，须落在两端画面的重叠区间内；
+                预览统一以交叉溶解近似展示，成片按所选类型合成。
+              </p>
             </div>
           )}
           {creation.type === "audio" && (

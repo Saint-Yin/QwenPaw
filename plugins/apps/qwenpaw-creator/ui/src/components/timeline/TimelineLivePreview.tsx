@@ -17,6 +17,7 @@ import type { ElementPlayback } from "@/selectors/elementPlaybackSelectors";
 import {
   ELEMENT_PLAYBACK_STATUS_LABEL,
   playbackLayersInWindow,
+  transitionOpacityAtTick,
 } from "@/selectors/elementPlaybackSelectors";
 import { ELEMENT_TYPE_META } from "@/selectors/timelineElementSelectors";
 import {
@@ -48,9 +49,7 @@ const RETIRED_MOTION_MOTIFS = new Set([
 ]);
 
 function aspectRatioStyle(aspectRatio: string): string {
-  const match = /^(\d+(?:\.\d+)?)[:x](\d+(?:\.\d+)?)$/.exec(
-    aspectRatio.trim(),
-  );
+  const match = /^(\d+(?:\.\d+)?)[:x](\d+(?:\.\d+)?)$/.exec(aspectRatio.trim());
   if (!match) return "16 / 9";
   return `${match[1]} / ${match[2]}`;
 }
@@ -86,8 +85,7 @@ function mediaTargetSeconds(
 ): number {
   const media = layer.media!;
   const localSeconds =
-    Math.max(0, playheadTick - layer.element.span.start_tick) /
-    ticksPerSecond;
+    Math.max(0, playheadTick - layer.element.span.start_tick) / ticksPerSecond;
   let offset = localSeconds * media.playbackRate;
   const windowSeconds =
     media.sourceOutSeconds != null
@@ -105,11 +103,7 @@ function PlaceholderLayer({ layer }: { layer: ElementPlayback }) {
   const label = ELEMENT_PLAYBACK_STATUS_LABEL[status];
   const fullFrame = isFullFrame(element.location);
   const StatusIcon =
-    status === "generating"
-      ? Loader2
-      : status === "queued"
-        ? Clock3
-        : ImageOff;
+    status === "generating" ? Loader2 : status === "queued" ? Clock3 : ImageOff;
   if (fullFrame) {
     return (
       <div
@@ -121,7 +115,9 @@ function PlaceholderLayer({ layer }: { layer: ElementPlayback }) {
         <StatusIcon
           className={`h-7 w-7 ${
             status === "generating" ? "animate-spin" : ""
-          } ${status === "failed" ? "text-[var(--color-danger)]" : "text-white/70"}`}
+          } ${
+            status === "failed" ? "text-[var(--color-danger)]" : "text-white/70"
+          }`}
         />
         <span className="max-w-[70%] truncate text-sm font-semibold text-white/85">
           {element.label || meta.label}
@@ -223,7 +219,10 @@ function motionDataSetting(html: string, name: string): string | undefined {
   return match?.[1];
 }
 
-function motionPreviewDocument(html: string, keepInsideViewport: boolean): string {
+function motionPreviewDocument(
+  html: string,
+  keepInsideViewport: boolean,
+): string {
   const safetyStyle = keepInsideViewport
     ? `<style data-qwenpaw-viewport-safety>html{padding:5%!important;box-sizing:border-box!important;overflow:hidden!important}body{width:100%!important;height:100%!important;box-sizing:border-box!important;overflow:visible!important;transform:scale(.9)!important;transform-origin:center!important}p,[class*=text],[class*=title],[class*=caption]{max-width:100%!important;font-size:min(8vh,8vw)!important;line-height:1.15!important;white-space:normal!important;overflow-wrap:anywhere!important;word-break:break-word!important;letter-spacing:.02em!important;-webkit-text-stroke:0!important;text-shadow:1px 1px 0 rgba(0,0,0,.22)!important}[data-motion-motif=caption_card] [class*=text]{font-size:min(10vh,12vw)!important;line-height:1.08!important;max-height:100%!important}${pawTrailCompatibilityCss()}</style>`
     : `<style data-qwenpaw-motion-compat>${pawTrailCompatibilityCss()}</style>`;
@@ -268,11 +267,7 @@ function MotionOverlayLayer({
   const exitStyle =
     motion?.exit ??
     (motion?.html ? motionDataSetting(motion.html, "exit") : undefined);
-  const exitProgress = motionExitProgress(
-    exitStyle,
-    localTimeMs,
-    durationMs,
-  );
+  const exitProgress = motionExitProgress(exitStyle, localTimeMs, durationMs);
   const boxStyle = locationBoxStyle(element.location);
   const exitScale = exitStyle === "shrink" ? 1 - exitProgress * 0.18 : 1;
   const baseOpacity =
@@ -337,16 +332,10 @@ export default function TimelineLivePreview({
   const mediaRefs = useRef(new Map<string, HTMLVideoElement>());
   const imageRefs = useRef(new Map<string, HTMLImageElement>());
   const mediaRefCallbacks = useRef(
-    new Map<
-      string,
-      (node: HTMLVideoElement | null) => void
-    >(),
+    new Map<string, (node: HTMLVideoElement | null) => void>(),
   );
   const imageRefCallbacks = useRef(
-    new Map<
-      string,
-      (node: HTMLImageElement | null) => void
-    >(),
+    new Map<string, (node: HTMLImageElement | null) => void>(),
   );
   const clock = useRef<{ baseTick: number; baseTime: number } | null>(null);
   const lastEmittedTick = useRef(playheadTick);
@@ -405,8 +394,7 @@ export default function TimelineLivePreview({
     [layers, playheadTick],
   );
   const visibleIds = useMemo(
-    () =>
-      new Set(visibleLayers.map((layer) => layer.element.element_id)),
+    () => new Set(visibleLayers.map((layer) => layer.element.element_id)),
     [visibleLayers],
   );
 
@@ -568,8 +556,7 @@ export default function TimelineLivePreview({
   );
   const previewIncomplete =
     anyVisible &&
-    (semanticIncompleteLayers.length > 0 ||
-      visualIncompleteLayers.length > 0);
+    (semanticIncompleteLayers.length > 0 || visualIncompleteLayers.length > 0);
   const incompleteLayerCount = new Set(
     [...semanticIncompleteLayers, ...visualIncompleteLayers].map(
       (layer) => layer.element.element_id,
@@ -599,9 +586,18 @@ export default function TimelineLivePreview({
           const { element, media, status } = layer;
           const elementId = element.element_id;
           const visible = visibleIds.has(elementId);
+          // 转场窗口内 to 端图层淡入，与后端 xfade 合成同口径。
+          const transitionOpacity = transitionOpacityAtTick(
+            timeline,
+            element,
+            playheadTick,
+          );
           if (media && media.mediaKind === "video") {
             // 声音策略与成片一致：仅主轨视频保留原声，overlay 媒体静音。
             const silent = muted || element.creation.type === "overlay";
+            const boxStyle = locationBoxStyle(element.location);
+            const baseOpacity =
+              typeof boxStyle.opacity === "number" ? boxStyle.opacity : 1;
             return (
               <video
                 key={`${elementId}:${media.versionId}`}
@@ -612,7 +608,10 @@ export default function TimelineLivePreview({
                 className={`absolute object-contain ${
                   visible ? "" : "invisible"
                 }`}
-                style={locationBoxStyle(element.location)}
+                style={{
+                  ...boxStyle,
+                  opacity: baseOpacity * transitionOpacity,
+                }}
                 muted={silent}
                 loop={media.loop}
                 playsInline
@@ -630,6 +629,9 @@ export default function TimelineLivePreview({
           }
           if (!visible) return null;
           if (media && media.mediaKind === "image") {
+            const boxStyle = locationBoxStyle(element.location);
+            const baseOpacity =
+              typeof boxStyle.opacity === "number" ? boxStyle.opacity : 1;
             return (
               <img
                 key={`${elementId}:${media.versionId}`}
@@ -639,7 +641,10 @@ export default function TimelineLivePreview({
                 src={media.url}
                 alt={element.label || elementId}
                 className="absolute object-contain"
-                style={locationBoxStyle(element.location)}
+                style={{
+                  ...boxStyle,
+                  opacity: baseOpacity * transitionOpacity,
+                }}
                 onLoad={refreshVisualReadiness}
                 onError={refreshVisualReadiness}
               />

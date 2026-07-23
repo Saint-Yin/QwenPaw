@@ -102,9 +102,7 @@ function resolveSourceVersionRef(
   return {
     url: getAssetVersionMediaUrl(versionId),
     mediaKind:
-      kind === "video" || kind === "image" || kind === "audio"
-        ? kind
-        : "other",
+      kind === "video" || kind === "image" || kind === "audio" ? kind : "other",
     versionId,
     durationSeconds: version.duration_seconds,
     stale: false,
@@ -175,7 +173,8 @@ export function resolveElementPlayback(
   element: TimelineElementDocument,
   tasks: TaskView[] = [],
 ): ElementPlayback {
-  // 转场在实时拼装中做硬切处理，不作为独立媒体层，视为已就绪。
+  // 转场在实时拼装中由 to 端图层透明度渐变实现，不作为独立媒体层，
+  // 视为已就绪。
   if (element.creation.type === "transition") {
     return { element, status: "ready", media: null };
   }
@@ -207,10 +206,7 @@ export function resolveElementPlayback(
   }
   // 动态 overlay 的 HTML/CSS 文档本身就是可预览内容，不需要等待独立媒体产物。
   // 成片阶段仍由后端逐帧渲染并合成；这里只负责浏览器内的实时预览。
-  if (
-    element.creation.type === "overlay" &&
-    element.creation.motion?.html
-  ) {
+  if (element.creation.type === "overlay" && element.creation.motion?.html) {
     return { element, status: "ready", media: null };
   }
   // 文案类 overlay（pet_os/interview_summary）没有独立产物，成片在合成时
@@ -228,6 +224,57 @@ export function resolveElementPlayback(
     status: elementTaskStatus(element, tasks) ?? "pending",
     media: null,
   };
+}
+
+/** 转场缓动：模型 easing 字段的浏览器端近似实现，默认线性。 */
+function easeProgress(progress: number, easing: string): number {
+  const clamped = Math.min(1, Math.max(0, progress));
+  switch (easing) {
+    case "ease-in":
+    case "ease_in":
+      return clamped * clamped;
+    case "ease-out":
+    case "ease_out":
+      return 1 - (1 - clamped) * (1 - clamped);
+    case "ease-in-out":
+    case "ease_in_out":
+      return clamped < 0.5
+        ? 2 * clamped * clamped
+        : 1 - 2 * (1 - clamped) * (1 - clamped);
+    default:
+      return clamped;
+  }
+}
+
+/**
+ * 某 Element 在实时预览中由转场决定的透明度乘数。
+ * 与后端合成同口径：转场窗口内 to 端图层按进度淡入盖住 from 端；
+ * 窗口前的重叠段 to 端保持隐藏。非 fade 类 transition_kind 在浏览器
+ * 预览中统一降级为 crossfade，成片仍按真实类型合成。
+ */
+export function transitionOpacityAtTick(
+  timeline: TimelineDocument,
+  element: TimelineElementDocument,
+  tick: number,
+): number {
+  if (element.creation.type === "transition") return 1;
+  for (const candidate of Object.values(timeline.elements_by_id)) {
+    if (!candidate.enabled || candidate.creation.type !== "transition")
+      continue;
+    if (candidate.creation.to_element_id !== element.element_id) continue;
+    if (candidate.creation.transition_kind === "cut") continue;
+    const start = candidate.span.start_tick;
+    const end = start + candidate.span.duration_tick;
+    if (tick >= end) continue;
+    if (tick < start) {
+      // 重叠已开始但 blend 未开始：画面仍属于 from 端。
+      if (tick >= element.span.start_tick) return 0;
+      continue;
+    }
+    const progress = (tick - start) / Math.max(1, candidate.span.duration_tick);
+    return easeProgress(progress, candidate.creation.easing);
+  }
+  return 1;
 }
 
 /**
@@ -248,7 +295,9 @@ export function playbackLayersAtTick(
         left.span.start_tick - right.span.start_tick ||
         left.element_id.localeCompare(right.element_id),
     )
-    .map((element) => resolveElementPlayback(project, timeline, element, tasks));
+    .map((element) =>
+      resolveElementPlayback(project, timeline, element, tasks),
+    );
 }
 
 /**
@@ -280,5 +329,7 @@ export function playbackLayersInWindow(
         left.span.start_tick - right.span.start_tick ||
         left.element_id.localeCompare(right.element_id),
     )
-    .map((element) => resolveElementPlayback(project, timeline, element, tasks));
+    .map((element) =>
+      resolveElementPlayback(project, timeline, element, tasks),
+    );
 }

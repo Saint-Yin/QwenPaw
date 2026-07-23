@@ -187,8 +187,7 @@ export default function TimelineCanvas({
         !finalVideo.seeking &&
         (playing ||
           Math.abs(
-            finalVideo.currentTime -
-              playheadTick / timeline.ticks_per_second,
+            finalVideo.currentTime - playheadTick / timeline.ticks_per_second,
           ) <= 0.35),
     );
 
@@ -199,16 +198,10 @@ export default function TimelineCanvas({
   const tickAt = (clientX: number): number => {
     const rect = chartRef.current?.getBoundingClientRect();
     if (!rect) return 0;
-    const inner = Math.max(
-      1,
-      rect.width - LABEL_WIDTH - CHART_PADDING * 2,
-    );
+    const inner = Math.max(1, rect.width - LABEL_WIDTH - CHART_PADDING * 2);
     const x = Math.min(
       inner,
-      Math.max(
-        0,
-        clientX - rect.left - CHART_PADDING - LABEL_WIDTH,
-      ),
+      Math.max(0, clientX - rect.left - CHART_PADDING - LABEL_WIDTH),
     );
     return Math.round((x / inner) * timelineDuration);
   };
@@ -366,8 +359,7 @@ export default function TimelineCanvas({
           !video.seeking &&
           (playing ||
             Math.abs(
-              video.currentTime -
-                playheadTick / timeline.ticks_per_second,
+              video.currentTime - playheadTick / timeline.ticks_per_second,
             ) <= 0.35),
       );
       setFinalFrameReady((current) => (current === ready ? current : ready));
@@ -498,13 +490,8 @@ export default function TimelineCanvas({
       const width = bar.offsetWidth || 116;
       const height = bar.offsetHeight || 32;
       const anchorTick =
-        selection.kind === "point"
-          ? selection.startTick
-          : selection.endTick;
-      const inner = Math.max(
-        1,
-        rect.width - LABEL_WIDTH - CHART_PADDING * 2,
-      );
+        selection.kind === "point" ? selection.startTick : selection.endTick;
+      const inner = Math.max(1, rect.width - LABEL_WIDTH - CHART_PADDING * 2);
       const anchorX =
         rect.left +
         CHART_PADDING +
@@ -851,12 +838,7 @@ export default function TimelineCanvas({
               />
               {major && (
                 <b className="absolute left-1/2 top-0 -translate-x-1/2 whitespace-nowrap text-[9px] font-medium text-[var(--color-text-tertiary)]">
-                  {seconds(
-                    tick,
-                    timeline.ticks_per_second,
-                    scale.labelDigits,
-                  )}
-                  s
+                  {seconds(tick, timeline.ticks_per_second, scale.labelDigits)}s
                 </b>
               )}
             </span>
@@ -873,8 +855,7 @@ export default function TimelineCanvas({
         >
           {scale.ticks
             .filter(
-              ({ major, tick }) =>
-                major && tick > 0 && tick < timelineDuration,
+              ({ major, tick }) => major && tick > 0 && tick < timelineDuration,
             )
             .map(({ tick }) => (
               <i
@@ -978,6 +959,10 @@ export default function TimelineCanvas({
                         (element.span.duration_tick / timelineDuration) * 100,
                       );
                       const selected = element.element_id === selectedElementId;
+                      // 转场块通常只有不到 2% 宽，两行文本会被裁剪成纯色块；
+                      // 改用居中的交叉三角转场符号，悬停仍有完整 title 提示。
+                      const isTransition =
+                        element.creation.type === "transition";
                       return (
                         <button
                           key={element.element_id}
@@ -1005,7 +990,11 @@ export default function TimelineCanvas({
                             onSelectElement(element.element_id);
                             onActiveElementIdsChange([element.element_id]);
                           }}
-                          className={`absolute top-1.5 flex h-[30px] min-w-3 flex-col justify-center overflow-hidden rounded-[7px] border px-2 text-left text-[10px] font-semibold shadow-sm transition ${
+                          className={`absolute top-1.5 flex h-[30px] min-w-3 overflow-hidden rounded-[7px] border text-[10px] font-semibold shadow-sm transition ${
+                            isTransition
+                              ? "items-center justify-center px-0"
+                              : "flex-col justify-center px-2 text-left"
+                          } ${
                             selected
                               ? "z-20 border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/20"
                               : "z-10"
@@ -1031,35 +1020,51 @@ export default function TimelineCanvas({
                               style={{ color: meta.color }}
                             />
                           )}
-                          <span className="min-w-0 truncate">
-                            {(playbackState === "generating" ||
-                              playbackState === "queued") && (
-                              <span
-                                aria-hidden
-                                className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-warning)] align-middle"
-                              />
-                            )}
-                            {playbackState === "failed" && (
-                              <span
-                                aria-hidden
-                                className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-danger)] align-middle"
-                              />
-                            )}
-                            {element.label || "时间线内容"}
-                          </span>
-                          <span className="truncate whitespace-nowrap text-[9px] font-medium opacity-75">
-                            {seconds(
-                              element.span.start_tick,
-                              timeline.ticks_per_second,
-                            )}
-                            s –{" "}
-                            {seconds(
-                              element.span.start_tick +
-                                element.span.duration_tick,
-                              timeline.ticks_per_second,
-                            )}
-                            s
-                          </span>
+                          {isTransition ? (
+                            // 剪辑软件惯用的交叉三角转场符号，窄块内也始终可识别。
+                            <svg
+                              aria-hidden
+                              data-transition-glyph
+                              viewBox="0 0 20 12"
+                              className="h-3 w-5 shrink-0"
+                              fill="currentColor"
+                            >
+                              <path d="M1 1 L9 6 L1 11 Z" opacity="0.9" />
+                              <path d="M19 1 L11 6 L19 11 Z" opacity="0.45" />
+                            </svg>
+                          ) : (
+                            <>
+                              <span className="min-w-0 truncate">
+                                {(playbackState === "generating" ||
+                                  playbackState === "queued") && (
+                                  <span
+                                    aria-hidden
+                                    className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-warning)] align-middle"
+                                  />
+                                )}
+                                {playbackState === "failed" && (
+                                  <span
+                                    aria-hidden
+                                    className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-danger)] align-middle"
+                                  />
+                                )}
+                                {element.label || "时间线内容"}
+                              </span>
+                              <span className="truncate whitespace-nowrap text-[9px] font-medium opacity-75">
+                                {seconds(
+                                  element.span.start_tick,
+                                  timeline.ticks_per_second,
+                                )}
+                                s –{" "}
+                                {seconds(
+                                  element.span.start_tick +
+                                    element.span.duration_tick,
+                                  timeline.ticks_per_second,
+                                )}
+                                s
+                              </span>
+                            </>
+                          )}
                         </button>
                       );
                     })}
@@ -1074,9 +1079,7 @@ export default function TimelineCanvas({
           data-timeline-playhead
           className="pointer-events-none absolute bottom-2 top-7 z-[22] w-0 -translate-x-1/2 border-l-2 border-[var(--color-accent)] drop-shadow-[0_0_3px_var(--color-accent)]"
           style={{
-            left: `calc(${
-              CHART_PADDING + LABEL_WIDTH
-            }px + (100% - ${
+            left: `calc(${CHART_PADDING + LABEL_WIDTH}px + (100% - ${
               LABEL_WIDTH + CHART_PADDING * 2
             }px) * ${percent(playheadTick, timelineDuration) / 100})`,
           }}
@@ -1089,9 +1092,7 @@ export default function TimelineCanvas({
                 data-timeline-selection-range
                 className="pointer-events-none absolute bottom-2 top-7 z-[21] border border-[var(--color-accent)] bg-[var(--color-accent)]/15"
                 style={{
-                  left: `calc(${
-                    CHART_PADDING + LABEL_WIDTH
-                  }px + (100% - ${
+                  left: `calc(${CHART_PADDING + LABEL_WIDTH}px + (100% - ${
                     LABEL_WIDTH + CHART_PADDING * 2
                   }px) * ${
                     percent(selection.startTick, timelineDuration) / 100
@@ -1099,8 +1100,7 @@ export default function TimelineCanvas({
                   width: `calc((100% - ${
                     LABEL_WIDTH + CHART_PADDING * 2
                   }px) * ${
-                    (selection.endTick - selection.startTick) /
-                    timelineDuration
+                    (selection.endTick - selection.startTick) / timelineDuration
                   })`,
                 }}
               />
@@ -1124,7 +1124,9 @@ export default function TimelineCanvas({
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    useOnboardingStore.getState().markHintSeen("addToConversation");
+                    useOnboardingStore
+                      .getState()
+                      .markHintSeen("addToConversation");
                     addSelectionToConversation();
                   }}
                   className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent)]"
@@ -1132,12 +1134,6 @@ export default function TimelineCanvas({
                   <MessageSquarePlus className="h-3.5 w-3.5" />
                   添加到对话
                 </button>
-                {useOnboardingStore.getState().hints.addToConversation !==
-                  true && (
-                  <span className="max-w-[200px] px-2.5 pb-1 text-[10px] leading-4 text-[var(--color-text-tertiary)]">
-                    把选中的时间点/时间段作为上下文发给 Agent
-                  </span>
-                )}
               </div>,
               document.body,
             )}

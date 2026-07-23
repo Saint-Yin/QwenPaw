@@ -237,9 +237,6 @@ export default function SelectionToolbar() {
 
   if (!state) return null;
 
-  const hintSeen =
-    useOnboardingStore.getState().hints.addToConversation === true;
-
   const addToConversation = () => {
     useOnboardingStore.getState().markHintSeen("addToConversation");
     setDockSelection(state.sel);
@@ -270,11 +267,6 @@ export default function SelectionToolbar() {
         <MessageSquarePlus className="h-3.5 w-3.5" />
         添加到对话
       </button>
-      {!hintSeen && (
-        <span className="max-w-[200px] px-2.5 pb-1 text-[10px] leading-4 text-[var(--color-text-tertiary)]">
-          把选中内容作为上下文发给 Agent，精准描述你想改哪里
-        </span>
-      )}
     </div>
   );
 }

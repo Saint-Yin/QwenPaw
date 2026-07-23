@@ -7,6 +7,7 @@ import inspect
 import json
 import logging
 import mimetypes
+import re
 import shutil
 import tempfile
 import urllib.request
@@ -881,10 +882,23 @@ async def serve_plugin_ui_file(
     elif full_path.suffix == ".css":
         content_type = "text/css"
 
-    if content_type:
-        return FileResponse(str(full_path), media_type=content_type)
+    # 插件前端产物的缓存策略：带内容 hash 的 chunk（如 assets/x-AbCd1234.js）
+    # 可以长缓存；入口文件（index.html / plugin entry）必须每次回源验证，
+    # 否则浏览器启发式缓存会在插件热更新后继续服务旧版本。
+    hashed_asset = re.search(r"-[A-Za-z0-9_]{8,}\.[a-z0-9]+$", full_path.name)
+    cache_control = (
+        "public, max-age=31536000, immutable" if hashed_asset else "no-cache"
+    )
+    headers = {"Cache-Control": cache_control}
 
-    return FileResponse(str(full_path))
+    if content_type:
+        return FileResponse(
+            str(full_path),
+            media_type=content_type,
+            headers=headers,
+        )
+
+    return FileResponse(str(full_path), headers=headers)
 
 
 # ── Plugin market proxy ───────────────────────────────────────────────────

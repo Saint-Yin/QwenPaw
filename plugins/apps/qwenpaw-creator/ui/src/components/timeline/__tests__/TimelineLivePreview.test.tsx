@@ -178,11 +178,35 @@ describe("TimelineLivePreview", () => {
     expect(bubble.textContent).toContain("😺");
   });
 
+  it("cross-fades the incoming main-track layer inside the transition window", () => {
+    // 转场窗口 [7000, 8000)：edit-opening → r2v-window，ease-in-out。
+    const { container } = renderPreview(cloneProject(), 7500);
+
+    const incoming = container.querySelector(
+      '[data-live-layer="r2v-window"]',
+    ) as HTMLVideoElement;
+    const outgoing = container.querySelector(
+      '[data-live-layer="edit-opening"]',
+    ) as HTMLVideoElement;
+    expect(Number(incoming.style.opacity)).toBeCloseTo(0.5);
+    expect(Number(outgoing.style.opacity)).toBe(1);
+  });
+
+  it("keeps the incoming layer hidden before its transition starts", () => {
+    // 6000 已在两端重叠区间，但 blend 尚未开始：画面仍属于 from 端。
+    const { container } = renderPreview(cloneProject(), 6000);
+
+    const incoming = container.querySelector(
+      '[data-live-layer="r2v-window"]',
+    ) as HTMLVideoElement;
+    expect(Number(incoming.style.opacity)).toBe(0);
+  });
+
   it("covers the whole composite until every visible video has decoded the requested frame", () => {
     const { container } = renderPreview(cloneProject(), 7000);
     const visibleVideos = [
       ...container.querySelectorAll<HTMLVideoElement>(
-        '[data-live-layer]:not(.invisible)',
+        "[data-live-layer]:not(.invisible)",
       ),
     ];
 
@@ -328,7 +352,8 @@ describe("TimelineLivePreview", () => {
     const project = cloneProject();
     const overlay =
       project.timelines.items["timeline:main"].elements_by_id["overlay-os"];
-    if (overlay.creation.type !== "overlay") throw new Error("expected overlay");
+    if (overlay.creation.type !== "overlay")
+      throw new Error("expected overlay");
     overlay.creation.motion = {
       format: "html_css",
       html: '<html><head></head><body><div class="text-row">午饭在哪里？</div></body></html>',
