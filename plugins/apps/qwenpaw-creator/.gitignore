@@ -1,8 +1,6 @@
 ui/node_modules/
-!ui/dist/
-!ui/dist/**
-# Sourcemaps stay local-only (4.9MB of the 6.2MB dist)
-ui/dist/**/*.map
+# 构建产物暂不入库，安装前在 ui/ 目录 npm run build 生成
+ui/dist/
 .env
 __pycache__/
 *.pyc
