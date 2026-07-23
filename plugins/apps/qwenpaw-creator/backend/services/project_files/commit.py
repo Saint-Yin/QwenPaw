@@ -58,8 +58,10 @@ from .json_pointer import (
     JsonCasConflict,
     JsonChange,
     diff_json,
+    hash_json_value,
     merge_candidate,
     pointers_overlap,
+    value_at,
 )
 from .locator_map import derive_ui_locator
 from .models import Project
@@ -318,6 +320,7 @@ class ProjectCommitBoundary:
         transaction_id: str | None = None,
         advance_accepted_baseline: bool = True,
         block_token: str | None = None,
+        reconcile_exclude_round_id: str | None = None,
         _order_lock_held: bool = False,
         _lifecycle_lock_held: bool = False,
     ) -> ProjectCommitResult:
@@ -645,20 +648,24 @@ class ProjectCommitBoundary:
                 snapshot=snapshot,
                 changes=runtime_changes,
             )
-            existing_review_pending = False
-            existing_review_resolved = False
-            existing_review_round_id: str | None = None
-            if review is None:
-                (
-                    existing_review_pending,
-                    existing_review_resolved,
-                    existing_review_round_id,
-                ) = self._reconcile_existing_review(
-                    runtime_root=runtime_root,
-                    origin=origin_value,
-                    snapshot=snapshot,
-                    changes=runtime_changes,
-                )
+            (
+                existing_review_pending,
+                existing_review_resolved,
+                existing_review_round_id,
+            ) = self._reconcile_existing_review(
+                runtime_root=runtime_root,
+                origin=origin_value,
+                snapshot=snapshot,
+                changes=runtime_changes,
+                exclude_round_ids=frozenset(
+                    value
+                    for value in (
+                        round_id if review is not None else None,
+                        reconcile_exclude_round_id,
+                    )
+                    if value is not None
+                ),
+            )
             terminal_status = (
                 TransactionStatus.PENDING_REVIEW
                 if review is not None
@@ -1172,14 +1179,18 @@ class ProjectCommitBoundary:
         origin: ChangeOrigin,
         snapshot: ProjectSnapshot,
         changes: list[ProjectChange],
+        exclude_round_ids: frozenset[str] = frozenset(),
     ) -> tuple[bool, bool, str | None]:
         """Keep every pending Review coherent when another accepted writer commits.
 
         Unrelated frontend edits remain immediately valid while a Review's
         accepted baseline stays put.  A direct user edit of a reviewed pointer
         supersedes that operation, so stale Keep/Undo can never overwrite it.
-        Media/runtime reviews and AgentDock reviews may be pending at the same
-        time, so reconciliation walks all of them, not just the round that
+        Any other writer (an agent auto-fix or a runtime task) that touches a
+        reviewed pointer rebases the operation's candidate value instead, so
+        Keep/Undo always decides against the live document.  Media/runtime
+        reviews and AgentDock reviews may be pending at the same time, so
+        reconciliation walks all of them, not just the round that
         ``active_round_id`` happens to point at.
         """
 
@@ -1195,6 +1206,7 @@ class ProjectCommitBoundary:
             for change in changes
             if change.json_pointer is not None
         ]
+        current_data = snapshot.project.model_dump(mode="json")
         examined = False
         still_pending: list[ReviewRecord] = []
         for review_root in sorted(
@@ -1210,23 +1222,46 @@ class ProjectCommitBoundary:
             review = review_store.read_or_none()
             if review is None or review.status is not ReviewStatus.PENDING:
                 continue
+            if review.round_id in exclude_round_ids:
+                if review.status is ReviewStatus.PENDING:
+                    still_pending.append(review)
+                continue
             examined = True
             operations = []
             for operation in review.operations:
-                if (
-                    origin is ChangeOrigin.FRONTEND_EDIT
-                    and operation.decision is ReviewOperationDecision.PENDING
+                overlaps = (
+                    operation.decision is ReviewOperationDecision.PENDING
                     and operation.json_pointer is not None
                     and any(
                         pointers_overlap(operation.json_pointer, pointer)
                         for pointer in touched
                     )
-                ):
+                )
+                if overlaps and origin is ChangeOrigin.FRONTEND_EDIT:
                     operation = operation.model_copy(
                         update={
                             "decision": ReviewOperationDecision.SUPERSEDED_BY_USER_EDIT,
                         },
                     )
+                elif overlaps:
+                    # A non-user writer moved this pointer after the review
+                    # captured it.  Rebase the candidate side so the pending
+                    # operation still hashes against the live document —
+                    # otherwise every later Keep/Undo would fail CAS forever.
+                    live_value = value_at(
+                        current_data,
+                        operation.json_pointer,
+                    )
+                    live_hash = hash_json_value(live_value)
+                    if live_hash != operation.after_hash:
+                        operation = operation.model_copy(
+                            update={
+                                "after": None
+                                if live_value is MISSING
+                                else live_value,
+                                "after_hash": live_hash,
+                            },
+                        )
                 operations.append(operation)
             pending = any(
                 operation.decision is ReviewOperationDecision.PENDING

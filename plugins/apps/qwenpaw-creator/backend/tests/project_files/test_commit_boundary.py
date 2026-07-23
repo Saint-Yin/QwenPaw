@@ -782,6 +782,77 @@ def test_user_edit_supersedes_pending_operation_in_inactive_review(
     assert state.accepted_generation == 0
 
 
+def test_runtime_writer_rebases_pending_operation_candidate(
+    tmp_path,
+) -> None:
+    # An agent auto-fix that touches a reviewed pointer must rebase the
+    # pending operation's candidate hash; otherwise Keep/Undo would fail CAS
+    # against the live document forever.
+    store, base = _store(tmp_path)
+    commit = ProjectCommitBoundary(store)
+    reviewed = base.project.model_dump(mode="json")
+    reviewed["description"] = "Reviewed description"
+    first = commit.commit(
+        base=base,
+        candidate=reviewed,
+        origin="agentdock_interrupt",
+        review_policy="require_review",
+        review_boundary=ReviewBoundary(
+            request_message_seq=2,
+            request_id="request-2",
+            interrupted_run_id="run-1",
+            accepted_generation=base.generation,
+            accepted_etag=base.etag,
+        ),
+        caused_by_request_id="request-2",
+        caused_by_message_seq=2,
+        round_id="round-1",
+    )
+
+    runtime_edit = first.snapshot.project.model_dump(mode="json")
+    runtime_edit["description"] = "Runtime refined description"
+    commit.commit(
+        base=first.snapshot,
+        candidate=runtime_edit,
+        origin="runtime_task",
+        round_id="round-runtime-fix",
+    )
+
+    review = AtomicJsonRecordStore(
+        tmp_path
+        / "project-1"
+        / "runtime"
+        / "reviews"
+        / "review-round-1"
+        / "review.json",
+        ReviewRecord,
+    ).read()
+    assert review.status is ReviewStatus.PENDING
+    (operation,) = review.operations
+    assert operation.decision is ReviewOperationDecision.PENDING
+    assert operation.after == "Runtime refined description"
+    # Rejecting after the rebase must restore the pre-review value.
+    from services.project_files.review import (
+        ProjectReviewService,
+        ReviewDecisionItem,
+    )
+
+    resolved = ProjectReviewService(store).decide(
+        project_id="project-1",
+        review_id=review.review_id,
+        decision_token=review.decision_token,
+        decisions=[
+            ReviewDecisionItem(
+                operation_id=operation.operation_id,
+                decision="REJECT",
+            ),
+        ],
+    )
+    assert resolved.status is ReviewStatus.RESOLVED
+    current = store.read("project-1")
+    assert current.project.description == ""
+
+
 def test_one_review_round_accumulates_multiple_transactions_safely(
     tmp_path,
 ) -> None:

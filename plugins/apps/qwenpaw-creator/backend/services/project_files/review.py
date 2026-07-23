@@ -808,6 +808,9 @@ class ProjectReviewService:
                         round_id=journal.compensation_round_id,
                         transaction_id=journal.compensation_transaction_id,
                         advance_accepted_baseline=False,
+                        # The decision flow itself rewrites this Review; the
+                        # compensating commit must not rebase or re-token it.
+                        reconcile_exclude_round_id=journal.review_before.round_id,
                         _order_lock_held=True,
                         _lifecycle_lock_held=True,
                     )
@@ -991,13 +994,15 @@ class ProjectReviewService:
                 raise ReviewDecisionError(
                     "file-only Review operations are not implemented",
                 )
+            if item.decision != "REJECT":
+                # Keep accepts the live document as-is; only a rejection must
+                # prove the candidate value it is about to restore over.
+                continue
             value = value_at(current_data, operation.json_pointer)
             if hash_json_value(value) != operation.after_hash:
                 raise ReviewDecisionConflict(
                     f"Review candidate changed at {operation.json_pointer}",
                 )
-            if item.decision != "REJECT":
-                continue
             if operation.kind.value == "create":
                 restored = MISSING
                 kind = "delete"
