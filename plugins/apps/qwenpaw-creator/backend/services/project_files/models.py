@@ -17,6 +17,7 @@ from enum import StrEnum
 import hashlib
 import math
 from pathlib import PurePosixPath
+import re
 from typing import Annotated, Any, Generic, Literal, TypeVar
 from urllib.parse import urlsplit
 
@@ -650,8 +651,81 @@ class EditCreation(StrictModel):
     source_intelligence_version_id: EntityId | None = None
 
 
+class MotionGraphic(StrictModel):
+    """One self-contained deterministic HTML/CSS animation document.
+
+    ``html`` is a complete standalone document that draws on a transparent
+    background and animates exclusively through CSS animations, so any
+    conforming renderer can seek it frame by frame.  External network
+    resources are never loaded during rendering.
+    """
+
+    format: Literal["html_css"] = "html_css"
+    html: str = Field(min_length=32, max_length=200_000)
+    fps: int = Field(default=24, ge=8, le=60)
+    loop: bool = True
+    design_notes: str = ""
+    motif: str = "custom"
+    template_version: int | None = Field(default=None, ge=1)
+    theme: str = "comic_patrol"
+    variant: str = "sticker"
+    emotion: str = "chill"
+    entrance: str = "pop"
+    exit: str = "soft_fade"
+    intensity: float = Field(default=0.6, ge=0.0, le=1.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _infer_template_metadata(cls, value: Any) -> Any:
+        """Keep generated template metadata when loading older project JSON."""
+
+        if not isinstance(value, dict) or not isinstance(value.get("html"), str):
+            return value
+        result = dict(value)
+        html = value["html"]
+        fields = (
+            "motif",
+            "theme",
+            "variant",
+            "emotion",
+            "entrance",
+            "exit",
+            "intensity",
+            "template-version",
+        )
+        for field in fields:
+            key = "template_version" if field == "template-version" else field
+            if key in result:
+                continue
+            match = re.search(
+                rf'data-motion-{re.escape(field)}=["\']([^"\']+)["\']',
+                html,
+            )
+            if match is None:
+                continue
+            raw: Any = match.group(1)
+            if key == "intensity":
+                try:
+                    raw = float(raw)
+                except ValueError:
+                    continue
+            elif key == "template_version":
+                try:
+                    raw = int(raw)
+                except ValueError:
+                    continue
+            result[key] = raw
+        return result
+
+
 class OverlayCreation(StrictModel):
-    """Procedural or generated overlay creative facts."""
+    """Procedural or generated overlay creative facts.
+
+    ``motion`` carries one generated presentation document.  It is the whole
+    payload of an ``overlay_kind="motion"`` decoration, and the optional
+    generated styling of a text overlay (``pet_os`` / ``interview_summary``),
+    whose ``text`` stays the authoritative content either way.
+    """
 
     type: Literal["overlay"] = "overlay"
     overlay_kind: Literal["pet_os", "interview_summary", "motion", "media"]
@@ -659,6 +733,7 @@ class OverlayCreation(StrictModel):
     vibe: str = "chill"
     prompt: str = ""
     reference_version_ids: list[EntityId] = Field(default_factory=list)
+    motion: MotionGraphic | None = None
 
     @model_validator(mode="after")
     def _validate_payload(self) -> OverlayCreation:
@@ -672,6 +747,10 @@ class OverlayCreation(StrictModel):
         ):
             raise ValueError(
                 "generated overlay requires prompt or reference versions",
+            )
+        if self.motion is not None and self.overlay_kind == "media":
+            raise ValueError(
+                "motion payload is not valid for overlay_kind=media",
             )
         return self
 
@@ -1273,6 +1352,7 @@ __all__ = [
     "ProjectSource",
     "R2VCreation",
     "RenderSource",
+    "MotionGraphic",
     "Shot",
     "SourceAssetVersion",
     "SourceCatalog",
