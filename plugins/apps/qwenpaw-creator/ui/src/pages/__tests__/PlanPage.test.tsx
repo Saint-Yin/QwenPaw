@@ -395,23 +395,8 @@ describe("PlanPage Timeline/Element frontend", () => {
     expect(screen.getByText("垂直位置（%）")).toBeInTheDocument();
   });
 
-  it("keeps a single export action gated on element readiness without planning shortcuts", async () => {
-    const { calls } = installMockFetch([
-      {
-        match: "/timelines/timeline%3Amain/render",
-        method: "POST",
-        response: {
-          json: {
-            ok: true,
-            taskId: "task-render",
-            artifactVersionId: "final-v2",
-            generation: 4,
-            etag: '"sha256:g4"',
-            replayed: false,
-          },
-        },
-      },
-    ]);
+  it("offers download for the fresh final render without triggering a new compose", async () => {
+    const { calls } = installMockFetch([]);
     renderPage("/project/p1/plan?element=r2v-window");
 
     // 规划/继续制作类快捷按钮已移除，Agent 入口统一在 AgentDock。
@@ -421,41 +406,86 @@ describe("PlanPage Timeline/Element frontend", () => {
     expect(
       screen.queryByRole("button", { name: "继续制作" }),
     ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "在 Agent 中修改" }),
-    ).not.toBeInTheDocument();
 
-    // fixture 全部就绪 → 导出可用；点击直接调确定性导出端点，不经 Agent。
-    const exportButton = screen.getByRole("button", { name: "导出成片" });
-    expect(exportButton).toBeEnabled();
-    fireEvent.click(exportButton);
-    await waitFor(() =>
+    // fixture 已有新鲜成片 → 不重新合成，按钮直接下载成片文件。
+    const downloadButton = screen.getByRole("button", { name: "下载成片" });
+    expect(downloadButton).toBeEnabled();
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    fireEvent.click(downloadButton);
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    clickSpy.mockRestore();
+    expect(
+      calls.some((call) => call.url.includes("/render")),
+    ).toBe(false);
+    expect(calls.some((call) => call.url.includes("/commands"))).toBe(false);
+  });
+
+  it("auto-composes the final render once all compose elements are ready", async () => {
+    vi.useFakeTimers();
+    try {
+      const project = cloneProject();
+      delete project.assets.artifact_slots_by_id[
+        "timeline:timeline:main:render"
+      ];
+      delete project.assets.artifact_versions_by_id["final-v1"];
+      seedProject(project);
+      const { calls } = installMockFetch([
+        {
+          match: "/timelines/timeline%3Amain/render",
+          method: "POST",
+          response: {
+            json: {
+              ok: true,
+              taskId: "task-render",
+              artifactVersionId: "final-v2",
+              generation: 4,
+              etag: '"sha256:g4"',
+              replayed: false,
+            },
+          },
+        },
+      ]);
+      renderPage();
+
+      // 全部主轨元素就绪且无成片 → 短防抖后自动触发确定性合成。
+      expect(screen.getByRole("button", { name: "下载成片" })).toBeDisabled();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1600);
+      });
       expect(
         calls.some(
           (call) =>
             call.method === "POST" &&
             call.url.includes("/timelines/timeline%3Amain/render"),
         ),
-      ).toBe(true),
-    );
-    expect(useAgentDockUiStore.getState().draft).toBe("");
-    expect(calls.some((call) => call.url.includes("/commands"))).toBe(false);
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("disables export while any enabled element is still not ready", () => {
+  it("keeps download disabled while any compose element is still not ready", () => {
     const project = cloneProject();
     project.assets.artifact_slots_by_id[
       "element:r2v-window:video"
     ].selected_version_id = null;
+    delete project.assets.artifact_slots_by_id[
+      "timeline:timeline:main:render"
+    ];
+    delete project.assets.artifact_versions_by_id["final-v1"];
     seedProject(project);
+    const { calls } = installMockFetch([]);
     renderPage();
 
-    const exportButton = screen.getByRole("button", { name: "导出成片" });
-    expect(exportButton).toBeDisabled();
-    expect(exportButton).toHaveAttribute(
+    const downloadButton = screen.getByRole("button", { name: "下载成片" });
+    expect(downloadButton).toBeDisabled();
+    expect(downloadButton).toHaveAttribute(
       "title",
       expect.stringContaining("项内容生成中"),
     );
+    expect(calls.some((call) => call.url.includes("/render"))).toBe(false);
   });
 
   it("keeps the detail header free of a delete action while retaining close", () => {

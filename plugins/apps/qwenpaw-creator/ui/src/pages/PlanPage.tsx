@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { message } from "antd";
-import { Loader2, Scissors } from "lucide-react";
+import { Download, Loader2, RefreshCw } from "lucide-react";
 import { navigate, useParams, useSearchParams } from "@/routing/navigation";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
-import { renderTimeline } from "@/api/creator";
+import { getArtifactVersionMediaUrl, renderTimeline } from "@/api/creator";
 import {
+  resolveTimelineRender,
   selectPrimaryTimeline,
   timelineEndTick,
 } from "@/selectors/timelineElementSelectors";
@@ -47,7 +48,10 @@ export default function PlanPage() {
       : null;
   const [playheadTick, setPlayheadTick] = useState(0);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const [composeFailed, setComposeFailed] = useState(false);
+  const composeAttemptedGeneration = useRef<number | null>(null);
+  const generation = useProjectSnapshotStore((state) => state.generation);
   const [activeElementIds, setActiveElementIds] = useState<string[]>([]);
   const durationTick = timelineEndTick(timeline);
   const displayDurationTick = timeline
@@ -98,6 +102,77 @@ export default function PlanPage() {
     [base, selectedElementId, timeline],
   );
 
+  // 就绪口径：只统计参与成片合成的主轨元素（r2v/edit）；文案 overlay
+  // 由合成器确定性绘制，motion/media overlay 与 audio 不参与合成。
+  const readiness = useMemo(() => {
+    if (!project || !timeline) return { total: 0, notReady: 0 };
+    const items = Object.values(timeline.elements_by_id).filter(
+      (element) =>
+        element.enabled &&
+        (element.creation.type === "r2v" || element.creation.type === "edit"),
+    );
+    return {
+      total: items.length,
+      notReady: items.filter(
+        (element) =>
+          resolveElementPlayback(project, timeline, element, tasks).status !==
+          "ready",
+      ).length,
+    };
+  }, [project, tasks, timeline]);
+  const renderOutput = useMemo(
+    () =>
+      project && timeline ? resolveTimelineRender(project, timeline) : null,
+    [project, timeline],
+  );
+  const freshRender =
+    renderOutput?.selected && !renderOutput.selected.stale
+      ? renderOutput.selected
+      : null;
+  const allReady = readiness.total > 0 && readiness.notReady === 0;
+
+  const composeNow = useCallback(async () => {
+    if (!timeline) return;
+    setComposing(true);
+    setComposeFailed(false);
+    try {
+      // 合成是确定性后端操作；完成后立即拉新快照，预览自动切成片。
+      await renderTimeline(id, timeline.timeline_id);
+      await pollOnce(id);
+    } catch (error) {
+      setComposeFailed(true);
+      message.error(`成片合成失败：${(error as Error).message}`);
+    } finally {
+      setComposing(false);
+    }
+  }, [id, pollOnce, timeline]);
+
+  // 全部主轨元素就绪且没有新鲜成片时自动合成；同一 generation 只尝试
+  // 一次（失败不自动重试，留手动重试入口）；短防抖吸收连续编辑。
+  useEffect(() => {
+    if (!allReady || freshRender || composing) return;
+    if (
+      generation !== null &&
+      composeAttemptedGeneration.current === generation
+    )
+      return;
+    const timer = window.setTimeout(() => {
+      composeAttemptedGeneration.current = generation;
+      void composeNow();
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [allReady, freshRender, composing, generation, composeNow]);
+
+  const downloadRender = useCallback(() => {
+    if (!freshRender) return;
+    const link = document.createElement("a");
+    link.href = getArtifactVersionMediaUrl(freshRender.version_id);
+    link.download = `${freshRender.name || project?.name || "成片"}.mp4`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }, [freshRender, project?.name]);
+
   if (!project) {
     if (syncStatus === "invalid" || syncStatus === "not_found") {
       return (
@@ -120,34 +195,6 @@ export default function PlanPage() {
 
   const patchValue = (path: string, before: unknown, value: unknown) =>
     patchProject(id, [{ op: "replace", path, before, value }]);
-  // 导出门禁：只统计参与成片合成的主轨元素（r2v/edit）；文案 overlay
-  // 由合成器确定性绘制，motion/media overlay 与 audio 不参与合成。
-  const composeElements = Object.values(timeline.elements_by_id).filter(
-    (element) =>
-      element.enabled &&
-      (element.creation.type === "r2v" || element.creation.type === "edit"),
-  );
-  const notReadyCount = composeElements.filter(
-    (element) =>
-      resolveElementPlayback(project, timeline, element, tasks).status !==
-      "ready",
-  ).length;
-  const exportDisabled =
-    composeElements.length === 0 || notReadyCount > 0 || exporting;
-  const exportTimeline = async () => {
-    setExporting(true);
-    try {
-      // 导出是确定性后端合成，不经过 Agent；完成后立即拉新快照，
-      // 预览会自动切换到新鲜成片。
-      await renderTimeline(id, timeline.timeline_id);
-      await pollOnce(id);
-      message.success("成片已导出，预览已切换到成片");
-    } catch (error) {
-      message.error(`导出成片失败：${(error as Error).message}`);
-    } finally {
-      setExporting(false);
-    }
-  };
   const openElementWorkbench = (element: TimelineElementDocument) =>
     navigate(`${base}/element/${encodeURIComponent(element.element_id)}`);
 
@@ -196,27 +243,41 @@ export default function PlanPage() {
           <span className="rounded-full border border-[var(--color-border)] bg-white px-2.5 py-1 text-[11px] font-semibold text-[var(--color-text-secondary)]">
             {Object.keys(timeline.elements_by_id).length} 项内容
           </span>
+          {composeFailed && !composing && (
+            <button
+              type="button"
+              title="上次自动合成失败，点击重新合成"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-danger)]/50 bg-[var(--color-danger-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--color-danger)] transition hover:border-[var(--color-danger)]"
+              onClick={() => void composeNow()}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              重试合成
+            </button>
+          )}
           <button
             type="button"
-            disabled={exportDisabled}
+            data-download-render
+            disabled={!freshRender}
             title={
-              composeElements.length === 0
-                ? "时间轴还没有可合成的画面内容"
-                : notReadyCount > 0
-                ? `还有 ${notReadyCount} 项内容生成中，全部就绪后可导出`
-                : exporting
-                ? "正在合成导出成片"
-                : "合成并导出最终成片文件"
+              freshRender
+                ? "下载成片视频文件"
+                : composing
+                  ? "正在合成成片，完成后可下载"
+                  : readiness.total === 0
+                    ? "时间轴还没有可合成的画面内容"
+                    : readiness.notReady > 0
+                      ? `还有 ${readiness.notReady} 项内容生成中，全部就绪后自动合成`
+                      : "等待成片合成"
             }
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-bg-secondary)] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-[var(--color-border)] disabled:hover:bg-[var(--color-bg-primary)]"
-            onClick={() => void exportTimeline()}
+            onClick={downloadRender}
           >
-            {exporting ? (
+            {composing ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Scissors className="h-3.5 w-3.5" />
+              <Download className="h-3.5 w-3.5" />
             )}
-            {exporting ? "导出中…" : "导出成片"}
+            {composing ? "合成中…" : "下载成片"}
           </button>
         </div>
       </header>
