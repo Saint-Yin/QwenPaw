@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Input, InputNumber, Switch, message } from "antd";
+import { Button, Input, InputNumber, message } from "antd";
 import {
   ArrowUpRight,
   Box,
@@ -230,22 +230,11 @@ export default function ElementDetail({
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 [scrollbar-gutter:stable]">
         <section className="rounded-xl border border-[var(--color-border)] p-3">
-          <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="mb-3">
             <h4 className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-primary)]">
               <Clock3 className="h-3.5 w-3.5 text-[var(--color-accent)]" />
               时间与层级
             </h4>
-            <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
-              启用
-              <Switch
-                size="small"
-                checked={element.enabled}
-                loading={patching}
-                onChange={(checked) =>
-                  void patch(["enabled"], element.enabled, checked)
-                }
-              />
-            </label>
           </div>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
             <label>
