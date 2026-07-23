@@ -99,6 +99,14 @@ def value_at(document: Any, pointer: str, *, missing: Any = MISSING) -> Any:
 
 
 def canonical_json_bytes(value: Any) -> bytes:
+    """Encode one field-CAS value using JSON-number equality semantics.
+
+    Integral floats normalize to integers so provider-produced ``1.0`` does
+    not conflict with an otherwise identical Project field containing ``1``.
+    This representation is intentionally different from the typed whole-
+    Project ETag encoder in :mod:`services.project_files.serialization`.
+    """
+
     def normalize_numbers(obj: Any) -> Any:
         if isinstance(obj, float) and obj.is_integer():
             return int(obj)

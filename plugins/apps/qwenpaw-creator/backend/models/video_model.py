@@ -6,7 +6,9 @@
 
 import asyncio
 import json
+import mimetypes
 from pathlib import Path
+import tempfile
 from urllib.parse import urlparse
 import uuid
 import httpx
@@ -14,10 +16,14 @@ from typing import Optional
 from models.concurrency import model_slot
 from models import config as model_config
 from models.media_transport import (
+    DASHSCOPE_TEMP_UPLOAD_MAX_BYTES,
+    SEEDANCE_REFERENCE_IMAGE_MAX_BYTES,
     read_reference_media,
     reference_media_data_url,
-    upload_reference_bytes_to_dashscope_temp,
+    upload_local_file_to_dashscope_temp,
 )
+from services.runtime_files.safe_remote_download import safe_download_to_file
+from utils.paths import media_path_from_url
 from utils.logger import setup_logger
 from utils.exceptions import ModelError
 
@@ -88,32 +94,70 @@ async def _resolve_reference_media_url(
                 f"filename={filename}, kind={kind}",
             )
             return url, kind
-        content, filename = await read_reference_media(url)
         kind = _reference_media_kind(filename)
-        if backend == "seedance2":
-            if kind == "video":
-                raise ModelError(
-                    "Seedance reference videos must be public HTTP(S) URLs: "
-                    "the Ark task API does not accept Base64-encoded video "
-                    f"and local uploads have no provider channel ({filename})",
-                    model_name=model_name,
+        if backend == "wan":
+            media_type = (
+                mimetypes.guess_type(filename)[0]
+                or "application/octet-stream"
+            )
+            if url.startswith(("http://", "https://")):
+                with tempfile.TemporaryDirectory(
+                    prefix="creator-reference-",
+                ) as temporary_directory:
+                    media_path = Path(temporary_directory) / filename
+                    _, downloaded_type, _ = await asyncio.to_thread(
+                        safe_download_to_file,
+                        url,
+                        media_path,
+                        max_bytes=DASHSCOPE_TEMP_UPLOAD_MAX_BYTES,
+                        timeout=httpx.Timeout(
+                            connect=30.0,
+                            read=300.0,
+                            write=300.0,
+                            pool=30.0,
+                        ),
+                    )
+                    resolved_url = await upload_local_file_to_dashscope_temp(
+                        media_path,
+                        api_key=model_config.get_video_api_key(),
+                        model_name=model_name,
+                        media_type=downloaded_type or media_type,
+                    )
+            else:
+                media_path = (
+                    media_path_from_url(url)
+                    if url.startswith("/generated/")
+                    else Path(urlparse(url).path)
                 )
-            resolved_url = reference_media_data_url(content, filename)
-            logger.info(
-                f"Inlined reference media as data URL | backend={backend}, "
-                f"filename={filename}, bytes={len(content)}",
-            )
-        else:
-            resolved_url = await upload_reference_bytes_to_dashscope_temp(
-                content,
-                filename,
-                api_key=model_config.get_video_api_key(),
-                model_name=model_name,
-            )
+                resolved_url = await upload_local_file_to_dashscope_temp(
+                    media_path,
+                    api_key=model_config.get_video_api_key(),
+                    model_name=model_name,
+                    media_type=media_type,
+                )
             logger.info(
                 f"Uploaded reference media to DashScope temp storage | backend={backend}, "
                 f"filename={filename}, url={resolved_url[:100]}",
             )
+            return resolved_url, kind
+
+        content, filename = await read_reference_media(
+            url,
+            max_bytes=SEEDANCE_REFERENCE_IMAGE_MAX_BYTES,
+        )
+        kind = _reference_media_kind(filename)
+        if kind == "video":
+            raise ModelError(
+                "Seedance reference videos must be public HTTP(S) URLs: "
+                "the Ark task API does not accept Base64-encoded video "
+                f"and local uploads have no provider channel ({filename})",
+                model_name=model_name,
+            )
+        resolved_url = reference_media_data_url(content, filename)
+        logger.info(
+            f"Inlined reference media as data URL | backend={backend}, "
+            f"filename={filename}, bytes={len(content)}",
+        )
         return resolved_url, kind
     except ModelError:
         raise

@@ -2,7 +2,79 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { ProjectComposer } from "@/components/creator/ProjectComposer";
+import type { ModelConfigData } from "@/contracts/creator/models";
 import { installMockFetch } from "@/test/mockFetch";
+
+const configuredModelConfig: ModelConfigData = {
+  llm: {
+    enabled: true,
+    model_name: "qwen3.7-plus",
+    api_key: "saved-secret",
+    base_url: "https://example.test/v1",
+    protocol: "OpenAI 协议",
+    custom_protocol: "",
+    multimodal: true,
+  },
+  vlm: {
+    enabled: true,
+    model_name: "qwen3.7-plus",
+    api_key: "saved-secret",
+    base_url: "https://example.test/v1",
+    protocol: "OpenAI 协议",
+    custom_protocol: "",
+    use_llm: true,
+    multimodal: true,
+  },
+  asr: {
+    enabled: false,
+    model_name: "fun-asr",
+    api_key: "",
+    base_url: "https://dashscope.aliyuncs.com/api/v1",
+    protocol: "DashScope Fun-ASR",
+    custom_protocol: "",
+    provider: "fun-asr",
+    language: "",
+    reuse_llm_key: true,
+  },
+  image: {
+    enabled: true,
+    model_name: "qwen-image",
+    api_key: "",
+    base_url: "https://example.test/image",
+    protocol: "DashScope（百炼）",
+    custom_protocol: "",
+  },
+  video: {
+    enabled: true,
+    model_name: "wan2.7-r2v",
+    api_key: "",
+    base_url: "https://example.test/video",
+    protocol: "DashScope（百炼）",
+    custom_protocol: "",
+  },
+  oss: {
+    enabled: false,
+    access_key_id: "",
+    access_key_secret: "",
+    endpoint: "",
+    bucket: "",
+    public_base_url: "",
+    policy_api_key: "",
+  },
+  executionAuthorization: { mode: "allow_all" },
+};
+
+function installComposerMockFetch(
+  routes: Parameters<typeof installMockFetch>[0],
+) {
+  return installMockFetch([
+    {
+      match: "/models/config",
+      response: { json: configuredModelConfig },
+    },
+    ...routes,
+  ]);
+}
 
 describe("ProjectComposer ingest boundary", () => {
   it("keeps only Agent and disabled Loop modes, and hides video format controls for editing", () => {
@@ -54,8 +126,29 @@ describe("ProjectComposer ingest boundary", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("fails closed when the model configuration response is incomplete", async () => {
+    installMockFetch([
+      {
+        match: "/models/config",
+        response: { json: {} },
+      },
+    ]);
+    render(
+      <MemoryRouter>
+        <ProjectComposer open onClose={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText(/^目标描述：/), {
+      target: { value: "制作一支短片" },
+    });
+
+    expect(await screen.findByText("必选模型未配置：")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /启动 Agent/ })).toBeDisabled();
+  });
+
   it("derives a missing project name from the first 20 normalized description characters", async () => {
-    const { calls } = installMockFetch([
+    const { calls } = installComposerMockFetch([
       {
         match: "/projects/p-auto-name/messages",
         response: {
@@ -114,7 +207,7 @@ describe("ProjectComposer ingest boundary", () => {
       acceptMessage = resolve;
     });
     const onClose = vi.fn();
-    const { calls } = installMockFetch([
+    const { calls } = installComposerMockFetch([
       {
         match: "/projects/p-delayed/messages",
         response: {
@@ -209,7 +302,7 @@ describe("ProjectComposer ingest boundary", () => {
   });
 
   it("creates Project, waits for succeeded immutable versions, then sends exactly one initial message", async () => {
-    const { calls } = installMockFetch([
+    const { calls } = installComposerMockFetch([
       {
         match: "/projects/p1/messages",
         response: {
@@ -289,7 +382,7 @@ describe("ProjectComposer ingest boundary", () => {
   });
 
   it("submits every successful folder-import version even though item rows have no status field", async () => {
-    const { calls } = installMockFetch([
+    const { calls } = installComposerMockFetch([
       {
         match: "/projects/p2/asset-imports/import-1",
         response: {
@@ -374,7 +467,7 @@ describe("ProjectComposer ingest boundary", () => {
   });
 
   it("sends the initial message immediately when RUNNING remote ingest pre-publishes an asset version", async () => {
-    const { calls } = installMockFetch([
+    const { calls } = installComposerMockFetch([
       {
         match: "/projects/p-url-fast/assets",
         method: "POST",
@@ -461,7 +554,7 @@ describe("ProjectComposer ingest boundary", () => {
   });
 
   it("starts the Agent with the indexed remote version without waiting for local caching", async () => {
-    const { calls } = installMockFetch([
+    const { calls } = installComposerMockFetch([
       {
         match: "/projects/p-url/tasks/task-url",
         method: "GET",
@@ -565,7 +658,7 @@ describe("ProjectComposer ingest boundary", () => {
   });
 
   it("does not block Agent startup on a remote cache task that may later fail", async () => {
-    const { calls } = installMockFetch([
+    const { calls } = installComposerMockFetch([
       {
         match: "/projects/p-failed/tasks/task-failed",
         method: "GET",

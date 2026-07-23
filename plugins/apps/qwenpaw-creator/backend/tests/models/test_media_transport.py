@@ -2,6 +2,7 @@
 # flake8: noqa: E501
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 
@@ -12,6 +13,7 @@ from models.media_transport import (
     SEEDANCE_REFERENCE_IMAGE_MAX_BYTES,
     _upload_local_file_to_dashscope_temp_sync,
     _upload_reference_bytes_to_dashscope_temp_sync,
+    read_reference_media,
     reference_media_data_url,
     validate_reference_image_bytes,
 )
@@ -222,3 +224,36 @@ def test_reference_media_data_url_rejects_oversized_media() -> None:
 
     with pytest.raises(RuntimeError, match="30MB"):
         reference_media_data_url(oversized, "reference.png")
+
+
+def test_reference_media_uses_bounded_safe_remote_download(monkeypatch) -> None:
+    observed = {}
+
+    def download(url, *, max_bytes, timeout):
+        observed.update(url=url, max_bytes=max_bytes, timeout=timeout)
+        return _png_bytes()
+
+    monkeypatch.setattr("models.media_transport.safe_download_bytes", download)
+
+    content, filename = asyncio.run(
+        read_reference_media(
+            "https://public.example/reference.png",
+            max_bytes=1234,
+        ),
+    )
+
+    assert content == _png_bytes()
+    assert filename == "reference.png"
+    assert observed == {
+        "url": "https://public.example/reference.png",
+        "max_bytes": 1234,
+        "timeout": 60.0,
+    }
+
+
+def test_reference_media_checks_local_size_before_reading(tmp_path) -> None:
+    reference = tmp_path / "too-large.png"
+    reference.write_bytes(b"123456")
+
+    with pytest.raises(ValueError, match="exceeds 5 bytes"):
+        asyncio.run(read_reference_media(reference.as_uri(), max_bytes=5))

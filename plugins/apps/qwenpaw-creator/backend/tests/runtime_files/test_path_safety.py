@@ -43,3 +43,13 @@ def test_opaque_runtime_ids_are_hashed_into_a_stable_safe_segment() -> None:
     assert first == second
     assert re.fullmatch(r"review-decision-[0-9a-f]{64}", first)
     assert "escaped" not in first
+
+
+def test_hashed_runtime_prefix_has_an_explicit_127_character_limit() -> None:
+    assert len(hashed_runtime_segment("a" * 127, "opaque")) == 192
+
+    with pytest.raises(
+        RuntimeFileValidationError,
+        match="must not exceed 127 characters",
+    ):
+        hashed_runtime_segment("a" * 128, "opaque")

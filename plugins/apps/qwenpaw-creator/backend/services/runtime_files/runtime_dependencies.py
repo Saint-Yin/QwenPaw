@@ -120,7 +120,9 @@ def resolve_jq() -> str | None:
         return configured
     managed = _managed_binary_path("jq")
     if managed is not None and _is_executable(managed):
-        return os.fspath(managed)
+        asset = _JQ_ASSETS.get(_platform_key())
+        if asset is not None and _file_sha256(managed) == asset[1]:
+            return os.fspath(managed)
     return shutil.which("jq")
 
 
@@ -177,7 +179,7 @@ def _platform_key() -> tuple[str, str]:
 
 def _auto_install_enabled() -> bool:
     value = (
-        os.environ.get(CREATOR_AUTO_INSTALL_BINARIES_ENV, "1")
+        os.environ.get(CREATOR_AUTO_INSTALL_BINARIES_ENV, "0")
         .strip()
         .casefold()
     )
@@ -273,6 +275,21 @@ class CreatorBinaryManager:
         return self.jq_path
 
     def ensure_jq(self) -> BinaryStatus:
+        def missing(source: str, detail: str) -> BinaryStatus:
+            os.environ.pop(CREATOR_JQ_PATH_ENV, None)
+            logger.warning(
+                "jq is unavailable; Creator will start in degraded mode: %s",
+                detail,
+            )
+            return BinaryStatus(
+                "jq",
+                "missing",
+                None,
+                source,
+                True,
+                detail,
+            )
+
         configured = _configured_executable(CREATOR_JQ_PATH_ENV)
         if configured:
             return BinaryStatus("jq", "ok", configured, "configured", True)
@@ -281,7 +298,10 @@ class CreatorBinaryManager:
             os.environ[CREATOR_JQ_PATH_ENV] = system
             return BinaryStatus("jq", "ok", system, "system", True)
         managed = self.jq_path
-        _, expected_sha256 = self._jq_asset()
+        try:
+            _, expected_sha256 = self._jq_asset()
+        except CreatorBinaryDependencyError as error:
+            return missing("unsupported-platform", str(error))
         if (
             _is_executable(managed)
             and _file_sha256(managed) == expected_sha256
@@ -296,8 +316,10 @@ class CreatorBinaryManager:
                 True,
             )
         if not _auto_install_enabled():
-            raise CreatorBinaryDependencyError(
-                f"jq is missing and {CREATOR_AUTO_INSTALL_BINARIES_ENV}=0",
+            return missing(
+                "auto-install-disabled",
+                f"jq is missing and {CREATOR_AUTO_INSTALL_BINARIES_ENV}=0; "
+                f"configure {CREATOR_JQ_PATH_ENV} or install jq on PATH",
             )
         with _DOWNLOAD_LOCK:
             if not (
@@ -306,12 +328,11 @@ class CreatorBinaryManager:
             ):
                 try:
                     self._download_jq()
-                except CreatorBinaryDependencyError:
-                    raise
                 except Exception as error:
-                    raise CreatorBinaryDependencyError(
+                    return missing(
+                        "auto-install-failed",
                         f"Unable to download jq {JQ_VERSION}: {error}",
-                    ) from error
+                    )
         path = os.fspath(managed)
         os.environ[CREATOR_JQ_PATH_ENV] = path
         return BinaryStatus("jq", "ok", path, f"managed-{JQ_VERSION}", True)
@@ -417,6 +438,7 @@ def creator_runtime_dependency_health() -> dict[str, Any]:
 
 __all__ = [
     "BinaryStatus",
+    "CREATOR_AUTO_INSTALL_BINARIES_ENV",
     "CREATOR_BINARY_DIR_ENV",
     "CREATOR_FFMPEG_PATH_ENV",
     "CREATOR_FFPROBE_PATH_ENV",

@@ -136,7 +136,7 @@ describe("AgentDock origin/main visible fidelity", () => {
       "rounded-2xl",
       "backdrop-blur-xl",
     );
-    expect(screen.getByText("Creator Agent")).toBeInTheDocument();
+    expect(screen.getByText("创作助手")).toBeInTheDocument();
     // 未绑定上下文时不再展示提示文案。
     expect(
       screen.queryByText("未绑定上下文，作用于整个项目"),
@@ -213,8 +213,8 @@ describe("AgentDock origin/main visible fidelity", () => {
     renderDock();
 
     fireEvent.click(screen.getByRole("button", { name: "工作区事实" }));
-    expect(screen.getByText("任务上下文")).toBeInTheDocument();
-    expect(screen.getByText("素材事实（0）")).toBeInTheDocument();
+    expect(screen.getByText("当前任务")).toBeInTheDocument();
+    expect(screen.getByText("素材概况（0）")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "审阅与决策中心" }));
     expect(screen.getByText("暂无待处理的决策")).toBeInTheDocument();
@@ -260,7 +260,7 @@ describe("AgentDock origin/main visible fidelity", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders an in-flight Creator SSE message as origin-sized rich Markdown", () => {
+  it("keeps an in-flight Creator SSE message compact until it completes", () => {
     useAgentDockUiStore.getState().setOpen(true);
     useCreatorSessionStore.setState((state) => ({
       ...state,
@@ -291,30 +291,28 @@ describe("AgentDock origin/main visible fidelity", () => {
     }));
     renderDock();
 
-    const heading = screen.getByRole("heading", { level: 2, name: "实时结果" });
-    const assistant = heading.closest<HTMLElement>("[data-agent-message]")!;
+    const thinking = document.querySelector<HTMLElement>(
+      "[data-agent-thinking]",
+    )!;
+    const assistant = thinking.closest<HTMLElement>("[data-agent-message]")!;
     expect(assistant).toHaveClass(
       "text-[11px]",
       "leading-5",
       "text-[var(--color-text-secondary)]",
     );
-    expect(assistant.querySelector("ul")).toBeInTheDocument();
-    expect(screen.getByText("第一项").tagName).toBe("STRONG");
-    expect(screen.getByText("内联代码").tagName).toBe("CODE");
-    expect(screen.getByRole("link", { name: "详情" })).toHaveAttribute(
-      "href",
-      "https://example.com",
-    );
-    const thinking = document.querySelector<HTMLElement>(
-      "[data-agent-thinking]",
-    )!;
+    expect(
+      screen.queryByRole("heading", { level: 2, name: "实时结果" }),
+    ).not.toBeInTheDocument();
+    expect(assistant.querySelector("ul")).not.toBeInTheDocument();
     expect(thinking).toBeInTheDocument();
-    expect(thinking).toHaveAttribute("data-expanded", "true");
-    expect(thinking).toHaveTextContent("思考...");
-    expect(thinking).toHaveTextContent("正在核对真实上下文。");
+    expect(thinking).toHaveAttribute("data-expanded", "false");
+    expect(thinking).toHaveTextContent("思考中");
+    expect(
+      thinking.querySelector("[data-agent-thinking-output]"),
+    ).not.toBeInTheDocument();
   });
 
-  it("streams partial Action JSON inside one tool card and auto-collapses thinking and tool details", async () => {
+  it("shows streaming tool status without exposing internal JSON details", async () => {
     useAgentDockUiStore.getState().setOpen(true);
     const user = {
       messageId: "user-stream-tool",
@@ -348,12 +346,12 @@ describe("AgentDock origin/main visible fidelity", () => {
       '[data-agent-action="tool_call"]',
     )!;
     expect(streamingAction).toHaveAttribute("data-streaming-action", "true");
-    expect(streamingAction).toHaveAttribute("data-expanded", "true");
-    expect(streamingAction).toHaveTextContent("读取素材分析...");
+    expect(streamingAction).toHaveAttribute("data-expanded", "false");
+    expect(streamingAction).toHaveTextContent("读取素材分析中");
     expect(
-      within(streamingAction).getByText(/"path":"plan/),
-    ).toBeInTheDocument();
-    expect(screen.getByText("我先读取计划。")).toBeInTheDocument();
+      within(streamingAction).queryByText(/"path":"plan/),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("我先读取计划。")).not.toBeInTheDocument();
 
     act(() =>
       useCreatorSessionStore.setState((state) => ({
@@ -371,10 +369,11 @@ describe("AgentDock origin/main visible fidelity", () => {
       })),
     );
     await waitFor(() =>
-      expect(
-        within(streamingAction).getByText(/"path": "plan.json"/),
-      ).toBeInTheDocument(),
+      expect(streamingAction).toHaveTextContent("读取素材分析中"),
     );
+    expect(
+      within(streamingAction).queryByText(/"path": "plan.json"/),
+    ).not.toBeInTheDocument();
 
     act(() =>
       useCreatorSessionStore.setState({
@@ -426,12 +425,15 @@ describe("AgentDock origin/main visible fidelity", () => {
     await waitFor(() =>
       expect(thinking).toHaveAttribute("data-expanded", "false"),
     );
-    expect(thinking).toHaveTextContent("✓ 思考");
+    expect(thinking).toHaveTextContent("思考完成");
     expect(
       thinking.querySelector("[data-agent-thinking-output]"),
     ).not.toBeInTheDocument();
-    expect(tool).toHaveAttribute("data-expanded", "true");
-    expect(within(tool).getByText(/"path": "plan.json"/)).toBeInTheDocument();
+    expect(tool).toHaveAttribute("data-expanded", "false");
+    expect(tool).toHaveTextContent("读取素材分析中");
+    expect(
+      within(tool).queryByText(/"path": "plan.json"/),
+    ).not.toBeInTheDocument();
 
     act(() =>
       useCreatorSessionStore.setState((state) => ({
@@ -467,12 +469,13 @@ describe("AgentDock origin/main visible fidelity", () => {
       })),
     );
     await waitFor(() => expect(tool).toHaveAttribute("data-expanded", "false"));
+    expect(tool).toHaveTextContent("读取素材分析完成");
     expect(
       within(tool).queryByText(/"path": "plan.json"/),
     ).not.toBeInTheDocument();
   });
 
-  it("renders yield_until_runtime_event as a collapsed waiting action with inspectable details", () => {
+  it("renders yield_until_runtime_event as a collapsed waiting action", () => {
     useAgentDockUiStore.getState().setOpen(true);
     useCreatorSessionStore.setState({
       messages: [
@@ -520,9 +523,10 @@ describe("AgentDock origin/main visible fidelity", () => {
       "等待 Source Intelligence 完成素材分析，以便 Runtime 投影 Timeline 和 Element，然后委派 AI Editing Director 进行剪辑中",
     );
     expect(waiting).not.toHaveTextContent("等待等待");
-    fireEvent.click(within(waiting).getByRole("button", { name: "详情" }));
-    expect(within(waiting).getByText(/"run-video-1"/)).toBeInTheDocument();
-    expect(screen.queryByText(/yield_until_runtime_event/)).toBeInTheDocument();
+    expect(
+      within(waiting).queryByRole("button", { name: "详情" }),
+    ).not.toBeInTheDocument();
+    expect(within(waiting).queryByText(/"run-video-1"/)).not.toBeInTheDocument();
   });
 
   it("keeps the focused modification editor writable and submits at a live SSE boundary", async () => {
@@ -638,6 +642,29 @@ describe("AgentDock origin/main visible fidelity", () => {
     );
   });
 
+  it("shows the same simplified copy for queued message failures", () => {
+    useCreatorSessionStore.setState({
+      queuedUi: [
+        {
+          clientMessageId: "failed-message",
+          requestSignature: "failed-signature",
+          text: "重新生成视频",
+          state: "failed",
+          error:
+            "R2V ArtifactSlot 归属冲突: internal/path/project.json\ntraceback",
+        },
+      ],
+    });
+    useAgentDockUiStore.getState().setOpen(true);
+
+    renderDock();
+
+    expect(screen.getByText("视频生成失败，请重试")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/internal\/path\/project\.json/),
+    ).not.toBeInTheDocument();
+  });
+
   it("morphs the composer button into a stop control while agents run with an empty input", async () => {
     const { calls } = installMockFetch([
       {
@@ -731,7 +758,7 @@ describe("AgentDock origin/main visible fidelity", () => {
     renderDock();
     act(() => useAgentDockUiStore.getState().setTab("conversation"));
 
-    expect(screen.getByText("端到端生产")).toBeInTheDocument();
+    expect(screen.getByText("制作流程")).toBeInTheDocument();
     expect(
       screen.getByText(/故事规划 · 主时间轴 · 已完成/),
     ).toBeInTheDocument();
@@ -881,15 +908,18 @@ describe("AgentDock origin/main visible fidelity", () => {
       responseFlow?.querySelector("[data-agent-thinking]"),
     ).not.toBeInTheDocument();
 
-    const toolStatus = screen.getByText(/✓\s+读取素材分析/);
-    expect(toolStatus).toHaveClass("text-[var(--color-success)]");
-    expect(toolStatus.parentElement?.parentElement?.parentElement).toBe(
+    const toolStatus = screen.getByText("读取素材分析完成");
+    expect(toolStatus.parentElement).toHaveClass(
+      "text-[var(--color-success)]",
+    );
+    expect(toolStatus.closest("[data-agent-tool]")?.parentElement).toBe(
       responseFlow,
     );
-    fireEvent.click(screen.getByRole("button", { name: "详情" }));
-    expect(screen.getByText(/"path": "plan.json"/)).toBeInTheDocument();
-    expect(screen.getByText(/"head": "h2"/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "收起" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "详情" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/"path": "plan.json"/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/"head": "h2"/)).not.toBeInTheDocument();
   });
 
   it("folds legacy file Runtime tool turns into the anchored tool card without placeholder bubbles", () => {
@@ -962,14 +992,17 @@ describe("AgentDock origin/main visible fidelity", () => {
       '[data-agent-tool="call-file-runtime"]',
     )!;
     expect(tool).toBeInTheDocument();
-    expect(tool).toHaveTextContent("✓ 查看视频方案");
+    expect(tool).toHaveTextContent("查看视频方案完成");
     expect(tool.closest("[data-agent-response-flow]")).toBeInTheDocument();
-    fireEvent.click(within(tool).getByRole("button", { name: "详情" }));
-    expect(tool).toHaveTextContent('"generation": 2');
+    expect(
+      within(tool).queryByRole("button", { name: "详情" }),
+    ).not.toBeInTheDocument();
+    expect(tool).not.toHaveTextContent('"generation": 2');
   });
 
   it("embeds the replayable Sub-agent SSE stream in one natural delegate tool card", async () => {
     useAgentDockUiStore.getState().setOpen(true);
+    useAgentDockUiStore.getState().setAllowExpandDetails(true);
     useCreatorSessionStore.setState((state) => ({
       ...state,
       session: { ...state.session!, status: "RUNNING" },
@@ -1082,15 +1115,20 @@ describe("AgentDock origin/main visible fidelity", () => {
     );
     renderDock();
 
-    expect(screen.getByText(/▸\s+安排给 视觉开发/)).toBeInTheDocument();
-    expect(
-      document.querySelector('[data-agent-tool="delegate-action"]'),
-    ).toHaveAttribute("data-expanded", "true");
+    const delegateTool = document.querySelector<HTMLElement>(
+      '[data-agent-tool="delegate-action"]',
+    )!;
+    expect(delegateTool).toHaveTextContent("视觉开发中");
+    expect(delegateTool).toHaveAttribute("data-expanded", "false");
+    fireEvent.click(
+      within(delegateTool).getByRole("button", { name: "详情" }),
+    );
+    expect(delegateTool).toHaveAttribute("data-expanded", "true");
     expect(
       screen.getByText("请完善开场视觉，并说明改动结果。"),
     ).toBeInTheDocument();
     expect(screen.getByText("目标：素材与生成结果")).toBeInTheDocument();
-    expect(screen.getByText(/## 正在规划/)).toBeInTheDocument();
+    expect(screen.queryByText(/## 正在规划/)).not.toBeInTheDocument();
     expect(screen.getByText("实时输出中")).toBeInTheDocument();
     expect(screen.getByText("运行中")).toBeInTheDocument();
     const subagentMessage = document.querySelector(
@@ -1115,7 +1153,7 @@ describe("AgentDock origin/main visible fidelity", () => {
       "overscroll-contain",
       "touch-pan-y",
     );
-    expect(screen.getByText(/✓\s+读取素材分析/)).toBeInTheDocument();
+    expect(screen.getByText("读取素材分析完成")).toBeInTheDocument();
     expect(screen.queryByText(/"role":/)).not.toBeInTheDocument();
     expect(screen.queryByText(/"target_refs":/)).not.toBeInTheDocument();
 
@@ -1164,8 +1202,10 @@ describe("AgentDock origin/main visible fidelity", () => {
 
   it("renders native Sub-agent tool argument deltas in one live tool card", async () => {
     useAgentDockUiStore.getState().setOpen(true);
+    useAgentDockUiStore.getState().setAllowExpandDetails(true);
     useCreatorSessionStore.setState((state) => ({
       ...state,
+      session: { ...state.session!, status: "RUNNING" },
       messages: [
         {
           messageId: "assistant-native-tool",
@@ -1228,11 +1268,19 @@ describe("AgentDock origin/main visible fidelity", () => {
     );
     renderDock();
 
+    const delegateTool = document.querySelector<HTMLElement>(
+      '[data-agent-tool="delegate-native-tool"]',
+    )!;
+    fireEvent.click(
+      within(delegateTool).getByRole("button", { name: "详情" }),
+    );
     const tool = document.querySelector<HTMLElement>(
       '[data-subagent-tool="call-native-tool"]',
     )!;
+    expect(tool).toHaveAttribute("data-expanded", "false");
+    fireEvent.click(within(tool).getByRole("button", { name: "详情" }));
     expect(tool).toHaveAttribute("data-expanded", "true");
-    expect(tool).toHaveTextContent("读取素材分析");
+    expect(tool).toHaveTextContent("读取素材分析中");
     expect(
       tool.querySelector("[data-subagent-tool-arguments]"),
     ).toHaveTextContent('{"path":"story/');
@@ -1312,8 +1360,10 @@ describe("AgentDock origin/main visible fidelity", () => {
 
   it("moves a streamed Sub-agent function call into its tool card and preserves detail scrolling", async () => {
     useAgentDockUiStore.getState().setOpen(true);
+    useAgentDockUiStore.getState().setAllowExpandDetails(true);
     useCreatorSessionStore.setState((state) => ({
       ...state,
+      session: { ...state.session!, status: "RUNNING" },
       messages: [
         {
           messageId: "user-function",
@@ -1385,14 +1435,24 @@ describe("AgentDock origin/main visible fidelity", () => {
     );
     renderDock();
 
+    const delegateTool = document.querySelector<HTMLElement>(
+      '[data-agent-tool="delegate-function"]',
+    )!;
+    fireEvent.click(
+      within(delegateTool).getByRole("button", { name: "详情" }),
+    );
     const subagentMessage = document.querySelector<HTMLElement>(
       '[data-subagent-message="message-function"]',
     )!;
     const streamingFunction = subagentMessage.querySelector<HTMLElement>(
       '[data-agent-action="tool_call"]',
     )!;
+    expect(streamingFunction).toHaveAttribute("data-expanded", "false");
+    fireEvent.click(
+      within(streamingFunction).getByRole("button", { name: "详情" }),
+    );
     expect(streamingFunction).toHaveAttribute("data-expanded", "true");
-    expect(streamingFunction).toHaveTextContent("读取素材分析...");
+    expect(streamingFunction).toHaveTextContent("读取素材分析中");
     expect(streamingFunction).toHaveTextContent('"path":"story/');
 
     act(() =>
@@ -1473,9 +1533,13 @@ describe("AgentDock origin/main visible fidelity", () => {
       nestedTool = document.querySelector<HTMLElement>(
         '[data-subagent-tool="function-tool"]',
       );
-      expect(nestedTool).toHaveAttribute("data-expanded", "true");
+      expect(nestedTool).toHaveAttribute("data-expanded", "false");
     });
     expect(nestedTool).not.toBeNull();
+    fireEvent.click(
+      within(nestedTool!).getByRole("button", { name: "详情" }),
+    );
+    expect(nestedTool).toHaveAttribute("data-expanded", "true");
     expect(
       subagentMessage.querySelector('[data-agent-action="tool_call"]'),
     ).not.toBeInTheDocument();
@@ -1546,8 +1610,10 @@ describe("AgentDock origin/main visible fidelity", () => {
 
   it("treats delegate acceptance as waiting and only a Sub-agent terminal event as finished", async () => {
     useAgentDockUiStore.getState().setOpen(true);
+    useAgentDockUiStore.getState().setAllowExpandDetails(true);
     useCreatorSessionStore.setState((state) => ({
       ...state,
+      session: { ...state.session!, status: "RUNNING" },
       messages: [
         {
           messageId: "user-service",
@@ -1634,8 +1700,12 @@ describe("AgentDock origin/main visible fidelity", () => {
     const delegateTool = document.querySelector<HTMLElement>(
       '[data-agent-tool="delegate-service-action"]',
     )!;
+    expect(delegateTool).toHaveAttribute("data-expanded", "false");
+    fireEvent.click(
+      within(delegateTool).getByRole("button", { name: "详情" }),
+    );
     expect(delegateTool).toHaveAttribute("data-expanded", "true");
-    expect(screen.getByText("等待输出…")).toBeInTheDocument();
+    expect(screen.getByText("等待输出中")).toBeInTheDocument();
     expect(screen.getByText("运行中")).toBeInTheDocument();
     expect(screen.queryByText("Sub-agent 已结束")).not.toBeInTheDocument();
 
@@ -1677,14 +1747,14 @@ describe("AgentDock origin/main visible fidelity", () => {
       expect(delegateTool).toHaveAttribute("data-expanded", "false"),
     );
     expect(
-      screen.queryByText("剪辑方案已生成并等待执行确认。"),
+      screen.queryByText("剪辑方案已生成并等待执行确认"),
     ).not.toBeInTheDocument();
     fireEvent.click(within(delegateTool).getByRole("button", { name: "详情" }));
     expect(
-      screen.getByText("剪辑方案已生成并等待执行确认。"),
+      screen.getByText("剪辑方案已生成并等待执行确认"),
     ).toBeInTheDocument();
     expect(screen.getByText("已完成")).toBeInTheDocument();
-    expect(screen.queryByText("等待输出…")).not.toBeInTheDocument();
+    expect(screen.queryByText("等待输出中")).not.toBeInTheDocument();
   });
 
   it("does not synthesize a thinking block when the provider emitted none", async () => {

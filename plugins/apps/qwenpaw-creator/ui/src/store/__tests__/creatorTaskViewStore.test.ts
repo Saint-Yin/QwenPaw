@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SpecialistRunListResponse,
   TaskListResponse,
+  TaskView,
 } from "@/contracts/creator";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
 
@@ -90,5 +91,40 @@ describe("creator task view refresh ordering", () => {
       finalMarker: "SUCCESS",
     });
     expect(useCreatorTaskViewStore.getState().loading).toBe(false);
+  });
+
+  it("drops a cancel response after switching projects", async () => {
+    const cancelled = deferred<Response>();
+    vi.stubGlobal("fetch", vi.fn(() => cancelled.promise));
+    const task = (projectId: string, status: TaskView["status"]): TaskView => ({
+      id: "reused-task-id",
+      projectId,
+      transactionId: null,
+      specialistRunId: null,
+      kind: "compose",
+      targetRef: `project:${projectId}`,
+      status,
+      progress: null,
+      resultRefs: [],
+    });
+    useCreatorTaskViewStore.setState({
+      projectId: "p1",
+      tasks: [task("p1", "RUNNING")],
+    });
+
+    const cancel = useCreatorTaskViewStore
+      .getState()
+      .cancel("reused-task-id");
+    useCreatorTaskViewStore.setState({
+      projectId: "p2",
+      tasks: [task("p2", "RUNNING")],
+    });
+    cancelled.resolve(response(task("p1", "CANCELLED")));
+    await cancel;
+
+    expect(useCreatorTaskViewStore.getState()).toMatchObject({
+      projectId: "p2",
+      tasks: [task("p2", "RUNNING")],
+    });
   });
 });

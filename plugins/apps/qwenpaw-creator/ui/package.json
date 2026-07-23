@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "vite build && node scripts/package-plugin.mjs && node scripts/verify-package.mjs",
-    "dev": "vite --host 0.0.0.0 --port 5179",
+    "dev": "vite --host 127.0.0.1 --port 5179",
+    "dev:lan": "vite --host 0.0.0.0 --port 5179",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:package": "node scripts/verify-package.mjs"

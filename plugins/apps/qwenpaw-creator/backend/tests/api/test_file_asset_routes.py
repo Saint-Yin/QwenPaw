@@ -26,6 +26,7 @@ from domain.errors import CreatorError, ValidationError
 from services.media_files.keyframe_cache import CachedKeyframe
 from services.project_files.facade import CreatorFileServices
 from services.project_files.models import Project
+from services.runtime_files import safe_remote_download
 
 
 class _ChunkStream(httpx.SyncByteStream):
@@ -62,15 +63,20 @@ def _install_remote_transport(
     def client_factory(**kwargs):
         return real_client(transport=transport, **kwargs)
 
-    monkeypatch.setattr(file_asset_routes.httpx, "Client", client_factory)
+    monkeypatch.setattr(safe_remote_download.httpx, "Client", client_factory)
+    monkeypatch.setattr(
+        safe_remote_download,
+        "validate_public_remote_url",
+        lambda value: value,
+    )
     monkeypatch.setattr(
         file_asset_routes,
         "_validate_public_remote_url",
         lambda value: value,
     )
     monkeypatch.setattr(
-        file_asset_routes,
-        "_validate_response_peer",
+        safe_remote_download,
+        "validate_response_peer",
         lambda _response: None,
     )
     return streams

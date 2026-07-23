@@ -11,6 +11,7 @@ from .errors import RuntimeFileValidationError
 
 
 _SAFE_RUNTIME_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$")
+_MAX_HASHED_PREFIX_LENGTH = 127
 
 
 def require_safe_runtime_segment(
@@ -34,6 +35,10 @@ def hashed_runtime_segment(prefix: str, *opaque_parts: str) -> str:
         prefix,
         label="Runtime id prefix",
     )
+    if len(safe_prefix) > _MAX_HASHED_PREFIX_LENGTH:
+        raise RuntimeFileValidationError(
+            "Runtime id prefix must not exceed 127 characters when hashed",
+        )
     digest = hashlib.sha256()
     for part in opaque_parts:
         if not isinstance(part, str):

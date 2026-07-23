@@ -11,14 +11,13 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
-import ipaddress
 import json
 import mimetypes
 import os
 from pathlib import Path, PurePosixPath
 import socket
 from typing import Any, Callable, Literal
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
 import httpx
@@ -73,6 +72,12 @@ from services.runtime_files.models import (
     IdempotencyStatus,
     ReviewPolicy,
 )
+from services.runtime_files.safe_remote_download import (
+    SafeRemoteDownloadError,
+    open_safe_remote_stream,
+    validate_public_remote_url,
+    validate_response_peer,
+)
 from services.runtime_files.session_store import (
     ProjectRuntimeSessionStore,
     RuntimeSessionNotFound,
@@ -95,7 +100,6 @@ router = APIRouter(
 _DEFAULT_MAX_REMOTE_ASSET_BYTES = 2 * 1024 * 1024 * 1024
 _DEFAULT_REMOTE_ASSET_TIMEOUT_SECONDS = 60 * 60
 _MAX_LOCAL_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024
-_MAX_REMOTE_REDIRECTS = 5
 _REMOTE_INGEST_TASKS: dict[tuple[str, str], asyncio.Task[None]] = {}
 
 
@@ -512,65 +516,22 @@ def _ingest_many_locked(
         return response, not reservation.created
 
 
-def _require_public_ip(address: str) -> None:
-    try:
-        parsed = ipaddress.ip_address(address.split("%", 1)[0])
-    except ValueError as error:
-        raise ValidationError("Asset URL 解析到了非法 IP") from error
-    if not parsed.is_global:
-        raise ValidationError("Asset URL 不允许访问本机、私有或保留网络")
-
-
 def _validate_public_remote_url(
     value: str,
     *,
     resolver: Any = socket.getaddrinfo,
 ) -> str:
-    parsed = urlsplit(str(value or "").strip())
-    if (
-        parsed.scheme.casefold() not in {"http", "https"}
-        or not parsed.hostname
-    ):
-        raise ValidationError("Asset URL 必须是公网 http(s) URL")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValidationError("Asset URL 不允许携带用户名或密码")
     try:
-        port = parsed.port or (
-            443 if parsed.scheme.casefold() == "https" else 80
-        )
-    except ValueError as error:
-        raise ValidationError("Asset URL 端口非法") from error
-    host = parsed.hostname
-    try:
-        _require_public_ip(host)
-    except ValidationError:
-        try:
-            ipaddress.ip_address(host.split("%", 1)[0])
-        except ValueError:
-            try:
-                records = resolver(host, port, type=socket.SOCK_STREAM)
-            except socket.gaierror as error:
-                raise ValidationError("Asset URL 主机无法解析") from error
-            addresses = {str(record[4][0]) for record in records if record[4]}
-            if not addresses:
-                raise ValidationError("Asset URL 主机无法解析")
-            for address in addresses:
-                _require_public_ip(address)
-        else:
-            raise
-    return urlunsplit(
-        (parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""),
-    )
+        return validate_public_remote_url(value, resolver=resolver)
+    except SafeRemoteDownloadError as error:
+        raise ValidationError(str(error)) from error
 
 
 def _validate_response_peer(response: httpx.Response) -> None:
-    stream = response.extensions.get("network_stream")
-    if stream is None or not hasattr(stream, "get_extra_info"):
-        raise ValidationError("Asset URL 连接缺少可验证的 peer address")
-    peer = stream.get_extra_info("server_addr")
-    if not isinstance(peer, tuple) or not peer:
-        raise ValidationError("Asset URL 连接缺少可验证的 peer address")
-    _require_public_ip(str(peer[0]))
+    try:
+        validate_response_peer(response)
+    except SafeRemoteDownloadError as error:
+        raise ValidationError(str(error)) from error
 
 
 def _download_remote_to_staging(
@@ -582,78 +543,32 @@ def _download_remote_to_staging(
 ) -> _RemoteAssetDownload:
     """Stream one public remote Asset directly into Project staging."""
 
-    current = _validate_public_remote_url(url)
-    original = urlsplit(current)
+    original = urlsplit(url)
     max_bytes = _remote_asset_max_bytes()
     staged: StagedAsset | None = None
     try:
-        with httpx.Client(
-            follow_redirects=False,
+        with open_safe_remote_stream(
+            url,
+            max_bytes=max_bytes,
             timeout=httpx.Timeout(
                 _DEFAULT_REMOTE_ASSET_TIMEOUT_SECONDS,
                 connect=30,
             ),
-            trust_env=False,
-            headers={"Accept": "*/*", "Accept-Encoding": "identity"},
-        ) as client:
-            for redirect_index in range(_MAX_REMOTE_REDIRECTS + 1):
-                with client.stream("GET", current) as response:
-                    _validate_response_peer(response)
-                    if response.status_code in {301, 302, 303, 307, 308}:
-                        if redirect_index >= _MAX_REMOTE_REDIRECTS:
-                            raise ValidationError("Asset URL 重定向次数超过限制")
-                        location = response.headers.get("location")
-                        if not location:
-                            raise ValidationError("Asset URL 重定向缺少 Location")
-                        current = _validate_public_remote_url(
-                            urljoin(current, location),
-                        )
-                        continue
-                    response.raise_for_status()
-                    if response.headers.get(
-                        "content-encoding",
-                        "identity",
-                    ).casefold() not in {
-                        "",
-                        "identity",
-                    }:
-                        raise ValidationError("Asset URL 未返回 identity 原始字节")
-                    declared = response.headers.get("content-length")
-                    declared_size: int | None = None
-                    if declared:
-                        try:
-                            declared_size = int(declared)
-                        except ValueError as error:
-                            raise ValidationError(
-                                "Asset URL Content-Length 非法",
-                            ) from error
-                        if declared_size < 0:
-                            raise ValidationError(
-                                "Asset URL Content-Length 非法",
-                            )
-                        if declared_size > max_bytes:
-                            raise ValidationError(
-                                f"远程 Asset 超过 {_format_byte_limit(max_bytes)} 限制",
-                            )
-                    staged = file_store.stage_stream(
-                        _BoundedRawReader(
-                            response.iter_raw(),
-                            max_bytes=max_bytes,
-                            total_bytes=declared_size,
-                            on_progress=on_progress,
-                        ),
-                        staging_id=staging_id,
-                    )
-                    if staged.size_bytes == 0:
-                        file_store.abandon(staged)
-                        raise ValidationError("远程 Asset 为空")
-                    media_type = response.headers.get(
-                        "content-type",
-                        "",
-                    ).split(";", 1)[0]
-                    break
-            else:  # pragma: no cover - the bounded loop always breaks or raises
-                raise ValidationError("Asset URL 未产生响应")
+        ) as remote:
+            current = remote.final_url
+            staged = file_store.stage_stream(
+                _BoundedRawReader(
+                    remote.iter_raw(),
+                    max_bytes=max_bytes,
+                    total_bytes=remote.declared_size,
+                    on_progress=on_progress,
+                ),
+                staging_id=staging_id,
+            )
+            if staged.size_bytes == 0:
+                file_store.abandon(staged)
+                raise ValidationError("远程 Asset 为空")
+            media_type = remote.media_type
         if (
             staged is None
         ):  # pragma: no cover - successful response always stages

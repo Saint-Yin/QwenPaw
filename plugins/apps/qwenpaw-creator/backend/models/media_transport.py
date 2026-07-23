@@ -16,6 +16,7 @@ import httpx
 from PIL import Image
 
 from models import config as model_config
+from services.runtime_files.safe_remote_download import safe_download_bytes
 from utils.paths import media_path_from_url
 
 
@@ -28,6 +29,7 @@ DASHSCOPE_TEMP_UPLOAD_CACHE_SECONDS = 47 * 60 * 60
 # Ark (Volcengine) Seedance accepts Base64 data URLs for reference images:
 # a single image must stay below 30MB and the request body below 64MB.
 SEEDANCE_REFERENCE_IMAGE_MAX_BYTES = 30 * 1024 * 1024
+REFERENCE_IMAGE_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
 
 _dashscope_temp_upload_cache: dict[
     tuple[str, int, int, str, str],
@@ -467,11 +469,22 @@ async def upload_reference_media_to_creator_oss(
     )
 
 
-async def read_reference_media(url: str) -> tuple[bytes, str]:
-    """Read a local, localhost, or remote reference media URL into bytes."""
+async def read_reference_media(
+    url: str,
+    *,
+    max_bytes: int = REFERENCE_IMAGE_DOWNLOAD_MAX_BYTES,
+) -> tuple[bytes, str]:
+    """Read one bounded local or SSRF-safe public reference into memory."""
+
+    if max_bytes <= 0:
+        raise ValueError("reference media max_bytes must be positive")
     if url.startswith("file://"):
         parsed = urlparse(url)
         media_path = Path(parsed.path)
+        if media_path.stat().st_size > max_bytes:
+            raise ValueError(
+                f"reference media exceeds {max_bytes} bytes",
+            )
         content = media_path.read_bytes()
         filename = media_path.name or f"reference-{uuid.uuid4().hex}"
         if not Path(filename).suffix:
@@ -479,19 +492,26 @@ async def read_reference_media(url: str) -> tuple[bytes, str]:
         return content, filename
     if url.startswith("/generated/"):
         media_path = media_path_from_url(url)
+        if media_path.stat().st_size > max_bytes:
+            raise ValueError(
+                f"reference media exceeds {max_bytes} bytes",
+            )
         return (
             media_path.read_bytes(),
             media_path.name or f"reference-{uuid.uuid4().hex}.bin",
         )
     if url.startswith(("http://", "https://")):
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            filename = (
-                Path(urlparse(url).path).name
-                or f"reference-{uuid.uuid4().hex}.bin"
-            )
-            return response.content, filename
+        content = await asyncio.to_thread(
+            safe_download_bytes,
+            url,
+            max_bytes=max_bytes,
+            timeout=60.0,
+        )
+        filename = (
+            Path(urlparse(url).path).name
+            or f"reference-{uuid.uuid4().hex}.bin"
+        )
+        return content, filename
     raise ValueError(f"Unsupported reference media URL: {url}")
 
 

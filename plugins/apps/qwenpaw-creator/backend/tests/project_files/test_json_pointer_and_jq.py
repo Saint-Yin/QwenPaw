@@ -13,8 +13,12 @@ from services.project_files.jq_transform import (
 )
 from services.project_files.json_pointer import (
     JsonCasConflict,
+    canonical_json_bytes as cas_json_bytes,
     diff_json,
     merge_candidate,
+)
+from services.project_files.serialization import (
+    canonical_json_bytes as project_json_bytes,
 )
 
 
@@ -31,6 +35,13 @@ def test_disjoint_object_changes_merge_without_losing_latest() -> None:
 
     assert merged["story"] == {"title": "agent", "outline": "user"}
     assert [item.pointer for item in changes] == ["/story/title"]
+
+
+def test_cas_normalizes_float_but_project_etag_preserves_type() -> None:
+    assert cas_json_bytes({"value": 1}) == cas_json_bytes({"value": 1.0})
+    assert project_json_bytes({"value": 1}) != project_json_bytes(
+        {"value": 1.0},
+    )
 
 
 def test_same_field_change_is_a_deterministic_conflict() -> None:

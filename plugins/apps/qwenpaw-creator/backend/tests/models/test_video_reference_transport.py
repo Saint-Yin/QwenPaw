@@ -97,19 +97,19 @@ def test_wan_reference_media_uses_dashscope_temp_upload(
     observed = {}
 
     async def fake_upload(
-        content: bytes,
-        filename: str,
+        path,
         *,
         api_key: str,
         model_name: str,
+        media_type: str,
     ) -> str:
-        assert content == _png_bytes()
-        observed["call"] = (filename, api_key, model_name)
+        assert path.read_bytes() == _png_bytes()
+        observed["call"] = (path.name, api_key, model_name, media_type)
         return "oss://dashscope-instant/ref.png"
 
     monkeypatch.setattr(
         video_model,
-        "upload_reference_bytes_to_dashscope_temp",
+        "upload_local_file_to_dashscope_temp",
         fake_upload,
     )
 
@@ -119,7 +119,12 @@ def test_wan_reference_media_uses_dashscope_temp_upload(
 
     assert url == "oss://dashscope-instant/ref.png"
     assert kind == "image"
-    assert observed["call"] == ("ref.png", "video-key", "wan2.7-r2v")
+    assert observed["call"] == (
+        "ref.png",
+        "video-key",
+        "wan2.7-r2v",
+        "image/png",
+    )
 
 
 def test_wan_local_reference_video_uploads_and_keeps_video_kind(
@@ -135,13 +140,13 @@ def test_wan_local_reference_video_uploads_and_keeps_video_kind(
     )
     monkeypatch.setattr(model_config, "get_video_api_key", lambda: "video-key")
 
-    async def fake_upload(content, filename, *, api_key, model_name):
-        del content, filename, api_key, model_name
+    async def fake_upload(path, *, api_key, model_name, media_type):
+        del path, api_key, model_name, media_type
         return "oss://dashscope-instant/clip.mp4"
 
     monkeypatch.setattr(
         video_model,
-        "upload_reference_bytes_to_dashscope_temp",
+        "upload_local_file_to_dashscope_temp",
         fake_upload,
     )
 
@@ -151,3 +156,56 @@ def test_wan_local_reference_video_uploads_and_keeps_video_kind(
 
     assert url == "oss://dashscope-instant/clip.mp4"
     assert kind == "video"
+
+
+def test_wan_remote_reference_streams_through_safe_temporary_file(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        model_config,
+        "get_video_model_name",
+        lambda: "wan2.7-r2v",
+    )
+    monkeypatch.setattr(model_config, "get_video_api_key", lambda: "video-key")
+    observed = {}
+
+    def fake_download(url, destination, *, max_bytes, timeout):
+        destination.write_bytes(b"remote-video")
+        observed["download"] = (url, max_bytes, timeout)
+        return len(b"remote-video"), "video/mp4", url
+
+    async def fake_upload(path, *, api_key, model_name, media_type):
+        observed["upload"] = (
+            path.read_bytes(),
+            path.name,
+            api_key,
+            model_name,
+            media_type,
+        )
+        return "oss://dashscope-instant/remote.mp4"
+
+    monkeypatch.setattr(video_model, "safe_download_to_file", fake_download)
+    monkeypatch.setattr(
+        video_model,
+        "upload_local_file_to_dashscope_temp",
+        fake_upload,
+    )
+
+    url, kind = asyncio.run(
+        video_model._resolve_reference_media_url(
+            "https://public.example/remote.mp4",
+            "wan",
+        ),
+    )
+
+    assert url == "oss://dashscope-instant/remote.mp4"
+    assert kind == "video"
+    assert observed["download"][0] == "https://public.example/remote.mp4"
+    assert observed["download"][1] == 1024 * 1024 * 1024
+    assert observed["upload"] == (
+        b"remote-video",
+        "remote.mp4",
+        "video-key",
+        "wan2.7-r2v",
+        "video/mp4",
+    )

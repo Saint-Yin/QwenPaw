@@ -63,12 +63,18 @@ export const useCreatorTaskViewStore = create<CreatorTaskViewState>(
         }));
     },
     cancel: async (taskId) => {
-      const { projectId } = get();
-      if (!projectId) return;
-      const updated = await cancelTask(projectId, taskId);
-      set((state) => ({
-        tasks: state.tasks.map((item) => (item.id === taskId ? updated : item)),
-      }));
+      const initialProjectId = get().projectId;
+      if (!initialProjectId) return;
+      const updated = await cancelTask(initialProjectId, taskId);
+      set((state) =>
+        state.projectId === initialProjectId
+          ? {
+              tasks: state.tasks.map((item) =>
+                item.id === taskId ? updated : item,
+              ),
+            }
+          : {},
+      );
     },
     reset: () => {
       refreshGeneration += 1;

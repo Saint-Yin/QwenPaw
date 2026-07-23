@@ -21,7 +21,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
-import ipaddress
 import json
 import mimetypes
 import os
@@ -30,7 +29,7 @@ import re
 import socket
 import stat
 from typing import Any, Protocol, TYPE_CHECKING
-from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
+from urllib.parse import unquote, urlparse, urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
 from domain.enums import (
@@ -83,6 +82,10 @@ from services.runtime_files.execution_store import (
     ProjectExecutionStore,
 )
 from services.runtime_files.models import ChangeOrigin, ReviewPolicy
+from services.runtime_files.safe_remote_download import (
+    SafeRemoteDownloadError,
+    validate_public_remote_url,
+)
 
 # pylint: disable=no-name-in-module
 from utils.paths import media_path_from_url, media_task_scope
@@ -253,55 +256,15 @@ def _variant_for(
     return entity.variants.items[entity.variants.order[index]]
 
 
-def _require_public_ip(address: str) -> None:
-    try:
-        parsed = ipaddress.ip_address(address.split("%", 1)[0])
-    except ValueError as exc:
-        raise ValidationError("远程图片解析到了非法 IP") from exc
-    if not parsed.is_global:
-        raise ValidationError("远程图片不允许访问本机、私有或保留网络")
-
-
 def _validate_public_remote_url(
     value: str,
     *,
     resolver: Any = socket.getaddrinfo,
 ) -> str:
-    parsed = urlsplit(str(value or "").strip())
-    if (
-        parsed.scheme.casefold() not in {"http", "https"}
-        or not parsed.hostname
-    ):
-        raise ValidationError("远程图片必须是公网 http(s) URL")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValidationError("远程图片 URL 不允许携带用户名或密码")
     try:
-        port = parsed.port or (
-            443 if parsed.scheme.casefold() == "https" else 80
-        )
-    except ValueError as exc:
-        raise ValidationError("远程图片 URL 端口非法") from exc
-    host = parsed.hostname
-    try:
-        _require_public_ip(host)
-    except ValidationError:
-        try:
-            ipaddress.ip_address(host.split("%", 1)[0])
-        except ValueError:
-            try:
-                records = resolver(host, port, type=socket.SOCK_STREAM)
-            except socket.gaierror as exc:
-                raise ValidationError("远程图片主机无法解析") from exc
-            addresses = {str(record[4][0]) for record in records if record[4]}
-            if not addresses:
-                raise ValidationError("远程图片主机无法解析")
-            for address in addresses:
-                _require_public_ip(address)
-        else:
-            raise
-    return urlunsplit(
-        (parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""),
-    )
+        return validate_public_remote_url(value, resolver=resolver)
+    except SafeRemoteDownloadError as error:
+        raise ValidationError(str(error)) from error
 
 
 def _exact_version_from_ref(value: str) -> str | None:

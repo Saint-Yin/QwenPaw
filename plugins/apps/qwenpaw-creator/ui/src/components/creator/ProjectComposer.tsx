@@ -170,6 +170,7 @@ export function ProjectComposer({ open, onClose }: ProjectComposerProps) {
   const hasAttachments = attachments.length > 0 || hasUrl;
   const missingRequiredModels: string[] | null = useMemo(() => {
     if (!modelConfig) return null;
+    const config = modelConfig as Partial<ModelConfigData>;
     const required: ("vlm" | "image" | "video")[] =
       scenario === "short_drama"
         ? ["vlm", "image", "video"]
@@ -178,11 +179,11 @@ export function ProjectComposer({ open, onClose }: ProjectComposerProps) {
           : [];
     const missing: string[] = [];
     for (const type of required) {
-      const item = modelConfig[type];
+      const item = config[type];
       const ok =
-        type === "vlm" && modelConfig.vlm.use_llm && modelConfig.llm.model_name
-          ? modelConfig.vlm.enabled
-          : Boolean(item.model_name && item.enabled);
+        type === "vlm" && config.vlm?.use_llm && config.llm?.model_name
+          ? Boolean(config.vlm.enabled)
+          : Boolean(item?.model_name && item.enabled);
       if (!ok) missing.push(type);
     }
     return missing;

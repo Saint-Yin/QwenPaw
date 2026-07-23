@@ -32,6 +32,24 @@
       "chat": false,
       "storage": false
     },
+    "runtime_dependencies": {
+      "jq": {
+        "required_for": "jq_project agent edits",
+        "path_env": "CREATOR_JQ_PATH",
+        "auto_install_env": "CREATOR_AUTO_INSTALL_BINARIES",
+        "auto_install_default": false
+      },
+      "ffmpeg": {
+        "required_for": "media probing, rendering, and composition",
+        "path_env": "CREATOR_FFMPEG_PATH",
+        "bundled_fallback": "imageio-ffmpeg"
+      },
+      "ffprobe": {
+        "required": false,
+        "path_env": "CREATOR_FFPROBE_PATH",
+        "fallback": "ffmpeg metadata probing"
+      }
+    },
     "category": "video-creation",
     "features": [
       "project-management",
@@ -213,6 +231,56 @@
             "default": 30,
             "min": 10,
             "max": 300
+          }
+        ]
+      },
+      {
+        "name": "creator_media_oss",
+        "description": "QwenPaw Creator OSS and provider-bound media upload configuration",
+        "icon": "🪣",
+        "requires_config": false,
+        "config_fields": [
+          {
+            "name": "policy_api_key",
+            "label": "DashScope Upload Policy API Key",
+            "type": "password",
+            "required": false,
+            "help": "Used for DashScope model-bound temporary uploads. Environment fallback: OSS_POLICY_API_KEY."
+          },
+          {
+            "name": "access_key_id",
+            "label": "OSS Access Key ID",
+            "type": "text",
+            "required": false,
+            "help": "Environment fallback: OSS_ACCESS_KEY_ID."
+          },
+          {
+            "name": "access_key_secret",
+            "label": "OSS Access Key Secret",
+            "type": "password",
+            "required": false,
+            "help": "Environment fallback: OSS_ACCESS_KEY_SECRET."
+          },
+          {
+            "name": "endpoint",
+            "label": "OSS Endpoint",
+            "type": "text",
+            "required": false,
+            "placeholder": "https://oss-cn-hangzhou.aliyuncs.com"
+          },
+          {
+            "name": "bucket",
+            "label": "OSS Bucket",
+            "type": "text",
+            "required": false,
+            "default": "creator-store"
+          },
+          {
+            "name": "public_base_url",
+            "label": "OSS Public Base URL",
+            "type": "text",
+            "required": false,
+            "placeholder": "https://cdn.example.com"
           }
         ]
       }

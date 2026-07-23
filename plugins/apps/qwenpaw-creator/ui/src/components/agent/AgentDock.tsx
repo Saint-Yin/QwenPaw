@@ -2149,7 +2149,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                       </div>
                       {item.state === "failed" && (
                         <p className="text-right text-[10px] text-[var(--color-danger)]">
-                          {item.error}
+                          {simplifyErrorMessage(item.error || "")}
                         </p>
                       )}
                     </div>

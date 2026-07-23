@@ -124,6 +124,7 @@ def test_manager_downloads_and_verifies_pinned_jq(
         dependencies.CREATOR_JQ_BASE_URL_ENV,
         "https://mirror.invalid/jq",
     )
+    monkeypatch.setenv(dependencies.CREATOR_AUTO_INSTALL_BINARIES_ENV, "1")
 
     manager = dependencies.CreatorBinaryManager(binary_dir=tmp_path / "bin")
     status = manager.ensure_jq()
@@ -137,7 +138,7 @@ def test_manager_downloads_and_verifies_pinned_jq(
     )
 
 
-def test_manager_rejects_a_jq_checksum_mismatch(
+def test_manager_degrades_on_a_jq_checksum_mismatch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -157,16 +158,46 @@ def test_manager_rejects_a_jq_checksum_mismatch(
         "urlopen",
         lambda *_args, **_kwargs: io.BytesIO(b"tampered"),
     )
+    monkeypatch.setenv(dependencies.CREATOR_AUTO_INSTALL_BINARIES_ENV, "1")
     manager = dependencies.CreatorBinaryManager(binary_dir=tmp_path / "bin")
 
-    with pytest.raises(
-        dependencies.CreatorBinaryDependencyError,
-        match="SHA-256 verification",
-    ):
-        manager.ensure_jq()
+    status = manager.ensure_jq()
 
+    assert status.status == "missing"
+    assert status.source == "auto-install-failed"
+    assert "SHA-256 verification" in (status.detail or "")
     assert not manager.jq_path.exists()
     assert not list(manager.binary_dir.glob(".jq-download-*"))
+
+
+def test_jq_auto_install_is_opt_in_and_missing_jq_is_degraded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ffmpeg = _executable(tmp_path / "ffmpeg")
+    monkeypatch.setenv(dependencies.CREATOR_FFMPEG_PATH_ENV, os.fspath(ffmpeg))
+    monkeypatch.setattr(dependencies.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        dependencies,
+        "urlopen",
+        lambda *_args, **_kwargs: pytest.fail(
+            "default dependency preparation must not access the network",
+        ),
+    )
+
+    status = dependencies.CreatorBinaryManager(
+        binary_dir=tmp_path / "bin",
+    ).ensure_all()
+
+    assert status["jq"].status == "missing"
+    assert status["jq"].source == "auto-install-disabled"
+    assert status["jq"].required is True
+    assert status["ffmpeg"].status == "ok"
+
+    monkeypatch.setattr(dependencies, "_LAST_STATUS", status)
+    health = dependencies.creator_runtime_dependency_health()
+    assert health["status"] == "degraded"
+    assert health["tools"]["jq"]["status"] == "missing"
 
 
 def test_ffprobe_is_optional_when_managed_ffmpeg_is_ready(

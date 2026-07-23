@@ -35,7 +35,7 @@ describe("AgentEventFeed", () => {
       ],
     });
     render(<AgentEventFeed />);
-    expect(screen.getByText("端到端生产")).toBeInTheDocument();
+    expect(screen.getByText("制作流程")).toBeInTheDocument();
     expect(
       screen.getByText(/R2V 生成导演 · 时间线内容 · 等待制作结果/),
     ).toBeInTheDocument();

@@ -267,8 +267,13 @@ export function deriveAgentLiveStatus(
       progressPercent: null,
     };
 
-  // 终态项目直接返回idle，不显示"工作中"
-  if (session?.status === "IDLE" || session?.status === "CANCELLED" || session?.status === "ERROR")
+  // CANCELLED/ERROR are terminal. IDLE remains actionable: an optimistic
+  // queued message must be visible while the backend transitions to RUNNING.
+  if (
+    session?.status === "CANCELLED" ||
+    session?.status === "ERROR" ||
+    (session?.status === "IDLE" && !hasQueuedInput)
+  )
     return {
       state: "idle",
       label: "待命中，可随时输入修改意图。",

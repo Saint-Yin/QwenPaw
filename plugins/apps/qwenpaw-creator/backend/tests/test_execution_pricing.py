@@ -30,7 +30,7 @@ class TestImageCost:
         )
         assert estimate.approximate
         assert estimate.estimated_cost == pytest.approx(0.25)
-        assert any("未收录" in note for note in estimate.notes)
+        assert estimate.notes == ("本地估算，实际费用以服务商账单为准",)
 
     def test_dated_snapshot_version_keeps_exact_price(self):
         estimate = estimate_image_cost(
@@ -47,7 +47,7 @@ class TestImageCost:
         )
         assert estimate.approximate
         assert estimate.estimated_cost == 0.5
-        assert any("仅供参考" in note for note in estimate.notes)
+        assert estimate.notes == ("本地估算，实际费用以服务商账单为准",)
 
     def test_longest_prefix_wins_over_shorter_family(self):
         # qwen-image-edit 不能被更短的 qwen-image 档位拦截。
@@ -120,7 +120,7 @@ class TestVideoCost:
         )
         assert estimate.approximate
         assert estimate.estimated_cost == pytest.approx(3.0)
-        assert any("仅供参考" in note for note in estimate.notes)
+        assert estimate.notes == ("本地估算，实际费用以服务商账单为准",)
 
     def test_wan_dated_snapshot_keeps_exact_price(self):
         estimate = estimate_video_cost(
@@ -152,7 +152,7 @@ class TestVideoCost:
         # 1920×1080×24fps×5s ÷ 1024 = 243,000 tokens × 46元/百万 ≈ ¥11.18
         assert estimate.estimated_cost == pytest.approx(11.178, abs=0.01)
         assert "tokens" in estimate.formula
-        assert any("÷ 1024" in note for note in estimate.notes)
+        assert estimate.notes == ("本地估算，实际费用以服务商账单为准",)
         assert not estimate.approximate
 
     def test_seedance_mini_uses_cheaper_tier(self):

@@ -618,17 +618,11 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
           });
           const pendingEvents: CreatorEvent[] = [];
           let flushTimer: number | null = null;
-          let replayFlushed = false;
           const flushEvents = () => {
             flushTimer = null;
             if (pendingEvents.length === 0) return;
             const batch = pendingEvents.splice(0, pendingEvents.length);
             get().ingestEvents(batch);
-            // 首次flush完成后，标记重放结束
-            if (!replayFlushed) {
-              replayFlushed = true;
-              set({ isReplaying: false });
-            }
           };
           const durableStream = openCreatorEvents(
             projectId,
@@ -696,32 +690,46 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
         });
         try {
           const page = await listMessages(projectId, conversationId, 0, 50);
-          if (
-            get().projectId === projectId &&
-            get().activeConversationId === conversationId
-          ) {
-            set({
+          set((current) => {
+            if (
+              current.projectId !== projectId ||
+              current.activeConversationId !== conversationId
+            )
+              return {};
+            return {
               messages: page.items,
               hasMoreMessages: page.nextAfter != null,
               loadingOlder: false,
-            });
-          }
+            };
+          });
         } catch (error) {
-          set({
-            activeConversationId,
-            messages,
-            streamingAssistantMessages,
-            hasMoreMessages,
-            loadingOlder: false,
+          set((current) => {
+            if (
+              current.projectId !== projectId ||
+              current.activeConversationId !== conversationId
+            )
+              return {};
+            return {
+              activeConversationId,
+              messages,
+              streamingAssistantMessages,
+              hasMoreMessages,
+              loadingOlder: false,
+            };
           });
           throw error;
         }
       },
 
       newConversation: async () => {
-        const { projectId } = get();
+        const { projectId, activeConversationId } = get();
         if (!projectId) throw new Error("Creator Session 尚未初始化");
         const created = await createStableConversation(projectId);
+        if (
+          get().projectId !== projectId ||
+          get().activeConversationId !== activeConversationId
+        )
+          return created.conversationId;
         invalidateMessageRefresh();
         const conversation: CreatorConversation = {
           conversationId: created.conversationId,
@@ -729,13 +737,20 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
           isDefault: false,
           createdAt: created.createdAt,
         };
-        set((state) => ({
-          conversations: [conversation, ...state.conversations],
-          activeConversationId: conversation.conversationId,
-          messages: [],
-          streamingAssistantMessages: {},
-          hasMoreMessages: false,
-        }));
+        set((state) => {
+          if (
+            state.projectId !== projectId ||
+            state.activeConversationId !== activeConversationId
+          )
+            return {};
+          return {
+            conversations: [conversation, ...state.conversations],
+            activeConversationId: conversation.conversationId,
+            messages: [],
+            streamingAssistantMessages: {},
+            hasMoreMessages: false,
+          };
+        });
         return conversation.conversationId;
       },
 
@@ -753,6 +768,11 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
             50,
           );
           set((state) => {
+            if (
+              state.projectId !== projectId ||
+              state.activeConversationId !== activeConversationId
+            )
+              return {};
             const messages = mergeMessages(state.messages, page.items);
             return {
               messages,
@@ -765,7 +785,12 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
             };
           });
         } catch (error) {
-          set({ loadingOlder: false });
+          set((state) =>
+            state.projectId === projectId &&
+            state.activeConversationId === activeConversationId
+              ? { loadingOlder: false }
+              : {},
+          );
         }
       },
 
@@ -807,14 +832,21 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
           input.clientMessageId ??
           failedRetry?.clientMessageId ??
           newClientId("message");
-        set((state) => ({
-          queuedUi: [
-            ...state.queuedUi.filter(
-              (item) => item.clientMessageId !== clientMessageId,
-            ),
-            { clientMessageId, requestSignature, text, state: "sending" },
-          ],
-        }));
+        set((state) => {
+          if (
+            state.projectId !== projectId ||
+            state.activeConversationId !== activeConversationId
+          )
+            return {};
+          return {
+            queuedUi: [
+              ...state.queuedUi.filter(
+                (item) => item.clientMessageId !== clientMessageId,
+              ),
+              { clientMessageId, requestSignature, text, state: "sending" },
+            ],
+          };
+        });
         try {
           const accepted = await sendCreatorMessage(projectId, {
             ...input,
@@ -822,13 +854,25 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
             creatorSessionId: session.id,
             conversationId: activeConversationId,
           });
-          set((state) => ({
-            queuedUi: state.queuedUi.map((item) =>
-              item.clientMessageId === clientMessageId
-                ? { ...item, state: "queued" }
-                : item,
-            ),
-          }));
+          if (
+            get().projectId !== projectId ||
+            get().activeConversationId !== activeConversationId
+          )
+            return;
+          set((state) => {
+            if (
+              state.projectId !== projectId ||
+              state.activeConversationId !== activeConversationId
+            )
+              return {};
+            return {
+              queuedUi: state.queuedUi.map((item) =>
+                item.clientMessageId === clientMessageId
+                  ? { ...item, state: "queued" }
+                  : item,
+              ),
+            };
+          });
           if (accepted.appendState === "appended") {
             const page = await listMessages(
               projectId,
@@ -836,21 +880,39 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
               Math.max(0, accepted.messageSeq - 1),
               1,
             );
-            set((state) => ({
-              messages: mergeMessages(state.messages, page.items),
-              queuedUi: state.queuedUi.filter(
-                (item) => item.clientMessageId !== clientMessageId,
-              ),
-            }));
+            set((state) => {
+              if (
+                state.projectId !== projectId ||
+                state.activeConversationId !== activeConversationId
+              )
+                return {};
+              return {
+                messages: mergeMessages(state.messages, page.items),
+                queuedUi: state.queuedUi.filter(
+                  (item) => item.clientMessageId !== clientMessageId,
+                ),
+              };
+            });
           }
         } catch (error) {
-          set((state) => ({
-            queuedUi: state.queuedUi.map((item) =>
-              item.clientMessageId === clientMessageId
-                ? { ...item, state: "failed", error: (error as Error).message }
-                : item,
-            ),
-          }));
+          set((state) => {
+            if (
+              state.projectId !== projectId ||
+              state.activeConversationId !== activeConversationId
+            )
+              return {};
+            return {
+              queuedUi: state.queuedUi.map((item) =>
+                item.clientMessageId === clientMessageId
+                  ? {
+                      ...item,
+                      state: "failed",
+                      error: (error as Error).message,
+                    }
+                  : item,
+              ),
+            };
+          });
           throw error;
         }
       },
@@ -1408,6 +1470,7 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
             lastEventSeq,
             connected: true,
           };
+          if (current.isReplaying) patch.isReplaying = false;
           if (messages !== current.messages) patch.messages = messages;
           if (
             streamingAssistantMessages !== current.streamingAssistantMessages

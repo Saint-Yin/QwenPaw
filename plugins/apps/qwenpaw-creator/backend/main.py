@@ -23,32 +23,6 @@ logger = logging.getLogger("qwenpaw").getChild("plugin.qwenpaw_creator")
 
 BACKEND_DIR = Path(__file__).resolve().parent
 PLUGIN_DIR = BACKEND_DIR.parent
-CONFIG_TOOLS = {
-    "creator_text_model": {
-        "description": "QwenPaw Creator text model configuration",
-        "icon": "📝",
-    },
-    "creator_vlm_model": {
-        "description": "QwenPaw Creator native multimodal understanding configuration",
-        "icon": "👁️",
-    },
-    "creator_asr_model": {
-        "description": "QwenPaw Creator speech-to-text configuration",
-        "icon": "🎙️",
-    },
-    "creator_image_model": {
-        "description": "QwenPaw Creator image generation configuration",
-        "icon": "🎨",
-    },
-    "creator_video_model": {
-        "description": "QwenPaw Creator reference-to-video configuration",
-        "icon": "🎬",
-    },
-    "creator_media_oss": {
-        "description": "QwenPaw Creator OSS/media configuration",
-        "icon": "🪣",
-    },
-}
 
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
@@ -153,48 +127,6 @@ def configure_creator_runtime_environment(
     return data_root, model_config_path
 
 
-def _ensure_config_tools_registered() -> None:
-    """Ensure CLI-installed Creator config tools exist for every agent."""
-    try:
-        from qwenpaw.config.config import (
-            BuiltinToolConfig,
-            ToolsConfig,
-            load_agent_config,
-            save_agent_config,
-        )
-        from qwenpaw.config.utils import load_config
-
-        config = load_config()
-        profiles = getattr(getattr(config, "agents", None), "profiles", {})
-        for agent_id in profiles:
-            agent_config = load_agent_config(agent_id)
-            if not agent_config.tools:
-                agent_config.tools = ToolsConfig()
-            changed = False
-            for tool_name, meta in CONFIG_TOOLS.items():
-                if tool_name in agent_config.tools.builtin_tools:
-                    continue
-                agent_config.tools.builtin_tools[
-                    tool_name
-                ] = BuiltinToolConfig(
-                    name=tool_name,
-                    enabled=False,
-                    description=meta["description"],
-                    display_to_user=True,
-                    async_execution=False,
-                    icon=meta["icon"],
-                )
-                changed = True
-            if changed:
-                save_agent_config(agent_id, agent_config)
-                logger.info(
-                    "QwenPaw Creator config tools synced for agent '%s'",
-                    agent_id,
-                )
-    except Exception as exc:
-        logger.warning("QwenPaw Creator config tool sync skipped: %s", exc)
-
-
 # ── PawApp definition ────────────────────────────────────────────────
 
 app = PawApp("QwenPaw Creator", app_id="qwenpaw-creator")
@@ -270,7 +202,7 @@ async def _startup() -> None:
         },
     )
     logger.info(
-        "QwenPaw Creator native tools ready: %s",
+        "QwenPaw Creator native tool status: %s",
         {
             name: {
                 "status": item.status,
@@ -289,7 +221,6 @@ async def _startup() -> None:
             len(project_errors),
             len(review_errors),
         )
-    _ensure_config_tools_registered()
     configured = [
         key
         for key in (

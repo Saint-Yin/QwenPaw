@@ -60,7 +60,14 @@ def canonical_data(value: Any) -> Any:
 
 
 def canonical_json_bytes(value: Any, *, pretty: bool = False) -> bytes:
-    """Serialize with one deterministic UTF-8 representation."""
+    """Serialize typed Project data with one deterministic representation.
+
+    Unlike the field-CAS encoder in :mod:`services.project_files.json_pointer`,
+    this preserves the model's integer-versus-float representation. Project
+    validation establishes those declared types before persistence and ETag
+    generation; callers comparing untyped field values should use the CAS
+    encoder instead.
+    """
 
     data = canonical_data(value)
     if pretty:

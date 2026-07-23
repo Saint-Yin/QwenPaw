@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from domain.errors import CreatorError
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 PLUGIN_ENTRYPOINT = WORKSPACE_ROOT / "qwenpaw-creator" / "backend" / "main.py"
+PLUGIN_MANIFEST = WORKSPACE_ROOT / "qwenpaw-creator" / "plugin.json"
 QWENPAW_SOURCE = WORKSPACE_ROOT.parents[1] / "src"
 
 
@@ -110,6 +112,39 @@ def test_plugin_rejects_model_config_outside_runtime_root(
         match="inside CREATOR_DATA_ROOT",
     ):
         module.configure_creator_runtime_environment(working_dir=tmp_path)
+
+
+def test_plugin_manifest_declares_every_creator_config_tool(
+    monkeypatch,
+) -> None:
+    manifest = json.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
+    tools = {
+        item["name"]: item for item in manifest["meta"]["tools"]
+    }
+    assert set(tools) == {
+        "creator_text_model",
+        "creator_vlm_model",
+        "creator_asr_model",
+        "creator_image_model",
+        "creator_video_model",
+        "creator_media_oss",
+    }
+    oss_fields = {
+        item["name"]: item
+        for item in tools["creator_media_oss"]["config_fields"]
+    }
+    assert {
+        "policy_api_key",
+        "access_key_id",
+        "access_key_secret",
+        "endpoint",
+        "bucket",
+        "public_base_url",
+    } == set(oss_fields)
+    assert oss_fields["access_key_secret"]["type"] == "password"
+
+    module = _load_plugin_entrypoint(monkeypatch)
+    assert not hasattr(module, "_ensure_config_tools_registered")
 
 
 def test_real_qwenpaw_host_mount_keeps_creator_errors_local_and_structured(
