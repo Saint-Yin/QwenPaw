@@ -33,6 +33,19 @@ class AsrConfig(ModelConfigItem):
     reuse_llm_key: bool = True
 
 
+class GroundingConfig(ModelConfigItem):
+    """Web-grounding credentials and model selection.
+
+    Search providers and their order are product policy and intentionally do
+    not appear in this schema. Runtime budgets are internal defaults/env
+    controls. The model fields are used only when ``reuse_llm`` is false.
+    """
+
+    enabled: bool = True
+    reuse_llm: bool = True
+    tavily_api_key: str = ""
+
+
 class ExecutionAuthorizationConfig(StrictModel):
     mode: Literal["required", "allow_all"] = "required"
 
@@ -52,6 +65,7 @@ class OssConfig(StrictModel):
 class ModelConfigData(StrictModel):
     llm: LlmConfig
     vlm: VlmConfig
+    grounding: GroundingConfig = Field(default_factory=GroundingConfig)
     asr: AsrConfig = Field(default_factory=AsrConfig)
     image: ModelConfigItem
     video: ModelConfigItem

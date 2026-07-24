@@ -52,6 +52,23 @@ CONVERSATION_ID = "conversation-1"
 GOAL_ID = "goal-1"
 
 
+def test_grounding_tool_is_absent_when_grounding_is_disabled(monkeypatch) -> None:
+    from services.file_agent_runtime import driver as driver_module
+
+    monkeypatch.setattr(
+        driver_module,
+        "get_web_grounding_enabled",
+        lambda: False,
+    )
+
+    names = {
+        item["function"]["name"]
+        for item in driver_module._creator_agent_tool_manifest()
+    }
+
+    assert "ground_prompt_context" not in names
+
+
 def test_message_text_includes_exact_project_json_selection_locator() -> None:
     from services.file_agent_runtime.driver import _message_text
 
@@ -333,6 +350,10 @@ def test_creator_agent_can_call_ground_prompt_context_tool(
         assert prompt == "哈兰德参加偶像练习生"
         assert kwargs["queries"] == ["Erling Haaland visual reference"]
         assert kwargs["include_visuals"] is True
+        assert kwargs["timeout"] == 60.0
+        assert kwargs["visual_search_timeout"] == 120.0
+        assert kwargs["image_download_timeout"] == 30.0
+        assert kwargs["verification_timeout"] == 120.0
         return {
             "ok": True,
             "status": "success",

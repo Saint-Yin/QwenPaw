@@ -25,6 +25,7 @@ from agentscope.message import (
     UserMsg,
 )
 from agentscope.model import DashScopeChatModel
+from json_repair import repair_json
 
 from models import config as model_config
 from models.concurrency import model_slot
@@ -42,6 +43,39 @@ class AgentModelError(RuntimeError):
 
 class AgentModelConfigurationError(AgentModelError):
     pass
+
+
+def _tool_call_arguments(raw_input: str) -> dict[str, Any]:
+    """Decode provider tool arguments, repairing syntax-only JSON damage.
+
+    Streaming providers occasionally finish a native ToolCallBlock with a
+    truncated closing delimiter or a trailing comma.  Treating that transport
+    defect as a terminal model failure strands an otherwise healthy Creator
+    run.  Repaired values still pass through the normal tool input and project
+    fencing validation before any side effect can occur.
+    """
+
+    try:
+        arguments = json.loads(raw_input or "{}")
+    except json.JSONDecodeError as error:
+        try:
+            arguments = repair_json(
+                raw_input or "{}",
+                return_objects=True,
+            )
+        except Exception as repair_error:
+            raise AgentModelError(
+                "Creator AgentScope ToolCallBlock input is invalid JSON",
+            ) from repair_error
+        if not isinstance(arguments, dict):
+            raise AgentModelError(
+                "Creator AgentScope ToolCallBlock input is invalid JSON",
+            ) from error
+    if not isinstance(arguments, dict):
+        raise AgentModelError(
+            "Creator AgentScope ToolCallBlock input must be an object",
+        )
+    return arguments
 
 
 class AgentStreamCallbackError(RuntimeError):
@@ -542,16 +576,7 @@ class AgentScopeAgentChatClient:
                     raise AgentModelError(
                         f"Creator AgentScope returned a tool not offered this turn: {name}",
                     )
-                try:
-                    arguments = json.loads(block.input or "{}")
-                except json.JSONDecodeError as exc:
-                    raise AgentModelError(
-                        "Creator AgentScope ToolCallBlock input is invalid JSON",
-                    ) from exc
-                if not isinstance(arguments, dict):
-                    raise AgentModelError(
-                        "Creator AgentScope ToolCallBlock input must be an object",
-                    )
+                arguments = _tool_call_arguments(block.input or "{}")
                 calls.append(
                     AgentToolCall(
                         call_id=call_id,

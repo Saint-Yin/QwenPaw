@@ -10,6 +10,7 @@ import {
   PictureOutlined,
   VideoCameraOutlined,
   AudioOutlined,
+  GlobalOutlined,
   ReloadOutlined,
   CloseOutlined,
 } from "@ant-design/icons";
@@ -20,7 +21,11 @@ import {
   patchExecutionAuthorization,
   testModelConnection,
 } from "@/api/creator";
-import type { ModelConfigData, ModelConfigItem } from "@/contracts/creator";
+import type {
+  GroundingConfig,
+  ModelConfigData,
+  ModelConfigItem,
+} from "@/contracts/creator";
 import ModelSetupGuide from "@/components/onboarding/ModelSetupGuide";
 
 const LLM_PROTOCOLS = [
@@ -47,7 +52,7 @@ const ASR_PROTOCOLS = ["DashScope Fun-ASR", "OpenAI Whisper"];
 const IMAGE_PROTOCOLS = ["OpenAI 协议", "DashScope（百炼）"];
 const VIDEO_PROTOCOLS = ["DashScope（百炼）", "Volcano Engine（火山引擎）"];
 type ModelType = "llm" | "vlm" | "asr" | "image" | "video";
-type TabType = ModelType;
+type TabType = ModelType | "grounding";
 const DEFAULT_CONFIG: ModelConfigData = {
   llm: {
     enabled: true,
@@ -67,6 +72,16 @@ const DEFAULT_CONFIG: ModelConfigData = {
     custom_protocol: "",
     use_llm: false,
     multimodal: false,
+  },
+  grounding: {
+    enabled: true,
+    model_name: "",
+    api_key: "",
+    base_url: "",
+    protocol: "OpenAI 协议",
+    custom_protocol: "",
+    reuse_llm: true,
+    tavily_api_key: "",
   },
   asr: {
     enabled: false,
@@ -117,7 +132,7 @@ interface Props {
 }
 
 const CARD_META: {
-  type: ModelType;
+  type: TabType;
   label: string;
   icon: React.ReactNode;
   required: boolean;
@@ -133,6 +148,16 @@ const CARD_META: {
     label: "VLM 模型",
     icon: (
       <EyeOutlined
+        style={{ color: "var(--color-text-tertiary)", fontSize: 16 }}
+      />
+    ),
+    required: false,
+  },
+  {
+    type: "grounding",
+    label: "Grounding",
+    icon: (
+      <GlobalOutlined
         style={{ color: "var(--color-text-tertiary)", fontSize: 16 }}
       />
     ),
@@ -190,6 +215,10 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       const merged: ModelConfigData = {
         ...DEFAULT_CONFIG,
         ...data,
+        grounding: {
+          ...DEFAULT_CONFIG.grounding,
+          ...data.grounding,
+        },
         oss: { ...DEFAULT_CONFIG.oss, ...data.oss },
         executionAuthorization: {
           ...DEFAULT_CONFIG.executionAuthorization,
@@ -206,6 +235,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
         merged.video.protocol = VIDEO_PROTOCOLS[0];
       const initialTested: Record<string, boolean> = {};
       CARD_META.forEach((meta) => {
+        if (meta.type === "grounding") return;
         const item = merged[meta.type] as ModelConfigItem;
         if (item?.enabled) initialTested[meta.type] = true;
       });
@@ -258,6 +288,31 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       });
       if (field !== "enabled") {
         setTested((prev) => ({ ...prev, [type]: false }));
+        if (
+          (type === "llm" || type === "vlm") &&
+          config.grounding.reuse_llm
+        ) {
+          setTested((prev) => ({ ...prev, grounding: false }));
+        }
+      }
+    },
+    [config.grounding.reuse_llm],
+  );
+
+  const updateGrounding = useCallback(
+    (field: keyof GroundingConfig, value: unknown) => {
+      setConfig((prev) => ({
+        ...prev,
+        grounding: { ...prev.grounding, [field]: value },
+      }));
+      if (
+        field === "reuse_llm" ||
+        field === "api_key" ||
+        field === "base_url" ||
+        field === "model_name" ||
+        field === "protocol"
+      ) {
+        setTested((prev) => ({ ...prev, grounding: false }));
       }
     },
     [],
@@ -437,6 +492,45 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     [config, updateItem],
   );
 
+  const handleGroundingTest = useCallback(async (): Promise<boolean> => {
+    const item: ModelConfigItem = config.grounding.reuse_llm
+      ? config.llm
+      : config.grounding;
+    if (!item.base_url || !hasUsableApiKey(item) || !item.model_name) {
+      message.warning(
+        config.grounding.reuse_llm
+          ? "当前 LLM 配置不完整，请先配置可用的 LLM"
+          : "请填写完整的 Grounding LLM 配置（Base URL、API Key、模型名称）",
+      );
+      return false;
+    }
+
+    setTesting((prev) => ({ ...prev, grounding: true }));
+    try {
+      const data = await testModelConnection({
+        type: "vlm",
+        base_url: item.base_url,
+        api_key: item.api_key,
+        model_name: item.model_name,
+        protocol: item.protocol,
+      });
+      if (!data.ok) {
+        message.warning(data.error || "Grounding LLM 图片输入测试失败");
+        setTested((prev) => ({ ...prev, grounding: false }));
+        return false;
+      }
+      message.success("Grounding LLM 图片输入测试成功");
+      setTested((prev) => ({ ...prev, grounding: true }));
+      return true;
+    } catch (err) {
+      message.error((err as Error).message || "测试 Grounding LLM 时发生错误");
+      setTested((prev) => ({ ...prev, grounding: false }));
+      return false;
+    } finally {
+      setTesting((prev) => ({ ...prev, grounding: false }));
+    }
+  }, [config]);
+
   const handleSave = useCallback(async () => {
     if (saving) return;
     setSaving(true);
@@ -444,15 +538,40 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       const prev = snapshotRef.current;
       if (!prev) throw new Error("快照丢失，请重新打开配置");
 
+      if (config.grounding.enabled) {
+        const groundingModel = config.grounding.reuse_llm
+          ? config.llm
+          : config.grounding;
+        if (
+          !groundingModel.base_url ||
+          !groundingModel.model_name ||
+          !hasUsableApiKey(groundingModel)
+        ) {
+          message.warning(
+            config.grounding.reuse_llm
+              ? "Grounding 默认开启，请先完整配置 LLM，或关闭 Grounding"
+              : "请完整配置 Grounding LLM，或关闭 Grounding",
+          );
+          return;
+        }
+      }
+
       const dirtySections: TabType[] = [];
-      for (const section of ["llm", "vlm", "asr", "image", "video"] as TabType[]) {
+      for (const section of [
+        "llm",
+        "vlm",
+        "grounding",
+        "asr",
+        "image",
+        "video",
+      ] as TabType[]) {
         if (JSON.stringify(config[section]) !== JSON.stringify(prev[section])) {
           dirtySections.push(section);
         }
       }
 
       for (const section of dirtySections) {
-        if (!tested[section]) {
+        if (section !== "grounding" && !tested[section]) {
           const ok = await handleTest(section);
           if (!ok) return;
         }
@@ -630,7 +749,279 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     );
   };
 
+  const renderGroundingCard = (
+    meta: (typeof CARD_META)[number],
+  ) => {
+    const { type, label, icon } = meta;
+    const isExpanded = expanded.grounding;
+    const verifier = config.grounding.reuse_llm
+      ? config.llm
+      : config.grounding;
+    const verifierReady =
+      !!verifier.model_name && !!verifier.base_url && hasUsableApiKey(verifier);
+
+    return (
+      <div key={type} className="glass-card">
+        <div
+          onClick={() => toggleExpand("grounding")}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "14px 18px",
+            cursor: "pointer",
+            userSelect: "none",
+            borderBottom: isExpanded ? "1px solid var(--color-border)" : "none",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {icon}
+            <span style={{ fontSize: 14, fontWeight: 600 }}>{label}</span>
+            <span
+              style={{
+                fontSize: 10,
+                color: "var(--color-text-tertiary)",
+                background: "var(--color-bg-secondary)",
+                padding: "1px 7px",
+                borderRadius: 4,
+              }}
+            >
+              固定提供商策略
+            </span>
+            {config.grounding.enabled && verifier.model_name && (
+              <span
+                className="text-ellipsis"
+                style={{
+                  fontSize: 10,
+                  color: verifierReady
+                    ? "var(--color-success)"
+                    : "var(--color-text-tertiary)",
+                  background: "var(--color-success-soft)",
+                  padding: "1px 7px",
+                  borderRadius: 4,
+                  maxWidth: 140,
+                }}
+              >
+                {config.grounding.tavily_api_key ? "tavily/" : ""}
+                {verifier.model_name}
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: config.grounding.enabled
+                  ? "var(--color-success)"
+                  : "var(--color-border)",
+              }}
+            />
+            <label
+              className="desktop-toggle"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <input
+                type="checkbox"
+                aria-label="启用 Grounding"
+                checked={config.grounding.enabled}
+                onChange={(event) =>
+                  updateGrounding("enabled", event.target.checked)
+                }
+              />
+              <div className="track" />
+              <div className="thumb" />
+            </label>
+            <DownOutlined
+              style={{
+                fontSize: 10,
+                color: "var(--color-text-tertiary)",
+                transition: "transform 0.2s",
+                transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)",
+              }}
+            />
+          </div>
+        </div>
+        {isExpanded && (
+          <div
+            style={{
+              padding: "16px 18px 32px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 16,
+            }}
+          >
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 12,
+              }}
+            >
+              {[
+                {
+                  title: "文字来源",
+                  chain: "Tavily → Qwen Web Search",
+                  detail: "Tavily 不可用或无结果时自动回退。",
+                },
+                {
+                  title: "图片来源",
+                  chain: "Tavily Images → Qwen web_search_image",
+                  detail: "结果不足时补充检索；顺序不可调整。",
+                },
+              ].map((provider) => (
+                <div
+                  key={provider.title}
+                  style={{
+                    border: "1px solid var(--color-border)",
+                    borderRadius: 8,
+                    padding: "10px 12px",
+                    background: "var(--color-bg-secondary)",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "var(--color-text-tertiary)",
+                    }}
+                  >
+                    {provider.title}
+                  </div>
+                  <div style={{ marginTop: 3, fontSize: 12, fontWeight: 600 }}>
+                    {provider.chain}
+                  </div>
+                  <div
+                    style={{
+                      marginTop: 3,
+                      fontSize: 11,
+                      color: "var(--color-text-tertiary)",
+                    }}
+                  >
+                    {provider.detail}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div>
+              <label className="field-label">Tavily API Key（可选）</label>
+              <Input.Password
+                placeholder="tvly-..."
+                value={config.grounding.tavily_api_key}
+                onChange={(event) =>
+                  updateGrounding("tavily_api_key", event.target.value)
+                }
+              />
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <Checkbox
+                checked={config.grounding.reuse_llm}
+                onChange={(event) =>
+                  updateGrounding("reuse_llm", event.target.checked)
+                }
+              >
+                复用 LLM 配置
+              </Checkbox>
+              {config.grounding.reuse_llm && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: verifierReady
+                      ? "var(--color-success)"
+                      : "var(--color-danger)",
+                  }}
+                >
+                  {verifier.model_name
+                    ? `当前：${verifier.model_name}`
+                    : "当前 LLM 未配置"}
+                </span>
+              )}
+            </div>
+
+            {!config.grounding.reuse_llm && (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "0 16px",
+                }}
+              >
+                <div>
+                  <label className="field-label">Grounding LLM 模型</label>
+                  <Input
+                    placeholder="model"
+                    value={config.grounding.model_name}
+                    onChange={(event) =>
+                      updateGrounding("model_name", event.target.value)
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="field-label">Grounding LLM API Key</label>
+                  <Input.Password
+                    placeholder="sk-..."
+                    value={config.grounding.api_key}
+                    onChange={(event) =>
+                      updateGrounding("api_key", event.target.value)
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="field-label">Grounding LLM Base URL</label>
+                  <Input
+                    placeholder="https://api.example.com"
+                    value={config.grounding.base_url}
+                    onChange={(event) =>
+                      updateGrounding("base_url", event.target.value)
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="field-label">API 协议</label>
+                  <Select
+                    value={config.grounding.protocol}
+                    onChange={(value) =>
+                      updateGrounding("protocol", value)
+                    }
+                    options={VLM_PROTOCOLS.map((protocol) => ({
+                      value: protocol,
+                      label: protocol,
+                    }))}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div>
+              <Button
+                className="test-btn"
+                icon={<LinkOutlined />}
+                loading={testing.grounding}
+                onClick={handleGroundingTest}
+              >
+                测试 LLM 图片输入
+              </Button>
+            </div>
+            <div
+              style={{
+                fontSize: 11,
+                lineHeight: 1.5,
+                color: "var(--color-text-tertiary)",
+              }}
+            >
+              Grounding 默认开启。复用或覆盖的 LLM
+              都必须完整配置；用于图片结果复核时还需支持图片输入。
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderCard = (meta: (typeof CARD_META)[number]) => {
+    if (meta.type === "grounding") return renderGroundingCard(meta);
     const { type, label, icon, required } = meta;
     const isExpanded = expanded[type];
     const item = config[type] as ModelConfigItem;
@@ -946,7 +1337,21 @@ export default function ModelConfigModal({ open, onClose }: Props) {
             const active = activeTab === meta.type;
             let subText: string;
             let subColor: string;
-            if (
+            if (meta.type === "grounding") {
+              const verifier = config.grounding.reuse_llm
+                ? config.llm
+                : config.grounding;
+              subText = !config.grounding.enabled
+                ? "已关闭"
+                : verifier.model_name
+                ? `${config.grounding.tavily_api_key ? "tavily/" : ""}${verifier.model_name}`
+                : "未配置";
+              subColor = !config.grounding.enabled
+                ? "var(--color-text-tertiary)"
+                : verifier.model_name
+                ? "var(--color-success)"
+                : "var(--color-text-tertiary)";
+            } else if (
               meta.type === "vlm" &&
               config.vlm.use_llm &&
               config.llm.model_name

@@ -23,6 +23,7 @@ from models import config as model_config
 from schemas.models import (
     AsrConfig,
     ExecutionAuthorizationConfig,
+    GroundingConfig,
     LlmConfig,
     ModelConfigData,
     ModelConfigItem,
@@ -61,7 +62,7 @@ router = APIRouter(
 )
 
 
-_SECTIONS = ("llm", "vlm", "asr", "image", "video", "oss")
+_SECTIONS = ("llm", "vlm", "grounding", "asr", "image", "video", "oss")
 _ENV_MAPPING: dict[str, dict[str, tuple[str, ...]]] = {
     "llm": {
         "base_url": ("TEXT_BASE_URL",),
@@ -72,6 +73,29 @@ _ENV_MAPPING: dict[str, dict[str, tuple[str, ...]]] = {
         "base_url": ("VLM_BASE_URL", "TEXT_BASE_URL"),
         "api_key": ("VLM_API_KEY", "TEXT_API_KEY"),
         "model_name": ("VLM_MODEL_NAME", "TEXT_MODEL_NAME"),
+    },
+    "grounding": {
+        "enabled": ("WEB_GROUNDING_ENABLED",),
+        "tavily_api_key": (
+            "TAVILY_API_KEY",
+            "WEB_GROUNDING_TAVILY_API_KEY",
+        ),
+        "reuse_llm": (
+            "WEB_GROUNDING_REUSE_LLM",
+            "WEB_GROUNDING_REUSE_VLM",
+        ),
+        "base_url": (
+            "WEB_GROUNDING_LLM_BASE_URL",
+            "WEB_GROUNDING_VLM_BASE_URL",
+        ),
+        "api_key": (
+            "WEB_GROUNDING_LLM_API_KEY",
+            "WEB_GROUNDING_VLM_API_KEY",
+        ),
+        "model_name": (
+            "WEB_GROUNDING_LLM_MODEL_NAME",
+            "WEB_GROUNDING_VLM_MODEL_NAME",
+        ),
     },
     "asr": {
         "base_url": ("ASR_BASE_URL",),
@@ -134,6 +158,11 @@ def _defaults() -> ModelConfigData:
             protocol="OpenAI 协议",
             use_llm=False,
             multimodal=False,
+        ),
+        grounding=GroundingConfig(
+            enabled=True,
+            reuse_llm=True,
+            protocol="OpenAI 协议",
         ),
         asr=AsrConfig(
             enabled=False,
@@ -225,6 +254,18 @@ def save_model_config(data: ModelConfigData) -> None:
     model_config._clear_user_config_cache()
 
 
+def _ensure_grounding_model_configured(data: ModelConfigData) -> None:
+    grounding = data.grounding
+    if not grounding.enabled:
+        return
+    item: ModelConfigItem = data.llm if grounding.reuse_llm else grounding
+    if not item.model_name or not item.base_url or not item.api_key:
+        source = "LLM" if grounding.reuse_llm else "Grounding LLM"
+        raise ValidationError(
+            f"Grounding 默认启用；请完整配置 {source} 的 Base URL、API Key 和模型名称，或关闭 Grounding",
+        )
+
+
 def request_tool_configs() -> dict[str, dict[str, Any]]:
     data = load_model_config()
     configs: dict[str, dict[str, Any]] = {}
@@ -262,6 +303,15 @@ def request_tool_configs() -> dict[str, dict[str, Any]]:
                 else "wan"
             )
         configs[tool_name] = tool_config
+    grounding = data.grounding
+    configs[model_config.CREATOR_GROUNDING_CONFIG_TOOL] = {
+        "enabled": grounding.enabled,
+        "tavily_api_key": grounding.tavily_api_key,
+        "reuse_llm": grounding.reuse_llm,
+        "api_key": grounding.api_key,
+        "model": grounding.model_name,
+        "base_url": grounding.base_url,
+    }
     return configs
 
 
@@ -321,6 +371,8 @@ async def _validate_section_connectivity(
     """Run connectivity probe for a single section. Raises ValidationError on failure."""
 
     if section in ("execution_authorization", "executionAuthorization"):
+        return
+    if section == "grounding":
         return
 
     if section == "oss":
@@ -459,6 +511,7 @@ async def update_model_config(
                     "上一次模型配置写入失败，请使用新的 Idempotency-Key 重试",
                 )
             data.llm.enabled = True
+            _ensure_grounding_model_configured(data)
             save_model_config(data)
             _notify_agent_model_config_changed()
             records.complete(
@@ -501,7 +554,15 @@ async def patch_model_config_section(
     data: dict[str, Any] = Body(...),
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ) -> dict[str, bool]:
-    valid_sections = {"llm", "vlm", "asr", "image", "video", "oss"}
+    valid_sections = {
+        "llm",
+        "vlm",
+        "grounding",
+        "asr",
+        "image",
+        "video",
+        "oss",
+    }
     if section not in valid_sections:
         raise ValidationError(f"不支持的配置项: {section}")
 
@@ -538,6 +599,7 @@ async def patch_model_config_section(
                 merged["llm"]["enabled"] = True
 
             full_data = ModelConfigData.model_validate(merged)
+            _ensure_grounding_model_configured(full_data)
             save_model_config(full_data)
             _notify_agent_model_config_changed()
             records.complete(

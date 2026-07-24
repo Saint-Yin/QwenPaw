@@ -123,6 +123,59 @@
         ]
       },
       {
+        "name": "creator_web_grounding",
+        "description": "QwenPaw Creator web and image grounding configuration",
+        "icon": "🌐",
+        "requires_config": false,
+        "config_fields": [
+          {
+            "name": "enabled",
+            "label": "Grounding Enabled",
+            "type": "select",
+            "required": false,
+            "default": "true",
+            "options": ["true", "false"]
+          },
+          {
+            "name": "tavily_api_key",
+            "label": "Tavily API Key",
+            "type": "password",
+            "required": false,
+            "placeholder": "tvly-...",
+            "help": "Optional. Provider policy is fixed: Tavily first, then the built-in Qwen search fallback."
+          },
+          {
+            "name": "reuse_llm",
+            "label": "Reuse Creator LLM",
+            "type": "select",
+            "required": false,
+            "default": "true",
+            "options": ["true", "false"]
+          },
+          {
+            "name": "api_key",
+            "label": "Grounding LLM API Key",
+            "type": "password",
+            "required": false,
+            "help": "Used only when reuse_llm is false. Must support image input for visual verification."
+          },
+          {
+            "name": "model",
+            "label": "Grounding LLM Model",
+            "type": "text",
+            "required": false,
+            "help": "Used only when reuse_llm is false."
+          },
+          {
+            "name": "base_url",
+            "label": "Grounding LLM Base URL",
+            "type": "text",
+            "required": false,
+            "help": "Used only when reuse_llm is false."
+          }
+        ]
+      },
+      {
         "name": "creator_image_model",
         "description": "QwenPaw Creator image generation/editing configuration",
         "icon": "🎨",

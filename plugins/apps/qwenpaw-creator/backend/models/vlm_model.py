@@ -199,10 +199,14 @@ async def chat_completion(
     temperature: float = 0.2,
     max_tokens: int = 1800,
     timeout: float | None = None,
+    api_key_override: str | None = None,
+    base_url_override: str | None = None,
+    model_name_override: str | None = None,
 ) -> str:
     """Call the configured VLM and return the assistant text."""
-    api_key = model_config.get_vlm_api_key()
-    model_name = model_config.get_vlm_model_name()
+    api_key = api_key_override or model_config.get_vlm_api_key()
+    base_url = base_url_override or model_config.get_vlm_base_url()
+    model_name = model_name_override or model_config.get_vlm_model_name()
     if not api_key:
         raise ModelError(
             "creator_vlm_model.api_key, VLM_API_KEY, DASHSCOPE_API_KEY, or TEXT_API_KEY is required",
@@ -276,7 +280,7 @@ async def chat_completion(
         async with httpx.AsyncClient(timeout=actual_timeout) as client:
             async with model_slot("vlm"):
                 response = await client.post(
-                    model_config.get_vlm_chat_url(),
+                    f"{base_url.rstrip('/')}/chat/completions",
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
@@ -322,13 +326,13 @@ async def chat_completion(
             "VLM request failed: type=%s repr=%r url=%s timeout=%s elapsed=%.2fs",
             type(exc).__name__,
             exc,
-            model_config.get_vlm_chat_url(),
-            model_config.get_vlm_timeout_seconds(),
+            f"{base_url.rstrip('/')}/chat/completions",
+            actual_timeout,
             elapsed,
             exc_info=True,
         )
         raise ModelError(
-            f"VLM request failed ({type(exc).__name__}): {exc!r} url={model_config.get_vlm_chat_url()}",
+            f"VLM request failed ({type(exc).__name__}): {exc!r} url={base_url.rstrip('/')}/chat/completions",
             model_name=model_name,
         ) from exc
 

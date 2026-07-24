@@ -35,8 +35,12 @@ from models.config import (
     get_execution_authorization_mode,
     get_text_model_name,
     get_vlm_model_name,
+    get_web_grounding_enabled,
+    get_web_grounding_image_download_timeout_seconds,
     get_web_grounding_max_sources,
     get_web_grounding_timeout_seconds,
+    get_web_grounding_verification_timeout_seconds,
+    get_web_grounding_visual_search_timeout_seconds,
     get_image_model_name,
     get_video_backend,
     get_video_model_name,
@@ -205,6 +209,14 @@ def _ground_prompt_context_tool_manifest() -> dict[str, Any]:
             },
         },
     }
+
+
+def _creator_agent_tool_manifest() -> list[dict[str, Any]]:
+    manifest = [*agent_project_tool_manifest()]
+    if get_web_grounding_enabled():
+        manifest.append(_ground_prompt_context_tool_manifest())
+    manifest.append(delegate_tool_manifest())
+    return manifest
 
 
 class FileAgentRuntimeError(RuntimeError):
@@ -814,11 +826,7 @@ class FileCreatorAgentRuntime:
         request: CreatorMessageRecord,
         tools: AgentProjectTools,
     ) -> _LoopResult:
-        tool_manifest = [
-            *agent_project_tool_manifest(),
-            _ground_prompt_context_tool_manifest(),
-            delegate_tool_manifest(),
-        ]
+        tool_manifest = _creator_agent_tool_manifest()
         conversation_records = await asyncio.to_thread(
             self.sessions.list_messages,
             project_id,
@@ -1135,6 +1143,15 @@ class FileCreatorAgentRuntime:
             detector=detector,
             max_sources=get_web_grounding_max_sources(),
             timeout=float(get_web_grounding_timeout_seconds()),
+            visual_search_timeout=float(
+                get_web_grounding_visual_search_timeout_seconds(),
+            ),
+            image_download_timeout=float(
+                get_web_grounding_image_download_timeout_seconds(),
+            ),
+            verification_timeout=float(
+                get_web_grounding_verification_timeout_seconds(),
+            ),
             include_visuals=include_visuals,
         )
         return await self._promote_grounding_visuals(

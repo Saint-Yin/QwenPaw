@@ -17,9 +17,15 @@ export interface OssConfig {
   policy_api_key: string;
 }
 
+export interface GroundingConfig extends ModelConfigItem {
+  reuse_llm: boolean;
+  tavily_api_key: string;
+}
+
 export interface ModelConfigData {
   llm: ModelConfigItem & { multimodal: boolean };
   vlm: ModelConfigItem & { use_llm: boolean; multimodal: boolean };
+  grounding: GroundingConfig;
   asr: ModelConfigItem & {
     provider: "whisper" | "fun-asr";
     language: string;

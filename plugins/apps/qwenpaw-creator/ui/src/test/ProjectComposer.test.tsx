@@ -25,6 +25,16 @@ const configuredModelConfig: ModelConfigData = {
     use_llm: true,
     multimodal: true,
   },
+  grounding: {
+    enabled: true,
+    model_name: "",
+    api_key: "",
+    base_url: "",
+    protocol: "OpenAI 协议",
+    custom_protocol: "",
+    reuse_llm: true,
+    tavily_api_key: "",
+  },
   asr: {
     enabled: false,
     model_name: "fun-asr",

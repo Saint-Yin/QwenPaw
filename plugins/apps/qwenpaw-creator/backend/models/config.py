@@ -20,6 +20,7 @@ CREATOR_TEXT_CONFIG_TOOL = "creator_text_model"
 CREATOR_IMAGE_CONFIG_TOOL = "creator_image_model"
 CREATOR_VIDEO_CONFIG_TOOL = "creator_video_model"
 CREATOR_VLM_CONFIG_TOOL = "creator_vlm_model"
+CREATOR_GROUNDING_CONFIG_TOOL = "creator_web_grounding"
 CREATOR_ASR_CONFIG_TOOL = "creator_asr_model"
 CREATOR_OSS_CONFIG_TOOL = "creator_media_oss"
 EXECUTION_AUTHORIZATION_REQUIRED = "required"
@@ -29,6 +30,7 @@ CREATOR_CONFIG_TOOLS = (
     CREATOR_IMAGE_CONFIG_TOOL,
     CREATOR_VIDEO_CONFIG_TOOL,
     CREATOR_VLM_CONFIG_TOOL,
+    CREATOR_GROUNDING_CONFIG_TOOL,
     CREATOR_ASR_CONFIG_TOOL,
     CREATOR_OSS_CONFIG_TOOL,
 )
@@ -258,6 +260,7 @@ def _map_tool_to_section(tool_name: str) -> str:
     return {
         CREATOR_TEXT_CONFIG_TOOL: "llm",
         CREATOR_VLM_CONFIG_TOOL: "vlm",
+        CREATOR_GROUNDING_CONFIG_TOOL: "grounding",
         CREATOR_ASR_CONFIG_TOOL: "asr",
         CREATOR_IMAGE_CONFIG_TOOL: "image",
         CREATOR_VIDEO_CONFIG_TOOL: "video",
@@ -315,13 +318,41 @@ VLM_MAX_INLINE_BYTES = _positive_int_env(
 # ── Web grounding ────────────────────────────────────────────────────────────
 WEB_GROUNDING_TIMEOUT_SECONDS = _positive_int_env(
     "WEB_GROUNDING_TIMEOUT_SECONDS",
-    8,
+    60,
 )
 WEB_GROUNDING_MAX_SOURCES = _positive_int_env("WEB_GROUNDING_MAX_SOURCES", 6)
 WEB_GROUNDING_MAX_ENTITIES = _positive_int_env("WEB_GROUNDING_MAX_ENTITIES", 3)
 WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS = _positive_int_env(
     "WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS",
     20,
+)
+WEB_GROUNDING_VISUAL_SEARCH_TIMEOUT_SECONDS = _positive_int_env(
+    "WEB_GROUNDING_VISUAL_SEARCH_TIMEOUT_SECONDS",
+    120,
+)
+WEB_GROUNDING_IMAGE_DOWNLOAD_TIMEOUT_SECONDS = _positive_int_env(
+    "WEB_GROUNDING_IMAGE_DOWNLOAD_TIMEOUT_SECONDS",
+    30,
+)
+WEB_GROUNDING_VERIFICATION_TIMEOUT_SECONDS = _positive_int_env(
+    "WEB_GROUNDING_VERIFICATION_TIMEOUT_SECONDS",
+    120,
+)
+WEB_GROUNDING_VERIFICATION_MAX_ATTEMPTS = _positive_int_env(
+    "WEB_GROUNDING_VERIFICATION_MAX_ATTEMPTS",
+    3,
+)
+WEB_GROUNDING_VERIFICATION_TOTAL_BUDGET_SECONDS = _positive_int_env(
+    "WEB_GROUNDING_VERIFICATION_TOTAL_BUDGET_SECONDS",
+    300,
+)
+WEB_GROUNDING_RETRY_BASE_SECONDS = _positive_int_env(
+    "WEB_GROUNDING_RETRY_BASE_SECONDS",
+    1,
+)
+WEB_GROUNDING_RETRY_MAX_SECONDS = _positive_int_env(
+    "WEB_GROUNDING_RETRY_MAX_SECONDS",
+    8,
 )
 
 # ── ASR Model (OpenAI Whisper / DashScope Fun-ASR) ───────────────────────────
@@ -448,12 +479,46 @@ def get_vlm_max_inline_bytes() -> int:
     )
 
 
+def _grounding_value(
+    fields: str | tuple[str, ...],
+    env_name: str,
+    default: str = "",
+) -> str:
+    """Read grounding config while preserving an explicit disabled section."""
+
+    field_names = (fields,) if isinstance(fields, str) else fields
+    tool_config = get_request_tool_config(CREATOR_GROUNDING_CONFIG_TOOL)
+    for field in field_names:
+        value = tool_config.get(field)
+        if value not in (None, ""):
+            return str(value)
+    section = _get_user_config().get("grounding")
+    if isinstance(section, dict):
+        for field in field_names:
+            value = section.get(_map_user_field(field))
+            if value not in (None, ""):
+                return str(value)
+    return os.environ.get(env_name, default)
+
+
+def _grounding_explicit(
+    fields: str | tuple[str, ...],
+    env_names: tuple[str, ...],
+) -> str:
+    for env_name in env_names:
+        value = _grounding_value(fields, env_name)
+        if value:
+            return value
+    return ""
+
+
 def get_web_grounding_enabled() -> bool:
-    return os.environ.get("WEB_GROUNDING_ENABLED", "1").lower() not in {
-        "0",
-        "false",
-        "no",
-    }
+    raw = _grounding_value(
+        "enabled",
+        "WEB_GROUNDING_ENABLED",
+        "1",
+    )
+    return str(raw).strip().casefold() not in {"0", "false", "no", "off"}
 
 
 def get_web_grounding_timeout_seconds() -> int:
@@ -481,6 +546,103 @@ def get_web_grounding_entity_timeout_seconds() -> int:
     return _positive_int_env(
         "WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS",
         WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS,
+    )
+
+
+def get_web_grounding_visual_search_timeout_seconds() -> int:
+    return _positive_int_env(
+        "WEB_GROUNDING_VISUAL_SEARCH_TIMEOUT_SECONDS",
+        WEB_GROUNDING_VISUAL_SEARCH_TIMEOUT_SECONDS,
+    )
+
+
+def get_web_grounding_image_download_timeout_seconds() -> int:
+    return _positive_int_env(
+        "WEB_GROUNDING_IMAGE_DOWNLOAD_TIMEOUT_SECONDS",
+        WEB_GROUNDING_IMAGE_DOWNLOAD_TIMEOUT_SECONDS,
+    )
+
+
+def get_web_grounding_verification_timeout_seconds() -> int:
+    return _positive_int_env(
+        "WEB_GROUNDING_VERIFICATION_TIMEOUT_SECONDS",
+        WEB_GROUNDING_VERIFICATION_TIMEOUT_SECONDS,
+    )
+
+
+def get_web_grounding_verification_max_attempts() -> int:
+    return _positive_int_env(
+        "WEB_GROUNDING_VERIFICATION_MAX_ATTEMPTS",
+        WEB_GROUNDING_VERIFICATION_MAX_ATTEMPTS,
+    )
+
+
+def get_web_grounding_verification_total_budget_seconds() -> int:
+    return _positive_int_env(
+        "WEB_GROUNDING_VERIFICATION_TOTAL_BUDGET_SECONDS",
+        WEB_GROUNDING_VERIFICATION_TOTAL_BUDGET_SECONDS,
+    )
+
+
+def get_web_grounding_retry_base_seconds() -> int:
+    return _positive_int_env(
+        "WEB_GROUNDING_RETRY_BASE_SECONDS",
+        WEB_GROUNDING_RETRY_BASE_SECONDS,
+    )
+
+
+def get_web_grounding_retry_max_seconds() -> int:
+    return _positive_int_env(
+        "WEB_GROUNDING_RETRY_MAX_SECONDS",
+        WEB_GROUNDING_RETRY_MAX_SECONDS,
+    )
+
+
+def get_web_grounding_tavily_api_key() -> str:
+    return _grounding_explicit(
+        "tavily_api_key",
+        ("TAVILY_API_KEY", "WEB_GROUNDING_TAVILY_API_KEY"),
+    )
+
+
+def get_web_grounding_reuse_llm() -> bool:
+    env_name = (
+        "WEB_GROUNDING_REUSE_LLM"
+        if "WEB_GROUNDING_REUSE_LLM" in os.environ
+        else "WEB_GROUNDING_REUSE_VLM"
+    )
+    raw = _grounding_value(
+        "reuse_llm",
+        env_name,
+        "1",
+    )
+    return str(raw).strip().casefold() not in {"0", "false", "no", "off"}
+
+
+def get_web_grounding_model_api_key() -> str:
+    if get_web_grounding_reuse_llm():
+        return get_text_api_key()
+    return _grounding_explicit(
+        "api_key",
+        ("WEB_GROUNDING_LLM_API_KEY", "WEB_GROUNDING_VLM_API_KEY"),
+    )
+
+
+def get_web_grounding_model_base_url() -> str:
+    if get_web_grounding_reuse_llm():
+        return get_text_base_url()
+    return _grounding_explicit(
+        ("base_url", "endpoint"),
+        ("WEB_GROUNDING_LLM_BASE_URL", "WEB_GROUNDING_VLM_BASE_URL"),
+    )
+
+
+def get_web_grounding_model_name() -> str:
+    if get_web_grounding_reuse_llm():
+        return get_text_model_name()
+    return _grounding_explicit(
+        "model",
+        ("WEB_GROUNDING_LLM_MODEL_NAME", "WEB_GROUNDING_VLM_MODEL_NAME"),
     )
 
 

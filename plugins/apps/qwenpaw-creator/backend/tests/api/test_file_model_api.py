@@ -10,10 +10,11 @@ import time
 
 import httpx
 from fastapi import FastAPI
+import pytest
 
 from api.dependencies import creator_error_handler
 from api import model_routes
-from domain.errors import CreatorError
+from domain.errors import CreatorError, ValidationError
 from schemas.models import ModelConfigData
 
 
@@ -40,6 +41,16 @@ def _config(model_name: str = "qwen-plus") -> dict:
             "custom_protocol": "",
             "use_llm": True,
             "multimodal": False,
+        },
+        "grounding": {
+            "enabled": True,
+            "model_name": "",
+            "api_key": "",
+            "base_url": "",
+            "protocol": "OpenAI 协议",
+            "custom_protocol": "",
+            "reuse_llm": True,
+            "tavily_api_key": "tvly-test",
         },
         "asr": {
             "enabled": False,
@@ -79,6 +90,36 @@ def _config(model_name: str = "qwen-plus") -> dict:
         },
         "executionAuthorization": {"mode": "required"},
     }
+
+
+def test_enabled_grounding_requires_global_or_override_llm() -> None:
+    missing = _config()
+    missing["llm"]["api_key"] = ""
+    with pytest.raises(ValidationError, match="Grounding 默认启用"):
+        model_routes._ensure_grounding_model_configured(
+            ModelConfigData.model_validate(missing),
+        )
+
+    override = _config()
+    override["llm"]["api_key"] = ""
+    override["grounding"].update(
+        {
+            "reuse_llm": False,
+            "api_key": "grounding-key",
+            "base_url": "https://grounding.example.test/v1",
+            "model_name": "grounding-qwen",
+        },
+    )
+    model_routes._ensure_grounding_model_configured(
+        ModelConfigData.model_validate(override),
+    )
+
+    disabled = _config()
+    disabled["llm"]["api_key"] = ""
+    disabled["grounding"]["enabled"] = False
+    model_routes._ensure_grounding_model_configured(
+        ModelConfigData.model_validate(disabled),
+    )
 
 
 def test_model_config_is_single_file_native_and_idempotent(
@@ -127,6 +168,16 @@ def test_model_config_is_single_file_native_and_idempotent(
     assert loaded.status_code == 200
     assert loaded.json()["llm"]["model_name"] == "qwen-plus"
     assert loaded.json()["llm"]["api_key"] == "secret"
+    assert loaded.json()["grounding"] == {
+        "enabled": True,
+        "model_name": "",
+        "api_key": "",
+        "base_url": "",
+        "protocol": "OpenAI 协议",
+        "custom_protocol": "",
+        "reuse_llm": True,
+        "tavily_api_key": "tvly-test",
+    }
     assert loaded.json()["oss"] == {
         "enabled": False,
         "access_key_id": "oss-access-id",

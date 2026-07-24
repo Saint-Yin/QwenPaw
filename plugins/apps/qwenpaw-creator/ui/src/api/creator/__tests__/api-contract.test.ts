@@ -206,6 +206,16 @@ describe("new Creator API contract", () => {
         use_llm: false,
         multimodal: false,
       },
+      grounding: {
+        enabled: true,
+        model_name: "",
+        api_key: "",
+        base_url: "",
+        protocol: "OpenAI 协议",
+        custom_protocol: "",
+        reuse_llm: true,
+        tavily_api_key: "",
+      },
       asr: {
         enabled: false,
         model_name: "fun-asr",
