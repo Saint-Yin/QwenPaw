@@ -480,7 +480,8 @@ def _resolve_request(
     ).strip()
     if not ratio or not resolution:
         raise ValidationError("R2V ratio/resolution 不能为空")
-    watermark = arguments.get("watermark", True)
+    # 默认不加提供商水印；仅在调用方显式要求时开启。
+    watermark = arguments.get("watermark", False)
     generate_audio = arguments.get("generateAudio", True)
     if not isinstance(watermark, bool) or not isinstance(generate_audio, bool):
         raise ValidationError("R2V watermark/generateAudio 必须是 boolean")
