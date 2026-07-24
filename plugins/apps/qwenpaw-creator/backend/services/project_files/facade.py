@@ -141,6 +141,9 @@ class CreatorFileServices:
     async def active_review(self, project_id: str):
         return await asyncio.to_thread(self.reviews.active, project_id)
 
+    async def active_reviews(self, project_id: str) -> list:
+        return await asyncio.to_thread(self.reviews.all_pending, project_id)
+
     async def decide_review(
         self,
         *,

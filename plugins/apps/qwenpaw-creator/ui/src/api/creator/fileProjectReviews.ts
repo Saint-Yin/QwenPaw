@@ -172,14 +172,19 @@ export async function getActiveFileProjectReview(
   if (response.status === 204) return { kind: "empty" };
   if (!response.ok) throw await httpError(response);
 
-  const review = parseFileProjectReview(await response.json());
+  const payload = await response.json();
+  if (!Array.isArray(payload)) {
+    throw new Error("File Project Review response is not an array");
+  }
+  const reviews = payload.map(parseFileProjectReview);
   if (!responseEtag) {
     throw new Error("File Project Review response is missing ETag");
   }
-  if (semanticEtag(responseEtag) !== semanticEtag(review.decision_token)) {
-    throw new Error("File Project Review ETag does not match decision_token");
+  const compositeToken = reviews.map((r) => r.decision_token).join("|");
+  if (semanticEtag(responseEtag) !== semanticEtag(compositeToken)) {
+    throw new Error("File Project Review ETag does not match decision_tokens");
   }
-  return { kind: "updated", review, etag: responseEtag };
+  return { kind: "updated", reviews, etag: responseEtag };
 }
 
 export async function decideFileProjectReview(

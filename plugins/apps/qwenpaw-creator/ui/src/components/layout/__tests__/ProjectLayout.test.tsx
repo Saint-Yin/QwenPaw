@@ -44,7 +44,10 @@ function commonRoutes(review?: FileProjectReviewRecord) {
     {
       match: "/projects/p1/runtime/reviews/active",
       response: review
-        ? { json: review, headers: { ETag: `"${review.decision_token}"` } }
+        ? {
+            json: [review],
+            headers: { ETag: `"${review.decision_token}"` },
+          }
         : { status: 204 },
     },
     {

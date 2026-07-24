@@ -69,7 +69,7 @@ export interface FileProjectReviewDecisionRequest {
 export type FileProjectReviewPollResult =
   | {
       kind: "updated";
-      review: FileProjectReviewRecord;
+      reviews: FileProjectReviewRecord[];
       etag: string;
     }
   | {

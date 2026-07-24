@@ -13,20 +13,12 @@ export default function AgentDecisionCenter({
     (state) => state.projectId,
   );
   const authorizations = useExecutionAuthorizationStore((state) => state.items);
-  const loading = useExecutionAuthorizationStore((state) => state.loading);
   const error = useExecutionAuthorizationStore((state) => state.error);
   const pending =
     storeProjectId === projectId
       ? authorizations.filter((item) => item.status === "PENDING")
       : [];
 
-  if (loading && pending.length === 0) {
-    return (
-      <p className="px-1 py-2 text-[11px] text-[var(--color-text-tertiary)]">
-        加载生产确认…
-      </p>
-    );
-  }
   if (error && pending.length === 0) {
     return (
       <p className="px-1 py-2 text-[11px] text-[var(--color-danger)]">

@@ -680,6 +680,30 @@ class ProjectCommitBoundary:
                     update={"created_at": existing_aggregate_round.created_at},
                 ),
             )
+            # Determine the active_round_id: prefer the earliest-created pending review
+            if review is not None:
+                # A new review was just created; check if there are earlier pending reviews
+                reviews_root = runtime_root / "reviews"
+                earliest_round_id = round_id
+                earliest_created = review.created_at
+                if reviews_root.is_dir():
+                    for child in reviews_root.iterdir():
+                        if child.is_symlink() or not child.is_dir():
+                            continue
+                        pending_review = AtomicJsonRecordStore(
+                            child / "review.json",
+                            ReviewRecord,
+                        ).read_or_none()
+                        if (
+                            pending_review is not None
+                            and pending_review.status is ReviewStatus.PENDING
+                            and pending_review.created_at < earliest_created
+                        ):
+                            earliest_round_id = pending_review.round_id
+                            earliest_created = pending_review.created_at
+                active_review_round = earliest_round_id
+            else:
+                active_review_round = existing_review_round_id if existing_review_pending else None
             self._update_runtime_state(
                 runtime_root=runtime_root,
                 snapshot=snapshot,
@@ -692,13 +716,7 @@ class ProjectCommitBoundary:
                     )
                 ),
                 boundary=review_boundary,
-                active_round_id=(
-                    round_id
-                    if review is not None
-                    else existing_review_round_id
-                    if existing_review_pending
-                    else None
-                ),
+                active_round_id=active_review_round,
             )
             journal_store.write(
                 journal.model_copy(
@@ -1288,15 +1306,9 @@ class ProjectCommitBoundary:
             return False, False, None
         if not still_pending:
             return False, True, None
-        # Keep the currently surfaced round when it is still live; otherwise
-        # promote the most recently updated pending review.
-        active_round_id = state.active_round_id if state is not None else None
-        if active_round_id and any(
-            review.round_id == active_round_id for review in still_pending
-        ):
-            return True, False, active_round_id
-        freshest = max(still_pending, key=lambda item: item.updated_at)
-        return True, False, freshest.round_id
+        # Promote the earliest-created pending review (FIFO order).
+        earliest = min(still_pending, key=lambda item: item.created_at)
+        return True, False, earliest.round_id
 
     @staticmethod
     def _update_runtime_state(

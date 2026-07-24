@@ -207,21 +207,14 @@ class ProjectReviewService:
         self.commits = ProjectCommitBoundary(store)
 
     def active(self, project_id: str) -> ReviewRecord | None:
+        all_pending = self.all_pending(project_id)
+        return all_pending[0] if all_pending else None
+
+    def all_pending(self, project_id: str) -> list[ReviewRecord]:
         runtime_root = self.store.project_root(project_id) / "runtime"
-        state = AtomicJsonRecordStore(
-            runtime_root / "state.json",
-            RuntimeProjectState,
-        ).read_or_none()
-        if state is not None and state.active_round_id:
-            review = self._review_store(
-                project_id,
-                f"review-{state.active_round_id}",
-            ).read_or_none()
-            if review is not None and review.status is ReviewStatus.PENDING:
-                return review
         reviews_root = runtime_root / "reviews"
         if not reviews_root.is_dir():
-            return None
+            return []
         candidates: list[ReviewRecord] = []
         for child in reviews_root.iterdir():
             if child.is_symlink() or not child.is_dir():
@@ -232,11 +225,7 @@ class ProjectReviewService:
             ).read_or_none()
             if review is not None and review.status is ReviewStatus.PENDING:
                 candidates.append(review)
-        return (
-            max(candidates, key=lambda item: item.updated_at)
-            if candidates
-            else None
-        )
+        return sorted(candidates, key=lambda item: item.created_at)
 
     def get(self, project_id: str, review_id: str) -> ReviewRecord:
         review = self._review_store(project_id, review_id).read_or_none()

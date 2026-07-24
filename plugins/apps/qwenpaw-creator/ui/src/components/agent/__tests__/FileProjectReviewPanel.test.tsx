@@ -91,7 +91,7 @@ function seed(
 ) {
   useFileProjectReviewStore.setState({
     projectId: "p1",
-    review: value,
+    reviews: [value],
     etag: '"token-1"',
     syncStatus: "healthy",
     syncError: null,
@@ -107,12 +107,10 @@ afterEach(() => {
 });
 
 describe("FileProjectReviewPanel", () => {
-  it("only renders for the active Project file Review", () => {
+  it("renders the review panel with the provided review", () => {
     seed(review());
-    const { rerender } = render(<FileProjectReviewPanel projectId="p2" />);
-    expect(screen.queryByText("文件项目修改")).not.toBeInTheDocument();
-
-    rerender(<FileProjectReviewPanel projectId="p1" />);
+    const reviewData = review();
+    render(<FileProjectReviewPanel projectId="p1" review={reviewData} />);
     expect(screen.getByText("文件项目修改")).toBeInTheDocument();
     expect(screen.getByText("/description")).toBeInTheDocument();
     expect(document.querySelector("[data-review-diff]")).toBeTruthy();
@@ -122,13 +120,14 @@ describe("FileProjectReviewPanel", () => {
 
   it("submits an individual Keep decision by operation_id", async () => {
     const decide = seed(review());
-    render(<FileProjectReviewPanel projectId="p1" />);
+    const reviewData = review();
+    render(<FileProjectReviewPanel projectId="p1" review={reviewData} />);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Keep /description" }),
+      screen.getByRole("button", { name: "保留 /description" }),
     );
     await waitFor(() =>
-      expect(decide).toHaveBeenCalledWith("p1", [
+      expect(decide).toHaveBeenCalledWith("p1", "review-1", [
         {
           operation_id: "operation-1",
           decision: "ACCEPT",
@@ -140,11 +139,11 @@ describe("FileProjectReviewPanel", () => {
   it("submits all pending operations in one Undo all request", async () => {
     const value = review(2);
     const decide = seed(value);
-    render(<FileProjectReviewPanel projectId="p1" />);
+    render(<FileProjectReviewPanel projectId="p1" review={value} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Undo all" }));
+    fireEvent.click(screen.getByRole("button", { name: "全部撤销" }));
     await waitFor(() =>
-      expect(decide).toHaveBeenCalledWith("p1", [
+      expect(decide).toHaveBeenCalledWith("p1", "review-1", [
         { operation_id: "operation-1", decision: "REJECT" },
         { operation_id: "operation-2", decision: "REJECT" },
       ]),
@@ -153,7 +152,8 @@ describe("FileProjectReviewPanel", () => {
 
   it("navigates to the ui_locator when a text operation is inspected", () => {
     seed(review());
-    render(<FileProjectReviewPanel projectId="p1" />);
+    const reviewData = review();
+    render(<FileProjectReviewPanel projectId="p1" review={reviewData} />);
     fireEvent.click(screen.getByRole("button", { name: "查看 /description" }));
     expect(navigateToLocator).toHaveBeenCalledWith(
       "p1",
@@ -164,7 +164,8 @@ describe("FileProjectReviewPanel", () => {
 
   it("renders a media preview and opens the generation detail locator", () => {
     seed(mediaReview());
-    render(<FileProjectReviewPanel projectId="p1" />);
+    const reviewData = mediaReview();
+    render(<FileProjectReviewPanel projectId="p1" review={reviewData} />);
     expect(screen.getByText("视频审阅")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "查看生成详情" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "查看生成详情" }));

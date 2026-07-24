@@ -786,7 +786,7 @@ describe("AgentDock origin/main visible fidelity", () => {
     }));
     useFileProjectReviewStore.setState({
       projectId: "p1",
-      review: fileProjectReview(),
+      reviews: [fileProjectReview()],
       etag: '"file-token-1"',
       syncStatus: "healthy",
     });

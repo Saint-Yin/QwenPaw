@@ -55,7 +55,12 @@ function response(
 }
 
 function activeResponse(value: FileProjectReviewRecord): Response {
-  return response(200, value, { ETag: `"${value.decision_token}"` });
+  return response(200, [value], { ETag: `"${value.decision_token}"` });
+}
+
+function activeResponseMulti(values: FileProjectReviewRecord[]): Response {
+  const compositeToken = values.map((r) => r.decision_token).join("|");
+  return response(200, values, { ETag: `"${compositeToken}"` });
 }
 
 afterEach(() => {
@@ -64,7 +69,7 @@ afterEach(() => {
 });
 
 describe("file-native Project Review store", () => {
-  it("keeps the last-good Review across 304 and transient failures", async () => {
+  it("keeps the last-good Reviews across 304 and transient failures", async () => {
     const first = review();
     const fetchMock = vi
       .fn()
@@ -74,18 +79,18 @@ describe("file-native Project Review store", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await useFileProjectReviewStore.getState().pollOnce("p1");
-    const lastGood = useFileProjectReviewStore.getState().review;
+    const lastGood = useFileProjectReviewStore.getState().reviews;
     await useFileProjectReviewStore.getState().pollOnce("p1");
-    expect(useFileProjectReviewStore.getState().review).toBe(lastGood);
+    expect(useFileProjectReviewStore.getState().reviews).toBe(lastGood);
     expect(useFileProjectReviewStore.getState().syncStatus).toBe("healthy");
 
     await useFileProjectReviewStore.getState().pollOnce("p1");
-    expect(useFileProjectReviewStore.getState().review).toBe(lastGood);
+    expect(useFileProjectReviewStore.getState().reviews).toBe(lastGood);
     expect(useFileProjectReviewStore.getState().syncStatus).toBe("degraded");
     expect(useFileProjectReviewStore.getState().syncError).toBe("offline");
   });
 
-  it("clears active Review state on both 204 and Project 404", async () => {
+  it("clears active Reviews state on both 204 and Project 404", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(activeResponse(review()))
@@ -98,17 +103,17 @@ describe("file-native Project Review store", () => {
 
     await useFileProjectReviewStore.getState().pollOnce("p1");
     await useFileProjectReviewStore.getState().pollOnce("p1");
-    expect(useFileProjectReviewStore.getState().review).toBeNull();
+    expect(useFileProjectReviewStore.getState().reviews).toEqual([]);
     expect(useFileProjectReviewStore.getState().syncStatus).toBe("healthy");
 
     await useFileProjectReviewStore.getState().pollOnce("p1");
     await useFileProjectReviewStore.getState().pollOnce("p1");
-    expect(useFileProjectReviewStore.getState().review).toBeNull();
+    expect(useFileProjectReviewStore.getState().reviews).toEqual([]);
     expect(useFileProjectReviewStore.getState().etag).toBeNull();
     expect(useFileProjectReviewStore.getState().syncStatus).toBe("not_found");
   });
 
-  it("does not apply a lower candidate generation over the current Review", async () => {
+  it("does not apply a lower candidate generation over the current Reviews", async () => {
     vi.stubGlobal(
       "fetch",
       vi
@@ -120,11 +125,11 @@ describe("file-native Project Review store", () => {
     await useFileProjectReviewStore.getState().pollOnce("p1");
     await useFileProjectReviewStore.getState().pollOnce("p1");
     expect(
-      useFileProjectReviewStore.getState().review?.candidate_generation,
+      useFileProjectReviewStore.getState().reviews[0]?.candidate_generation,
     ).toBe(5);
-    expect(useFileProjectReviewStore.getState().review?.decision_token).toBe(
-      "token-5",
-    );
+    expect(
+      useFileProjectReviewStore.getState().reviews[0]?.decision_token,
+    ).toBe("token-5");
   });
 
   it("ignores a late response after switching Project scope", async () => {
@@ -151,12 +156,12 @@ describe("file-native Project Review store", () => {
     await p1;
 
     expect(useFileProjectReviewStore.getState().projectId).toBe("p2");
-    expect(useFileProjectReviewStore.getState().review?.review_id).toBe(
+    expect(useFileProjectReviewStore.getState().reviews[0]?.review_id).toBe(
       "review-p2",
     );
-    expect(useFileProjectReviewStore.getState().review?.decision_token).toBe(
-      "p2-token",
-    );
+    expect(
+      useFileProjectReviewStore.getState().reviews[0]?.decision_token,
+    ).toBe("p2-token");
   });
 
   it("reuses decisionId and Idempotency-Key after an ambiguous failed response", async () => {
@@ -178,11 +183,11 @@ describe("file-native Project Review store", () => {
     const fetchMock = vi
       .fn()
       .mockRejectedValueOnce(new Error("response lost"))
-      .mockResolvedValueOnce(response(200, resolved));
+      .mockResolvedValueOnce(response(200, resolved, { ETag: '"token-2"' }));
     vi.stubGlobal("fetch", fetchMock);
     useFileProjectReviewStore.setState({
       projectId: "p1",
-      review: pending,
+      reviews: [pending],
       etag: '"token-1"',
       syncStatus: "healthy",
     });
@@ -192,12 +197,14 @@ describe("file-native Project Review store", () => {
     ];
 
     await expect(
-      useFileProjectReviewStore.getState().decide("p1", decisions),
+      useFileProjectReviewStore
+        .getState()
+        .decide("p1", "review-1", decisions),
     ).rejects.toThrow("response lost");
     await expect(
       useFileProjectReviewStore
         .getState()
-        .decide("p1", [...decisions].reverse()),
+        .decide("p1", "review-1", [...decisions].reverse()),
     ).resolves.toMatchObject({ status: "RESOLVED" });
 
     const firstInit = fetchMock.mock.calls[0][1] as RequestInit;
@@ -212,6 +219,27 @@ describe("file-native Project Review store", () => {
     expect(new Headers(secondInit.headers).get("Idempotency-Key")).toBe(
       firstBody.decisionId,
     );
-    expect(useFileProjectReviewStore.getState().review).toBeNull();
+    expect(useFileProjectReviewStore.getState().reviews).toEqual([]);
+  });
+
+  it("handles multiple pending reviews in FIFO order", async () => {
+    const first = review("token-1", 3, {
+      review_id: "review-1",
+      created_at: "2026-07-15T00:00:00Z",
+    });
+    const second = review("token-2", 4, {
+      review_id: "review-2",
+      created_at: "2026-07-15T00:00:01Z",
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(activeResponseMulti([first, second]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await useFileProjectReviewStore.getState().pollOnce("p1");
+    const reviews = useFileProjectReviewStore.getState().reviews;
+    expect(reviews).toHaveLength(2);
+    expect(reviews[0].review_id).toBe("review-1");
+    expect(reviews[1].review_id).toBe("review-2");
   });
 });

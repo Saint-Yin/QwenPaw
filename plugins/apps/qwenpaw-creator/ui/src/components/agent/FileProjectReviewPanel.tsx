@@ -11,6 +11,7 @@ import { getArtifactVersionMediaUrl } from "@/api/creator";
 import { navigateToLocator } from "@/routing/locators";
 import { useFileProjectReviewStore } from "@/store/fileProjectReviewStore";
 import OnboardingHint from "@/components/onboarding/OnboardingHint";
+import DiffView from "./DiffView";
 
 const DECISION_LABELS: Record<FileProjectReviewOperationDecision, string> = {
   PENDING: "待审",
@@ -57,11 +58,11 @@ function mediaLabel(locator: Record<string, string>): string {
 
 export default function FileProjectReviewPanel({
   projectId,
+  review,
 }: {
   projectId: string;
+  review: FileProjectReviewRecord;
 }) {
-  const storeProjectId = useFileProjectReviewStore((state) => state.projectId);
-  const review = useFileProjectReviewStore((state) => state.review);
   const decisionInFlight = useFileProjectReviewStore(
     (state) => state.decisionInFlight,
   );
@@ -69,8 +70,7 @@ export default function FileProjectReviewPanel({
   const decide = useFileProjectReviewStore((state) => state.decide);
   const [localBusy, setLocalBusy] = useState(false);
 
-  if (storeProjectId !== projectId || !review || review.status !== "PENDING")
-    return null;
+  if (review.status !== "PENDING") return null;
   const pending = review.operations.filter(
     (operation) => operation.decision === "PENDING",
   );
@@ -86,6 +86,7 @@ export default function FileProjectReviewPanel({
     try {
       await decide(
         projectId,
+        review.review_id,
         operations.map((operation) => ({
           operation_id: operation.operation_id,
           decision,
@@ -155,7 +156,7 @@ export default function FileProjectReviewPanel({
             onClick={() => void submit(pending, "ACCEPT")}
             className="rounded-md bg-[var(--color-accent)] px-2 py-1 text-[10px] font-medium text-white disabled:opacity-50"
           >
-            Keep all
+            {mediaLocator ? "保留" : "全部保留"}
           </button>
           <button
             type="button"
@@ -163,7 +164,7 @@ export default function FileProjectReviewPanel({
             onClick={() => void submit(pending, "REJECT")}
             className="rounded-md border border-[var(--color-border)] px-2 py-1 text-[10px] font-medium text-[var(--color-text-secondary)] disabled:opacity-50"
           >
-            Undo all
+            {mediaLocator ? "撤销" : "全部撤销"}
           </button>
         </div>
       </div>
@@ -223,23 +224,23 @@ export default function FileProjectReviewPanel({
                       <>
                         <button
                           type="button"
-                          aria-label={`Keep ${location}`}
+                          aria-label={`保留 ${location}`}
                           disabled={busy}
                           onClick={() => void submit([operation], "ACCEPT")}
                           className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)] disabled:opacity-50"
                         >
                           <Check className="h-3 w-3" />
-                          Keep
+                          保留
                         </button>
                         <button
                           type="button"
-                          aria-label={`Undo ${location}`}
+                          aria-label={`撤销 ${location}`}
                           disabled={busy}
                           onClick={() => void submit([operation], "REJECT")}
                           className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] disabled:opacity-50"
                         >
                           <Undo2 className="h-3 w-3" />
-                          Undo
+                          撤销
                         </button>
                       </>
                     )}

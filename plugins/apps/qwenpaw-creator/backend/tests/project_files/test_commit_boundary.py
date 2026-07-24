@@ -675,7 +675,7 @@ def test_second_review_round_coexists_with_active_review(tmp_path) -> None:
     assert current.generation == 2
     assert current.project.name == "Cannot overtake"
     assert current.project.description == "Needs review"
-    assert state.active_round_id == "round-2"
+    assert state.active_round_id == "round-1"
     assert state.accepted_generation == 0
     for round_id in ("round-1", "round-2"):
         review = AtomicJsonRecordStore(
@@ -738,7 +738,7 @@ def test_user_edit_supersedes_pending_operation_in_inactive_review(
         tmp_path / "project-1" / "runtime" / "state.json",
         RuntimeProjectState,
     ).read()
-    assert state.active_round_id == "round-2"
+    assert state.active_round_id == "round-1"
 
     edited = second.snapshot.project.model_dump(mode="json")
     edited["description"] = "User rewrote the description by hand"

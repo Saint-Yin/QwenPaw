@@ -57,17 +57,19 @@ describe("file-native Project Review API", () => {
   it("reads the strict snake_case Review contract and validates its ETag", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => response(200, review(), { ETag: '"token-1"' })),
+      vi.fn(async () => response(200, [review()], { ETag: '"token-1"' })),
     );
 
     await expect(getActiveFileProjectReview("p1")).resolves.toMatchObject({
       kind: "updated",
       etag: '"token-1"',
-      review: {
-        review_id: "review-1",
-        candidate_generation: 3,
-        decision_token: "token-1",
-      },
+      reviews: [
+        {
+          review_id: "review-1",
+          candidate_generation: 3,
+          decision_token: "token-1",
+        },
+      ],
     });
   });
 

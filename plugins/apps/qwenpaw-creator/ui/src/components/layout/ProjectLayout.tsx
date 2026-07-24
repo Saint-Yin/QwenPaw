@@ -165,7 +165,9 @@ export default function ProjectLayout() {
   const startFileReviewPolling = useFileProjectReviewStore(
     (state) => state.startPolling,
   );
-  const activeFileReview = useFileProjectReviewStore((state) => state.review);
+  const activeFileReview = useFileProjectReviewStore(
+    (state) => state.reviews[0] ?? null,
+  );
   const fileReviewSyncStatus = useFileProjectReviewStore(
     (state) => state.syncStatus,
   );

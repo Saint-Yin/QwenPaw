@@ -1396,9 +1396,9 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   const runs = useCreatorTaskViewStore((state) => state.runs);
   const tasks = useCreatorTaskViewStore((state) => state.tasks);
   const authorizations = useExecutionAuthorizationStore((state) => state.items);
-  const fileReview = useFileProjectReviewStore((state) =>
-    state.projectId === projectId ? state.review : null,
-  );
+  const fileReviews = useFileProjectReviewStore((state) =>
+    state.projectId === projectId ? state.reviews : null,
+  ) ?? [];
   const selectedRef = useCreatorInteractionStore((state) => state.selectedRef);
   const editingField = useCreatorInteractionStore(
     (state) => state.editingField,
@@ -1624,10 +1624,13 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   const pendingAuthorizationCount = authorizations.filter(
     (item) => item.status === "PENDING",
   ).length;
-  const pendingFileReviewCount =
-    fileReview?.operations.filter(
-      (operation) => operation.decision === "PENDING",
-    ).length ?? 0;
+  const pendingFileReviewCount = fileReviews.reduce(
+    (total, review) =>
+      total +
+      review.operations.filter((operation) => operation.decision === "PENDING")
+        .length,
+    0,
+  );
   const backendBadgeCount =
     agentStatusBar?.badges
       .filter(
@@ -1654,11 +1657,14 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   }, [pendingAuthorizationCount, setTab]);
 
   useEffect(() => {
-    if (!fileReview || pendingFileReviewCount === 0) return;
-    if (lastOpenedFileReviewToken.current === fileReview.decision_token) return;
-    lastOpenedFileReviewToken.current = fileReview.decision_token;
+    if (fileReviews.length === 0 || pendingFileReviewCount === 0) return;
+    const compositeToken = fileReviews
+      .map((r) => r.decision_token)
+      .join("|");
+    if (lastOpenedFileReviewToken.current === compositeToken) return;
+    lastOpenedFileReviewToken.current = compositeToken;
     setTab("review");
-  }, [fileReview, pendingFileReviewCount, setTab]);
+  }, [fileReviews, pendingFileReviewCount, setTab]);
 
   useEffect(() => {
     const stored = loadDockSize();
@@ -2082,8 +2088,16 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
           {showDecisions ? (
             <div className="flex min-h-0 flex-1 flex-col bg-[var(--color-bg-secondary)]/50">
               <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-                {fileReview ? (
-                  <FileProjectReviewPanel projectId={projectId} />
+                {fileReviews.length > 0 ? (
+                  <div className="space-y-3">
+                    {fileReviews.map((review) => (
+                      <FileProjectReviewPanel
+                        key={review.review_id}
+                        projectId={projectId}
+                        review={review}
+                      />
+                    ))}
+                  </div>
                 ) : (
                   <AgentDecisionCenter projectId={projectId} />
                 )}
