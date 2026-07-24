@@ -142,6 +142,44 @@ class TestVideoCost:
         assert estimate.approximate
         assert estimate.estimated_cost == pytest.approx(0.7 * 4)
 
+    def test_happyhorse_r2v_catalog_price_is_exact(self):
+        estimate = estimate_video_cost(
+            backend="wan",
+            model="happyhorse-1.1-r2v",
+            duration_seconds=5,
+            resolution="720P",
+        )
+        assert estimate.currency == "CNY"
+        assert estimate.estimated_cost == pytest.approx(4.5)
+        assert "0.9元/秒 × 5秒" in estimate.formula
+        assert not estimate.approximate
+
+    def test_happyhorse_1080p_tiers_differ_by_version(self):
+        latest = estimate_video_cost(
+            backend="wan",
+            model="happyhorse-1.1-r2v",
+            duration_seconds=10,
+            resolution="1080P",
+        )
+        legacy = estimate_video_cost(
+            backend="wan",
+            model="happyhorse-1.0-r2v",
+            duration_seconds=10,
+            resolution="1080P",
+        )
+        assert latest.estimated_cost == pytest.approx(12.0)
+        assert legacy.estimated_cost == pytest.approx(16.0)
+
+    def test_happyhorse_has_no_muted_discount(self):
+        muted = estimate_video_cost(
+            backend="wan",
+            model="happyhorse-1.1-r2v",
+            duration_seconds=5,
+            resolution="720P",
+            audio=False,
+        )
+        assert muted.estimated_cost == pytest.approx(4.5)
+
     def test_seedance_token_formula(self):
         estimate = estimate_video_cost(
             backend="seedance2",

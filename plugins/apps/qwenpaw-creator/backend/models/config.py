@@ -729,6 +729,11 @@ def get_video_backend() -> str:
     model_name = get_video_model_name().lower()
     if "seedance" in model_name:
         return "seedance2"
+    # Bailian HappyHorse (e.g. happyhorse-1.1-r2v) shares the Wan DashScope
+    # async protocol; keep this explicit instead of relying on the "r2v"
+    # substring below.
+    if model_name.startswith("happyhorse"):
+        return "wan"
     if model_name.startswith("wan") or "r2v" in model_name:
         return "wan"
     if "volcengine" in get_video_base_url().lower():
