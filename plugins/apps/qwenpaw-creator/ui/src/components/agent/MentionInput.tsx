@@ -524,10 +524,10 @@ const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
           onMouseLeave={() => setHoverThumb(null)}
           onClick={handleClick}
           onBlur={saveRange}
-          className="max-h-24 min-h-[32px] w-full overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2.5 py-1.5 text-xs leading-6 text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+          className="max-h-24 min-h-[32px] w-full overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2.5 py-1.5 text-[11px] leading-5 text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
         />
         {empty && (
-          <span className="pointer-events-none absolute left-2.5 top-1.5 text-xs leading-6 text-[var(--color-text-tertiary)]">
+          <span className="pointer-events-none absolute left-2.5 top-1.5 text-[11px] leading-5 text-[var(--color-text-tertiary)]">
             {placeholder}
           </span>
         )}

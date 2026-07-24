@@ -352,11 +352,9 @@ function useLiveDisclosure(active: boolean) {
 function ThinkingDisclosure({
   children,
   active,
-  compact = false,
 }: {
   children: string;
   active: boolean;
-  compact?: boolean;
 }) {
   const allowExpand = useAgentDockUiStore((state) => state.allowExpandDetails);
   const isReplaying = useCreatorSessionStore((state) => state.isReplaying);
@@ -366,9 +364,7 @@ function ThinkingDisclosure({
     <div
       data-agent-thinking
       data-expanded={expanded ? "true" : "false"}
-      className={`${
-        compact ? "text-[10px]" : "text-[11px]"
-      } border-l-2 border-[var(--color-border-strong)] pl-2`}
+      className="border-l-2 border-[var(--color-border-strong)] pl-2 text-[10px]"
     >
       <div className="flex items-center gap-2">
         <span className={`flex items-center gap-1.5 ${active ? "text-[var(--color-text-secondary)]" : "text-[var(--color-text-tertiary)]"}`}>
@@ -395,9 +391,7 @@ function ThinkingDisclosure({
         <pre
           data-agent-thinking-output
           tabIndex={0}
-          className={`${
-            compact ? "text-[10px] leading-4" : "text-[11px] leading-5"
-          } mt-1 max-h-56 touch-pan-y overflow-y-auto overscroll-contain whitespace-pre-wrap break-words font-sans text-[var(--color-text-secondary)] [scrollbar-gutter:stable]`}
+          className="mt-1 max-h-56 touch-pan-y overflow-y-auto overscroll-contain whitespace-pre-wrap break-words font-sans text-[10px] leading-4 text-[var(--color-text-secondary)] [scrollbar-gutter:stable]"
         >
           {children}
         </pre>
@@ -475,11 +469,9 @@ function actionTitle(envelope: CreatorActionEnvelope, active: boolean): string {
 function ActionDisclosure({
   envelope,
   active,
-  compact = false,
 }: {
   envelope: CreatorActionEnvelope;
   active: boolean;
-  compact?: boolean;
 }) {
   const allowExpand = useAgentDockUiStore((state) => state.allowExpandDetails);
   const isReplaying = useCreatorSessionStore((state) => state.isReplaying);
@@ -493,9 +485,7 @@ function ActionDisclosure({
       data-agent-action={envelope.action}
       data-streaming-action={active ? "true" : undefined}
       data-expanded={expanded ? "true" : "false"}
-      className={`${
-        compact ? "text-[10px]" : "text-[11px]"
-      } border-l-2 border-[var(--color-accent)]/25 pl-2`}
+      className="border-l-2 border-[var(--color-accent)]/25 pl-2 text-[10px]"
     >
       <div className="flex items-center gap-2">
         <span className={`flex items-center gap-1.5 ${active || waiting ? "text-[var(--color-text-secondary)]" : "text-[var(--color-success)]"}`}>
@@ -524,9 +514,7 @@ function ActionDisclosure({
         <pre
           data-agent-action-output
           tabIndex={0}
-          className={`${
-            compact ? "text-[10px] leading-4" : "text-[11px] leading-5"
-          } mt-1 max-h-56 touch-pan-y overflow-auto overscroll-contain whitespace-pre-wrap break-words rounded-md bg-[var(--color-bg-secondary)] p-2 text-[var(--color-text-secondary)] [scrollbar-gutter:stable]`}
+          className="mt-1 max-h-56 touch-pan-y overflow-auto overscroll-contain whitespace-pre-wrap break-words rounded-md bg-[var(--color-bg-secondary)] p-2 text-[10px] leading-4 text-[var(--color-text-secondary)] [scrollbar-gutter:stable]"
         >
           {payload}
         </pre>
@@ -551,7 +539,7 @@ function ConversationMessage({ item }: { item: CreatorMessage }) {
   if (item.role === "user") {
     return (
       <div data-agent-message className="space-y-2">
-        <div className="ml-auto w-fit max-w-[85%] rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs text-white">
+        <div className="ml-auto w-fit max-w-[85%] rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-[11px] leading-[1.5] text-white">
           <MessageParts parts={content} />
         </div>
       </div>
@@ -561,7 +549,7 @@ function ConversationMessage({ item }: { item: CreatorMessage }) {
     return (
       <div
         data-agent-message
-        className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2.5 py-1.5 text-[11px] text-[var(--color-text-secondary)]"
+        className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2.5 py-1.5 text-[10px] text-[var(--color-text-secondary)]"
       >
         <MessageParts parts={content} />
       </div>
@@ -729,7 +717,7 @@ function SubagentMessageBubble({
           </span>
         </div>
       )}
-      {thinking && <ThinkingDisclosure active={!item.completed} compact>{thinking}</ThinkingDisclosure>}
+      {thinking && <ThinkingDisclosure active={!item.completed}>{thinking}</ThinkingDisclosure>}
       {visibleBody && item.completed && (
         <pre className="mt-1 whitespace-pre-wrap break-words font-sans text-[11px] leading-5 text-[var(--color-text-secondary)]">
           {visibleBody}
@@ -739,7 +727,6 @@ function SubagentMessageBubble({
         <ActionDisclosure
           envelope={envelope}
           active={!item.completed}
-          compact
         />
       )}
     </div>
@@ -1010,7 +997,7 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
     <div
       data-agent-tool={data.actionId}
       data-expanded={expanded ? "true" : "false"}
-      className="text-[11px]"
+      className="text-[10px]"
     >
       <div className="flex items-center gap-2">
         <span className={`flex items-center gap-1.5 ${tone}`}>
@@ -1047,7 +1034,7 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
           {delegated && (task || targets.length > 0) && (
             <div
               data-subagent-input
-              className="max-h-32 overflow-y-auto rounded-md bg-[var(--color-bg-secondary)] px-2 py-1.5 text-[11px] leading-5 text-[var(--color-text-secondary)]"
+              className="max-h-32 overflow-y-auto rounded-md bg-[var(--color-bg-secondary)] px-2 py-1.5 text-[10px] leading-4 text-[var(--color-text-secondary)]"
             >
               {task && (
                 <p className="whitespace-pre-wrap break-words">{task}</p>
@@ -1064,7 +1051,7 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
             <SubagentActivityBubble activity={activity} />
           )}
           {delegated && !activity && rawDelegateResult && (
-            <div className="text-[11px] leading-5 text-[var(--color-text-secondary)]">
+            <div className="text-[10px] leading-4 text-[var(--color-text-secondary)]">
               <pre className="whitespace-pre-wrap break-words font-sans">
                 {rawDelegateResult}
               </pre>
@@ -1115,7 +1102,7 @@ function planPresentation(message: CreatorMessage): PlanPresentation | null {
 function PlanCard({ data }: { data: PlanPresentation }) {
   return (
     <div className="rounded-lg border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] p-3 text-[11px] leading-5 text-[var(--color-text-primary)]">
-      <b className="block text-xs text-[var(--color-accent)]">
+      <b className="block text-[var(--color-accent)]">
         执行计划：{data.summary}
       </b>
       {data.steps.length > 0 && (
@@ -1271,7 +1258,7 @@ function WorkspacePanel() {
     .reverse();
 
   return (
-    <div className="space-y-2.5 text-[11px] leading-5">
+    <div className="space-y-2.5 text-[10px] leading-4">
       <div>
         <p className="font-semibold text-[var(--color-text-secondary)]">
           当前任务
@@ -2049,7 +2036,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
             <div className="flex min-w-0 items-center gap-2">
               <Sparkles className="h-4 w-4 shrink-0 text-[var(--color-accent)]" />
               <div className="min-w-0">
-                <b className="block truncate text-xs text-[var(--color-text-primary)]">
+                <b className="block truncate text-sm font-medium text-[var(--color-text-primary)]">
                   创作助手
                 </b>
                 {contextChips.length > 0 && (
@@ -2192,7 +2179,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                       >
                         <div
                           data-agent-message
-                          className="ml-auto w-fit max-w-[85%] rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs text-white"
+                          className="ml-auto w-fit max-w-[85%] rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-[11px] leading-[1.5] text-white"
                         >
                           <MessageParts
                             parts={conversationContent(turn.user)}
@@ -2226,7 +2213,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                     ))}
                   {queued.map((item) => (
                     <div key={item.clientMessageId} className="space-y-2">
-                      <div className="ml-auto w-fit max-w-[85%] rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs text-white">
+                      <div className="ml-auto w-fit max-w-[85%] rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-[11px] leading-[1.5] text-white">
                         {item.text}
                       </div>
                       {item.state === "failed" && (
@@ -2255,7 +2242,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                 <div
                   data-agent-live-status
                   data-state={liveStatus.state}
-                  className="mb-2 flex items-center gap-2 text-[11px] leading-4"
+                  className="mb-2 flex items-center gap-2 text-[10px] leading-4"
                 >
                   <span
                     className="agent-live-dot"
@@ -2365,7 +2352,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                         onMouseEnter={() => setMentionIndex(index)}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() => pickMention(item)}
-                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs ${
+                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] ${
                           index === mentionIndex
                             ? "bg-[var(--color-accent-soft)]"
                             : "hover:bg-[var(--color-accent-soft)]"
