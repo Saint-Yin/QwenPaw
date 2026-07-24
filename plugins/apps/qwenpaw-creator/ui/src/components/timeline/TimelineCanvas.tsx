@@ -676,10 +676,10 @@ export default function TimelineCanvas({
             >
               <Loader2 className="h-7 w-7 animate-spin text-white/75" />
               <span className="text-sm font-semibold text-white/90">
-                该时间点尚未渲染完成
+                正在定位画面
               </span>
               <span className="text-xs leading-5 text-white/60">
-                正在准备该时间点的完整画面，就绪前不会显示未完成的预览。
+                成片已渲染完成，正在加载该时间点的画面，无需重新渲染。
               </span>
             </div>
           )}

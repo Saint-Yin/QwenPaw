@@ -368,6 +368,7 @@ async def render_timeline(
     from services.media_files.local_execution import (
         execute_file_local_media_command,
         file_local_media_task_id,
+        find_reusable_local_media_task,
     )
 
     identity = (str(services.root), project_id, timeline_id)
@@ -395,6 +396,24 @@ async def render_timeline(
                 services,
                 project_id,
                 task_id=active.task_id,
+                replayed=True,
+            )
+
+        reusable = await asyncio.to_thread(
+            find_reusable_local_media_task,
+            services,
+            project_id=project_id,
+            command=CreatorCommandType.COMPOSE_FINAL_VIDEO,
+            target_ref=target_ref,
+        )
+        if reusable is not None:
+            # 渲染内容自上次成功合成后未变化且成片未过期：直接重放
+            # 已成功的 Task，前端观察到终态后继续使用现有成片。
+            return await asyncio.to_thread(
+                _render_dispatch_view,
+                services,
+                project_id,
+                task_id=reusable.task_id,
                 replayed=True,
             )
 

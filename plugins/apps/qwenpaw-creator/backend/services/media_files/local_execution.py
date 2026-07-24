@@ -1587,12 +1587,14 @@ def _resolve_execution(
     raise ValidationError(f"不支持的本地媒体命令: {command.value}")
 
 
-def _resolved_fingerprint(
-    resolved: _ResolvedExecution,
-    *,
-    generation: int,
-    etag: str,
-) -> str:
+def _resolved_fingerprint(resolved: _ResolvedExecution) -> str:
+    """渲染内容指纹：只覆盖会影响合成结果的输入。
+
+    刻意不包含 Project 的 generation/etag——无关提交（Agent 会话、
+    素材分析等）不应改变指纹，否则内容完全一致的成片会被判为新
+    内容而反复重新合成。
+    """
+
     return _fingerprint(
         {
             "command": resolved.command.value,
@@ -1620,10 +1622,51 @@ def _resolved_fingerprint(
             "transitions": list(resolved.transitions),
             "audioPlan": resolved.audio_plan,
             "canvasSize": list(resolved.canvas_size),
-            "inputGeneration": generation,
-            "inputEtag": etag,
         },
     )
+
+
+def _fresh_slot_version(
+    project: Project,
+    slot_id: str,
+) -> ArtifactVersion | None:
+    """返回槽位当前选中且未过期的产物版本，找不到时为 None。"""
+
+    slot = project.assets.artifact_slots_by_id.get(slot_id)
+    if slot is None or not slot.selected_version_id:
+        return None
+    version = project.assets.artifact_versions_by_id.get(
+        slot.selected_version_id,
+    )
+    if version is None or version.stale:
+        return None
+    return version
+
+
+def _reusable_succeeded_task(
+    executions: ProjectExecutionStore,
+    project: Project,
+    *,
+    slot_id: str,
+    fingerprint: str,
+) -> TaskRecord | None:
+    """内容指纹与已选新鲜成片一致时返回其成功 Task，避免重复合成。"""
+
+    version = _fresh_slot_version(project, slot_id)
+    if version is None or version.input_fingerprint != fingerprint:
+        return None
+    task_id = version.metadata.get("taskId")
+    if not isinstance(task_id, str) or not task_id:
+        return None
+    try:
+        task = executions.get_task(project.project_id, task_id)
+    except RecordNotFoundError:
+        return None
+    if task.status is not TaskStatus.SUCCEEDED:
+        return None
+    if not isinstance(task.result, dict):
+        return None
+    return task
 
 
 def _json_mapping(value: Any) -> dict[str, Any]:
@@ -1738,11 +1781,21 @@ class FileLocalMediaExecutionService:
             target_ref=target_ref,
             arguments=dict(arguments),
         )
-        request_fingerprint = _resolved_fingerprint(
-            resolved,
-            generation=base.generation,
-            etag=base.etag,
+        request_fingerprint = _resolved_fingerprint(resolved)
+        reuse = await asyncio.to_thread(
+            _reusable_succeeded_task,
+            self.executions,
+            base.project,
+            slot_id=resolved.slot_id,
+            fingerprint=request_fingerprint,
         )
+        if reuse is not None:
+            # 渲染内容与上次成功合成完全一致且成片未过期：直接重放
+            # 既有结果，不再派发新的合成任务。
+            try:
+                return self._result_from_task(reuse, replayed=True)
+            except StorageIntegrityError:
+                pass
         run, task = await self._admit(
             base=base,
             resolved=resolved,
@@ -2411,7 +2464,10 @@ class FileLocalMediaExecutionService:
                 elif (
                     current.etag != latest.input_etag
                     or current.generation != latest.input_generation
-                ):
+                ) and not self._content_fingerprint_matches(current, latest):
+                    # Project 在合成期间被其他写者提交过；只有当渲染内容
+                    # 本身（元素/转场/画布等）确实变化时才丢弃结果，
+                    # 无关提交不作废刚合成好的成片。
                     return "STALE", latest, current
                 else:
                     candidate = current.project.model_dump(mode="json")
@@ -2500,6 +2556,28 @@ class FileLocalMediaExecutionService:
             summary=f"已生成并选择 {artifact.name}",
         )
         return self._result_from_task(current_task, replayed=replayed)
+
+    @staticmethod
+    def _content_fingerprint_matches(
+        current: ProjectSnapshot,
+        task: TaskRecord,
+    ) -> bool:
+        """当前快照下重新解析的渲染内容指纹是否仍与任务受理时一致。"""
+
+        raw_command = task.metadata.get("commandType")
+        raw_target = task.metadata.get("targetRef")
+        if not isinstance(raw_command, str) or not isinstance(raw_target, str):
+            return False
+        try:
+            resolved = _resolve_execution(
+                snapshot=current,
+                command=CreatorCommandType(raw_command),
+                target_ref=raw_target,
+                arguments={},
+            )
+        except (ConflictError, ValidationError, ValueError):
+            return False
+        return _resolved_fingerprint(resolved) == task.request_fingerprint
 
     @staticmethod
     def _result_is_converged(
@@ -2828,6 +2906,41 @@ def file_local_media_task_id(
     )[
         "task_id"
     ]
+
+
+def find_reusable_local_media_task(
+    services: CreatorFileServices,
+    *,
+    project_id: str,
+    command: CreatorCommandType | str,
+    target_ref: str,
+) -> TaskRecord | None:
+    """当前渲染内容与已选新鲜成片指纹一致时，返回其成功 Task。
+
+    供路由层在派发前短路：内容未变化就复用上次成功合成的结果，
+    不再重复渲染。任何解析失败都返回 None 走正常派发。
+    """
+
+    try:
+        command_value = CreatorCommandType(command)
+    except ValueError:
+        return None
+    snapshot = services.projects.read(project_id)
+    try:
+        resolved = _resolve_execution(
+            snapshot=snapshot,
+            command=command_value,
+            target_ref=target_ref,
+            arguments={},
+        )
+    except (ConflictError, ValidationError):
+        return None
+    return _reusable_succeeded_task(
+        ProjectExecutionStore(services.root),
+        snapshot.project,
+        slot_id=resolved.slot_id,
+        fingerprint=_resolved_fingerprint(resolved),
+    )
 
 
 async def recover_file_local_media_project(

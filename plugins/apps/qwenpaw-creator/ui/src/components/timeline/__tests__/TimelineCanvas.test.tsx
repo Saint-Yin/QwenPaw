@@ -251,7 +251,7 @@ describe("TimelineCanvas preview scrubber", () => {
 
     expect(
       container.querySelector("[data-final-preview-incomplete]"),
-    ).toHaveTextContent("该时间点尚未渲染完成");
+    ).toHaveTextContent("正在定位画面");
 
     Object.defineProperties(video, {
       duration: { configurable: true, value: 20 },

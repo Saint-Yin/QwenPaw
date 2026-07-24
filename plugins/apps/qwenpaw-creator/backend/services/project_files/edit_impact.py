@@ -490,6 +490,43 @@ def _apply_slot_selection_path(
     _mark_timeline_render_stale(document, timeline_id, impact)
 
 
+def _pointer_value(
+    document: Mapping[str, Any] | None,
+    tokens: tuple[str, ...],
+) -> tuple[bool, Any]:
+    """按 JSON Pointer token 链取值，返回 (是否存在, 值)。"""
+
+    node: Any = document
+    for token in tokens:
+        if isinstance(node, Mapping):
+            if token not in node:
+                return False, None
+            node = node[token]
+        elif isinstance(node, list):
+            try:
+                index = int(token)
+            except ValueError:
+                return False, None
+            if not 0 <= index < len(node):
+                return False, None
+            node = node[index]
+        else:
+            return False, None
+    return True, node
+
+
+def _pointer_unchanged(
+    base: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    tokens: tuple[str, ...],
+) -> bool:
+    """提交的 pointer 在 base 与 candidate 中值完全相同时为 True。"""
+
+    base_found, base_value = _pointer_value(base, tokens)
+    candidate_found, candidate_value = _pointer_value(candidate, tokens)
+    return base_found == candidate_found and base_value == candidate_value
+
+
 def apply_frontend_edit_impacts(
     candidate: Mapping[str, Any],
     submitted_pointers: Sequence[str],
@@ -502,6 +539,10 @@ def apply_frontend_edit_impacts(
     impact = EditImpact()
     for pointer in dict.fromkeys(submitted_pointers):
         tokens = split_pointer(pointer)
+        if base is not None and _pointer_unchanged(base, document, tokens):
+            # 提交了 pointer 但值与基线完全一致（no-op 编辑）：
+            # 不得作废任何已生成产物或成片。
+            continue
         _apply_element_path(
             document,
             tokens,
