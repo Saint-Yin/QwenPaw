@@ -144,7 +144,7 @@ describe("FileProjectReviewPanel", () => {
     const decide = seed(value);
     render(<FileProjectReviewPanel projectId="p1" review={value} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+    fireEvent.click(screen.getByRole("button", { name: "全部撤销" }));
     await waitFor(() =>
       expect(decide).toHaveBeenCalledWith("p1", "review-1", [
         { operation_id: "operation-1", decision: "REJECT" },
