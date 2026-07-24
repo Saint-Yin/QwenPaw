@@ -112,10 +112,13 @@ describe("FileProjectReviewPanel", () => {
     const reviewData = review();
     render(<FileProjectReviewPanel projectId="p1" review={reviewData} />);
     expect(screen.getByText("文件项目修改")).toBeInTheDocument();
-    expect(screen.getByText("/description")).toBeInTheDocument();
-    expect(document.querySelector("[data-review-diff]")).toBeTruthy();
-    expect(screen.getByText("Old title")).toBeInTheDocument();
-    expect(screen.getByText("New title")).toBeInTheDocument();
+    // 文本修改不再在审阅面板内展示 diff；只展示可读摘要，
+    // 完整 diff 通过“查看”跳转到原文位置展示。
+    expect(screen.getByText("描述")).toBeInTheDocument();
+    expect(screen.getByTitle("/description")).toBeInTheDocument();
+    expect(document.querySelector("[data-review-diff]")).toBeNull();
+    expect(screen.queryByText("Old title")).toBeNull();
+    expect(screen.queryByText("New title")).toBeNull();
   });
 
   it("submits an individual Keep decision by operation_id", async () => {
@@ -141,7 +144,7 @@ describe("FileProjectReviewPanel", () => {
     const decide = seed(value);
     render(<FileProjectReviewPanel projectId="p1" review={value} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "全部撤销" }));
+    fireEvent.click(screen.getByRole("button", { name: "撤销" }));
     await waitFor(() =>
       expect(decide).toHaveBeenCalledWith("p1", "review-1", [
         { operation_id: "operation-1", decision: "REJECT" },

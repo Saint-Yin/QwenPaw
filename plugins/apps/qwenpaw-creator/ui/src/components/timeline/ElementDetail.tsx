@@ -23,6 +23,7 @@ import {
 } from "@/selectors/timelineElementSelectors";
 import { outputLabel } from "@/lib/creatorPresentation";
 import { projectJsonPointer } from "@/lib/projectJsonPointer";
+import InlineReviewDiff from "@/components/agent/InlineReviewDiff";
 
 interface ElementDetailProps {
   project: ProjectDocument;
@@ -87,6 +88,7 @@ function TextField({
           onChange={(event) => onChange(event.target.value)}
         />
       )}
+      <InlineReviewDiff pointer={path} />
     </label>
   );
 }

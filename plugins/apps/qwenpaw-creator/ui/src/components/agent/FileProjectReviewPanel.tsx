@@ -11,6 +11,8 @@ import { getArtifactVersionMediaUrl } from "@/api/creator";
 import { navigateToLocator } from "@/routing/locators";
 import { useFileProjectReviewStore } from "@/store/fileProjectReviewStore";
 import OnboardingHint from "@/components/onboarding/OnboardingHint";
+import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
+import { selectPrimaryTimeline } from "@/selectors/timelineElementSelectors";
 import DiffView from "./DiffView";
 
 const DECISION_LABELS: Record<FileProjectReviewOperationDecision, string> = {
@@ -19,6 +21,29 @@ const DECISION_LABELS: Record<FileProjectReviewOperationDecision, string> = {
   REJECTED: "已撤销",
   REVISED: "已修订",
   SUPERSEDED_BY_USER_EDIT: "已被用户编辑替代",
+};
+
+const KIND_LABELS: Record<string, string> = {
+  create: "新增",
+  update: "修改",
+  delete: "删除",
+  move: "移动",
+  reorder: "重排",
+  select_asset: "选择资产",
+};
+
+const FIELD_LABELS: Record<string, string> = {
+  name: "名称",
+  title: "标题",
+  description: "描述",
+  creative_brief: "创作总纲",
+  creative_direction: "创作方向",
+  prompt: "提示词",
+  camera: "运镜",
+  framing: "景别",
+  duration_seconds: "时长",
+  narration: "旁白",
+  dialogue: "台词",
 };
 
 const ARTIFACT_KIND_LABELS: Record<string, string> = {
@@ -36,6 +61,40 @@ function operationLocation(operation: FileProjectReviewOperation): string {
   );
 }
 
+/** 可读的修改位置摘要：用 element/asset 真实名称与字段名代替裸 JSON pointer。 */
+function operationSummary(
+  operation: FileProjectReviewOperation,
+  elementNames: Record<string, string>,
+): string {
+  const locator = operation.ui_locator ?? {};
+  const pointer = operation.json_pointer ?? "";
+  const lastToken = pointer.split("/").filter(Boolean).pop() ?? "";
+  const fieldLabel = FIELD_LABELS[lastToken] ?? lastToken;
+  const parts: string[] = [];
+  if (locator.elementId)
+    parts.push(elementNames[locator.elementId] ?? `内容 ${locator.elementId}`);
+  else if (locator.assetId) parts.push(`资产 ${locator.assetId}`);
+  if (fieldLabel) parts.push(fieldLabel);
+  return parts.length > 0 ? parts.join(" · ") : operationLocation(operation);
+}
+
+function previewText(value: unknown, limit = 26): string {
+  if (value === null || value === undefined) return "—";
+  const text =
+    typeof value === "string" ? value : JSON.stringify(value) ?? "—";
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > limit
+    ? `${normalized.slice(0, limit)}…`
+    : normalized || "—";
+}
+
+/** 一行变更预览，让用户不跳转也能知道改了什么；完整 diff 在原文处展示。 */
+function operationPreview(operation: FileProjectReviewOperation): string {
+  if (operation.kind === "create") return `新增：${previewText(operation.after)}`;
+  if (operation.kind === "delete") return `删除：${previewText(operation.before)}`;
+  return `${previewText(operation.before)} → ${previewText(operation.after)}`;
+}
+
 /** The media artifact locator for a media-generation review, if any. */
 function mediaLocatorOf(
   review: FileProjectReviewRecord,
@@ -47,6 +106,18 @@ function mediaLocatorOf(
     }
   }
   return null;
+}
+
+/**
+ * 待审“单元”数：媒体生成审阅的若干内部 operations（文件/版本/槽位/记账字段）
+ * 对用户而言是同一件产物，计为 1；文本审阅按待决策的 operation 计数。
+ */
+export function reviewPendingUnits(review: FileProjectReviewRecord): number {
+  const pending = review.operations.filter(
+    (operation) => operation.decision === "PENDING",
+  ).length;
+  if (pending === 0) return 0;
+  return mediaLocatorOf(review) ? 1 : pending;
 }
 
 function mediaLabel(locator: Record<string, string>): string {
@@ -68,7 +139,32 @@ export default function FileProjectReviewPanel({
   );
   const syncError = useFileProjectReviewStore((state) => state.syncError);
   const decide = useFileProjectReviewStore((state) => state.decide);
+  const project = useProjectSnapshotStore((state) => state.project);
   const [localBusy, setLocalBusy] = useState(false);
+
+  const elementNames = (() => {
+    const timeline = selectPrimaryTimeline(project);
+    const names: Record<string, string> = {};
+    if (timeline) {
+      Object.values(timeline.elements_by_id).forEach((element) => {
+        names[element.element_id] = element.label || element.element_id;
+      });
+    }
+    return names;
+  })();
+  const assetName = (assetId: string): string =>
+    project?.visual.entities.items[assetId]?.name || assetId;
+  /** 媒体产物的归属描述：「第一幕：发现」的分镜图 / 角色「狐狸」的形象图。 */
+  const mediaOwnerLine = (locator: Record<string, string>): string => {
+    if (locator.elementId) {
+      const name = elementNames[locator.elementId] ?? locator.elementId;
+      return `「${name}」的${mediaLabel(locator)}`;
+    }
+    if (locator.assetId) {
+      return `「${assetName(locator.assetId)}」的形象图`;
+    }
+    return mediaLabel(locator);
+  };
 
   if (review.status !== "PENDING") return null;
   const pending = review.operations.filter(
@@ -76,6 +172,7 @@ export default function FileProjectReviewPanel({
   );
   const busy = decisionInFlight || localBusy;
   const mediaLocator = mediaLocatorOf(review);
+  const pendingUnits = mediaLocator ? Math.min(pending.length, 1) : pending.length;
 
   const submit = async (
     operations: FileProjectReviewOperation[],
@@ -138,15 +235,16 @@ export default function FileProjectReviewPanel({
             )}
             {mediaLocator ? `${mediaLabel(mediaLocator)}审阅` : "文件项目修改"}
             <span className="rounded-full bg-[var(--color-accent-soft)] px-1.5 py-0.5 text-[9px] text-[var(--color-accent)]">
-              {pending.length} 待审
+              {pendingUnits} 待审
             </span>
           </h3>
           <p
-            className="mt-0.5 truncate font-mono text-[9px] text-[var(--color-text-tertiary)]"
-            title={review.round_id}
+            className="mt-0.5 truncate text-[9px] text-[var(--color-text-tertiary)]"
+            title={`${review.round_id} · generation ${review.baseline_generation} → ${review.candidate_generation}`}
           >
-            round {review.round_id} · generation {review.baseline_generation} →{" "}
-            {review.candidate_generation}
+            {mediaLocator
+              ? mediaOwnerLine(mediaLocator)
+              : `共 ${pending.length} 处待确认的文本修改`}
           </p>
         </div>
         <div className="flex shrink-0 gap-1">
@@ -181,6 +279,7 @@ export default function FileProjectReviewPanel({
       {mediaLocator ? (
         <MediaReviewBody
           locator={mediaLocator}
+          ownerLine={mediaOwnerLine(mediaLocator)}
           onOpen={() => openLocator(mediaLocator)}
         />
       ) : (
@@ -190,7 +289,8 @@ export default function FileProjectReviewPanel({
             const location = operationLocation(operation);
             const locator = operation.ui_locator ?? {};
             const canJump =
-              Boolean(locator.field) || Boolean(operation.json_pointer);
+              operation.kind !== "delete" &&
+              (Boolean(locator.field) || Boolean(operation.json_pointer));
             return (
               <li
                 key={operation.operation_id}
@@ -199,11 +299,22 @@ export default function FileProjectReviewPanel({
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="break-all font-mono text-[10px] font-semibold text-[var(--color-text-primary)]">
-                      {location}
+                    <p
+                      className="break-all text-[11px] font-semibold text-[var(--color-text-primary)]"
+                      title={location}
+                    >
+                      {operationSummary(operation, elementNames)}
                     </p>
                     <p className="mt-0.5 text-[9px] text-[var(--color-text-tertiary)]">
-                      {operation.kind} · {DECISION_LABELS[operation.decision]}
+                      {KIND_LABELS[operation.kind] ?? operation.kind} ·{" "}
+                      {DECISION_LABELS[operation.decision]}
+                      {canJump && " · 点击“查看”在原文处对比修改"}
+                    </p>
+                    <p
+                      className="mt-0.5 truncate text-[9px] text-[var(--color-text-secondary)]"
+                      title={operationPreview(operation)}
+                    >
+                      {operationPreview(operation)}
                     </p>
                   </div>
                   <div className="flex shrink-0 gap-1">
@@ -246,9 +357,15 @@ export default function FileProjectReviewPanel({
                     )}
                   </div>
                 </div>
-                <div className="mt-2">
-                  <DiffView before={operation.before} after={operation.after} />
-                </div>
+                {operation.kind === "delete" && (
+                  <div className="mt-2">
+                    {/* 已删除的内容在工作区没有可跳转的原文位置，就地展示被删内容。 */}
+                    <DiffView
+                      before={operation.before}
+                      after={operation.after}
+                    />
+                  </div>
+                )}
               </li>
             );
           })}
@@ -260,9 +377,11 @@ export default function FileProjectReviewPanel({
 
 function MediaReviewBody({
   locator,
+  ownerLine,
   onOpen,
 }: {
   locator: Record<string, string>;
+  ownerLine: string;
   onOpen: () => void;
 }) {
   const versionId = locator.artifactVersionId;
@@ -295,10 +414,11 @@ function MediaReviewBody({
         )}
       </div>
       <div className="mt-2 flex items-center justify-between gap-2">
-        <p className="min-w-0 truncate text-[10px] text-[var(--color-text-secondary)]">
-          {mediaLabel(locator)}
-          {locator.elementId ? ` · 分镜 ${locator.elementId}` : ""}
-          {locator.assetId ? ` · 资产 ${locator.assetId}` : ""}
+        <p
+          className="min-w-0 truncate text-[10px] text-[var(--color-text-secondary)]"
+          title={`${locator.elementId ?? locator.assetId ?? ""}`}
+        >
+          {ownerLine}
         </p>
         <button
           type="button"

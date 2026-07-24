@@ -16,6 +16,8 @@ interface ExecutionAuthorizationState {
   projectId: string | null;
   items: ExecutionAuthorizationView[];
   loading: boolean;
+  /** 至少成功加载过一次；轮询刷新时 UI 不再回退到 loading 文案。 */
+  loaded: boolean;
   error: string | null;
   bindProject: (projectId: string) => void;
   load: (projectId: string) => Promise<void>;
@@ -39,13 +41,20 @@ export const useExecutionAuthorizationStore =
       if (get().projectId === projectId) return;
       epoch += 1;
       requestId = 0;
-      set({ projectId, items: [], loading: false, error: null });
+      set({
+        projectId,
+        items: [],
+        loading: false,
+        loaded: false,
+        error: null,
+      });
     };
 
     return {
       projectId: null,
       items: [],
       loading: false,
+      loaded: false,
       error: null,
       bindProject,
       load: async (projectId) => {
@@ -61,7 +70,12 @@ export const useExecutionAuthorizationStore =
             get().projectId !== projectId
           )
             return;
-          set({ items: response.items ?? [], loading: false, error: null });
+          set({
+            items: response.items ?? [],
+            loading: false,
+            loaded: true,
+            error: null,
+          });
         } catch (error) {
           if (
             requestEpoch === epoch &&
@@ -130,7 +144,13 @@ export const useExecutionAuthorizationStore =
       reset: () => {
         epoch += 1;
         requestId = 0;
-        set({ projectId: null, items: [], loading: false, error: null });
+        set({
+          projectId: null,
+          items: [],
+          loading: false,
+          loaded: false,
+          error: null,
+        });
       },
     };
   });

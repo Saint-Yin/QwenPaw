@@ -5,6 +5,7 @@ import type {
   ShotDocument,
 } from "@/contracts/creator";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
+import InlineReviewDiff from "@/components/agent/InlineReviewDiff";
 
 const { TextArea } = Input;
 
@@ -78,6 +79,7 @@ export default function ShotList({
                   placeholder="镜头描述…"
                   className="!rounded-md !border-transparent !bg-transparent !p-1 !text-xs hover:!border-[var(--color-border)] focus:!border-[var(--color-accent)]"
                 />
+                <InlineReviewDiff pointer={shotPointer(shotId, "description")} />
               </div>
               <div className="flex items-center gap-2">
                 <span
@@ -143,6 +145,11 @@ export default function ShotList({
                   />
                 </span>
               </div>
+              <InlineReviewDiff pointer={shotPointer(shotId, "camera")} />
+              <InlineReviewDiff pointer={shotPointer(shotId, "framing")} />
+              <InlineReviewDiff
+                pointer={shotPointer(shotId, "duration_seconds")}
+              />
             </div>
             <Popconfirm
               title="删除此镜头？"

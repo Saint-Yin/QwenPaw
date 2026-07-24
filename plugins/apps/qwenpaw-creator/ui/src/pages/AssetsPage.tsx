@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Input, message, Modal, Tabs } from "antd";
 import {
   Box,
+  Clapperboard,
   Download,
   FileText,
   Film,
@@ -12,6 +13,7 @@ import {
   Search,
   Sparkles,
   Upload,
+  Wand2,
 } from "lucide-react";
 import {
   getArtifactVersionMediaUrl,
@@ -34,6 +36,7 @@ import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import AssetMediaPreview from "@/components/assets/AssetMediaPreview";
 import PageLoadError from "@/components/PageLoadError";
 import PageSkeleton from "@/components/PageSkeleton";
+import { selectPrimaryTimeline } from "@/selectors/timelineElementSelectors";
 
 type FilterKey =
   | "all"
@@ -265,6 +268,140 @@ function displayValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
+interface PromptTarget {
+  pointer: string;
+  value: string;
+  label: string;
+}
+
+function visualEntityPromptTarget(
+  entity: VisualEntityDocument,
+  versionId: string | null,
+): PromptTarget | null {
+  const variantId =
+    (versionId &&
+      entity.variants.order.find((candidate) =>
+        entity.variants.items[
+          candidate
+        ]?.generated_artifact_version_ids.includes(versionId),
+      )) ||
+    entity.variants.order[0];
+  const variant = variantId ? entity.variants.items[variantId] : null;
+  if (!variant) return null;
+  return {
+    pointer: `/visual/entities/items/${entity.entity_id}/variants/items/${variant.variant_id}/prompt`,
+    value: variant.prompt,
+    label: "生成 Prompt",
+  };
+}
+
+/** AI 生成产物的原始生成 Prompt 与其在 Project 中的可编辑位置。 */
+function generationPromptTarget(
+  project: ProjectDocument,
+  selected: AssetItem,
+): PromptTarget | null {
+  if (selected.kind === "visual") {
+    const entity = selected.raw as VisualEntityDocument;
+    return visualEntityPromptTarget(
+      entity,
+      entity.selected_artifact_version_id,
+    );
+  }
+  if (selected.kind !== "artifact") return null;
+  const ownerRef = selected.ownerRef ?? "";
+  if (ownerRef.startsWith("visual-entity:")) {
+    const entity =
+      project.visual.entities.items[ownerRef.slice("visual-entity:".length)];
+    return entity ? visualEntityPromptTarget(entity, selected.id) : null;
+  }
+  if (ownerRef.startsWith("element:")) {
+    const elementId = ownerRef.slice("element:".length);
+    const timeline = selectPrimaryTimeline(project);
+    const element = timeline?.elements_by_id[elementId];
+    if (!timeline || !element) return null;
+    const base = `/timelines/items/${timeline.timeline_id}/elements_by_id/${elementId}/creation`;
+    if (element.creation.type === "r2v") {
+      const artifact = selected.raw as ArtifactVersionDocument;
+      const isVideo =
+        selected.mediaKind === "video" ||
+        `${artifact.kind}`.includes("video");
+      return isVideo
+        ? {
+            pointer: `${base}/video_prompt`,
+            value: element.creation.video_prompt,
+            label: "视频生成 Prompt",
+          }
+        : {
+            pointer: `${base}/storyboard_prompt`,
+            value: element.creation.storyboard_prompt,
+            label: "分镜图生成 Prompt",
+          };
+    }
+    if (element.creation.type === "overlay") {
+      return {
+        pointer: `${base}/prompt`,
+        value: element.creation.prompt,
+        label: "生成 Prompt",
+      };
+    }
+  }
+  return null;
+}
+
+/** 可编辑的生成 Prompt 区块；key 绑定 pointer，切换选中项时自动重置草稿。 */
+function GenerationPromptEditor({
+  target,
+  onSave,
+  saving,
+}: {
+  target: PromptTarget;
+  onSave: (target: PromptTarget, next: string) => Promise<void>;
+  saving: boolean;
+}) {
+  const [draft, setDraft] = useState(target.value);
+  const dirty = draft !== target.value;
+  return (
+    <div
+      data-creator-path={target.pointer}
+      data-creator-field-label={target.label}
+      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3"
+    >
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1 text-xs font-semibold text-[var(--color-text-secondary)]">
+          <Wand2 className="h-3.5 w-3.5" />
+          {target.label}
+        </span>
+        <div className="flex gap-1.5">
+          {dirty && (
+            <Button size="small" onClick={() => setDraft(target.value)}>
+              还原
+            </Button>
+          )}
+          <Button
+            size="small"
+            type="primary"
+            disabled={!dirty}
+            loading={saving}
+            onClick={() => void onSave(target, draft)}
+          >
+            保存
+          </Button>
+        </div>
+      </div>
+      <Input.TextArea
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        autoSize={{ minRows: 3, maxRows: 10 }}
+        placeholder="该产物的生成 Prompt"
+        className="!text-xs"
+      />
+      <p className="mt-1.5 text-[10px] leading-4 text-[var(--color-text-tertiary)]">
+        修改后保存即写入项目；下次生成将使用新 Prompt。
+      </p>
+    </div>
+  );
+}
+
 export default function AssetsPage() {
   const { id = "" } = useParams();
   const query = useSearchParams();
@@ -274,6 +411,8 @@ export default function AssetsPage() {
   const syncStatus = useProjectSnapshotStore((state) => state.syncStatus);
   const syncError = useProjectSnapshotStore((state) => state.syncError);
   const pollOnce = useProjectSnapshotStore((state) => state.pollOnce);
+  const patchProject = useProjectSnapshotStore((state) => state.patch);
+  const patching = useProjectSnapshotStore((state) => state.patching);
   const refreshTasks = useCreatorTaskViewStore((state) => state.refresh);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [filter, setFilter] = useState<FilterKey>("all");
@@ -633,6 +772,54 @@ export default function AssetsPage() {
                     </dl>
                   </details>
                 )}
+                {(() => {
+                  if (!project) return null;
+                  const promptTarget = generationPromptTarget(
+                    project,
+                    selected,
+                  );
+                  if (!promptTarget) return null;
+                  return (
+                    <GenerationPromptEditor
+                      key={promptTarget.pointer}
+                      target={promptTarget}
+                      saving={patching}
+                      onSave={async (target, next) => {
+                        try {
+                          await patchProject(id, [
+                            {
+                              op: "replace",
+                              path: target.pointer,
+                              before: target.value,
+                              value: next,
+                            },
+                          ]);
+                          message.success("生成 Prompt 已保存");
+                        } catch (error) {
+                          message.error(
+                            `保存失败：${(error as Error).message}`,
+                          );
+                        }
+                      }}
+                    />
+                  );
+                })()}
+                {selected.mediaKind === "video" &&
+                  selected.ownerRef?.startsWith("element:") && (
+                    <Button
+                      block
+                      icon={<Clapperboard className="h-3.5 w-3.5" />}
+                      onClick={() =>
+                        navigate(
+                          `/project/${id}/plan/element/${encodeURIComponent(
+                            selected.ownerRef!.slice("element:".length),
+                          )}`,
+                        )
+                      }
+                    >
+                      进入该视频的 R2V 工作台
+                    </Button>
+                  )}
                 <div className="flex gap-2">
                   {selected.previewUrl && (
                     <Button

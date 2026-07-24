@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
-import { Button, message } from "antd";
+import { Button, Tooltip, message } from "antd";
 import { ArrowUpOutlined } from "@ant-design/icons";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -17,7 +17,11 @@ import {
   Square,
   XCircle,
 } from "lucide-react";
-import { getAssetVersionMediaUrl, getGeneratedMediaUrl } from "@/api/creator";
+import {
+  getArtifactVersionMediaUrl,
+  getAssetVersionMediaUrl,
+  getGeneratedMediaUrl,
+} from "@/api/creator";
 import type {
   CreatorContentPart,
   CreatorMessage,
@@ -61,7 +65,9 @@ import { deriveAgentLiveStatus } from "@/lib/agentLiveStatus";
 import AgentDecisionCenter from "./AgentDecisionCenter";
 import AgentEventFeed from "./AgentEventFeed";
 import MentionInput, { type MentionInputHandle } from "./MentionInput";
-import FileProjectReviewPanel from "./FileProjectReviewPanel";
+import FileProjectReviewPanel, {
+  reviewPendingUnits,
+} from "./FileProjectReviewPanel";
 import OnboardingHint from "@/components/onboarding/OnboardingHint";
 
 interface DockSize {
@@ -1136,6 +1142,7 @@ const REF_TYPE_LABELS: Record<RefSearchItem["type"], string> = {
   element: "时间线内容",
   asset: "素材",
   artifact: "生成产物",
+  visual: "视觉设定",
 };
 
 function refTypeLabel(type: RefSearchItem["type"]): string {
@@ -1180,24 +1187,52 @@ function projectRefItems(
       }),
     );
   }
+  // 视觉设定（场景/角色/道具）以实体身份参与引用；它们名下的生成图
+  // 不再作为独立“生成产物”重复出现，避免“场景”与“场景视觉图”两条。
+  Object.values(project.visual.entities.items).forEach((entity) =>
+    items.push({
+      ref: `visual-entity:${entity.entity_id}`,
+      name: entity.name || entity.entity_id,
+      type: "visual",
+      thumbnailUrl: entity.selected_artifact_version_id
+        ? getArtifactVersionMediaUrl(entity.selected_artifact_version_id)
+        : undefined,
+      uiLocator: { page: "assets", assetId: entity.entity_id },
+    }),
+  );
   Object.values(project.assets.source_versions_by_id).forEach((version) =>
     items.push({
       ref: `asset-version:${version.version_id}`,
       name: version.name,
       type: "asset",
       version: version.version_id,
+      thumbnailUrl:
+        version.media_kind === "image" || version.media_kind === "video"
+          ? getAssetVersionMediaUrl(version.version_id)
+          : undefined,
       uiLocator: { page: "assets", assetId: version.version_id },
     }),
   );
-  Object.values(project.assets.artifact_versions_by_id).forEach((version) =>
-    items.push({
-      ref: `artifact-version:${version.version_id}`,
-      name: version.name,
-      type: "artifact",
-      version: version.version_id,
-      uiLocator: { page: "assets", assetId: version.version_id },
-    }),
-  );
+  Object.values(project.assets.artifact_versions_by_id)
+    .filter((version) => {
+      // 实体归属在历史数据中有多种前缀（visual-entity: / asset:）；
+      // 归一化后命中视觉实体的产出不再重复出现。
+      const entityId = (version.owner_ref ?? "").replace(
+        /^(?:visual-entity|asset):/,
+        "",
+      );
+      return !project.visual.entities.items[entityId];
+    })
+    .forEach((version) =>
+      items.push({
+        ref: `artifact-version:${version.version_id}`,
+        name: version.name,
+        type: "artifact",
+        version: version.version_id,
+        thumbnailUrl: getArtifactVersionMediaUrl(version.version_id),
+        uiLocator: { page: "assets", assetId: version.version_id },
+      }),
+    );
   return items
     .filter(
       (item) =>
@@ -1625,10 +1660,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
     (item) => item.status === "PENDING",
   ).length;
   const pendingFileReviewCount = fileReviews.reduce(
-    (total, review) =>
-      total +
-      review.operations.filter((operation) => operation.decision === "PENDING")
-        .length,
+    (total, review) => total + reviewPendingUnits(review),
     0,
   );
   const backendBadgeCount =
@@ -1855,6 +1887,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
       ref: item.ref,
       name: item.name,
       type: item.type,
+      thumbnailUrl: item.thumbnailUrl,
     });
     setMentionQuery(null);
     setMentionOptions([]);
@@ -2088,19 +2121,20 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
           {showDecisions ? (
             <div className="flex min-h-0 flex-1 flex-col bg-[var(--color-bg-secondary)]/50">
               <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-                {fileReviews.length > 0 ? (
-                  <div className="space-y-3">
-                    {fileReviews.map((review) => (
-                      <FileProjectReviewPanel
-                        key={review.review_id}
-                        projectId={projectId}
-                        review={review}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <AgentDecisionCenter projectId={projectId} />
-                )}
+                {/* 审阅面板与生产确认同时展示：两类待决策互不覆盖。 */}
+                <div className="space-y-3">
+                  {fileReviews.map((review) => (
+                    <FileProjectReviewPanel
+                      key={review.review_id}
+                      projectId={projectId}
+                      review={review}
+                    />
+                  ))}
+                  <AgentDecisionCenter
+                    projectId={projectId}
+                    hideEmptyState={fileReviews.length > 0}
+                  />
+                </div>
               </div>
             </div>
           ) : (
@@ -2261,7 +2295,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                       const manual = extraRefs.some(
                         (item) => item.ref === chip.ref,
                       );
-                      return (
+                      const chipNode = (
                         <span
                           key={chip.ref}
                           className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] ${
@@ -2269,7 +2303,13 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                               ? "border border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
                               : "bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)]"
                           }`}
-                          title={manual ? "手动引用" : "自动带入的上下文"}
+                          title={
+                            chip.thumbnailUrl
+                              ? undefined
+                              : manual
+                              ? "手动引用"
+                              : "自动带入的上下文"
+                          }
                         >
                           @{chip.name}
                           <button
@@ -2281,6 +2321,21 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                             ×
                           </button>
                         </span>
+                      );
+                      if (!chip.thumbnailUrl) return chipNode;
+                      return (
+                        <Tooltip
+                          key={chip.ref}
+                          title={
+                            <img
+                              src={chip.thumbnailUrl}
+                              alt={chip.name}
+                              className="max-h-40 max-w-[220px] rounded object-contain"
+                            />
+                          }
+                        >
+                          {chipNode}
+                        </Tooltip>
                       );
                     })}
                     <button
@@ -2316,6 +2371,14 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                             : "hover:bg-[var(--color-accent-soft)]"
                         }`}
                       >
+                        {item.thumbnailUrl && (
+                          <img
+                            src={item.thumbnailUrl}
+                            alt=""
+                            className="h-6 w-6 shrink-0 rounded object-cover"
+                            loading="lazy"
+                          />
+                        )}
                         {refTypeLabel(item.type) &&
                           refTypeLabel(item.type) !== item.name && (
                             <span className="rounded bg-[var(--color-bg-secondary)] px-1 text-[10px] text-[var(--color-text-tertiary)]">

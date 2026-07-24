@@ -17,7 +17,9 @@ import {
 import {
   authorizationApprovalPayload,
   authorizationDetail,
+  authorizationJumpTarget,
 } from "./ExecutionAuthorizationCard";
+import { navigateToLocator } from "@/routing/locators";
 
 type OriginRunStatus =
   | "running"
@@ -432,7 +434,7 @@ export default function AgentEventFeed() {
         {status === "waiting_confirm" && authorization && (
           <div className="mt-2 rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] p-2.5">
             <p className="text-[11px] font-medium leading-4 text-[var(--color-text-primary)]">
-              {authorizationDetail(authorization)}
+              {authorizationDetail(authorization, project)}
             </p>
             <div className="mt-2 flex items-center gap-2">
               <Button
@@ -452,6 +454,31 @@ export default function AgentEventFeed() {
               >
                 取消
               </Button>
+              {projectId &&
+                (() => {
+                  const jumpTarget = authorizationJumpTarget(
+                    authorization,
+                    project,
+                  );
+                  if (!jumpTarget) return null;
+                  return (
+                    <Button
+                      size="small"
+                      disabled={busy}
+                      title="跳转到将要生成的 Prompt / 编辑位置，确认前先检查输入"
+                      onClick={() =>
+                        navigateToLocator(projectId, jumpTarget.locator, {
+                          review: true,
+                          field: jumpTarget.field,
+                          description: "生产确认 / 查看生成输入",
+                        })
+                      }
+                      className="!h-6 !text-[11px]"
+                    >
+                      查看
+                    </Button>
+                  );
+                })()}
             </div>
           </div>
         )}

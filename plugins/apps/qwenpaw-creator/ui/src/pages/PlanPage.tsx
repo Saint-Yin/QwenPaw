@@ -17,6 +17,7 @@ import { useReviewFieldFocus } from "@/routing/reviewFocus";
 import { useProjectDraft } from "@/lib/useProjectDraft";
 import TimelineCanvas from "@/components/timeline/TimelineCanvas";
 import ElementList from "@/components/timeline/ElementList";
+import InlineReviewDiff from "@/components/agent/InlineReviewDiff";
 import ElementDetail from "@/components/timeline/ElementDetail";
 import PageSkeleton from "@/components/PageSkeleton";
 import PageLoadError from "@/components/PageLoadError";
@@ -451,6 +452,12 @@ export default function PlanPage() {
                 {project.strategy.creative_direction &&
                   `\n\n创作方向：${project.strategy.creative_direction}`}
               </div>
+              <InlineReviewDiff
+                pointer={projectJsonPointer("strategy", "creative_brief")}
+              />
+              <InlineReviewDiff
+                pointer={projectJsonPointer("strategy", "creative_direction")}
+              />
             </details>
           ) : (
             <h2 className="text-base font-semibold text-[var(--color-text-primary)]">
