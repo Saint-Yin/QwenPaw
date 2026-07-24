@@ -65,8 +65,11 @@ from .path_safety import require_safe_runtime_segment
 # Statuses whose AgentDock mutation requests capture a ReviewBoundary.  A
 # running Session yields an interrupt boundary; an idle/settled Session yields
 # an idle-goal boundary so user feedback after a run still gates its related
-# changes behind a review.  Hard-stop transitions (INTERRUPT_REQUESTED) and
-# terminal failures stay out: their next request is a restart, not feedback.
+# changes behind a review.  CANCELLED is included: a user who stopped the
+# Agent and later sends 修改意见 is still commenting on already-produced
+# work (the frontend presents that Session as 待命).  Hard-stop transitions
+# (INTERRUPT_REQUESTED) and terminal failures (ERROR) stay out: their next
+# request is a restart, not feedback.
 _REVIEW_ACTIVE_STATUSES = frozenset(
     {
         CreatorSessionStatus.RUNNING,
@@ -76,6 +79,7 @@ _REVIEW_ACTIVE_STATUSES = frozenset(
         CreatorSessionStatus.IDLE,
         CreatorSessionStatus.PENDING_REVIEW,
         CreatorSessionStatus.WAITING_USER_INPUT,
+        CreatorSessionStatus.CANCELLED,
     },
 )
 _REVIEW_MUTATING_CLASSIFICATIONS = frozenset(
@@ -1738,11 +1742,16 @@ class ProjectRuntimeSessionStore:
         ):
             return False
         # A running Session must expose a coherent Goal/Run pair before an
-        # interrupt boundary may be captured.  An idle Session has neither and
-        # still requires review: the request is feedback on completed work.
+        # interrupt boundary may be captured.
         if session.active_run_id:
             return bool(session.active_goal_id)
-        return True
+        # An idle Session requires review only when a Goal already exists:
+        # the request is then feedback (修改意见) on previously produced
+        # mainline work.  A Session that has never owned a Goal is receiving
+        # its mainline kick-off request (e.g. the first instruction after an
+        # attachment-driven Project creation), and every change on that
+        # mainline is auto-applied without review.
+        return bool(session.active_goal_id)
 
     def _assert_review_active_goal_unlocked(
         self,
