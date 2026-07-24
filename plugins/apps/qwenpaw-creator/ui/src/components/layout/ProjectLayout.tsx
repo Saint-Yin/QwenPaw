@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
-import { useParams, usePathname, useRouter } from "@/routing/navigation";
+import { useParams, usePathname } from "@/routing/navigation";
+import { navigateToLocator } from "@/routing/locators";
 import type { FileProjectReviewOperation } from "@/contracts/creator";
 import { useCreatorSessionStore } from "@/store/creatorSessionStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
@@ -68,27 +69,54 @@ function reviewIdsFromEvent(data: Record<string, unknown>): string[] {
   );
 }
 
-function reviewElementTargets(
+function elementIdFromPointer(pointer: string | null): string | null {
+  if (!pointer) return null;
+  const tokens = pointer
+    .slice(1)
+    .split("/")
+    .map((token) => token.replace(/~1/g, "/").replace(/~0/g, "~"));
+  if (
+    tokens[0] !== "timelines" ||
+    tokens[1] !== "items" ||
+    !tokens[2] ||
+    tokens[3] !== "elements_by_id" ||
+    !tokens[4]
+  )
+    return null;
+  return tokens[4];
+}
+
+/**
+ * The place to land a reviewer after a run completes: prefer a generated media
+ * artifact (jump to its Element workbench / asset detail), otherwise the first
+ * text field so its diff can be flashed in place.  Derived entirely from the
+ * server-provided ui_locator, falling back to the raw JSON pointer.
+ */
+function primaryReviewLocator(
   operations: FileProjectReviewOperation[],
-): string[] {
-  const elementIds = new Set<string>();
-  operations.forEach((operation) => {
-    if (operation.decision !== "PENDING" || !operation.json_pointer) return;
-    const tokens = operation.json_pointer
-      .slice(1)
-      .split("/")
-      .map((token) => token.replace(/~1/g, "/").replace(/~0/g, "~"));
-    if (
-      tokens[0] !== "timelines" ||
-      tokens[1] !== "items" ||
-      !tokens[2] ||
-      tokens[3] !== "elements_by_id" ||
-      !tokens[4]
-    )
-      return;
-    elementIds.add(tokens[4]);
+): Record<string, string> | null {
+  const pending = operations.filter(
+    (operation) => operation.decision === "PENDING",
+  );
+  const media = pending.find((operation) => {
+    const kind = operation.ui_locator?.mediaType;
+    return kind === "image" || kind === "video";
   });
-  return [...elementIds];
+  if (media) return media.ui_locator;
+  for (const operation of pending) {
+    const locator = operation.ui_locator ?? {};
+    if (locator.field || locator.elementId) return locator;
+    const elementId = elementIdFromPointer(operation.json_pointer);
+    if (elementId) {
+      return {
+        page: "plan",
+        mediaType: "text",
+        elementId,
+        field: operation.json_pointer ?? "",
+      };
+    }
+  }
+  return null;
 }
 
 function LayoutSkeleton() {
@@ -109,7 +137,6 @@ function LayoutSkeleton() {
 export default function ProjectLayout() {
   const { id = "" } = useParams();
   const pathname = usePathname();
-  const router = useRouter();
   const bootstrap = useCreatorSessionStore((state) => state.bootstrap);
   const refreshSession = useCreatorSessionStore(
     (state) => state.refreshSession,
@@ -138,7 +165,9 @@ export default function ProjectLayout() {
   const startFileReviewPolling = useFileProjectReviewStore(
     (state) => state.startPolling,
   );
-  const activeFileReview = useFileProjectReviewStore((state) => state.review);
+  const activeFileReview = useFileProjectReviewStore(
+    (state) => state.reviews[0] ?? null,
+  );
   const fileReviewSyncStatus = useFileProjectReviewStore(
     (state) => state.syncStatus,
   );
@@ -295,21 +324,19 @@ export default function ProjectLayout() {
     )
       return;
     setPendingReviewNavigation(null);
-    const targets = reviewElementTargets(activeFileReview.operations);
-    if (!targets.length) return;
-    const [primary] = targets;
-    useCreatorInteractionStore.getState().select(`element:${primary}`);
-    const targetPath = `/project/${id}/plan?element=${encodeURIComponent(
-      primary,
-    )}&review=1`;
-    router.push(targetPath);
-  }, [
-    activeFileReview,
-    fileReviewSyncStatus,
-    id,
-    pendingReviewNavigation,
-    router,
-  ]);
+    const locator = primaryReviewLocator(activeFileReview.operations);
+    if (!locator) return;
+    if (locator.elementId) {
+      useCreatorInteractionStore
+        .getState()
+        .select(`element:${locator.elementId}`);
+    }
+    navigateToLocator(id, locator, {
+      review: true,
+      field: locator.field ?? undefined,
+      description: "审阅 / 查看修改",
+    });
+  }, [activeFileReview, fileReviewSyncStatus, id, pendingReviewNavigation]);
 
   // A background Header revalidation must not unmount the active route.  The
   // initial skeleton is only needed before the first authoritative Header is

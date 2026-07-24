@@ -8,7 +8,6 @@ import pytest
 
 from domain.enums import TransactionStatus
 from services.project_files.commit import (
-    ActiveReviewConflictError,
     ProjectCommitBoundary,
     ProjectCommitError,
     ProtectedFieldError,
@@ -23,7 +22,9 @@ from services.runtime_files.field_blocks import FieldBlockStore
 from services.runtime_files.models import (
     ChangeRoundRecord,
     ReviewBoundary,
+    ReviewOperationDecision,
     ReviewRecord,
+    ReviewStatus,
     RuntimeChangeSet,
     RuntimeProjectState,
 )
@@ -617,7 +618,10 @@ def test_only_agentdock_active_interrupt_creates_review(tmp_path) -> None:
     assert state.last_project_generation == 1
 
 
-def test_second_review_round_cannot_overtake_active_review(tmp_path) -> None:
+def test_second_review_round_coexists_with_active_review(tmp_path) -> None:
+    # Multiple pending reviews may coexist: media/runtime tasks and AgentDock
+    # interventions each publish their own review round.  A second review
+    # boundary no longer blocks the first; both stay PENDING and discoverable.
     store, base = _store(tmp_path)
     commit = ProjectCommitBoundary(store)
     first_candidate = base.project.model_dump(mode="json")
@@ -637,7 +641,7 @@ def test_second_review_round_cannot_overtake_active_review(tmp_path) -> None:
         review_boundary=first_boundary,
         caused_by_request_id="request-2",
         caused_by_message_seq=2,
-        round_id="review-round-1",
+        round_id="round-1",
     )
     second_candidate = first.snapshot.project.model_dump(mode="json")
     second_candidate["name"] = "Cannot overtake"
@@ -649,27 +653,204 @@ def test_second_review_round_cannot_overtake_active_review(tmp_path) -> None:
         accepted_etag=base.etag,
     )
 
-    with pytest.raises(ActiveReviewConflictError, match="still pending"):
-        commit.commit(
-            base=first.snapshot,
-            candidate=second_candidate,
-            origin="agentdock_interrupt",
-            review_policy="require_review",
-            review_boundary=second_boundary,
-            caused_by_request_id="request-3",
-            caused_by_message_seq=3,
-            round_id="review-round-2",
-        )
+    second = commit.commit(
+        base=first.snapshot,
+        candidate=second_candidate,
+        origin="agentdock_interrupt",
+        review_policy="require_review",
+        review_boundary=second_boundary,
+        caused_by_request_id="request-3",
+        caused_by_message_seq=3,
+        round_id="round-2",
+    )
 
+    assert second.review is not None
     current = store.read("project-1")
     state = AtomicJsonRecordStore(
         tmp_path / "project-1" / "runtime" / "state.json",
         RuntimeProjectState,
     ).read()
-    assert current.generation == 1
-    assert current.project.name == "Initial"
-    assert state.active_round_id == "review-round-1"
+    # Both candidates are published live; review only gates the accepted
+    # baseline, which stays put while either review is pending.
+    assert current.generation == 2
+    assert current.project.name == "Cannot overtake"
+    assert current.project.description == "Needs review"
+    assert state.active_round_id == "round-1"
     assert state.accepted_generation == 0
+    for round_id in ("round-1", "round-2"):
+        review = AtomicJsonRecordStore(
+            tmp_path
+            / "project-1"
+            / "runtime"
+            / "reviews"
+            / f"review-{round_id}"
+            / "review.json",
+            ReviewRecord,
+        ).read()
+        assert review.status is ReviewStatus.PENDING
+
+
+def test_user_edit_supersedes_pending_operation_in_inactive_review(
+    tmp_path,
+) -> None:
+    # With several reviews pending at once, a direct user edit must supersede
+    # the touched operation wherever it lives — including a review that is not
+    # the one active_round_id currently points at.
+    store, base = _store(tmp_path)
+    commit = ProjectCommitBoundary(store)
+    first_candidate = base.project.model_dump(mode="json")
+    first_candidate["description"] = "Reviewed description"
+    first = commit.commit(
+        base=base,
+        candidate=first_candidate,
+        origin="agentdock_interrupt",
+        review_policy="require_review",
+        review_boundary=ReviewBoundary(
+            request_message_seq=2,
+            request_id="request-2",
+            interrupted_run_id="run-1",
+            accepted_generation=base.generation,
+            accepted_etag=base.etag,
+        ),
+        caused_by_request_id="request-2",
+        caused_by_message_seq=2,
+        round_id="round-1",
+    )
+    second_candidate = first.snapshot.project.model_dump(mode="json")
+    second_candidate["name"] = "Reviewed name"
+    second = commit.commit(
+        base=first.snapshot,
+        candidate=second_candidate,
+        origin="agentdock_interrupt",
+        review_policy="require_review",
+        review_boundary=ReviewBoundary(
+            request_message_seq=3,
+            request_id="request-3",
+            interrupted_run_id="run-2",
+            accepted_generation=base.generation,
+            accepted_etag=base.etag,
+        ),
+        caused_by_request_id="request-3",
+        caused_by_message_seq=3,
+        round_id="round-2",
+    )
+    state = AtomicJsonRecordStore(
+        tmp_path / "project-1" / "runtime" / "state.json",
+        RuntimeProjectState,
+    ).read()
+    assert state.active_round_id == "round-1"
+
+    edited = second.snapshot.project.model_dump(mode="json")
+    edited["description"] = "User rewrote the description by hand"
+    commit.commit(
+        base=second.snapshot,
+        candidate=edited,
+        origin="frontend_edit",
+        round_id="round-user-edit",
+    )
+
+    first_review = AtomicJsonRecordStore(
+        tmp_path
+        / "project-1"
+        / "runtime"
+        / "reviews"
+        / "review-round-1"
+        / "review.json",
+        ReviewRecord,
+    ).read()
+    assert first_review.status is ReviewStatus.RESOLVED
+    assert [
+        operation.decision for operation in first_review.operations
+    ] == [ReviewOperationDecision.SUPERSEDED_BY_USER_EDIT]
+    second_review = AtomicJsonRecordStore(
+        tmp_path
+        / "project-1"
+        / "runtime"
+        / "reviews"
+        / "review-round-2"
+        / "review.json",
+        ReviewRecord,
+    ).read()
+    assert second_review.status is ReviewStatus.PENDING
+    state = AtomicJsonRecordStore(
+        tmp_path / "project-1" / "runtime" / "state.json",
+        RuntimeProjectState,
+    ).read()
+    # round-2 is still pending, so the accepted baseline must not advance and
+    # the surfaced round pointer must stay on the live review.
+    assert state.active_round_id == "round-2"
+    assert state.accepted_generation == 0
+
+
+def test_runtime_writer_rebases_pending_operation_candidate(
+    tmp_path,
+) -> None:
+    # An agent auto-fix that touches a reviewed pointer must rebase the
+    # pending operation's candidate hash; otherwise Keep/Undo would fail CAS
+    # against the live document forever.
+    store, base = _store(tmp_path)
+    commit = ProjectCommitBoundary(store)
+    reviewed = base.project.model_dump(mode="json")
+    reviewed["description"] = "Reviewed description"
+    first = commit.commit(
+        base=base,
+        candidate=reviewed,
+        origin="agentdock_interrupt",
+        review_policy="require_review",
+        review_boundary=ReviewBoundary(
+            request_message_seq=2,
+            request_id="request-2",
+            interrupted_run_id="run-1",
+            accepted_generation=base.generation,
+            accepted_etag=base.etag,
+        ),
+        caused_by_request_id="request-2",
+        caused_by_message_seq=2,
+        round_id="round-1",
+    )
+
+    runtime_edit = first.snapshot.project.model_dump(mode="json")
+    runtime_edit["description"] = "Runtime refined description"
+    commit.commit(
+        base=first.snapshot,
+        candidate=runtime_edit,
+        origin="runtime_task",
+        round_id="round-runtime-fix",
+    )
+
+    review = AtomicJsonRecordStore(
+        tmp_path
+        / "project-1"
+        / "runtime"
+        / "reviews"
+        / "review-round-1"
+        / "review.json",
+        ReviewRecord,
+    ).read()
+    assert review.status is ReviewStatus.PENDING
+    (operation,) = review.operations
+    assert operation.decision is ReviewOperationDecision.PENDING
+    assert operation.after == "Runtime refined description"
+    # Rejecting after the rebase must restore the pre-review value.
+    from services.project_files.review import (
+        ProjectReviewService,
+        ReviewDecisionItem,
+    )
+
+    resolved = ProjectReviewService(store).decide(
+        project_id="project-1",
+        review_id=review.review_id,
+        decision_token=review.decision_token,
+        decisions=[
+            ReviewDecisionItem(
+                operation_id=operation.operation_id,
+                decision="REJECT",
+            ),
+        ],
+    )
+    assert resolved.status is ReviewStatus.RESOLVED
+    current = store.read("project-1")
+    assert current.project.description == ""
 
 
 def test_one_review_round_accumulates_multiple_transactions_safely(
@@ -773,3 +954,45 @@ def test_review_round_net_zero_clears_review_and_recovers_cleanly(
     assert (
         ProjectCommitRecoveryCoordinator(store).recover_project("project-1").ok
     )
+
+
+def test_runtime_task_review_populates_ui_locator(tmp_path) -> None:
+    # A runtime task (e.g. media generation) may gate its commit behind a
+    # review; the boundary anchors on the accepted baseline and every operation
+    # carries a ui_locator so the frontend can jump to the change.
+    store, base = _store(tmp_path)
+    commit = ProjectCommitBoundary(store)
+    boundary = commit.runtime_review_boundary(
+        "project-1",
+        run_id="run-gen-1",
+    )
+    assert boundary.request_id is None
+    assert boundary.interrupted_run_id == "run-gen-1"
+    assert boundary.accepted_generation == base.generation
+
+    candidate = base.project.model_dump(mode="json")
+    candidate["description"] = "Generated caption pending review"
+    result = commit.commit(
+        base=base,
+        candidate=candidate,
+        origin="runtime_task",
+        review_policy="require_review",
+        review_boundary=boundary,
+        round_id="runtime-review-1",
+        transaction_id="runtime-review-tx-1",
+    )
+
+    assert result.review is not None
+    operation = result.review.operations[0]
+    assert operation.json_pointer == "/description"
+    assert operation.ui_locator == {
+        "page": "plan",
+        "mediaType": "text",
+        "field": "/description",
+    }
+    state = AtomicJsonRecordStore(
+        tmp_path / "project-1" / "runtime" / "state.json",
+        RuntimeProjectState,
+    ).read()
+    assert state.active_round_id == "runtime-review-1"
+    assert state.accepted_generation == 0

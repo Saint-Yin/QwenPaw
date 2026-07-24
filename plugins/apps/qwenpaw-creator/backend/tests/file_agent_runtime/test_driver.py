@@ -1328,6 +1328,153 @@ def test_agentdock_boundary_is_carried_into_run_and_creates_review(
     assert "agent.review.resolved" in {item.event_type for item in events}
 
 
+def test_intervention_completion_queues_mainline_resume(tmp_path) -> None:
+    """中断式干预完成后，Runtime 自动注入主线恢复消息并以 AUTO_FIX 继续主线。"""
+
+    async def scenario():
+        services, snapshot = _create_project(tmp_path, initial_goal=None)
+        root = services.root
+        first = services.sessions.append_message(
+            PROJECT_ID,
+            SESSION_ID,
+            CONVERSATION_ID,
+            role="user",
+            content_parts=[{"type": "text", "text": "主线目标：生成完整短片"}],
+            client_message_id="mainline-client",
+            source="initial_creation",
+            channel=MessageChannel.COMPOSER,
+            classification=MessageClassification.MUTATION_INSTRUCTION,
+        ).message
+        services.sessions.create_goal(
+            PROJECT_ID,
+            SESSION_ID,
+            CONVERSATION_ID,
+            root_message_seq=first.message_seq,
+            intent="主线目标",
+            goal_id=GOAL_ID,
+        )
+        services.sessions.mark_messages_consumed(
+            PROJECT_ID,
+            SESSION_ID,
+            through_seq=first.message_seq,
+            goal_id=GOAL_ID,
+        )
+        services.sessions.activate_run(
+            PROJECT_ID,
+            SESSION_ID,
+            goal_id=GOAL_ID,
+            run_id="old-run",
+        )
+        AtomicJsonRecordStore(
+            root / PROJECT_ID / "runtime" / "state.json",
+            RuntimeProjectState,
+        ).write(
+            RuntimeProjectState(
+                project_id=PROJECT_ID,
+                active_session_id=SESSION_ID,
+                active_goal_id=GOAL_ID,
+                last_project_generation=snapshot.generation,
+                last_project_etag=snapshot.etag,
+                accepted_generation=snapshot.generation,
+                accepted_etag=snapshot.etag,
+            ),
+        )
+        driver = FileCreatorAgentRuntime(
+            services,
+            model_client=_edit_client(description="支线修改已完成"),
+            poll_interval_seconds=0.01,
+        )
+        # Durable record of the interrupted mainline run (as _cancel_run
+        # leaves it after a real supersede).
+        driver.runs.create(
+            {
+                "run_id": "old-run",
+                "project_id": PROJECT_ID,
+                "session_id": SESSION_ID,
+                "goal_id": GOAL_ID,
+                "conversation_id": CONVERSATION_ID,
+                "round_id": "agent-round-old-run",
+                "caused_by_message_id": first.message_id,
+                "caused_by_message_seq": first.message_seq,
+                "caused_by_request_id": "mainline-client",
+                "origin": "runtime_task",
+                "review_policy": "auto_fix",
+                "input_generation": snapshot.generation,
+                "input_etag": snapshot.etag,
+            },
+        )
+        driver.runs.transition(
+            PROJECT_ID,
+            "old-run",
+            expected_status=AgentRunStatus.QUEUED,
+            status=AgentRunStatus.RUNNING,
+        )
+        driver.runs.transition(
+            PROJECT_ID,
+            "old-run",
+            expected_status=AgentRunStatus.RUNNING,
+            status=AgentRunStatus.CANCELLED,
+        )
+        admitted = services.sessions.admit_user_request(
+            PROJECT_ID,
+            SESSION_ID,
+            CONVERSATION_ID,
+            request_id="interrupt-request",
+            client_message_id="interrupt-message",
+            content_parts=[{"type": "text", "text": "把说明改成支线版本"}],
+            channel=MessageChannel.AGENTDOCK,
+            classification=MessageClassification.MUTATION_INSTRUCTION,
+        )
+        assert admitted.review_boundary is not None
+        assert admitted.review_boundary.interrupted_run_id == "old-run"
+
+        await driver.start()
+        driver.notify(PROJECT_ID)
+
+        def _resume_messages():
+            return [
+                item
+                for item in services.sessions.list_messages(
+                    PROJECT_ID,
+                    SESSION_ID,
+                    after_seq=0,
+                    limit=None,
+                )
+                if item.source == "mainline_resume"
+            ]
+
+        await _wait_for(lambda: len(_resume_messages()) == 1)
+        resume = _resume_messages()[0]
+        await _wait_for(
+            lambda: any(
+                run.caused_by_message_seq == resume.message_seq
+                and run.status is AgentRunStatus.SUCCEEDED
+                for run in driver.runs.list(PROJECT_ID)
+            ),
+        )
+        await driver.wait_until_idle(PROJECT_ID)
+        driver.notify(PROJECT_ID)
+        await asyncio.sleep(0.05)
+        resume_count = len(_resume_messages())
+        runs = driver.runs.list(PROJECT_ID)
+        events = services.sessions.list_events(PROJECT_ID, SESSION_ID)
+        await driver.stop()
+        return resume, resume_count, runs, events
+
+    resume, resume_count, runs, events = asyncio.run(scenario())
+    assert resume.channel is MessageChannel.RUNTIME
+    assert resume.review_boundary is None
+    assert resume.metadata["interruptedRunId"] == "old-run"
+    assert resume_count == 1
+    resume_run = next(
+        run for run in runs if run.caused_by_message_seq == resume.message_seq
+    )
+    assert resume_run.origin.value == "runtime_task"
+    assert resume_run.review_policy.value == "auto_fix"
+    assert resume_run.review_boundary is None
+    assert "agent.mainline.resumed" in {item.event_type for item in events}
+
+
 def test_interrupt_revokes_stale_run_before_late_tool_commit(tmp_path) -> None:
     async def scenario():
         services, snapshot = _create_project(tmp_path, initial_goal="请修改项目")

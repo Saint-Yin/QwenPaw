@@ -132,9 +132,13 @@ class AgentProjectToolContext(_ToolModel):
     @model_validator(mode="after")
     def validate_review_provenance(self) -> AgentProjectToolContext:
         if self.review_policy is ReviewPolicy.REQUIRE_REVIEW:
-            if self.origin is not ChangeOrigin.AGENTDOCK_INTERRUPT:
+            if self.origin not in {
+                ChangeOrigin.AGENTDOCK_INTERRUPT,
+                ChangeOrigin.AGENTDOCK_IDLE_GOAL,
+            }:
                 raise ValueError(
-                    "only an AgentDock interrupt context may require review",
+                    "only an AgentDock interrupt/idle-goal context may "
+                    "require review",
                 )
             if self.review_boundary is None:
                 raise ValueError(

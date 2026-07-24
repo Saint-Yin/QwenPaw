@@ -45,17 +45,22 @@ def operation() -> ReviewOperation:
     )
 
 
-def test_only_agentdock_interrupt_round_can_require_review():
-    record = ChangeRoundRecord(
-        round_id="round-1",
-        project_id="project-1",
-        origin=ChangeOrigin.AGENTDOCK_INTERRUPT,
-        review_policy=ReviewPolicy.REQUIRE_REVIEW,
-        review_boundary=boundary(),
-        caused_by_request_id="request-2",
-        caused_by_message_seq=2,
-    )
-    assert record.review_boundary is not None
+def test_only_review_capable_origins_can_require_review():
+    for origin in (
+        ChangeOrigin.AGENTDOCK_INTERRUPT,
+        ChangeOrigin.AGENTDOCK_IDLE_GOAL,
+        ChangeOrigin.RUNTIME_TASK,
+    ):
+        record = ChangeRoundRecord(
+            round_id="round-1",
+            project_id="project-1",
+            origin=origin,
+            review_policy=ReviewPolicy.REQUIRE_REVIEW,
+            review_boundary=boundary(),
+            caused_by_request_id="request-2",
+            caused_by_message_seq=2,
+        )
+        assert record.review_boundary is not None
 
     with pytest.raises(ValidationError, match="only an AgentDock interrupt"):
         ChangeRoundRecord(
@@ -73,6 +78,23 @@ def test_only_agentdock_interrupt_round_can_require_review():
             review_policy=ReviewPolicy.AUTO_FIX,
             review_boundary=boundary(),
         )
+
+
+def test_idle_goal_review_boundary_needs_no_interrupted_run():
+    idle_boundary = boundary().model_copy(
+        update={"interrupted_run_id": None},
+    )
+    record = ChangeRoundRecord(
+        round_id="round-idle",
+        project_id="project-1",
+        origin=ChangeOrigin.AGENTDOCK_IDLE_GOAL,
+        review_policy=ReviewPolicy.REQUIRE_REVIEW,
+        review_boundary=idle_boundary,
+        caused_by_request_id="request-2",
+        caused_by_message_seq=2,
+    )
+    assert record.review_boundary is not None
+    assert record.review_boundary.interrupted_run_id is None
 
 
 def test_runtime_project_state_rejects_impossible_accepted_baseline():

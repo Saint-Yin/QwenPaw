@@ -62,12 +62,24 @@ from .models import (
 from .path_safety import require_safe_runtime_segment
 
 
+# Statuses whose AgentDock mutation requests capture a ReviewBoundary.  A
+# running Session yields an interrupt boundary; an idle/settled Session yields
+# an idle-goal boundary so user feedback after a run still gates its related
+# changes behind a review.  CANCELLED is included: a user who stopped the
+# Agent and later sends 修改意见 is still commenting on already-produced
+# work (the frontend presents that Session as 待命).  Hard-stop transitions
+# (INTERRUPT_REQUESTED) and terminal failures (ERROR) stay out: their next
+# request is a restart, not feedback.
 _REVIEW_ACTIVE_STATUSES = frozenset(
     {
         CreatorSessionStatus.RUNNING,
         CreatorSessionStatus.RESUMING,
         CreatorSessionStatus.WAITING_RUNTIME,
         CreatorSessionStatus.WAITING_EXECUTION_AUTH,
+        CreatorSessionStatus.IDLE,
+        CreatorSessionStatus.PENDING_REVIEW,
+        CreatorSessionStatus.WAITING_USER_INPUT,
+        CreatorSessionStatus.CANCELLED,
     },
 )
 _REVIEW_MUTATING_CLASSIFICATIONS = frozenset(
@@ -1151,6 +1163,7 @@ class ProjectRuntimeSessionStore:
                     )
 
                 boundary: ReviewBoundary | None = None
+                project_state: RuntimeProjectState | None = None
                 requires_review = self._requires_review(
                     session,
                     channel=resolved_channel,
@@ -1167,13 +1180,20 @@ class ProjectRuntimeSessionStore:
                         project_id,
                     ).read_or_none()
                     if project_state is None:
-                        raise RequestAdmissionConflict(
-                            "Cannot capture review boundary without runtime/state.json",
-                        )
-                    if project_state.project_id != project_id:
+                        if session.active_run_id is not None:
+                            raise RequestAdmissionConflict(
+                                "Cannot capture review boundary without runtime/state.json",
+                            )
+                        # A brand-new Project has no accepted baseline yet, so
+                        # an idle feedback request has nothing to diff against.
+                        # Admit it as a plain auto-fix instruction instead of
+                        # failing the request.
+                        requires_review = False
+                    elif project_state.project_id != project_id:
                         raise SessionStoreIntegrityError(
                             "RuntimeProjectState belongs to another Project",
                         )
+                if requires_review and project_state is not None:
                     next_message_seq = (
                         self._messages_store(project_id, session_id).last_seq()
                         + 1
@@ -1713,22 +1733,36 @@ class ProjectRuntimeSessionStore:
         initial_creation: bool,
         hard_stop: bool,
     ) -> bool:
-        return bool(
-            channel is MessageChannel.AGENTDOCK
-            and classification in _REVIEW_MUTATING_CLASSIFICATIONS
-            and not initial_creation
-            and not hard_stop
-            and session.status in _REVIEW_ACTIVE_STATUSES
-            and session.active_goal_id
-            and session.active_run_id,
-        )
+        if (
+            channel is not MessageChannel.AGENTDOCK
+            or classification not in _REVIEW_MUTATING_CLASSIFICATIONS
+            or initial_creation
+            or hard_stop
+            or session.status not in _REVIEW_ACTIVE_STATUSES
+        ):
+            return False
+        # A running Session must expose a coherent Goal/Run pair before an
+        # interrupt boundary may be captured.
+        if session.active_run_id:
+            return bool(session.active_goal_id)
+        # An idle Session requires review only when a Goal already exists:
+        # the request is then feedback (修改意见) on previously produced
+        # mainline work.  A Session that has never owned a Goal is receiving
+        # its mainline kick-off request (e.g. the first instruction after an
+        # attachment-driven Project creation), and every change on that
+        # mainline is auto-applied without review.
+        return bool(session.active_goal_id)
 
     def _assert_review_active_goal_unlocked(
         self,
         project_id: str,
         session: CreatorSessionRecord,
     ) -> None:
-        if session.active_goal_id is None or session.active_run_id is None:
+        if session.active_run_id is None:
+            # Idle-goal boundary: no Run is interrupted and the driver will
+            # admit a fresh Goal for this feedback request.
+            return
+        if session.active_goal_id is None:
             raise RequestAdmissionConflict(
                 "Review admission requires an active Goal and Run",
             )

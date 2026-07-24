@@ -38,7 +38,7 @@ export const DEFAULT_FILE_PROJECT_REVIEW_POLL_OPTIONS: FileProjectReviewPollOpti
 
 export interface FileProjectReviewState {
   projectId: string | null;
-  review: FileProjectReviewRecord | null;
+  reviews: FileProjectReviewRecord[];
   etag: string | null;
   syncStatus: FileProjectReviewSyncStatus;
   syncError: string | null;
@@ -51,6 +51,7 @@ export interface FileProjectReviewState {
   pollOnce: (projectId: string) => Promise<void>;
   decide: (
     projectId: string,
+    reviewId: string,
     decisions: FileProjectReviewDecisionItem[],
   ) => Promise<FileProjectReviewRecord>;
   startPolling: (
@@ -71,7 +72,7 @@ interface PollController {
 
 const reviewBase = (projectId: string | null = null) => ({
   projectId,
-  review: null,
+  reviews: [] as FileProjectReviewRecord[],
   etag: null,
   syncStatus: "idle" as FileProjectReviewSyncStatus,
   syncError: null,
@@ -177,7 +178,8 @@ export const useFileProjectReviewStore = create<FileProjectReviewState>(
         state.projectId === projectId
           ? {
               requestInFlight: true,
-              syncStatus: state.review ? state.syncStatus : "syncing",
+              syncStatus:
+                state.reviews.length > 0 ? state.syncStatus : "syncing",
             }
           : {},
       );
@@ -193,7 +195,7 @@ export const useFileProjectReviewStore = create<FileProjectReviewState>(
               return {};
             if (result.kind === "empty") {
               return {
-                review: null,
+                reviews: [],
                 etag: null,
                 requestInFlight: false,
                 syncStatus: "healthy" as const,
@@ -203,12 +205,12 @@ export const useFileProjectReviewStore = create<FileProjectReviewState>(
               };
             }
             if (result.kind === "not_modified") {
-              if (!state.review || !state.etag) {
+              if (state.reviews.length === 0 || !state.etag) {
                 return {
                   requestInFlight: false,
                   syncStatus: "degraded" as const,
                   syncError:
-                    "Active Review returned 304 before a last-good Review was loaded",
+                    "Active Reviews returned 304 before a last-good Review was loaded",
                   consecutiveFailures: state.consecutiveFailures + 1,
                 };
               }
@@ -220,7 +222,7 @@ export const useFileProjectReviewStore = create<FileProjectReviewState>(
                   requestInFlight: false,
                   syncStatus: "degraded" as const,
                   syncError:
-                    "Active Review 304 ETag does not match the last-good decision token",
+                    "Active Reviews 304 ETag does not match the last-good decision tokens",
                   consecutiveFailures: state.consecutiveFailures + 1,
                 };
               }
@@ -233,42 +235,25 @@ export const useFileProjectReviewStore = create<FileProjectReviewState>(
               };
             }
 
-            const incoming = result.review;
-            const current = state.review;
+            const incomingReviews = result.reviews;
+            const currentReviews = state.reviews;
+            const currentMaxGeneration = currentReviews.length > 0
+              ? Math.max(...currentReviews.map((r) => r.candidate_generation))
+              : -1;
+            const incomingMaxGeneration = incomingReviews.length > 0
+              ? Math.max(...incomingReviews.map((r) => r.candidate_generation))
+              : -1;
             if (
-              current &&
-              incoming.candidate_generation < current.candidate_generation
+              currentReviews.length > 0 &&
+              incomingMaxGeneration < currentMaxGeneration
             ) {
               return { requestInFlight: false };
             }
-            if (
-              current &&
-              incoming.candidate_generation === current.candidate_generation &&
-              incoming.review_id === current.review_id &&
-              semanticEtag(incoming.decision_token) ===
-                semanticEtag(current.decision_token) &&
-              !sameReviewPayload(incoming, current)
-            ) {
-              return {
-                requestInFlight: false,
-                syncStatus: "degraded" as const,
-                syncError: "Active Review changed without a new decision token",
-                consecutiveFailures: state.consecutiveFailures + 1,
-              };
-            }
-            if (incoming.status !== "PENDING") {
-              return {
-                review: null,
-                etag: null,
-                requestInFlight: false,
-                syncStatus: "healthy" as const,
-                syncError: null,
-                consecutiveFailures: 0,
-                lastGoodAt: new Date().toISOString(),
-              };
-            }
+            const pendingReviews = incomingReviews.filter(
+              (r) => r.status === "PENDING",
+            );
             return {
-              review: incoming,
+              reviews: pendingReviews,
               etag: result.etag,
               requestInFlight: false,
               syncStatus: "healthy" as const,
@@ -317,11 +302,12 @@ export const useFileProjectReviewStore = create<FileProjectReviewState>(
 
     const decide = async (
       projectId: string,
+      reviewId: string,
       decisions: FileProjectReviewDecisionItem[],
     ): Promise<FileProjectReviewRecord> => {
       ensureProject(projectId);
       const state = get();
-      const review = state.review;
+      const review = state.reviews.find((r) => r.review_id === reviewId);
       if (!review || review.status !== "PENDING")
         throw new Error("没有可处理的文件 Review");
       if (state.decisionInFlight) throw new Error("文件 Review 决策正在提交");
@@ -340,7 +326,6 @@ export const useFileProjectReviewStore = create<FileProjectReviewState>(
       }
 
       const epoch = projectEpoch;
-      const reviewId = review.review_id;
       const decisionToken = review.decision_token;
       const canonicalDecisions = [...decisions].sort(
         (left, right) =>
@@ -372,27 +357,24 @@ export const useFileProjectReviewStore = create<FileProjectReviewState>(
         set((current) => {
           if (epoch !== projectEpoch || current.projectId !== projectId)
             return {};
-          if (
-            current.review &&
-            current.review.review_id !== reviewId &&
-            current.review.candidate_generation > result.candidate_generation
-          ) {
-            return { decisionInFlight: false };
+          const updatedReviews = current.reviews.filter(
+            (r) => r.review_id !== reviewId,
+          );
+          if (result.status === "PENDING") {
+            updatedReviews.push(result);
+            updatedReviews.sort(
+              (a, b) =>
+                new Date(a.created_at).getTime() -
+                new Date(b.created_at).getTime(),
+            );
           }
-          if (result.status !== "PENDING") {
-            return {
-              review: null,
-              etag: null,
-              decisionInFlight: false,
-              syncStatus: "healthy" as const,
-              syncError: null,
-              consecutiveFailures: 0,
-              lastGoodAt: new Date().toISOString(),
-            };
-          }
+          const compositeToken =
+            updatedReviews.length > 0
+              ? updatedReviews.map((r) => r.decision_token).join("|")
+              : null;
           return {
-            review: result,
-            etag: quotedEtag(result.decision_token),
+            reviews: updatedReviews,
+            etag: compositeToken ? quotedEtag(compositeToken) : null,
             decisionInFlight: false,
             syncStatus: "healthy" as const,
             syncError: null,

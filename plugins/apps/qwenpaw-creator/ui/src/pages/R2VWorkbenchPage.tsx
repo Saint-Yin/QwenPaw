@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Button, Input, Modal, Select, message } from "antd";
+import { Alert, Button, Input, Modal, Select, Tooltip, message } from "antd";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -8,7 +8,12 @@ import {
   Video,
   Wand2,
 } from "lucide-react";
-import { navigate, useParams } from "@/routing/navigation";
+import {
+  navigate,
+  useParams,
+  useSearchParams,
+} from "@/routing/navigation";
+import { useReviewFieldFocus } from "@/routing/reviewFocus";
 import {
   useProjectSnapshotStore,
   type ProjectEditOperation,
@@ -17,11 +22,12 @@ import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { selectPrimaryTimeline } from "@/selectors/timelineElementSelectors";
-import { getArtifactVersionMediaUrl, getResolvedModels } from "@/api/creator";
+import { getArtifactVersionMediaUrl, getAssetVersionMediaUrl, getResolvedModels } from "@/api/creator";
 import { projectJsonPointer } from "@/lib/projectJsonPointer";
 import { useProjectDraft } from "@/lib/useProjectDraft";
 import PageSkeleton from "@/components/PageSkeleton";
 import PageLoadError from "@/components/PageLoadError";
+import InlineReviewDiff from "@/components/agent/InlineReviewDiff";
 import ShotList from "@/components/workbench/ShotList";
 import ArtifactVersionChips from "@/components/workbench/ArtifactVersionChips";
 import type {
@@ -97,6 +103,7 @@ function PromptTextArea({
         placeholder={`生成${label}后可在此编辑…`}
         className="!rounded-lg !border-[var(--color-border)] !bg-[var(--color-bg-secondary)] !text-xs"
       />
+      <InlineReviewDiff pointer={path} />
     </div>
   );
 }
@@ -141,6 +148,17 @@ function referenceVersionName(
 
 export default function R2VWorkbenchPage() {
   const { id = "", elementId = "" } = useParams();
+  const query = useSearchParams();
+  const reviewMode = query.get("review") === "1";
+  const reviewField = query.get("field");
+  const reviewPulse = query.get("reviewPulse");
+  const versionFromUrl = query.get("version");
+  useReviewFieldFocus({
+    path: `/project/${id}/plan/element/${elementId}`,
+    field: reviewField,
+    enabled: reviewMode,
+    pulse: reviewPulse,
+  });
   const project = useProjectSnapshotStore((state) =>
     state.projectId === id ? state.project : null,
   );
@@ -173,6 +191,20 @@ export default function R2VWorkbenchPage() {
   const [resolvedVideoModel, setResolvedVideoModel] = useState<string | null>(
     null,
   );
+
+  useEffect(() => {
+    if (!versionFromUrl || !project) return;
+    const version = project.assets.artifact_versions_by_id[versionFromUrl];
+    if (!version || version.owner_ref !== `element:${elementId}`) return;
+    if (
+      version.kind === "r2v_storyboard_image" ||
+      version.slot_id.endsWith(":storyboard")
+    ) {
+      setViewedSbId(versionFromUrl);
+      return;
+    }
+    setViewedVideoId(versionFromUrl);
+  }, [versionFromUrl, project, elementId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -412,12 +444,118 @@ export default function R2VWorkbenchPage() {
   const overLimit = totalDuration > spanSeconds;
 
   // 输入引用：从 R2V creation 的引用字段汇总，与 origin/main 的 resolvedRefs 对应。
+  // 若某素材版本本身就是已引用视觉实体（场景/角色/道具）的生成图，
+  // 则不在“素材”中重复展示一次，避免“场景”与“场景视觉图”语义重复。
+  const referencedEntityIds = new Set(
+    [creation.scene_ref, ...creation.character_refs, ...creation.prop_refs]
+      .filter((ref): ref is string => Boolean(ref))
+      .map((ref) => ref.replace(/^visual-entity:/, "")),
+  );
   const materialVersionIds = [
     ...new Set([
       ...creation.storyboard_reference_version_ids,
       ...creation.video_reference_version_ids,
     ]),
   ];
+  // 实体归属在历史数据中有多种前缀（visual-entity: / asset: / 无前缀）；
+  // 只要归一化后能命中视觉实体，就视为该实体的产出。
+  const ownerEntityId = (ownerRef: string): string | null => {
+    const entityId = ownerRef.replace(/^(?:visual-entity|asset):/, "");
+    return project.visual.entities.items[entityId] ? entityId : null;
+  };
+  const isReferencedEntityArtifact = (versionId: string) => {
+    const owner =
+      project.assets.artifact_versions_by_id[versionId]?.owner_ref ?? "";
+    const entityId = ownerEntityId(owner);
+    return entityId !== null && referencedEntityIds.has(entityId);
+  };
+  // 历史数据里实体引用存在两种格式（scene:night_room 与
+  // visual-entity:scene:night_room）。统一归一化到带前缀格式，让
+  // Select 已选值命中选项（显示真实名称且不产生重复 fallback 项）。
+  const normalizeEntityRef = (ref: string | null | undefined) => {
+    if (!ref) return undefined;
+    const entityId = ref.replace(/^visual-entity:/, "");
+    return project.visual.entities.items[entityId]
+      ? `visual-entity:${entityId}`
+      : ref;
+  };
+  const entityThumbVersionId = (entityId: string): string | null => {
+    const entity = project.visual.entities.items[entityId];
+    if (!entity) return null;
+    if (entity.selected_artifact_version_id)
+      return entity.selected_artifact_version_id;
+    for (const variantId of [...entity.variants.order].reverse()) {
+      const generated =
+        entity.variants.items[variantId]?.generated_artifact_version_ids ?? [];
+      if (generated.length) return generated[generated.length - 1];
+    }
+    return null;
+  };
+  const versionMediaKind = (versionId: string): "image" | "video" | null => {
+    const artifact = project.assets.artifact_versions_by_id[versionId];
+    if (artifact) {
+      const mediaType =
+        (artifact.file_id &&
+          project.assets.files_by_id[artifact.file_id]?.media_type) ||
+        "";
+      if (mediaType.startsWith("video") || `${artifact.kind}`.includes("video"))
+        return "video";
+      return "image";
+    }
+    const source = project.assets.source_versions_by_id[versionId];
+    if (source) {
+      if (source.media_kind === "video") return "video";
+      if (source.media_kind === "image") return "image";
+      return null;
+    }
+    return null;
+  };
+  /** 同一 element 产出的分镜图；视频缩略优先用它代替关键帧。 */
+  const storyboardOfOwner = (ownerRef: string): string | null => {
+    if (!ownerRef.startsWith("element:")) return null;
+    const candidates = Object.values(
+      project.assets.artifact_versions_by_id,
+    ).filter(
+      (version) =>
+        version.owner_ref === ownerRef &&
+        `${version.kind}`.includes("storyboard"),
+    );
+    if (!candidates.length) return null;
+    return candidates[candidates.length - 1].version_id;
+  };
+  interface RefThumb {
+    kind: "image" | "video";
+    url: string;
+  }
+  /** 引用的悬浮预览：图片直接显示；视频用同属分镜图或关键帧；无产出时返回 null。 */
+  const refThumbInfo = (ref: string): RefThumb | null => {
+    const entityId = ref.replace(/^visual-entity:/, "");
+    if (project.visual.entities.items[entityId]) {
+      const versionId = entityThumbVersionId(entityId);
+      return versionId
+        ? { kind: "image", url: getArtifactVersionMediaUrl(versionId) }
+        : null;
+    }
+    const versionId = ref.replace(/^artifact-version:/, "");
+    const media = versionMediaKind(versionId);
+    if (!media) return null;
+    const artifact = project.assets.artifact_versions_by_id[versionId];
+    const url = artifact
+      ? getArtifactVersionMediaUrl(versionId)
+      : getAssetVersionMediaUrl(versionId);
+    if (media === "video") {
+      const storyboardId = artifact
+        ? storyboardOfOwner(artifact.owner_ref ?? "")
+        : null;
+      if (storyboardId)
+        return {
+          kind: "image",
+          url: getArtifactVersionMediaUrl(storyboardId),
+        };
+      return { kind: "video", url };
+    }
+    return { kind: "image", url };
+  };
   const inputRefs: Array<{ ref: string; field: ReferenceField; name: string }> =
     [
       ...(creation.scene_ref
@@ -439,32 +577,74 @@ export default function R2VWorkbenchPage() {
         field: "props" as const,
         name: visualEntityName(project, ref),
       })),
-      ...materialVersionIds.map((versionId) => ({
-        ref: `artifact-version:${versionId}`,
-        field: "sources" as const,
-        name: referenceVersionName(project, versionId),
-      })),
+      ...materialVersionIds
+        .filter((versionId) => !isReferencedEntityArtifact(versionId))
+        .map((versionId) => ({
+          ref: `artifact-version:${versionId}`,
+          field: "sources" as const,
+          name: referenceVersionName(project, versionId),
+        })),
     ];
 
+  // Select 选项与已选值都用真实名称；若已选值不在选项里（历史数据/
+  // 不同前缀格式），补一个带真实名称的 fallback 选项，避免直接显示
+  // scene:night_room 这样的原始 ID。
+  const withValueFallback = (
+    options: Array<{ value: string; label: string }>,
+    refs: Array<string | null | undefined>,
+    labelOf: (ref: string) => string,
+  ) => {
+    const known = new Set(options.map((option) => option.value));
+    refs
+      .map((ref) => normalizeEntityRef(ref))
+      .filter((ref): ref is string => Boolean(ref))
+      .forEach((ref) => {
+        if (known.has(ref)) return;
+        known.add(ref);
+        options.push({ value: ref, label: labelOf(ref) });
+      });
+    return options;
+  };
   const entityOptions = (kind: "scene" | "character" | "prop") =>
     Object.values(project.visual.entities.items)
       .filter((entity) => entity.kind === kind)
       .map((entity) => ({
         value: `visual-entity:${entity.entity_id}`,
-        label: entity.name,
+        label: entity.name || entity.entity_id,
       }));
-  const materialOptions = [
-    ...Object.values(project.assets.source_versions_by_id).map((version) => ({
-      value: version.version_id,
-      label: version.name,
-    })),
-    ...Object.values(project.assets.artifact_versions_by_id)
-      .filter((version) => version.owner_ref !== elementRef)
-      .map((version) => ({
-        value: version.version_id,
-        label: version.name,
-      })),
-  ];
+  const sceneOptions = withValueFallback(
+    entityOptions("scene"),
+    [creation.scene_ref],
+    (ref) => visualEntityName(project, ref),
+  );
+  const characterOptions = withValueFallback(
+    entityOptions("character"),
+    creation.character_refs,
+    (ref) => visualEntityName(project, ref),
+  );
+  const propOptions = withValueFallback(
+    entityOptions("prop"),
+    creation.prop_refs,
+    (ref) => visualEntityName(project, ref),
+  );
+  const materialOptions = withValueFallback(
+    [
+      ...Object.values(project.assets.source_versions_by_id).map(
+        (version) => ({
+          value: version.version_id,
+          label: version.name || version.version_id,
+        }),
+      ),
+      ...Object.values(project.assets.artifact_versions_by_id)
+        .filter((version) => version.owner_ref !== elementRef)
+        .map((version) => ({
+          value: version.version_id,
+          label: version.name || version.version_id,
+        })),
+    ],
+    materialVersionIds,
+    (versionId) => referenceVersionName(project, versionId),
+  );
   const changeMaterialReferences = (next: string[]) =>
     updateElement((draft) => {
       if (draft.creation.type !== "r2v") return;
@@ -841,23 +1021,55 @@ export default function R2VWorkbenchPage() {
               </p>
             ) : (
               <div className="space-y-1.5">
-                {inputRefs.map((item) => (
-                  <button
-                    key={item.ref}
-                    type="button"
-                    onClick={() =>
-                      useCreatorInteractionStore.getState().select(item.ref)
-                    }
-                    className="flex w-full items-center gap-2 rounded-lg bg-[var(--color-bg-secondary)]/60 px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--color-bg-secondary)]"
-                  >
-                    <span className="shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-1.5 py-px text-[10px] text-[var(--color-text-tertiary)]">
-                      {FIELD_LABEL[item.field]}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--color-accent)]">
-                      @{item.name}
-                    </span>
-                  </button>
-                ))}
+                {inputRefs.map((item) => {
+                  const thumb = refThumbInfo(item.ref);
+                  const row = (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        useCreatorInteractionStore.getState().select(item.ref)
+                      }
+                      className="flex w-full items-center gap-2 rounded-lg bg-[var(--color-bg-secondary)]/60 px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--color-bg-secondary)]"
+                    >
+                      <span className="shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-1.5 py-px text-[10px] text-[var(--color-text-tertiary)]">
+                        {FIELD_LABEL[item.field]}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--color-accent)]">
+                        @{item.name}
+                      </span>
+                    </button>
+                  );
+                  return (
+                    <Tooltip
+                      key={item.ref}
+                      placement="left"
+                      title={
+                        thumb ? (
+                          thumb.kind === "video" ? (
+                            <video
+                              src={thumb.url}
+                              muted
+                              preload="metadata"
+                              className="max-h-40 max-w-[220px] rounded object-contain"
+                            />
+                          ) : (
+                            <img
+                              src={thumb.url}
+                              alt={item.name}
+                              className="max-h-40 max-w-[220px] rounded object-contain"
+                            />
+                          )
+                        ) : (
+                          <span className="text-xs">
+                            尚未生成可预览的图像，生成后这里会显示缩略图
+                          </span>
+                        )
+                      }
+                    >
+                      {row}
+                    </Tooltip>
+                  );
+                })}
               </div>
             )}
           </Panel>
@@ -871,7 +1083,7 @@ export default function R2VWorkbenchPage() {
                 <Select
                   size="small"
                   className="!w-full"
-                  value={creation.scene_ref || undefined}
+                  value={normalizeEntityRef(creation.scene_ref)}
                   disabled={patching}
                   onChange={(value) =>
                     updateElement((draft) => {
@@ -881,7 +1093,7 @@ export default function R2VWorkbenchPage() {
                   }
                   allowClear
                   placeholder="选择场景"
-                  options={entityOptions("scene")}
+                  options={sceneOptions}
                 />
               </div>
               <div>
@@ -892,7 +1104,9 @@ export default function R2VWorkbenchPage() {
                   size="small"
                   mode="multiple"
                   className="!w-full"
-                  value={creation.character_refs}
+                  value={creation.character_refs.map(
+                    (ref) => normalizeEntityRef(ref) ?? ref,
+                  )}
                   disabled={patching}
                   onChange={(value) =>
                     updateElement((draft) => {
@@ -901,7 +1115,7 @@ export default function R2VWorkbenchPage() {
                     })
                   }
                   placeholder="选择角色"
-                  options={entityOptions("character")}
+                  options={characterOptions}
                 />
               </div>
               <div>
@@ -912,7 +1126,9 @@ export default function R2VWorkbenchPage() {
                   size="small"
                   mode="multiple"
                   className="!w-full"
-                  value={creation.prop_refs}
+                  value={creation.prop_refs.map(
+                    (ref) => normalizeEntityRef(ref) ?? ref,
+                  )}
                   disabled={patching}
                   onChange={(value) =>
                     updateElement((draft) => {
@@ -921,7 +1137,7 @@ export default function R2VWorkbenchPage() {
                     })
                   }
                   placeholder="选择道具"
-                  options={entityOptions("prop")}
+                  options={propOptions}
                 />
               </div>
               <div>

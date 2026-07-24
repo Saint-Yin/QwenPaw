@@ -207,21 +207,14 @@ class ProjectReviewService:
         self.commits = ProjectCommitBoundary(store)
 
     def active(self, project_id: str) -> ReviewRecord | None:
+        all_pending = self.all_pending(project_id)
+        return all_pending[0] if all_pending else None
+
+    def all_pending(self, project_id: str) -> list[ReviewRecord]:
         runtime_root = self.store.project_root(project_id) / "runtime"
-        state = AtomicJsonRecordStore(
-            runtime_root / "state.json",
-            RuntimeProjectState,
-        ).read_or_none()
-        if state is not None and state.active_round_id:
-            review = self._review_store(
-                project_id,
-                f"review-{state.active_round_id}",
-            ).read_or_none()
-            if review is not None and review.status is ReviewStatus.PENDING:
-                return review
         reviews_root = runtime_root / "reviews"
         if not reviews_root.is_dir():
-            return None
+            return []
         candidates: list[ReviewRecord] = []
         for child in reviews_root.iterdir():
             if child.is_symlink() or not child.is_dir():
@@ -232,11 +225,7 @@ class ProjectReviewService:
             ).read_or_none()
             if review is not None and review.status is ReviewStatus.PENDING:
                 candidates.append(review)
-        return (
-            max(candidates, key=lambda item: item.updated_at)
-            if candidates
-            else None
-        )
+        return sorted(candidates, key=lambda item: item.created_at)
 
     def get(self, project_id: str, review_id: str) -> ReviewRecord:
         review = self._review_store(project_id, review_id).read_or_none()
@@ -808,6 +797,9 @@ class ProjectReviewService:
                         round_id=journal.compensation_round_id,
                         transaction_id=journal.compensation_transaction_id,
                         advance_accepted_baseline=False,
+                        # The decision flow itself rewrites this Review; the
+                        # compensating commit must not rebase or re-token it.
+                        reconcile_exclude_round_id=journal.review_before.round_id,
                         _order_lock_held=True,
                         _lifecycle_lock_held=True,
                     )
@@ -936,6 +928,7 @@ class ProjectReviewService:
             project_id,
             resulting,
             resolved=journal.final_review.status is ReviewStatus.RESOLVED,
+            resolved_round_id=journal.final_review.round_id,
         )
         finalized = ReviewDecisionJournal.model_validate(
             journal.model_copy(
@@ -990,13 +983,15 @@ class ProjectReviewService:
                 raise ReviewDecisionError(
                     "file-only Review operations are not implemented",
                 )
+            if item.decision != "REJECT":
+                # Keep accepts the live document as-is; only a rejection must
+                # prove the candidate value it is about to restore over.
+                continue
             value = value_at(current_data, operation.json_pointer)
             if hash_json_value(value) != operation.after_hash:
                 raise ReviewDecisionConflict(
                     f"Review candidate changed at {operation.json_pointer}",
                 )
-            if item.decision != "REJECT":
-                continue
             if operation.kind.value == "create":
                 restored = MISSING
                 kind = "delete"
@@ -1333,32 +1328,83 @@ class ProjectReviewService:
         snapshot: ProjectSnapshot,
         *,
         resolved: bool,
+        resolved_round_id: str | None = None,
     ) -> None:
+        runtime_root = self.store.project_root(project_id) / "runtime"
         state_store = AtomicJsonRecordStore(
-            self.store.project_root(project_id) / "runtime" / "state.json",
+            runtime_root / "state.json",
             RuntimeProjectState,
         )
         state = state_store.read()
+        # Multiple reviews may be pending at once (media/runtime tasks plus
+        # AgentDock interventions).  Resolving one must neither drop the pointer
+        # to another still-pending review nor advance the accepted baseline past
+        # changes the user has not yet reviewed.
+        other_pending = self._other_pending_round_id(
+            project_id,
+            exclude_round_id=resolved_round_id,
+        )
+        if not resolved:
+            next_active_round_id = state.active_round_id
+        elif state.active_round_id in {None, resolved_round_id}:
+            next_active_round_id = other_pending
+        else:
+            next_active_round_id = state.active_round_id
+        advance_baseline = resolved and other_pending is None
         state_store.write(
             state.model_copy(
                 update={
-                    "active_round_id": None
-                    if resolved
-                    else state.active_round_id,
+                    "active_round_id": next_active_round_id,
                     "last_project_generation": snapshot.generation,
                     "last_project_etag": snapshot.etag,
                     "accepted_generation": (
                         snapshot.generation
-                        if resolved
+                        if advance_baseline
                         else state.accepted_generation
                     ),
                     "accepted_etag": snapshot.etag
-                    if resolved
+                    if advance_baseline
                     else state.accepted_etag,
                     "updated_at": datetime.now(UTC),
                 },
             ),
         )
+
+    def _other_pending_round_id(
+        self,
+        project_id: str,
+        *,
+        exclude_round_id: str | None,
+    ) -> str | None:
+        """Return the round id of another still-pending review, if any.
+
+        Used to keep ``active_round_id`` pointed at a live review after a
+        sibling review resolves.  The most recently updated pending review is
+        preferred so the frontend surfaces the freshest work first.
+        """
+
+        reviews_root = (
+            self.store.project_root(project_id) / "runtime" / "reviews"
+        )
+        if not reviews_root.is_dir():
+            return None
+        candidates: list[ReviewRecord] = []
+        for child in reviews_root.iterdir():
+            if child.is_symlink() or not child.is_dir():
+                continue
+            review = AtomicJsonRecordStore(
+                child / "review.json",
+                ReviewRecord,
+            ).read_or_none()
+            if (
+                review is not None
+                and review.status is ReviewStatus.PENDING
+                and review.round_id != exclude_round_id
+            ):
+                candidates.append(review)
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item.updated_at).round_id
 
 
 __all__ = [

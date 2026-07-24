@@ -24,21 +24,36 @@ const MAX_RETRIES = 40;
 const FLASH_DURATION_MS = 2400;
 const fallbackFlashTokens = new WeakMap<HTMLElement, number>();
 let fallbackFlashSequence = 0;
+// 每次点击“查看”都会生成唯一的 reviewPulse。定位/强调动画只在首次消费
+// 某个 pulse 时触发；URL 参数残留、组件重挂载、快照轮询都不会重放。
+const consumedFocusPulses = new Set<string>();
+
+function consumePulse(pulse: string | null | undefined): boolean {
+  if (!pulse) return false;
+  if (consumedFocusPulses.has(pulse)) return false;
+  consumedFocusPulses.add(pulse);
+  return true;
+}
 
 /** 精确寻找字段节点，避免把 `:`、`/` 等字段路径直接拼进 CSS selector。 */
 export function findCreatorFieldElement(
   field: string,
   root: ParentNode = document,
 ): HTMLElement | null {
+  // A review operation's locator field is the RFC 6901 JSON pointer of the
+  // change.  DOM fields expose that pointer via data-creator-path, plus a
+  // human data-creator-field/data-review-field alias.  Match any of them so a
+  // backend-derived locator (which uses the pointer) can find the node.
   return (
     Array.from(
       root.querySelectorAll<HTMLElement>(
-        "[data-review-field], [data-creator-field]",
+        "[data-review-field], [data-creator-field], [data-creator-path]",
       ),
     ).find(
       (element) =>
         element.getAttribute("data-review-field") === field ||
-        element.getAttribute("data-creator-field") === field,
+        element.getAttribute("data-creator-field") === field ||
+        element.getAttribute("data-creator-path") === field,
     ) ?? null
   );
 }
@@ -204,12 +219,13 @@ export function useReviewFieldFocus({
     [clearTimers],
   );
 
-  // 直接打开/刷新带审阅 query 的方案页时也能恢复定位；pulse 变化会重放同一字段。
+  // 仅当本次点击产生的 pulse 尚未被消费时才定位/强调；没有 pulse（非点击
+  // 进入）或 pulse 已消费（重挂载/轮询重渲染）时保持页面安静。
   useEffect(() => {
-    if (enabled && field) trigger(field);
+    if (enabled && field && consumePulse(pulse)) trigger(field);
   }, [enabled, field, pulse, trigger]);
 
-  // 跨页与同页重复“查看”都通过 reviewFocus.nonce 到达这里。
+  // 跨页跳转的定位请求同样按 pulse 消费，避免 store 残留请求在重挂载时重放。
   useEffect(() => {
     if (!enabled) return;
     if (!reviewFocusRequest || reviewFocusRequest.path !== path) return;
@@ -218,6 +234,7 @@ export function useReviewFieldFocus({
       !reviewFocusRequest.query.field
     )
       return;
+    if (!consumePulse(reviewFocusRequest.query.reviewPulse)) return;
     trigger(reviewFocusRequest.query.field);
   }, [enabled, path, reviewFocusRequest, trigger]);
 

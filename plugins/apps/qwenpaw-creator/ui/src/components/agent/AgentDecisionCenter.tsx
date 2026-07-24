@@ -5,29 +5,25 @@ import ExecutionAuthorizationCard from "./ExecutionAuthorizationCard";
 
 export default function AgentDecisionCenter({
   projectId,
+  hideEmptyState = false,
 }: {
   projectId: string;
+  /** 当审阅面板已占据决策区时，空状态/加载文案不再重复展示。 */
+  hideEmptyState?: boolean;
 }) {
   const project = useProjectSnapshotStore((state) => state.project);
   const storeProjectId = useExecutionAuthorizationStore(
     (state) => state.projectId,
   );
   const authorizations = useExecutionAuthorizationStore((state) => state.items);
-  const loading = useExecutionAuthorizationStore((state) => state.loading);
   const error = useExecutionAuthorizationStore((state) => state.error);
   const pending =
     storeProjectId === projectId
       ? authorizations.filter((item) => item.status === "PENDING")
       : [];
 
-  if (loading && pending.length === 0) {
-    return (
-      <p className="px-1 py-2 text-[11px] text-[var(--color-text-tertiary)]">
-        加载生产确认…
-      </p>
-    );
-  }
   if (error && pending.length === 0) {
+    if (hideEmptyState) return null;
     return (
       <p className="px-1 py-2 text-[11px] text-[var(--color-danger)]">
         生产确认读取失败：{error}
@@ -35,6 +31,7 @@ export default function AgentDecisionCenter({
     );
   }
   if (pending.length === 0) {
+    if (hideEmptyState) return null;
     return (
       <div className="flex flex-col items-center gap-1.5 py-10 text-center">
         <CheckCircle2 className="h-8 w-8 text-[var(--color-success)]" />
