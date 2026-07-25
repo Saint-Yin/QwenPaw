@@ -25,6 +25,7 @@ import json
 import math
 import mimetypes
 import os
+import re
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
@@ -584,6 +585,21 @@ class FfmpegLocalMediaRunner:
         rendered = segment.with_name(f"{segment.stem}-overlay.mp4")
         styled_error: str | None = None
         motion = overlay.get("motion")
+        if (
+            isinstance(motion, Mapping)
+            and str(motion.get("html") or "").strip()
+            and not _motion_document_matches_text(
+                str(motion["html"]),
+                str(overlay.get("text") or ""),
+            )
+        ):
+            # 文案已更新但动效文档还是旧版：跳过过期文档，用回退模板
+            # 把当前文案烧进成片，绝不把旧文案交付给用户。
+            motion = None
+            styled_error = (
+                f"{overlay['kind']} 动效文档与当前文案不一致，"
+                "已用回退样式渲染最新文案"
+            )
         if (
             isinstance(motion, Mapping)
             and str(motion.get("html") or "").strip()
@@ -1167,6 +1183,21 @@ def _resolved_element_input(
     raise ConflictError(f"Element {element.element_id} 尚无可渲染来源")
 
 
+def _motion_document_matches_text(html: str, text: str) -> bool:
+    """判断动效文档是否仍承载当前文案。
+
+    气泡的视觉文本烧在生成的 motion HTML 里；文案事后被修改（审阅保留、
+    手动编辑）时 HTML 不会自动同步，直接渲染会把旧文案烧进成片。
+    去标签、去空白后做包含判断，容忍设计时插入的换行与分段。
+    """
+
+    needle = re.sub(r"\s+", "", text)
+    if not needle:
+        return True
+    plain = re.sub(r"<[^>]+>", "", html)
+    return needle in re.sub(r"\s+", "", plain)
+
+
 def _edit_overlay(
     timeline: Timeline,
     element: TimelineElement,
@@ -1178,6 +1209,15 @@ def _edit_overlay(
     when the Timeline asks it to render more than that.
     """
 
+    def _owned(candidate: TimelineElement) -> bool:
+        # 转场设计要求相邻 Edit 的 span 有少量重叠；随 Edit 对齐的 Overlay
+        # 会在重叠区擦边覆盖邻居 Edit。按主要覆盖时长归属，擦边不算，
+        # 避免每个转场边界都被判为多 Overlay 叠加而无法合成。
+        start = max(element.span.start_tick, candidate.span.start_tick)
+        end = min(element.span.end_tick, candidate.span.end_tick)
+        overlap = max(0, end - start)
+        return overlap * 2 > candidate.span.duration_tick
+
     overlays = sorted(
         (
             candidate
@@ -1187,6 +1227,7 @@ def _edit_overlay(
             and candidate.creation.overlay_kind
             in {"pet_os", "interview_summary"}
             and candidate.span.overlaps(element.span)
+            and _owned(candidate)
         ),
         key=lambda candidate: (candidate.z_index, candidate.element_id),
     )
@@ -1598,6 +1639,9 @@ def _resolved_fingerprint(resolved: _ResolvedExecution) -> str:
     return _fingerprint(
         {
             "command": resolved.command.value,
+            # 渲染器行为版本：渲染逻辑的语义性修复（如过期动效文档
+            # 回退）需要使旧成片失效重新合成时，递增此版本号。
+            "rendererVersion": 2,
             "targetRef": resolved.target_ref,
             "inputs": [
                 {
@@ -2472,8 +2516,16 @@ class FileLocalMediaExecutionService:
                 else:
                     candidate = current.project.model_dump(mode="json")
                     self._apply_result(candidate, result)
+                    # 成片合成是确定性组装（所有素材均已单独审阅过），
+                    # 不再进入审阅流程；其余本地媒体产物保持审阅。
+                    is_final_compose = (
+                        result.get("commandType")
+                        == CreatorCommandType.COMPOSE_FINAL_VIDEO.value
+                    )
                     review_boundary = (
-                        self.services.commits.runtime_review_boundary(
+                        None
+                        if is_final_compose
+                        else self.services.commits.runtime_review_boundary(
                             task.project_id,
                             run_id=str(task.run_id),
                             request_id=latest.caused_by_request_id,
@@ -2483,7 +2535,11 @@ class FileLocalMediaExecutionService:
                         base=current,
                         candidate=candidate,
                         origin=ChangeOrigin.RUNTIME_TASK,
-                        review_policy=ReviewPolicy.REQUIRE_REVIEW,
+                        review_policy=(
+                            ReviewPolicy.AUTO_FIX
+                            if is_final_compose
+                            else ReviewPolicy.REQUIRE_REVIEW
+                        ),
                         review_boundary=review_boundary,
                         caused_by_request_id=latest.caused_by_request_id,
                         round_id=ids["round_id"],
@@ -2906,6 +2962,30 @@ def file_local_media_task_id(
     )[
         "task_id"
     ]
+
+
+def validate_local_media_execution(
+    services: CreatorFileServices,
+    *,
+    project_id: str,
+    command: CreatorCommandType | str,
+    target_ref: str,
+    arguments: Mapping[str, Any] | None = None,
+) -> None:
+    """在后台派发前同步预检执行计划。
+
+    后台 runner 在创建持久化 Task 之前就可能因结构不满足本地合成条件
+    而失败；那时失败只能被静默吞掉，前端会等待一个永不存在的 Task。
+    路由层先调用本预检，把同样的 ValidationError 显式抛给调用方。
+    """
+
+    snapshot = services.projects.read(project_id)
+    _resolve_execution(
+        snapshot=snapshot,
+        command=CreatorCommandType(command),
+        target_ref=target_ref,
+        arguments=dict(arguments or {}),
+    )
 
 
 def find_reusable_local_media_task(

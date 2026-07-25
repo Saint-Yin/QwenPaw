@@ -28,7 +28,10 @@ import type {
   VisualEntityDocument,
 } from "@/contracts/creator";
 import { navigate, useParams, useSearchParams } from "@/routing/navigation";
-import { useReviewFieldFocus } from "@/routing/reviewFocus";
+import {
+  useReviewFieldFocus,
+  useReviewMediaFocus,
+} from "@/routing/reviewFocus";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
@@ -426,10 +429,17 @@ export default function AssetsPage() {
   const reviewMode = query.get("review") === "1";
   const reviewField = query.get("field");
   const reviewPulse = query.get("reviewPulse");
+  const versionFromUrl = query.get("version");
   useReviewFieldFocus({
     path: `/project/${id}/assets`,
     field: reviewField,
     enabled: reviewMode,
+    pulse: reviewPulse,
+  });
+  // 形象图审阅的「查看生成详情」没有字段指针，按待审版本锚点闪烁详情预览。
+  useReviewMediaFocus({
+    versionId: versionFromUrl,
+    enabled: reviewMode && !reviewField,
     pulse: reviewPulse,
   });
   const allItems = useMemo(
@@ -680,7 +690,10 @@ export default function AssetsPage() {
         >
           {selected ? (
             <div>
-              <div className="flex aspect-video items-center justify-center overflow-hidden bg-black">
+              <div
+                data-review-media-anchor={versionFromUrl ?? undefined}
+                className="flex aspect-video items-center justify-center overflow-hidden bg-black"
+              >
                 {selected.mediaKind === "audio" && selected.previewUrl ? (
                   <audio
                     src={selected.previewUrl}

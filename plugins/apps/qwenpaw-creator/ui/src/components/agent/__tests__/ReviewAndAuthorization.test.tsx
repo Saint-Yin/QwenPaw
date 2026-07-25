@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
-import AgentDecisionCenter from "@/components/agent/AgentDecisionCenter";
+import DecisionTray from "@/components/agent/DecisionTray";
 import { installMockFetch } from "@/test/mockFetch";
+import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationStore";
 
 const pending = {
@@ -23,11 +24,12 @@ const pending = {
 
 describe("file-native execution authorization decisions", () => {
   beforeEach(() => {
+    useAgentDockUiStore.getState().reset();
     useExecutionAuthorizationStore.getState().reset();
     useExecutionAuthorizationStore.getState().bindProject("p1");
   });
 
-  it("approves the exact project-level authorization request", async () => {
+  it("approves the exact project-level authorization request from the inline tray", async () => {
     useExecutionAuthorizationStore.setState({ items: [pending] });
     const { calls } = installMockFetch([
       {
@@ -36,7 +38,13 @@ describe("file-native execution authorization decisions", () => {
       },
     ]);
 
-    render(<AgentDecisionCenter projectId="p1" />);
+    render(<DecisionTray projectId="p1" />);
+    // 阻塞级：托盘展开且摘要栏标注需确认后才能继续。
+    const tray = document.querySelector("[data-decision-tray]");
+    expect(tray).toHaveAttribute("data-decision-tray-urgent", "true");
+    expect(
+      screen.getByText("1 项待决策 · 需确认后才能继续"),
+    ).toBeInTheDocument();
     expect(screen.getByText("生成 Element 视频")).toBeInTheDocument();
     fireEvent.click(screen.getByText("继续"));
 
@@ -51,7 +59,7 @@ describe("file-native execution authorization decisions", () => {
     });
   });
 
-  it("declines with the exact token and shows the empty decision state afterwards", async () => {
+  it("declines with the exact token and removes the tray afterwards", async () => {
     useExecutionAuthorizationStore.setState({ items: [pending] });
     installMockFetch([
       {
@@ -60,11 +68,27 @@ describe("file-native execution authorization decisions", () => {
       },
     ]);
 
-    render(<AgentDecisionCenter projectId="p1" />);
+    render(<DecisionTray projectId="p1" />);
     fireEvent.click(screen.getByText("取消"));
 
+    // 全部处理完后托盘整体消失，不再占据聊天面板空间。
     await waitFor(() =>
-      expect(screen.getByText("暂无待处理的决策")).toBeInTheDocument(),
+      expect(
+        document.querySelector("[data-decision-tray]"),
+      ).not.toBeInTheDocument(),
     );
+  });
+
+  it("keeps the amber summary line when collapsed with a blocking authorization", () => {
+    useExecutionAuthorizationStore.setState({ items: [pending] });
+    render(<DecisionTray projectId="p1" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "折叠决策托盘" }));
+    const tray = document.querySelector("[data-decision-tray]");
+    expect(tray).toHaveAttribute("data-decision-tray-collapsed", "true");
+    expect(tray).toHaveAttribute("data-decision-tray-urgent", "true");
+    // 折叠后卡片隐藏，但摘要栏仍保留阻塞提示文案。
+    expect(screen.queryByText("生成 Element 视频")).not.toBeInTheDocument();
+    expect(screen.getByText(/生产确认 1 项阻塞执行中/)).toBeInTheDocument();
   });
 });

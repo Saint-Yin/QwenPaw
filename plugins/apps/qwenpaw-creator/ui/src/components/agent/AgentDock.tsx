@@ -8,9 +8,7 @@ import {
   CircleCheck,
   Eraser,
   Info,
-  ListTodo,
   Loader2,
-  MessageSquare,
   PanelRightClose,
   PanelRightOpen,
   Sparkles,
@@ -62,12 +60,10 @@ import {
   type ToolCallPresentation,
 } from "@/lib/creatorMessagePresentation";
 import { deriveAgentLiveStatus } from "@/lib/agentLiveStatus";
-import AgentDecisionCenter from "./AgentDecisionCenter";
 import AgentEventFeed from "./AgentEventFeed";
+import DecisionTray from "./DecisionTray";
 import MentionInput, { type MentionInputHandle } from "./MentionInput";
-import FileProjectReviewPanel, {
-  reviewPendingUnits,
-} from "./FileProjectReviewPanel";
+import { reviewPendingUnits } from "./FileProjectReviewPanel";
 import OnboardingHint from "@/components/onboarding/OnboardingHint";
 
 interface DockSize {
@@ -1390,6 +1386,9 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   const setSelectionAttachment = useAgentDockUiStore(
     (state) => state.setSelection,
   );
+  const setDecisionTrayCollapsed = useAgentDockUiStore(
+    (state) => state.setDecisionTrayCollapsed,
+  );
 
   const session = useCreatorSessionStore((state) => state.session);
   const agentStatusBar = useCreatorSessionStore(
@@ -1442,7 +1441,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
     runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status)) ||
     Boolean(session && STOPPABLE_SESSION_STATUSES.includes(session.status));
   const showWorkspace = tab === "activity";
-  const showDecisions = tab === "review";
 
   const [removedContextRefs, setRemovedContextRefs] = useState<string[]>([]);
   const [canSend, setCanSend] = useState(false);
@@ -1454,7 +1452,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   const inputRef = useRef<MentionInputHandle>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickBottom = useRef(true);
-  const previousTab = useRef(tab);
   const previousPendingAuthorizationCount = useRef(0);
   const lastOpenedFileReviewToken = useRef<string | null>(null);
   const resizeRef = useRef<{
@@ -1667,13 +1664,13 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
     const previous = previousPendingAuthorizationCount.current;
     previousPendingAuthorizationCount.current = pendingAuthorizationCount;
     if (pendingAuthorizationCount > previous) {
-      // A production authorization is a blocking user decision.  Bring the
-      // already-existing decision center into view as soon as polling/SSE
-      // observes it; do not wait for a route refresh or bury it above the
-      // conversation scroll position.
-      setTab("review");
+      // A production authorization is a blocking user decision.  Pop the dock
+      // open and force the inline decision tray to expand as soon as
+      // polling/SSE observes it; do not wait for a route refresh.
+      setOpen(true);
+      setDecisionTrayCollapsed(false);
     }
-  }, [pendingAuthorizationCount, setTab]);
+  }, [pendingAuthorizationCount, setDecisionTrayCollapsed, setOpen]);
 
   useEffect(() => {
     if (fileReviews.length === 0 || pendingFileReviewCount === 0) return;
@@ -1682,8 +1679,10 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
       .join("|");
     if (lastOpenedFileReviewToken.current === compositeToken) return;
     lastOpenedFileReviewToken.current = compositeToken;
-    setTab("review");
-  }, [fileReviews, pendingFileReviewCount, setTab]);
+    // New review content lands in the inline tray; surface the dock so the
+    // pending badge and tray summary are visible without navigation.
+    setOpen(true);
+  }, [fileReviews, pendingFileReviewCount, setOpen]);
 
   useEffect(() => {
     const stored = loadDockSize();
@@ -1715,10 +1714,10 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
     stickBottom.current = true;
     setShowJump(false);
     const timer = window.setTimeout(() => {
-      if (!showDecisions) inputRef.current?.focus();
+      inputRef.current?.focus();
     }, 60);
     return () => window.clearTimeout(timer);
-  }, [open, showDecisions]);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -1736,39 +1735,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   }, [open, orderedMessages, queued, toolCalls]);
 
   useEffect(() => {
-    const wasReview = previousTab.current === "review";
-    previousTab.current = tab;
-    // The review tab unmounts the conversation scroll container; switching to
-    // either activity or conversation remounts it with scrollTop reset to 0.
-    // Re-anchor to the bottom so the latest content stays in view instead of
-    // jumping to the top on return from the decision center.
-    if (!open || tab === "review" || !wasReview) return;
-    stickBottom.current = true;
-    let handle = 0;
-    let attempts = 0;
-    // The remounted flex container and async markdown/media content settle
-    // layout over several frames, so retry until the scroll is actually pinned
-    // to the bottom rather than no-opping on the first unconstrained read.
-    const anchor = () => {
-      const el = scrollRef.current;
-      if (!el) return false;
-      el.scrollTop = el.scrollHeight;
-      setShowJump(false);
-      return (
-        el.scrollHeight > 0 &&
-        el.scrollTop + el.clientHeight >= el.scrollHeight - 1
-      );
-    };
-    const tick = () => {
-      if (anchor() || ++attempts > 8) return;
-      handle = requestAnimationFrame(tick);
-    };
-    handle = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(handle);
-  }, [open, tab]);
-
-  useEffect(() => {
-    if (!open || showDecisions || !selectionAttachment) return;
+    if (!open || !selectionAttachment) return;
     inputRef.current?.insertSelection(selectionAttachment);
     setSelectionAttachment(null);
     useCreatorInteractionStore.getState().setSelection(null);
@@ -1776,14 +1743,14 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
     setCanSend(Boolean(content?.text.trim()));
     const timer = window.setTimeout(() => inputRef.current?.focus(), 40);
     return () => window.clearTimeout(timer);
-  }, [open, selectionAttachment, setSelectionAttachment, showDecisions]);
+  }, [open, selectionAttachment, setSelectionAttachment]);
 
   useEffect(() => {
-    if (!open || showDecisions || !draft || inputRef.current?.getContent().text)
+    if (!open || !draft || inputRef.current?.getContent().text)
       return;
     inputRef.current?.setText(draft);
     setCanSend(Boolean(draft.trim()));
-  }, [draft, open, showDecisions]);
+  }, [draft, open]);
 
   useEffect(() => {
     if (mentionQuery === null || !projectId) {
@@ -1840,9 +1807,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
 
   const panelStyle: CSSProperties = { width, height };
 
-  const toggleDecisions = () => {
-    setTab(showDecisions ? "conversation" : "review");
-  };
   const toggleWorkspace = () => {
     setTab(showWorkspace ? "conversation" : "activity");
   };
@@ -1973,11 +1937,28 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
           onClick={() => setOpen(true)}
           data-agent-dock-handle
           data-state={liveStatus.state}
-          className="fixed right-0 top-1/2 z-40 flex h-[76px] w-7 -translate-y-1/2 flex-col items-center justify-center rounded-l-xl border border-r-0 border-[var(--color-border)] bg-[var(--color-bg-card)]/92 text-[var(--color-text-tertiary)] shadow-lg backdrop-blur-xl transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+          className={`fixed right-0 top-1/2 z-40 flex ${
+            decisionCount > 0 ? "h-[96px]" : "h-[76px]"
+          } w-7 -translate-y-1/2 flex-col items-center justify-center rounded-l-xl border border-r-0 border-[var(--color-border)] bg-[var(--color-bg-card)]/92 text-[var(--color-text-tertiary)] shadow-lg backdrop-blur-xl transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]`}
           aria-label="打开 Agent"
-          title="展开 Agent 面板"
+          title={
+            decisionCount > 0
+              ? "展开 Agent 面板，处理待决策项"
+              : "展开 Agent 面板"
+          }
         >
           <PanelRightOpen className="h-3.5 w-3.5 shrink-0" />
+          {decisionCount > 0 && (
+            <span
+              className={`mt-1.5 text-[9px] font-semibold leading-none tracking-[3px] [writing-mode:vertical-rl] ${
+                hasUrgentDecision
+                  ? "text-[var(--color-warning)]"
+                  : "text-[var(--color-text-secondary)]"
+              }`}
+            >
+              待决策
+            </span>
+          )}
           {decisionCount > 0 && (
             <span
               className={`absolute -left-2 -top-2 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white ${
@@ -1987,6 +1968,15 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
               }`}
             >
               {decisionCount}
+            </span>
+          )}
+          {hasUrgentDecision && (
+            <span
+              data-agent-dock-handle-toast
+              className="agent-dock-handle-toast pointer-events-none absolute right-full top-1/2 mr-3 -translate-y-1/2 whitespace-nowrap rounded-full bg-[var(--color-warning)] px-2.5 py-1 text-[10px] font-semibold text-white shadow-lg"
+            >
+              {pendingAuthorizationCount} 项生产确认待处理
+              <span className="absolute left-full top-1/2 -translate-y-1/2 border-[5px] border-transparent border-l-[var(--color-warning)]" />
             </span>
           )}
         </button>
@@ -2047,33 +2037,6 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
-              <span className="relative inline-flex">
-                <Button
-                  type="primary"
-                  size="small"
-                  icon={
-                    showDecisions ? (
-                      <MessageSquare className="h-3.5 w-3.5 text-white" />
-                    ) : (
-                      <ListTodo className="h-3.5 w-3.5 text-white" />
-                    )
-                  }
-                  onClick={toggleDecisions}
-                  title={showDecisions ? "返回对话" : "审阅 / 决策中心"}
-                  aria-label={showDecisions ? "返回对话" : "审阅与决策中心"}
-                />
-                {decisionCount > 0 && !showDecisions && (
-                  <span
-                    className={`pointer-events-none absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-1 text-[9px] font-bold text-white ${
-                      hasUrgentDecision
-                        ? "animate-pulse bg-[var(--color-warning)]"
-                        : "bg-[var(--color-danger)]"
-                    }`}
-                  >
-                    {decisionCount}
-                  </span>
-                )}
-              </span>
               <Button
                 type="text"
                 size="small"
@@ -2105,28 +2068,8 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
             </div>
           )}
 
-          {showDecisions ? (
-            <div className="flex min-h-0 flex-1 flex-col bg-[var(--color-bg-secondary)]/50">
-              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-                {/* 审阅面板与生产确认同时展示：两类待决策互不覆盖。 */}
-                <div className="space-y-3">
-                  {fileReviews.map((review) => (
-                    <FileProjectReviewPanel
-                      key={review.review_id}
-                      projectId={projectId}
-                      review={review}
-                    />
-                  ))}
-                  <AgentDecisionCenter
-                    projectId={projectId}
-                    hideEmptyState={fileReviews.length > 0}
-                  />
-                </div>
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="relative flex min-h-0 flex-1 flex-col">
+          <>
+            <div className="relative flex min-h-0 flex-1 flex-col">
                 <div
                   ref={scrollRef}
                   onScroll={handleScroll}
@@ -2234,6 +2177,9 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                   </button>
                 )}
               </div>
+
+              {/* 内联决策托盘：钉在聊天流与实时状态栏之间，审阅与生产确认就地处理。 */}
+              <DecisionTray projectId={projectId} />
 
               <div
                 data-agent-composer
@@ -2428,8 +2374,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                   )}
                 </div>
               </div>
-            </>
-          )}
+          </>
         </div>
       )}
     </>

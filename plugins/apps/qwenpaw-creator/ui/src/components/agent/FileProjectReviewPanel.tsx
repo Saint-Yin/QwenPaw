@@ -96,7 +96,7 @@ function operationPreview(operation: FileProjectReviewOperation): string {
 }
 
 /** The media artifact locator for a media-generation review, if any. */
-function mediaLocatorOf(
+export function reviewMediaLocator(
   review: FileProjectReviewRecord,
 ): Record<string, string> | null {
   for (const operation of review.operations) {
@@ -117,7 +117,7 @@ export function reviewPendingUnits(review: FileProjectReviewRecord): number {
     (operation) => operation.decision === "PENDING",
   ).length;
   if (pending === 0) return 0;
-  return mediaLocatorOf(review) ? 1 : pending;
+  return reviewMediaLocator(review) ? 1 : pending;
 }
 
 function mediaLabel(locator: Record<string, string>): string {
@@ -125,6 +125,16 @@ function mediaLabel(locator: Record<string, string>): string {
     return ARTIFACT_KIND_LABELS[locator.artifactKind];
   }
   return locator.mediaType === "video" ? "视频" : "图片";
+}
+
+/** 决策托盘堆叠存根/指示点用的紧凑标题。 */
+export function reviewTrayLabel(review: FileProjectReviewRecord): string {
+  const locator = reviewMediaLocator(review);
+  if (locator) return `${mediaLabel(locator)}审阅`;
+  const pending = review.operations.filter(
+    (operation) => operation.decision === "PENDING",
+  ).length;
+  return `文本审阅 · ${pending} 处`;
 }
 
 export default function FileProjectReviewPanel({
@@ -171,7 +181,7 @@ export default function FileProjectReviewPanel({
     (operation) => operation.decision === "PENDING",
   );
   const busy = decisionInFlight || localBusy;
-  const mediaLocator = mediaLocatorOf(review);
+  const mediaLocator = reviewMediaLocator(review);
   const pendingUnits = mediaLocator ? Math.min(pending.length, 1) : pending.length;
 
   const submit = async (

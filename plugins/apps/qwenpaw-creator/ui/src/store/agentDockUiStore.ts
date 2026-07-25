@@ -17,7 +17,7 @@ export interface SelectionAttachment {
   elementIds?: string[];
 }
 
-export type AgentDockTab = "conversation" | "activity" | "review";
+export type AgentDockTab = "conversation" | "activity";
 
 interface AgentDockUiState {
   open: boolean;
@@ -28,6 +28,8 @@ interface AgentDockUiState {
   draft: string;
   selection: SelectionAttachment | null;
   allowExpandDetails: boolean;
+  /** 内联决策托盘的折叠偏好；新阻塞项（生产确认）到达时会被强制展开。 */
+  decisionTrayCollapsed: boolean;
   setOpen: (open: boolean) => void;
   setTab: (tab: AgentDockTab) => void;
   setSize: (width: number, height: number) => void;
@@ -35,6 +37,7 @@ interface AgentDockUiState {
   setDraft: (draft: string) => void;
   setSelection: (selection: SelectionAttachment | null) => void;
   setAllowExpandDetails: (allow: boolean) => void;
+  setDecisionTrayCollapsed: (collapsed: boolean) => void;
   reset: () => void;
 }
 
@@ -47,6 +50,7 @@ export const useAgentDockUiStore = create<AgentDockUiState>((set) => ({
   draft: "",
   selection: null,
   allowExpandDetails: false,
+  decisionTrayCollapsed: false,
   setOpen: (open) => set({ open }),
   setTab: (tab) => set({ tab, open: true }),
   setSize: (width, height) =>
@@ -56,6 +60,8 @@ export const useAgentDockUiStore = create<AgentDockUiState>((set) => ({
   setSelection: (selection) =>
     set({ selection, tab: "conversation", open: true }),
   setAllowExpandDetails: (allowExpandDetails) => set({ allowExpandDetails }),
+  setDecisionTrayCollapsed: (decisionTrayCollapsed) =>
+    set({ decisionTrayCollapsed }),
   reset: () =>
     set({
       open: true,
@@ -66,5 +72,6 @@ export const useAgentDockUiStore = create<AgentDockUiState>((set) => ({
       draft: "",
       selection: null,
       allowExpandDetails: false,
+      decisionTrayCollapsed: false,
     }),
 }));

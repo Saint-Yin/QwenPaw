@@ -162,7 +162,9 @@ export async function getActiveFileProjectReview(
   if (etag) headers.set("If-None-Match", etag);
   const response = await creatorFetch(
     `/projects/${encodeURIComponent(projectId)}/runtime/reviews/active`,
-    { headers },
+    // 轮询自己管理 If-None-Match/ETag；绕过浏览器 HTTP 缓存，
+    // 避免旧部署缓存的响应体在 304 复用时被当作最新数据解析。
+    { headers, cache: "no-store" },
   );
   const responseEtag = response.headers?.get("ETag") ?? null;
 

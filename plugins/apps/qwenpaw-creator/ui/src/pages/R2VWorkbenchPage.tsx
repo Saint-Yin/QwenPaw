@@ -13,7 +13,10 @@ import {
   useParams,
   useSearchParams,
 } from "@/routing/navigation";
-import { useReviewFieldFocus } from "@/routing/reviewFocus";
+import {
+  useReviewFieldFocus,
+  useReviewMediaFocus,
+} from "@/routing/reviewFocus";
 import {
   useProjectSnapshotStore,
   type ProjectEditOperation,
@@ -157,6 +160,12 @@ export default function R2VWorkbenchPage() {
     path: `/project/${id}/plan/element/${elementId}`,
     field: reviewField,
     enabled: reviewMode,
+    pulse: reviewPulse,
+  });
+  // 媒体审阅的「查看生成详情」没有字段指针，按待审版本锚点闪烁预览块。
+  useReviewMediaFocus({
+    versionId: versionFromUrl,
+    enabled: reviewMode && !reviewField,
     pulse: reviewPulse,
   });
   const project = useProjectSnapshotStore((state) =>
@@ -881,11 +890,17 @@ export default function R2VWorkbenchPage() {
                 }
               />
               {storyboardUrl ? (
-                <img
-                  src={storyboardUrl}
-                  alt="分镜图"
-                  className="w-full rounded-lg border border-[var(--color-border)]"
-                />
+                // img 不支持 ::after，审阅闪烁锚点打在包裹容器上。
+                <div
+                  data-review-media-anchor={viewedStoryboard?.version_id}
+                  className="rounded-lg"
+                >
+                  <img
+                    src={storyboardUrl}
+                    alt="分镜图"
+                    className="w-full rounded-lg border border-[var(--color-border)]"
+                  />
+                </div>
               ) : (
                 <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] text-xs text-[var(--color-text-tertiary)]">
                   尚无分镜图
@@ -927,12 +942,18 @@ export default function R2VWorkbenchPage() {
           >
             <div className="space-y-2">
               {videoUrl && viewedVideo ? (
-                <video
-                  key={viewedVideo.version_id}
-                  src={videoUrl}
-                  controls
-                  className="w-full rounded-lg border border-[var(--color-border)]"
-                />
+                // video 不支持 ::after，审阅闪烁锚点打在包裹容器上。
+                <div
+                  data-review-media-anchor={viewedVideo.version_id}
+                  className="rounded-lg"
+                >
+                  <video
+                    key={viewedVideo.version_id}
+                    src={videoUrl}
+                    controls
+                    className="w-full rounded-lg border border-[var(--color-border)]"
+                  />
+                </div>
               ) : (
                 <div className="flex h-32 flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--color-border)] text-xs text-[var(--color-text-tertiary)]">
                   {videoGenerating ? (

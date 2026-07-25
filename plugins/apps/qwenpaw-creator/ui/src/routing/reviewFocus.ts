@@ -96,6 +96,86 @@ export function flashCreatorReviewField(
   return target;
 }
 
+/** 媒体审阅「查看生成详情」的落点锚点：按 artifact version 匹配预览块。 */
+export function findReviewMediaAnchor(
+  versionId: string,
+  root: ParentNode = document,
+): HTMLElement | null {
+  return (
+    Array.from(
+      root.querySelectorAll<HTMLElement>("[data-review-media-anchor]"),
+    ).find(
+      (element) =>
+        element.getAttribute("data-review-media-anchor") === versionId,
+    ) ?? null
+  );
+}
+
+/**
+ * 媒体审阅定位强调：没有字段指针的图片/视频「查看」按 version 锚点闪烁。
+ *
+ * 与 useReviewFieldFocus 共用 pulse 消费集，因此同一次点击只会触发一种强调；
+ * 目标预览可能在快照/媒体加载后才挂载，同样用短轮询等待锚点出现。
+ */
+export function useReviewMediaFocus({
+  versionId,
+  enabled,
+  pulse,
+}: {
+  /** URL 中的 version 参数；媒体审阅跳转时指向待审产物版本。 */
+  versionId: string | null;
+  /** URL 中 review=1 且没有 field（有 field 时由字段定位接管）。 */
+  enabled: boolean;
+  pulse: string | null;
+}): void {
+  const retryTimerRef = useRef<number | null>(null);
+  const sequenceRef = useRef(0);
+
+  useEffect(() => {
+    if (!enabled || !versionId || !consumePulse(pulse)) return;
+    const sequence = ++sequenceRef.current;
+    let retries = 0;
+    const tryFlash = () => {
+      if (sequence !== sequenceRef.current) return;
+      const workspaceRoot = document.querySelector<HTMLElement>(
+        "[data-creator-workspace-root]",
+      );
+      const target = findReviewMediaAnchor(
+        versionId,
+        workspaceRoot ?? document,
+      );
+      if (!target) {
+        if (retries++ < MAX_RETRIES) {
+          retryTimerRef.current = window.setTimeout(
+            tryFlash,
+            RETRY_INTERVAL_MS,
+          );
+        }
+        return;
+      }
+      retryTimerRef.current = null;
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.classList.remove("review-flash");
+      void target.offsetWidth;
+      target.classList.add("review-flash");
+      window.setTimeout(() => {
+        if (sequence === sequenceRef.current)
+          target.classList.remove("review-flash");
+      }, FLASH_DURATION_MS);
+    };
+    tryFlash();
+  }, [enabled, pulse, versionId]);
+
+  useEffect(
+    () => () => {
+      sequenceRef.current += 1;
+      if (retryTimerRef.current != null)
+        window.clearTimeout(retryTimerRef.current);
+    },
+    [],
+  );
+}
+
 /**
  * 方案页字段级审阅定位。
  *

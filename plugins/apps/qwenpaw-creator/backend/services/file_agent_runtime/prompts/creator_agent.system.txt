@@ -110,6 +110,7 @@ Specialist 返回后读取最新 Project，逐项核对：
 - 不创建空壳媒体版本、占位 Artifact、虚构 file ID 或未产生的 selected version。
 - 所有时间使用 Timeline 的整数 tick，遵守 `[start_tick, start_tick + duration_tick)`。
 - 当前任务已经反映到 Project 后，用简洁自然语言总结实际完成内容和仍需用户决定的事项，不声明未被工具结果证实的媒体状态。
+- 成片合成由系统在全部主轨内容就绪后自动完成（确定性后端渲染），不需要也不应由 Agent 或用户触发；总结时不得向用户提议手动拼接、合并或导出片段，如需说明去向，只告知成片会自动合成并可在方案页预览与下载。
 - 委派前确认输入已就绪，不将未完成的 Element 结构传递给 Specialist。
 - Specialist 返回后必须重新读取 Project 验证产物有效性，不信任上一次读取的缓存状态。
 - 同一批 Element 的 ID、span 引用、creation 引用在写入后不存在悬空或错位。

@@ -255,7 +255,17 @@ export default function PlanPage() {
     try {
       // 接口只负责派发持久化 Task；进度与最终产物通过轮询恢复，
       // 页面切换、刷新或另一个标签页接管都不会丢失合成状态。
-      const dispatch = await renderTimeline(id, timeline.timeline_id);
+      // 派发请求自身也可能因后端忙碌而长时间不返回；超时后转入
+      // 统一的恢复分支，避免「合成准备中」悬挂到手动刷新。
+      const dispatch = await Promise.race([
+        renderTimeline(id, timeline.timeline_id),
+        new Promise<never>((_, reject) =>
+          window.setTimeout(
+            () => reject(new Error("派发超时，正在恢复合成状态")),
+            15_000,
+          ),
+        ),
+      ]);
       setRequestedComposeTaskId(dispatch.taskId);
       await Promise.allSettled([refreshTasks(id), pollOnce(id)]);
     } catch (error) {
@@ -300,6 +310,29 @@ export default function PlanPage() {
     composeAttemptedGeneration.current = generation;
     setRequestedComposeTaskId(activeComposeTask.id);
   }, [activeComposeTask, generation, requestedComposeTaskId]);
+
+  useEffect(() => {
+    if (!composePendingAdmission) return;
+    // 派发返回的 taskId 迟迟没有出现在任务列表（后台派发失败、被替换
+    // 或被其他写者拦截）时自愈，避免「合成准备中」永久悬挂到刷新。
+    const pendingTaskId = requestedComposeTaskId;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        await Promise.allSettled([refreshTasks(id), pollOnce(id)]);
+        const latest = useCreatorTaskViewStore.getState();
+        if (latest.tasks.some((task) => task.id === pendingTaskId)) return;
+        setRequestedComposeTaskId(null);
+        setComposeFailed(true);
+      })();
+    }, 10_000);
+    return () => window.clearTimeout(timer);
+  }, [
+    composePendingAdmission,
+    id,
+    pollOnce,
+    refreshTasks,
+    requestedComposeTaskId,
+  ]);
 
   useEffect(() => {
     if (
