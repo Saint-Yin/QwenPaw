@@ -953,7 +953,7 @@ class Project(StrictModel):
         source_versions = assets.get("source_versions_by_id", {})
         if not isinstance(source_versions, dict):
             source_versions = {}
-        for timeline_id, timeline in items.items():
+        for timeline in items.values():
             if not isinstance(timeline, dict):
                 continue
             ticks_per_second = timeline.get(
@@ -963,7 +963,7 @@ class Project(StrictModel):
             elements = timeline.get("elements_by_id")
             if not isinstance(elements, dict):
                 continue
-            for element_id, element in elements.items():
+            for element in elements.values():
                 if not isinstance(element, dict):
                     continue
                 creation = element.get("creation")

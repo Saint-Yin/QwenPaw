@@ -182,11 +182,11 @@ def _match_prefix_price(
 
     lowered = model.casefold()
     best: tuple[str, Any] | None = None
+    best_len = -1
     for prefix, value in table:
-        if lowered.startswith(prefix) and (
-            best is None or len(prefix) > len(best[0])
-        ):
+        if lowered.startswith(prefix) and len(prefix) > best_len:
             best = (prefix, value)
+            best_len = len(prefix)
     return best
 
 

@@ -36,10 +36,11 @@ class AsrConfig(ModelConfigItem):
 class GroundingConfig(ModelConfigItem):
     """Web-grounding retrieval and visual-verification configuration.
 
-    The inherited model fields configure a custom visual verifier. ``reuse_llm``
-    remains in the wire format for older saved/plugin-host configurations and
-    mirrors ``validation_source == "llm"``. Search has separate credentials so
-    a generic verifier is never assumed to support provider-native web tools.
+    The inherited model fields configure a custom visual verifier.
+    ``reuse_llm`` remains in the wire format for older saved/plugin-host
+    configurations and mirrors ``validation_source == "llm"``. Search has
+    separate credentials so a generic verifier is never assumed to support
+    provider-native web tools.
     """
 
     enabled: bool = True

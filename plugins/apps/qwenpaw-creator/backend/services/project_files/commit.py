@@ -1216,10 +1216,6 @@ class ProjectCommitBoundary:
         ``active_round_id`` happens to point at.
         """
 
-        state = AtomicJsonRecordStore(
-            runtime_root / "state.json",
-            RuntimeProjectState,
-        ).read_or_none()
         reviews_root = runtime_root / "reviews"
         if not reviews_root.is_dir():
             return False, False, None

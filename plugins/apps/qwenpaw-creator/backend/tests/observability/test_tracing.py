@@ -385,7 +385,7 @@ def test_project_observability_symlink_is_rejected_and_never_written(
         for handler in logger.handlers:
             handler.flush()
 
-        assert list(outside.iterdir()) == []
+        assert not list(outside.iterdir())
         assert (
             "unsafe project path is a system diagnostic"
             in system_log_path.read_text(encoding="utf-8")

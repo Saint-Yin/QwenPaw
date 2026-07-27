@@ -244,7 +244,7 @@ class CallbackAgentChatClient:
         return turn
 
 
-def _text_content(value: Any, *, field: str) -> str:
+def _text_content(value: Any, *, field_name: str) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
@@ -260,18 +260,18 @@ def _text_content(value: Any, *, field: str) -> str:
                 "text",
             }:
                 raise AgentModelError(
-                    f"Creator Agent history {field} contains non-text content",
+                    f"Creator Agent history {field_name} contains non-text content",
                 )
             pieces.append(str(item.get("text") or ""))
         return "".join(pieces)
-    raise AgentModelError(f"Creator Agent history {field} must be text")
+    raise AgentModelError(f"Creator Agent history {field_name} must be text")
 
 
-def _message_content_blocks(value: Any, *, field: str) -> list[Any]:
+def _message_content_blocks(value: Any, *, field_name: str) -> list[Any]:
     """Preserve native user media while keeping ordinary history compatible."""
 
     if value is None or isinstance(value, str):
-        text = _text_content(value, field=field)
+        text = _text_content(value, field_name=field_name)
         return [TextBlock(text=text)] if text else []
     if isinstance(value, Sequence) and not isinstance(
         value,
@@ -281,17 +281,17 @@ def _message_content_blocks(value: Any, *, field: str) -> list[Any]:
         for item in value:
             if not isinstance(item, Mapping):
                 raise AgentModelError(
-                    f"Creator Agent history {field} contains an invalid content part",
+                    f"Creator Agent history {field_name} contains an invalid content part",
                 )
             parts.append(dict(item))
         try:
             return list(native_content_blocks(parts))
         except Exception as exc:
             raise AgentModelError(
-                f"Creator Agent history {field} contains invalid native media: {exc}",
+                f"Creator Agent history {field_name} contains invalid native media: {exc}",
             ) from exc
     raise AgentModelError(
-        f"Creator Agent history {field} must be text or content parts",
+        f"Creator Agent history {field_name} must be text or content parts",
     )
 
 
@@ -342,7 +342,10 @@ def records_to_agentscope_messages(
         role = str(record.get("role") or "").strip()
         content_value = record.get("content")
         content = (
-            _text_content(content_value, field=f"message[{index}].content")
+            _text_content(
+                content_value,
+                field_name=f"message[{index}].content",
+            )
             if role in {"system", "tool"}
             else ""
         )
@@ -352,7 +355,7 @@ def records_to_agentscope_messages(
         if role == "user":
             blocks = _message_content_blocks(
                 content_value,
-                field=f"message[{index}].content",
+                field_name=f"message[{index}].content",
             )
             if not blocks:
                 raise AgentModelError(
@@ -363,7 +366,7 @@ def records_to_agentscope_messages(
         if role == "assistant":
             blocks = _message_content_blocks(
                 content_value,
-                field=f"message[{index}].content",
+                field_name=f"message[{index}].content",
             )
             raw_calls = record.get("tool_calls") or []
             if not isinstance(raw_calls, Sequence) or isinstance(

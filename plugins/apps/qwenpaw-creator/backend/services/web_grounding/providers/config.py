@@ -111,9 +111,10 @@ def responses_url_from_base(base_url: str) -> str:
 def visual_search_provider_order() -> tuple[str, ...]:
     """Return the fixed product provider chain, filtered by availability."""
 
+    native_search_ok = not dashscope_native_search_unavailable_reason()
     available = {
         "tavily": bool(tavily_api_key()),
-        "dashscope_web_search_image": not dashscope_native_search_unavailable_reason(),
+        "dashscope_web_search_image": native_search_ok,
     }
     providers = tuple(
         provider

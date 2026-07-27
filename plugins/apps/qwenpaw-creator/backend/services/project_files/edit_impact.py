@@ -243,6 +243,7 @@ def _rebind_motion_copy(
     old_text: str,
     new_text: str,
 ) -> str | None:
+    # pylint: disable=too-many-branches,too-many-statements
     """Replace only visible copy while preserving the motion document.
 
     Generated caption cards may split one sentence over ``<br>`` or several
@@ -340,7 +341,7 @@ def _rebind_motion_copy(
     )
 
 
-def _apply_element_path(
+def _apply_element_path(  # pylint: disable=too-many-branches
     document: dict[str, Any],
     tokens: tuple[str, ...],
     impact: EditImpact,
@@ -565,8 +566,9 @@ def summarize_committed_edit_impact(
     """Reconstruct the response contract from a finalized transaction."""
 
     impact = EditImpact()
-    # Re-running the classifier on a copy is deterministic and also covers the
-    # no-selected-artifact case where the commit contains no induced stale path.
+    # Re-running the classifier on a copy is deterministic and also covers
+    # the no-selected-artifact case where the commit contains no induced
+    # stale path.
     _, classified = apply_frontend_edit_impacts(project, changed_pointers)
     impact.affected_element_ids.update(classified.affected_element_ids)
     impact.affected_timeline_ids.update(classified.affected_timeline_ids)

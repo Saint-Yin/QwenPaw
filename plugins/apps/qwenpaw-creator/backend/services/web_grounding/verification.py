@@ -186,6 +186,7 @@ async def verify_visual_grounding_with_vlm(
     context: dict[str, Any] | None = None,
     timeout: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    # pylint: disable=too-many-statements
     """Use the configured VLM to rank visual references for the prompt."""
     if not visual_sources:
         return ([], {"status": "skipped", "detail": "no visual sources"})

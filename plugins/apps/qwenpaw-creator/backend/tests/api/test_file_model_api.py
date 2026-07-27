@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# pylint: disable=use-implicit-booleaness-not-comparison
+# pylint: disable=use-implicit-booleaness-not-comparison,protected-access
 from __future__ import annotations
 
 import asyncio
