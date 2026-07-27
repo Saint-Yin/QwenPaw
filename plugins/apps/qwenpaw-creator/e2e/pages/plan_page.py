@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
-"""Page object for the schema-v2 Timeline/Element Plan surface."""
 
 from __future__ import annotations
 

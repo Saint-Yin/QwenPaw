@@ -2,7 +2,6 @@
 # flake8: noqa: E501
 # pylint: disable=line-too-long,protected-access,unnecessary-lambda
 # pylint: disable=useless-return
-"""Golden tests for OpenAI-compatible VLM image/video content parts."""
 
 from __future__ import annotations
 

@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
-"""R2V director prompt injects model-aware video guidance."""
 
 from __future__ import annotations
 

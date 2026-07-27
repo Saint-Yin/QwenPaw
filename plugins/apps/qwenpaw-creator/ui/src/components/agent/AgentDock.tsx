@@ -622,12 +622,14 @@ function roleDisplayName(
 ): string {
   const raw =
     activity?.role || (typeof args?.role === "string" ? args.role : "");
+  if (raw) {
+    const label = creatorRoleLabel(raw);
+    if (label !== "专业制作") return label;
+  }
   const displayName =
     activity?.roleDisplayName ||
-    (typeof args?.roleDisplayName === "string" ? args.roleDisplayName : "") ||
-    raw ||
-    "Agent";
-  return creatorRoleLabel(displayName);
+    (typeof args?.roleDisplayName === "string" ? args.roleDisplayName : "");
+  return displayName || "专业制作";
 }
 
 function delegationText(
@@ -976,7 +978,6 @@ function SubagentActivityBubble({ activity }: { activity: SubagentActivity }) {
   );
 }
 
-/** Tool-call card: one status line, expandable to inspect arguments/result. */
 function ToolCallCard({ data }: { data: ToolCallPresentation }) {
   const allowExpand = useAgentDockUiStore((state) => state.allowExpandDetails);
   const isReplaying = useCreatorSessionStore((state) => state.isReplaying);
@@ -1034,6 +1035,9 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
         ? activity.terminalKind === "FAILED" ||
           activity.terminalKind === "BLOCKED"
           ? "failed"
+          : activity.terminalKind === "CANCELLED" ||
+            activity.terminalKind === "STALE"
+          ? "cancelled"
           : "succeeded"
         : "started"
       : status;
@@ -1051,15 +1055,20 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
       ? "text-[var(--color-success)]"
       : resolvedStatus === "failed"
       ? "text-[var(--color-danger)]"
+      : resolvedStatus === "cancelled"
+      ? "text-[var(--color-text-tertiary)]"
       : "text-[var(--color-text-secondary)]";
 
   let displayLabel: string;
+  let subLabel: string | null = null;
   if (delegated) {
-    if (role) {
-      displayLabel = creatorRoleLabel(role);
-    } else {
-      displayLabel = "专业制作";
+    const activeTool = activity
+      ? Object.values(activity.tools).find((t) => t.status === "started")
+      : null;
+    if (activeTool) {
+      subLabel = creatorToolLabel(activeTool.tool);
     }
+    displayLabel = role || "专业制作";
   } else {
     displayLabel = creatorToolLabel(tool);
   }
@@ -1082,6 +1091,8 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : resolvedStatus === "succeeded" ? (
             <CircleCheck className="h-3.5 w-3.5" />
+          ) : resolvedStatus === "cancelled" ? (
+            <XCircle className="h-3.5 w-3.5 opacity-50" />
           ) : (
             <XCircle className="h-3.5 w-3.5" />
           )}
@@ -1093,8 +1104,15 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
               ? "中"
               : resolvedStatus === "succeeded"
               ? "完成"
+              : resolvedStatus === "cancelled"
+              ? "已中止"
               : "失败"}
           </span>
+          {subLabel && active && (
+            <span className="text-[10px] text-[var(--color-text-tertiary)]">
+              · {subLabel}
+            </span>
+          )}
           {estimatedDuration && (
             <span className="text-[10px] text-[var(--color-text-tertiary)]">
               {estimatedDuration}

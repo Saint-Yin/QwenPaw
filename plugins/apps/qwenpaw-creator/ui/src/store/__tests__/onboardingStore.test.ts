@@ -4,7 +4,7 @@ import {
   useOnboardingStore,
 } from "@/store/onboardingStore";
 
-// jsdom's localStorage is incomplete; replace it with an in-memory implementation.
+// jsdom's localStorage is incomplete; replace with an in-memory version.
 const memory = new Map<string, string>();
 
 function readStored(): Record<string, unknown> {
@@ -91,7 +91,7 @@ describe("useOnboardingStore", () => {
 
   it("ignores corrupted persisted payloads gracefully", () => {
     memory.set(ONBOARDING_STORAGE_KEY, "not-json{");
-    // markHintSeen re-persists internally, overwriting the corrupted data without throwing.
+    // markHintSeen re-persists, overwriting corrupted data without throwing.
     expect(() =>
       useOnboardingStore.getState().markHintSeen("addToConversation"),
     ).not.toThrow();

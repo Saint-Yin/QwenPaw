@@ -15,7 +15,7 @@ import {
 } from "./creatorPresentation";
 import { taskProgressPercent } from "./taskPresentation";
 
-// Same "agent is working" session criteria as AgentStatusBar/agentWorkingSelectors.
+// Same "working" session criteria as AgentStatusBar/agentWorkingSelectors.
 const WORKING_SESSION_STATUSES = new Set([
   "RUNNING",
   "RESUMING",
@@ -30,7 +30,7 @@ export type AgentLiveState = "working" | "stopping" | "waiting" | "idle";
 export interface AgentLiveStatus {
   state: AgentLiveState;
   label: string;
-  /** 0-100 only when quantifiable progress exists (e.g. asset ingestion); null hides the bar. */
+  /** 0-100 only for quantifiable progress (e.g. ingestion); null hides bar. */
   progressPercent: number | null;
 }
 
@@ -59,7 +59,7 @@ function toolTargetRef(
   return fallbackRefs[0] ?? "";
 }
 
-/** Truncate over-long target names within the name itself, so sentence-final keywords like "storyboard"/"frame" (appended after the name) stay visible. */
+// Truncate long target names so trailing keywords ("storyboard") stay visible.
 const MAX_TARGET_NAME_LENGTH = 10;
 
 function clampTargetName(name: string): string {
@@ -68,7 +68,7 @@ function clampTargetName(name: string): string {
     : name;
 }
 
-/** Treat creatorTargetLabel's generic fallback copy as "unresolved", so we never render labels like a "timeline content" storyboard. */
+/** Generic fallback copy = unresolved; avoid "timeline content" storyboard. */
 function resolvedTargetName(
   ref: string,
   project: ProjectDocument | null,
@@ -123,24 +123,31 @@ function subagentRoleName(activity: SubagentActivity): string {
   return activity.roleDisplayName || creatorRoleLabel(activity.role);
 }
 
-/** Role-level sub-status: prefer preset copy; unknown roles degrade to a generic "role working" label. */
 function roleWorkingLabel(activity: SubagentActivity): string {
   const runningLabel = getRoleRunningLabel(activity.role);
   if (runningLabel) return runningLabel;
   return `「${subagentRoleName(activity)}」工作中…`;
 }
 
-/** Latest still-running tool among incomplete subagents (falls back to the owning activity's targetRefs). */
 function activeSubagentToolLabel(
   activities: Record<string, SubagentActivity>,
   project: ProjectDocument | null,
 ): string | null {
+  // Internal project tools are meaningless to users; skip them to avoid
+  // vague states like "modifying project".
+  const internalProjectTools = new Set([
+    "jq_project",
+    "read_project",
+    "read_project_file",
+    "elements_at",
+  ]);
   let latestSeq = -1;
   let latestLabel: string | null = null;
   Object.values(activities).forEach((activity) => {
     if (activity.completed) return;
     Object.values(activity.tools).forEach((tool) => {
       if (tool.status !== "started" || tool.firstEventSeq <= latestSeq) return;
+      if (internalProjectTools.has(tool.tool)) return;
       const label = runningToolLabel(
         tool.tool,
         tool.arguments,
@@ -155,18 +162,24 @@ function activeSubagentToolLabel(
   return latestLabel;
 }
 
-/** Latest still-running tool of the main agent; delegations are expressed via role copy instead. */
 function activeMainToolLabel(
   toolCalls: ToolCallPresentation[],
   activities: Record<string, SubagentActivity>,
   project: ProjectDocument | null,
 ): string | null {
+  // Internal project tools are meaningless to users; skip them to avoid
+  // vague states like "modifying project".
+  const internalProjectTools = new Set([
+    "jq_project",
+    "read_project",
+    "read_project_file",
+    "elements_at",
+  ]);
   for (let index = toolCalls.length - 1; index >= 0; index -= 1) {
     const call = toolCalls[index];
     if (call.status !== "started") continue;
     if (call.tool === "delegate_to_agent") {
       const activity = activities[call.actionId];
-      // Subagent still running → show its working label.
       if (activity && !activity.completed) return roleWorkingLabel(activity);
       // Subagent already finished (incl. cancelled) → defer to the activity
       // card, which renders the terminal state. Returning null here avoids
@@ -179,13 +192,13 @@ function activeMainToolLabel(
       const role = typeof args?.role === "string" ? args.role : "";
       return role ? `正在安排「${creatorRoleLabel(role)}」…` : "正在分配任务…";
     }
+    if (internalProjectTools.has(call.tool)) continue;
     const label = runningToolLabel(call.tool, call.arguments, [], project);
     if (label) return label;
   }
   return null;
 }
 
-/** Currently running Runtime task (long jobs such as asset ingestion / video generation). */
 function activeTask(tasks: TaskView[]): TaskView | null {
   const running = tasks.filter((task) => ACTIVE_TASK_STATUSES.has(task.status));
   if (running.length === 0) return null;
@@ -212,7 +225,7 @@ function firstIncompleteActivity(
   return pending[0] ?? null;
 }
 
-/** Only accept quantifiable progress: numeric task progress (e.g. asset ingestion), otherwise the backend's completed/total. */
+/** Only quantifiable progress: numeric task progress, else completed/total. */
 function quantifiedProgressPercent(
   tasks: TaskView[],
   agentStatusBar: AgentStatusBarView | null,
@@ -257,7 +270,7 @@ export function deriveAgentLiveStatus(
       progressPercent: null,
     };
 
-  // While replaying, show the loading label and suppress the "working" animation.
+  // During replay show loading and suppress the "working" animation.
   if (isReplaying)
     return {
       state: "idle",

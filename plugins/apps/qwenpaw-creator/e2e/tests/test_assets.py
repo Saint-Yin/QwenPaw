@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-"""Asset upload acceptance against the Project Asset Index."""
 
 from __future__ import annotations
 

@@ -39,7 +39,6 @@ BACKEND_SRC = os.path.join(PLUGIN_DIR, "backend")
 
 
 def snapshot(root: str, exts: tuple = ()) -> dict:
-    """Return {path: mtime} for files under root (optionally by extension)."""
     result = {}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d != "__pycache__"]
@@ -95,7 +94,6 @@ def sync_frontend() -> None:
 
 
 def reload_backend() -> None:
-    """Force-reinstall from the installed dir itself → pure hot reload."""
     payload = json.dumps({"source": INSTALLED_DIR, "force": True}).encode()
     req = urllib.request.Request(
         f"http://127.0.0.1:{PORT}/api/plugins/install",

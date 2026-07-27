@@ -253,7 +253,7 @@ export const useProjectSnapshotStore = create<ProjectSnapshotState>(
               result.generation < state.generation
             ) {
               // A late response can complete after a newer local confirmation.
-              // Mark its sequence consumed but never roll the Project authority back.
+              // Mark its sequence consumed but never roll Project authority back.
               return applied;
             }
             if (

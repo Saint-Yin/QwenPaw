@@ -682,7 +682,6 @@ class ProjectCommitBoundary:
             )
             # Determine the active_round_id: prefer the earliest-created pending review
             if review is not None:
-                # A new review was just created; check if there are earlier pending reviews
                 reviews_root = runtime_root / "reviews"
                 earliest_round_id = round_id
                 earliest_created = review.created_at

@@ -21,8 +21,6 @@ import requests
 
 
 def reserve_loopback_port() -> int:
-    """Return a currently free loopback port for a short-lived test process."""
-
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
         return int(probe.getsockname()[1])
@@ -145,8 +143,6 @@ class ExternalCreatorBackend:
         )
 
     def crash(self) -> None:
-        """Send SIGKILL to the external backend process group."""
-
         process = self.process
         if process is None:
             return

@@ -535,7 +535,6 @@ async def check_task_status(task_id: str) -> dict:
             payload.get("task_status") or payload.get("status") or "unknown",
         ).upper()
 
-        # Normalize: succeeded → SUCCEEDED, running → RUNNING, failed → FAILED
         status_map = {
             "SUCCEEDED": "SUCCEEDED",
             "RUNNING": "RUNNING",

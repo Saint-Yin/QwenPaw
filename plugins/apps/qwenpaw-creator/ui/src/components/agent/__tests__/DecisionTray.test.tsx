@@ -117,7 +117,6 @@ describe("DecisionTray", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "下一条决策" }));
     expect(screen.getByText(/旧文案/)).toBeInTheDocument();
-    // At the end of the queue the next arrow is disabled, the back arrow enabled.
     expect(screen.getByRole("button", { name: "下一条决策" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "上一条决策" })).toBeEnabled();
   });
@@ -132,10 +131,8 @@ describe("DecisionTray", () => {
     render(<DecisionTray projectId="p1" />);
 
     fireEvent.click(screen.getByRole("button", { name: /列表/ }));
-    // List mode: the authorization card and both review cards are visible at once.
     expect(screen.getByText("生成开场分镜图")).toBeInTheDocument();
     expect(screen.getAllByText(/旧文案/)).toHaveLength(2);
-    // Can switch back to stacked mode.
     expect(screen.getByRole("button", { name: /堆叠/ })).toBeInTheDocument();
   });
 

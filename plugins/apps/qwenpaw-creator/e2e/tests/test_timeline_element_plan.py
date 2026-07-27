@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-"""Browser acceptance for the single Timeline and overlapping Elements."""
 
 from __future__ import annotations
 

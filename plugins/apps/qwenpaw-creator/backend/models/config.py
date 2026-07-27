@@ -54,7 +54,6 @@ _IMAGE_PROVIDER_CACHE: ContextVar[Any] = ContextVar(
 def set_request_tool_configs(
     configs: Mapping[str, Mapping[str, Any]],
 ) -> Token[dict[str, dict[str, Any]]]:
-    """Bind QwenPaw tool configuration for the current request."""
     normalized = {
         name: dict(value)
         for name, value in configs.items()
@@ -70,13 +69,11 @@ def set_request_tool_configs(
 def reset_request_tool_configs(
     token: Token[dict[str, dict[str, Any]]],
 ) -> None:
-    """Reset request-scoped QwenPaw tool configuration."""
     _REQUEST_TOOL_CONFIGS.reset(token)
     _IMAGE_PROVIDER_CACHE.set(None)
 
 
 def get_request_tool_config(tool_name: str) -> dict[str, Any]:
-    """Return the current request's config for a Creator config tool."""
     return dict(_REQUEST_TOOL_CONFIGS.get({}).get(tool_name) or {})
 
 
@@ -100,7 +97,6 @@ def _configured_value(
         value = tool_config.get(field)
         if value not in (None, ""):
             return str(value)
-    # Check user model config (model_config.json)
     section = _map_tool_to_section(tool_name)
     if section:
         user_cfg = _get_user_config().get(section, {})
@@ -984,7 +980,6 @@ def get_image_generations_url() -> str:
 
 
 def get_video_submit_url() -> str:
-    """Return the full URL for submitting the configured video generation task."""
     base = get_video_base_url().rstrip("/")
     backend = get_video_backend()
     _validate_video_backend_url(backend, base)

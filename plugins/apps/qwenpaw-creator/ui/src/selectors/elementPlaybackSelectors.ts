@@ -12,7 +12,6 @@ import {
 } from "@/api/creator";
 import { elementsAtTick } from "@/selectors/timelineElementSelectors";
 
-/** Playability status of a single Element in the live-assembly preview. */
 export type ElementPlaybackStatus =
   | "ready"
   | "generating"
@@ -26,7 +25,7 @@ export type ElementPlaybackMediaKind = "video" | "image" | "audio" | "other";
 export interface ElementPlaybackMedia {
   url: string;
   mediaKind: ElementPlaybackMediaKind;
-  /** Version ID of the artifact or source asset; used as the layer's stable key. */
+  /** Artifact/source-asset version ID; used as the layer's stable key. */
   versionId: string;
   sourceInSeconds: number;
   sourceOutSeconds: number | null;
@@ -109,7 +108,6 @@ function resolveSourceVersionRef(
   };
 }
 
-/** element.outputs fallback: prefer the video output, else any output slot with a selected version. */
 function resolveSelectedOutputRef(
   project: ProjectDocument,
   element: TimelineElementDocument,
@@ -186,8 +184,6 @@ export function resolveElementPlayback(
     : null;
   const resolved = fromRender ?? resolveSelectedOutputRef(project, element);
   if (resolved) {
-    // When render_source resolves, keep its in/out points and rate; the outputs
-    // fallback plays the whole clip from the start.
     const timing = fromRender && renderSource ? renderSource : null;
     const taskStatus = elementTaskStatus(element, tasks);
     const artifactStatus: ElementPlaybackStatus = resolved.stale
@@ -243,7 +239,7 @@ export function resolveElementPlayback(
   };
 }
 
-/** Transition easing: browser-side approximation of the model's easing field; defaults to linear. */
+/** Browser approximation of the model's easing field; default linear. */
 function easeProgress(progress: number, easing: string): number {
   const clamped = Math.min(1, Math.max(0, progress));
   switch (easing) {
@@ -286,7 +282,7 @@ export function transitionOpacityAtTick(
     const end = start + candidate.span.duration_tick;
     if (tick >= end) continue;
     if (tick < start) {
-      // Overlap has started but the blend has not: the frame still belongs to the "from" side.
+      // Overlap started but blend has not: frame still belongs to "from" side.
       if (tick >= element.span.start_tick) return 0;
       continue;
     }
@@ -296,11 +292,6 @@ export function transitionOpacityAtTick(
   return 1;
 }
 
-/**
- * All layers participating in live assembly at a given tick, sorted by z_index
- * ascending (lower layers first). Transition elements produce no media layer
- * and are dropped.
- */
 export function playbackLayersAtTick(
   project: ProjectDocument,
   timeline: TimelineDocument,

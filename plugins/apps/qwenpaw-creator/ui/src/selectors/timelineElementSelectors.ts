@@ -305,7 +305,10 @@ export function resolveTimelineRender(
   );
 }
 
-/** Transition kinds supported by the local compositor with display copy; "fade" is a synonym of crossfade. */
+/**
+ * Transition kinds supported by the local compositor with display copy;
+ * "fade" is a synonym of crossfade.
+ */
 export const TRANSITION_KIND_LABEL: Record<string, string> = {
   crossfade: "交叉溶解",
   fade: "交叉溶解",

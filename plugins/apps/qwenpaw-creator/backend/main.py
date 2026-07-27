@@ -127,8 +127,6 @@ def configure_creator_runtime_environment(
     return data_root, model_config_path
 
 
-# ── PawApp definition ────────────────────────────────────────────────
-
 app = PawApp("QwenPaw Creator", app_id="qwenpaw-creator")
 app.include_router(creator_router)
 

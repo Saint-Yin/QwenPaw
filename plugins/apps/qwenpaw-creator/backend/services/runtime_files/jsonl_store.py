@@ -429,7 +429,6 @@ class DurableJsonlStore(Generic[T]):
                 break
             collected.append(envelope)
         collected.reverse()  # oldest-first
-        # Validate contiguity over the returned range.
         expected = after_seq + 1
         for env in collected:
             if env.seq != expected:

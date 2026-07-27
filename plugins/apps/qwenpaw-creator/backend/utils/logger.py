@@ -206,30 +206,19 @@ def setup_logger(
     name: str = "app",
     logging_level: str = "INFO",
 ) -> logging.Logger:
-    """Create and configure a logger instance.
-
-    Args:
-        name: Logger name, typically module or component name.
-
-    Returns:
-        Configured logger instance.
-    """
     _logger = logging.getLogger(name)
     _REGISTERED_LOGGERS.add(name)
 
-    # Avoid adding duplicate handlers if called multiple times
     if _logger.handlers:
         _attach_file_handler(_logger)
         return _logger
 
-    # Override logging level set by code.
     env_logging_level = os.environ.get("CREATOR_LOGGING_LEVEL", "").upper()
     if env_logging_level:
         logging_level = env_logging_level
 
     _logger.setLevel(logging_level)
 
-    # Console handler with formatted output
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(logging_level)
     handler.setFormatter(_formatter())
@@ -242,7 +231,6 @@ def setup_logger(
     return _logger
 
 
-# Default application logger
 logger = setup_logger()
 
 

@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
-"""Page object for the retained origin/main Home surface."""
 from __future__ import annotations
 
 from playwright.sync_api import Locator, Page

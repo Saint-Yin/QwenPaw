@@ -8,7 +8,7 @@ function recordOf(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-/** Render the Runtime Task progress contract, which is always normalized to [0, 1]. */
+/** Render the Runtime Task progress contract; always normalized to [0, 1]. */
 export function taskProgressPercent(
   progress: number | null | undefined,
 ): number | null {
@@ -16,7 +16,7 @@ export function taskProgressPercent(
   return Math.round(Math.max(0, Math.min(1, progress)) * 100);
 }
 
-/** Prefer durable structured provider/item failures over a generic terminal status. */
+/** Prefer durable structured provider/item failures over generic status. */
 export function taskErrorMessage(error: unknown, fallback: string): string {
   const directText = nonEmptyString(error);
   if (directText) return directText;

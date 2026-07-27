@@ -1761,9 +1761,6 @@ def test_agentdock_boundary_is_carried_into_run_and_creates_review(
 
 
 def test_intervention_completion_queues_mainline_resume(tmp_path) -> None:
-    """After an interrupting intervention completes, the Runtime queues a
-    mainline resume message and continues the mainline as AUTO_FIX."""
-
     async def scenario():
         services, snapshot = _create_project(tmp_path, initial_goal=None)
         root = services.root

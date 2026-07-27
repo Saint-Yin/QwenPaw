@@ -40,9 +40,6 @@ RETRY_BACKOFF_BASE = 10  # seconds
 MIN_IMAGE_BYTES = int(os.environ.get("IMAGE_MIN_BYTES", "10000"))
 
 
-# ── shared helpers ───────────────────────────────────────────────────────────
-
-
 def format_http_error_detail(response: httpx.Response) -> str:
     body_text = response.text.strip()
     if body_text:
@@ -161,9 +158,6 @@ def _configured_int(
         env_name,
         default,
     )
-
-
-# ── abstract base ────────────────────────────────────────────────────────────
 
 
 class BaseImageModel(ABC):

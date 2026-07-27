@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 # pylint: disable=subprocess-run-check
-"""ffprobe final-video checks: assert the output decodes and duration > 0."""
 from __future__ import annotations
 
 import json
@@ -13,7 +12,6 @@ def ffprobe_available() -> bool:
 
 
 def probe_duration_seconds(media_path: str) -> float:
-    """Return media duration in seconds; 0.0 when it cannot be parsed."""
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
         return 0.0
@@ -41,7 +39,6 @@ def probe_duration_seconds(media_path: str) -> float:
 
 
 def assert_playable(media_path: str, min_duration: float = 0.5) -> float:
-    """Assert the video decodes and meets the duration threshold; return it."""
     assert ffprobe_available(), "本机缺少 ffprobe，无法校验成片"
     duration = probe_duration_seconds(media_path)
     assert (

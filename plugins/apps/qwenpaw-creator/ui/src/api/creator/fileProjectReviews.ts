@@ -162,8 +162,8 @@ export async function getActiveFileProjectReview(
   if (etag) headers.set("If-None-Match", etag);
   const response = await creatorFetch(
     `/projects/${encodeURIComponent(projectId)}/runtime/reviews/active`,
-    // The poller manages If-None-Match/ETag itself; bypass the browser HTTP cache
-    // so a stale response body cached by an old deployment is never re-parsed as
+    // The poller manages If-None-Match/ETag itself; bypass the browser HTTP
+    // cache so a stale body cached by an old deployment is never re-parsed as
     // fresh data on a 304 reuse.
     { headers, cache: "no-store" },
   );

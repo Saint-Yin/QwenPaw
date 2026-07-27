@@ -43,7 +43,6 @@ _dashscope_credential_tokens: dict[str, str] = {}
 
 
 async def get_oss_policy(model: str = "wan2.7-r2v") -> dict:
-    """Get OSS upload credentials."""
     api_key = model_config.get_oss_policy_api_key()
     if not api_key:
         raise RuntimeError(

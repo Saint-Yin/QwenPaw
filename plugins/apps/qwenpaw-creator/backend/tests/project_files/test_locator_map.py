@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for JSON-pointer -> frontend locator derivation."""
 
 from __future__ import annotations
 

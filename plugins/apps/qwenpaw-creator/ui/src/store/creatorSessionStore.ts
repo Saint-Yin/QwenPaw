@@ -375,7 +375,7 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
         return {};
 
       // SSE is authoritative between revalidations. A response queried before a
-      // later durable event must not roll the Session or progress projection back.
+      // later durable event must not roll Session/progress projection back.
       const currentEventSeq = Math.max(
         current.lastEventSeq,
         current.session?.lastEventSeq ?? 0,
@@ -648,15 +648,15 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
             resumeAfter,
             (event) => {
               pendingEvents.push(event);
-              // Initial SSE replay can contain hundreds of durable events.  Fold
+              // Initial SSE replay can carry hundreds of durable events. Fold
               // one animation frame into one Zustand commit so refresh does not
-              // remount/reload the active Timeline page once per historical event.
+              // remount the active Timeline page once per historical event.
               if (flushTimer == null)
                 flushTimer = window.setTimeout(flushEvents, 16);
             },
             () => set({ connected: false }),
           );
-          // When there are no events to replay, defer setting isReplaying: false.
+          // With no events to replay, defer setting isReplaying: false.
           if (resumeAfter >= (sessionResponse.session.lastEventSeq ?? 0)) {
             window.setTimeout(() => {
               if (
@@ -1202,7 +1202,7 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
                       const candidate = JSON.parse(rawArguments) as unknown;
                       if (isRecord(candidate)) parsedArguments = candidate;
                     } catch {
-                      // Partial provider JSON remains visible until later deltas complete it.
+                      // Partial JSON stays visible until deltas complete it.
                     }
                   }
                   const nextTool: SubagentStreamTool = {
@@ -1479,8 +1479,30 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
                   : ((event.data.status ?? event.data.to) as
                       | CreatorSessionView["status"]
                       | undefined);
-              if (status && session)
+              if (status && session) {
                 session = { ...session, status, lastEventSeq: event.seq };
+                if (
+                  status === "IDLE" ||
+                  status === "CANCELLED" ||
+                  status === "ERROR"
+                ) {
+                  Object.entries(subagentActivities).forEach(
+                    ([key, activity]) => {
+                      if (activity.completed) return;
+                      subagentActivities = {
+                        ...subagentActivities,
+                        [key]: {
+                          ...activity,
+                          completed: true,
+                          terminalKind: "CANCELLED" as const,
+                          summaryText: activity.summaryText ?? "用户中止",
+                          terminalEventSeq: event.seq,
+                        },
+                      };
+                    },
+                  );
+                }
+              }
             }
           });
           const lastEventSeq = accepted.at(-1)!.seq;

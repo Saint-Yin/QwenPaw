@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
 # pylint: disable=unused-argument,protected-access
-"""Unit tests for motion design and text-overlay styled rendering."""
 
 from __future__ import annotations
 

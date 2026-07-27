@@ -25,7 +25,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Runtime feedback is persisted in the transcript for replay, but is not user-authored UI. */
+/** Runtime feedback persists in the transcript for replay; not user UI. */
 export function isRuntimeControlSource(source: string | undefined): boolean {
   if (!source) return false;
   return (
@@ -315,7 +315,6 @@ export function actionEnvelopeFromStreamText(
   return actionEnvelopeFromText(raw, 0);
 }
 
-/** Detect the final machine action while its SSE text is still incomplete. */
 export function creatorActionEnvelope(
   message: CreatorMessage,
 ): CreatorActionEnvelope | null {
@@ -341,7 +340,7 @@ export function creatorActionEnvelope(
   return null;
 }
 
-/** Keep prose/media in the conversation and move machine syntax into its disclosure card. */
+/** Keep prose/media in conversation; move machine syntax to its card. */
 export function actionAwareConversationContent(
   message: CreatorMessage,
   envelope: CreatorActionEnvelope | null = creatorActionEnvelope(message),
@@ -434,7 +433,7 @@ function safeResult(message: CreatorMessage): unknown {
   }
 }
 
-/** Merge durable assistant envelopes, Runtime result rows, and SSE events by actionId. */
+/** Merge durable envelopes, Runtime result rows, and SSE by actionId. */
 export function toolCallPresentations(
   messages: CreatorMessage[],
   events: CreatorEvent[],
