@@ -348,6 +348,14 @@ def test_agentscope_client_repairs_truncated_native_tool_argument_json() -> (
             },
         ),
     )
+    repaired_call = turn.tool_calls[0]
+    assert repaired_call.arguments_repaired is True
+    assert repaired_call.raw_arguments_bytes == len(
+        '{"projectId":"project-1","baseEtag":"etag-truncated'.encode(
+            "utf-8",
+        ),
+    )
+    assert repaired_call.strict_json_error is not None
 
 
 def test_agentscope_client_rejects_repaired_non_object_tool_arguments() -> None:

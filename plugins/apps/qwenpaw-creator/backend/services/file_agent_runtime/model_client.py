@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import inspect
 import json
 from typing import Any, Protocol
@@ -45,7 +45,9 @@ class AgentModelConfigurationError(AgentModelError):
     pass
 
 
-def _tool_call_arguments(raw_input: str) -> dict[str, Any]:
+def _tool_call_arguments(
+    raw_input: str,
+) -> tuple[dict[str, Any], bool, str | None]:
     """Decode provider tool arguments, repairing syntax-only JSON damage.
 
     Streaming providers occasionally finish a native ToolCallBlock with a
@@ -55,9 +57,13 @@ def _tool_call_arguments(raw_input: str) -> dict[str, Any]:
     fencing validation before any side effect can occur.
     """
 
+    repaired = False
+    strict_error: str | None = None
     try:
         arguments = json.loads(raw_input or "{}")
     except json.JSONDecodeError as error:
+        repaired = True
+        strict_error = str(error)
         try:
             arguments = repair_json(
                 raw_input or "{}",
@@ -75,7 +81,7 @@ def _tool_call_arguments(raw_input: str) -> dict[str, Any]:
         raise AgentModelError(
             "Creator AgentScope ToolCallBlock input must be an object",
         )
-    return arguments
+    return arguments, repaired, strict_error
 
 
 class AgentStreamCallbackError(RuntimeError):
@@ -99,6 +105,17 @@ class AgentToolCall:
     call_id: str
     name: str
     arguments: dict[str, Any]
+    # Transport diagnostics are intentionally excluded from equality, repr,
+    # and provider history. They let the Runtime distinguish strict provider
+    # JSON from syntax-repaired JSON without leaking malformed payloads back
+    # into the conversation or changing tool semantics.
+    raw_arguments_bytes: int = field(default=0, compare=False, repr=False)
+    arguments_repaired: bool = field(default=False, compare=False, repr=False)
+    strict_json_error: str | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
 
     def history_dict(self) -> dict[str, Any]:
         """Serialize the call for the driver's provider-independent turn history."""
@@ -576,12 +593,20 @@ class AgentScopeAgentChatClient:
                     raise AgentModelError(
                         f"Creator AgentScope returned a tool not offered this turn: {name}",
                     )
-                arguments = _tool_call_arguments(block.input or "{}")
+                raw_arguments = block.input or "{}"
+                arguments, repaired, strict_error = _tool_call_arguments(
+                    raw_arguments,
+                )
                 calls.append(
                     AgentToolCall(
                         call_id=call_id,
                         name=name,
                         arguments=arguments,
+                        raw_arguments_bytes=len(
+                            raw_arguments.encode("utf-8"),
+                        ),
+                        arguments_repaired=repaired,
+                        strict_json_error=strict_error,
                     ),
                 )
 

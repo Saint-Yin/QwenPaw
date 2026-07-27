@@ -228,6 +228,7 @@ def test_manifest_and_invoke_expose_only_model_owned_arguments(tmp_path):
     assert jq_parameters["additionalProperties"] is False
     assert "完整 Project 根对象" in schemas["jq_project"]["description"]
     assert "jsonArgs" in schemas["jq_project"]["description"]
+    assert "2-3 个 Timeline Element" in schemas["jq_project"]["description"]
     elements_parameters = schemas["elements_at"]["parameters"]
     assert set(elements_parameters["properties"]) == {
         "projectId",

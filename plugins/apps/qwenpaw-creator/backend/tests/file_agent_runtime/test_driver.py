@@ -233,6 +233,242 @@ def _edit_client(*, description: str):
     return CallbackAgentChatClient(callback)
 
 
+def _corrupted_jq_call(*, call_id: str, etag: str) -> AgentToolCall:
+    """Mirror a syntax-repaired call whose program drifted into jsonArgs."""
+
+    return AgentToolCall(
+        call_id=call_id,
+        name="jq_project",
+        arguments={
+            "projectId": PROJECT_ID,
+            "baseEtag": etag,
+            "jsonArgs": {
+                "timeline_elements": {
+                    "elem-01": {
+                        "program": ".description = $description",
+                    },
+                },
+            },
+        },
+        raw_arguments_bytes=18_522,
+        arguments_repaired=True,
+        strict_json_error="Unterminated string at EOF",
+    )
+
+
+def test_malformed_jq_project_arguments_recover_with_a_fresh_small_call(
+    tmp_path,
+) -> None:
+    turn = 0
+
+    async def callback(messages, _tools):
+        nonlocal turn
+        turn += 1
+        if turn == 1:
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id="read-before-corruption",
+                        name="read_project",
+                        arguments={"projectId": PROJECT_ID},
+                    ),
+                ),
+            )
+        if turn == 2:
+            observed = json.loads(messages[-1]["content"])
+            return AgentModelTurn(
+                tool_calls=(
+                    _corrupted_jq_call(
+                        call_id="malformed-write",
+                        etag=observed["etag"],
+                    ),
+                ),
+            )
+        if turn == 3:
+            rejected = json.loads(messages[-1]["content"])
+            assert rejected["error"]["type"] == (
+                "MalformedJqProjectArguments"
+            )
+            assert rejected["error"]["retry"] == {
+                "attempt": 1,
+                "retriesRemaining": 2,
+                "samePayload": False,
+            }
+            assert rejected["error"]["details"]["missingTopLevel"] == [
+                "program",
+            ]
+            assert rejected["error"]["details"][
+                "nestedRequiredPaths"
+            ] == ["$.jsonArgs.timeline_elements.elem-01.program"]
+            assert "2-3 timeline elements" in rejected["error"]["recovery"]
+            assert "ValidationError" not in messages[-1]["content"]
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id="reread-after-corruption",
+                        name="read_project",
+                        arguments={"projectId": PROJECT_ID},
+                    ),
+                ),
+            )
+        if turn == 4:
+            observed = json.loads(messages[-1]["content"])
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id="small-replacement-write",
+                        name="jq_project",
+                        arguments={
+                            "projectId": PROJECT_ID,
+                            "baseEtag": observed["etag"],
+                            "program": ".description = $description",
+                            "stringArgs": {
+                                "description": "recovered in a small commit",
+                            },
+                        },
+                    ),
+                ),
+            )
+        return AgentModelTurn(content="Recovered and completed.")
+
+    async def scenario():
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="Create the project plan",
+        )
+        driver = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(callback),
+            poll_interval_seconds=0.01,
+        )
+        await driver.start()
+        driver.notify(PROJECT_ID)
+        await _wait_for(
+            lambda: services.sessions.get_project_session(
+                PROJECT_ID,
+            ).last_consumed_message_seq
+            == 1,
+        )
+        await driver.wait_until_idle(PROJECT_ID)
+        project = services.projects.read(PROJECT_ID)
+        session = services.sessions.get_project_session(PROJECT_ID)
+        events = services.sessions.list_events(PROJECT_ID, SESSION_ID)
+        messages = services.sessions.list_messages(PROJECT_ID, SESSION_ID)
+        await driver.stop()
+        return project, session, events, messages
+
+    project, session, events, messages = asyncio.run(scenario())
+
+    assert project.project.description == "recovered in a small commit"
+    assert project.generation == 1
+    assert session.error is None
+    assert turn == 5
+    checks = [
+        event
+        for event in events
+        if event.event_type == "agent.tool_arguments_checked"
+    ]
+    assert len(checks) == 2
+    assert checks[0].payload["rawArgumentsBytes"] == 18_522
+    assert checks[0].payload["jsonRepairApplied"] is True
+    assert checks[0].payload["schemaValid"] is False
+    assert checks[1].payload["schemaValid"] is True
+    malformed_results = [
+        json.loads(message.content_parts[0].text or "{}")
+        for message in messages
+        if message.role == "tool"
+        and message.metadata.get("toolCallId") == "malformed-write"
+    ]
+    assert malformed_results[0]["error"]["type"] == (
+        "MalformedJqProjectArguments"
+    )
+
+
+def test_repeated_malformed_jq_project_arguments_stop_after_two_retries(
+    tmp_path,
+) -> None:
+    turn = 0
+    etag = ""
+
+    async def callback(messages, _tools):
+        nonlocal turn, etag
+        turn += 1
+        if turn == 1:
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id="read-before-repeats",
+                        name="read_project",
+                        arguments={"projectId": PROJECT_ID},
+                    ),
+                ),
+            )
+        if turn == 2:
+            etag = json.loads(messages[-1]["content"])["etag"]
+        return AgentModelTurn(
+            tool_calls=(
+                _corrupted_jq_call(
+                    call_id=f"malformed-repeat-{turn}",
+                    etag=etag,
+                ),
+            ),
+        )
+
+    async def scenario():
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="Create the project plan",
+        )
+        driver = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(callback),
+            poll_interval_seconds=0.01,
+        )
+        await driver.start()
+        driver.notify(PROJECT_ID)
+        await _wait_for(
+            lambda: services.sessions.get_project_session(
+                PROJECT_ID,
+            ).status.value
+            == "ERROR",
+        )
+        await driver.wait_until_idle(PROJECT_ID)
+        project = services.projects.read(PROJECT_ID)
+        session = services.sessions.get_project_session(PROJECT_ID)
+        messages = services.sessions.list_messages(PROJECT_ID, SESSION_ID)
+        await driver.stop()
+        return project, session, messages
+
+    project, session, messages = asyncio.run(scenario())
+
+    assert project.generation == 0
+    assert turn == 4
+    assert session.error is not None
+    assert session.error["code"] == "MODEL_REQUEST_FAILED"
+    assert session.error["retryable"] is True
+    assert "after 2 bounded retries" in session.error["message"]
+    errors = [
+        json.loads(message.content_parts[0].text or "{}")["error"]
+        for message in messages
+        if message.role == "tool"
+        and str(message.metadata.get("toolCallId") or "").startswith(
+            "malformed-repeat-",
+        )
+    ]
+    assert [item["retry"]["attempt"] for item in errors] == [1, 2, 3]
+    assert [item["retry"]["retriesRemaining"] for item in errors] == [
+        2,
+        1,
+        0,
+    ]
+    assert [item["retry"]["samePayload"] for item in errors] == [
+        False,
+        True,
+        True,
+    ]
+    assert "Do not resend it" in errors[-1]["recovery"]
+
+
 async def _wait_for(predicate, *, timeout: float = 5.0) -> None:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout

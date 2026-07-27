@@ -49,6 +49,7 @@ from models.media_transport import validate_reference_image_bytes
 from services.project_files.agent_tools import (
     AgentProjectToolContext,
     AgentProjectTools,
+    JQ_PROJECT_TOOL_NAME,
     agent_project_tool_manifest,
 )
 from services.project_files.commit import ProjectCommitBoundary
@@ -98,6 +99,7 @@ from .model_client import (
     AgentModelTurn,
     AgentScopeAgentChatClient,
     AgentScopeVlmChatClient,
+    AgentToolCall,
 )
 from .models import AgentRunStatus, CreatorAgentRunRecord
 from .native_media import source_intelligence_content_parts
@@ -112,6 +114,7 @@ from .subagents import (
 
 GROUND_PROMPT_CONTEXT_TOOL_NAME = "ground_prompt_context"
 GROUNDING_VISUAL_MAX_BYTES = 16 * 1024 * 1024
+MAX_MALFORMED_JQ_PROJECT_RETRIES = 2
 
 
 def _grounding_stable_id(prefix: str, project_id: str, identity: str) -> str:
@@ -221,6 +224,180 @@ def _creator_agent_tool_manifest() -> list[dict[str, Any]]:
 
 class FileAgentRuntimeError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class _JqProjectArgumentDiagnosis:
+    missing_top_level: tuple[str, ...]
+    invalid_top_level: tuple[str, ...]
+    unexpected_top_level: tuple[str, ...]
+    nested_required_paths: tuple[str, ...]
+    raw_arguments_bytes: int
+    strict_json_parsed: bool
+    json_repair_applied: bool
+    strict_json_error: str | None
+    fingerprint: str
+
+    def event_payload(self) -> dict[str, Any]:
+        return {
+            "rawArgumentsBytes": self.raw_arguments_bytes,
+            "strictJsonParsed": self.strict_json_parsed,
+            "jsonRepairApplied": self.json_repair_applied,
+            "strictJsonError": self.strict_json_error,
+            "schemaValid": not (
+                self.missing_top_level
+                or self.invalid_top_level
+                or self.unexpected_top_level
+            ),
+            "missingTopLevel": list(self.missing_top_level),
+            "invalidTopLevel": list(self.invalid_top_level),
+            "unexpectedTopLevel": list(self.unexpected_top_level),
+            "nestedRequiredPaths": list(self.nested_required_paths),
+            "fingerprint": self.fingerprint,
+        }
+
+
+class MalformedJqProjectArguments(FileAgentRuntimeError):
+    """A jq_project call whose decoded object is unsafe to execute."""
+
+    def __init__(
+        self,
+        diagnosis: _JqProjectArgumentDiagnosis,
+        *,
+        attempt: int,
+        repeated_payload: bool,
+    ) -> None:
+        self.diagnosis = diagnosis
+        self.attempt = attempt
+        self.repeated_payload = repeated_payload
+        self.retries_remaining = max(
+            0,
+            MAX_MALFORMED_JQ_PROJECT_RETRIES - attempt + 1,
+        )
+        details: list[str] = []
+        if diagnosis.missing_top_level:
+            details.append(
+                "missing top-level "
+                + ", ".join(diagnosis.missing_top_level),
+            )
+        if diagnosis.invalid_top_level:
+            details.append(
+                "invalid top-level "
+                + ", ".join(diagnosis.invalid_top_level),
+            )
+        if diagnosis.unexpected_top_level:
+            details.append(
+                "unexpected top-level "
+                + ", ".join(diagnosis.unexpected_top_level),
+            )
+        message = "jq_project arguments are structurally corrupted; jq was not executed"
+        if details:
+            message += ": " + "; ".join(details)
+        super().__init__(message)
+
+    def tool_result(self) -> dict[str, Any]:
+        recovery = (
+            "Do not reuse or auto-hoist any nested field from this corrupted payload. "
+            "Call read_project to obtain the latest ETag, then issue a new jq_project "
+            "call with projectId, baseEtag, and program at the top level. Keep program "
+            "small and put structured values in jsonArgs. Split bulk work into separate "
+            "commits for strategy/settings, visual entities, and timeline elements; "
+            "write only 2-3 timeline elements per call and re-read project.json between "
+            "commits."
+        )
+        if self.repeated_payload:
+            recovery = (
+                "The same malformed payload was repeated. Do not resend it. "
+                + recovery
+            )
+        return {
+            "ok": False,
+            "error": {
+                "type": type(self).__name__,
+                "message": str(self),
+                "details": self.diagnosis.event_payload(),
+                "retry": {
+                    "attempt": self.attempt,
+                    "retriesRemaining": self.retries_remaining,
+                    "samePayload": self.repeated_payload,
+                },
+                "recovery": recovery,
+            },
+        }
+
+
+def _nested_required_key_paths(
+    value: Any,
+    required_keys: set[str],
+) -> tuple[str, ...]:
+    """Find misplaced required jq keys without trusting or moving them."""
+
+    found: list[str] = []
+    remaining_nodes = 4_096
+
+    def visit(current: Any, path: str, depth: int) -> None:
+        nonlocal remaining_nodes
+        if remaining_nodes <= 0 or depth > 16 or len(found) >= 12:
+            return
+        remaining_nodes -= 1
+        if isinstance(current, Mapping):
+            for key, child in current.items():
+                child_path = f"{path}.{key}"
+                if depth > 0 and key in required_keys:
+                    found.append(child_path)
+                    if len(found) >= 12:
+                        return
+                visit(child, child_path, depth + 1)
+        elif isinstance(current, list):
+            for index, child in enumerate(current):
+                visit(child, f"{path}[{index}]", depth + 1)
+
+    visit(value, "$", 0)
+    return tuple(found)
+
+
+def _jq_project_argument_diagnosis(
+    call: AgentToolCall,
+) -> _JqProjectArgumentDiagnosis:
+    arguments = call.arguments
+    required = {"projectId", "baseEtag", "program"}
+    allowed = required | {"stringArgs", "jsonArgs"}
+    missing = tuple(sorted(required - arguments.keys()))
+    invalid: list[str] = []
+    for key in sorted(required & arguments.keys()):
+        if not isinstance(arguments[key], str) or not arguments[key].strip():
+            invalid.append(key)
+    for key in ("stringArgs", "jsonArgs"):
+        if key in arguments and not isinstance(arguments[key], Mapping):
+            invalid.append(key)
+    if isinstance(arguments.get("stringArgs"), Mapping) and any(
+        not isinstance(value, str)
+        for value in arguments["stringArgs"].values()
+    ):
+        invalid.append("stringArgs")
+    unexpected = tuple(sorted(set(arguments) - allowed))
+    encoded = json.dumps(
+        arguments,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    fingerprint = hashlib.sha256(encoded).hexdigest()[:16]
+    return _JqProjectArgumentDiagnosis(
+        missing_top_level=missing,
+        invalid_top_level=tuple(sorted(set(invalid))),
+        unexpected_top_level=unexpected,
+        nested_required_paths=_nested_required_key_paths(
+            arguments,
+            set(missing),
+        ),
+        raw_arguments_bytes=call.raw_arguments_bytes or len(encoded),
+        strict_json_parsed=not call.arguments_repaired,
+        json_repair_applied=call.arguments_repaired,
+        strict_json_error=call.strict_json_error,
+        fingerprint=fingerprint,
+    )
 
 
 class StaleAgentRun(FileAgentRuntimeError, AgentStreamCallbackPassthrough):
@@ -868,6 +1045,8 @@ class FileCreatorAgentRuntime:
         ]
         tool_call_count = 0
         review_ids: list[str] = []
+        malformed_jq_attempts = 0
+        malformed_jq_fingerprints: set[str] = set()
         for _turn_number in range(1, self.max_model_turns + 1):
             self._assert_epoch(project_id, run_id, epoch)
             assistant_message_id = f"message-{uuid4().hex}"
@@ -974,6 +1153,7 @@ class FileCreatorAgentRuntime:
             for call in turn.tool_calls:
                 tool_call_count += 1
                 tool_failed = False
+                malformed_budget_exhausted = False
                 self._assert_epoch(project_id, run_id, epoch)
                 await self._event(
                     project_id,
@@ -990,6 +1170,51 @@ class FileCreatorAgentRuntime:
                     },
                 )
                 try:
+                    if call.name == JQ_PROJECT_TOOL_NAME:
+                        diagnosis = _jq_project_argument_diagnosis(call)
+                        schema_valid = not (
+                            diagnosis.missing_top_level
+                            or diagnosis.invalid_top_level
+                            or diagnosis.unexpected_top_level
+                        )
+                        next_attempt = (
+                            0 if schema_valid else malformed_jq_attempts + 1
+                        )
+                        await self._event(
+                            project_id,
+                            session_id,
+                            "agent.tool_arguments_checked",
+                            run_id,
+                            request,
+                            {
+                                "runId": run_id,
+                                "actionId": call.call_id,
+                                "toolCallId": call.call_id,
+                                "tool": call.name,
+                                "messageId": assistant_message_id,
+                                "malformedAttempt": next_attempt,
+                                **diagnosis.event_payload(),
+                            },
+                        )
+                        if not schema_valid:
+                            malformed_jq_attempts = next_attempt
+                            repeated_payload = (
+                                diagnosis.fingerprint
+                                in malformed_jq_fingerprints
+                            )
+                            malformed_jq_fingerprints.add(
+                                diagnosis.fingerprint,
+                            )
+                            raise MalformedJqProjectArguments(
+                                diagnosis,
+                                attempt=malformed_jq_attempts,
+                                repeated_payload=repeated_payload,
+                            )
+                        # A structurally valid replacement resolves the current
+                        # malformed-payload incident. Normal jq/CAS failures
+                        # retain their existing recovery behavior.
+                        malformed_jq_attempts = 0
+                        malformed_jq_fingerprints.clear()
                     if (
                         call.name != DELEGATE_TOOL_NAME
                         and call.arguments.get("projectId") != project_id
@@ -1054,13 +1279,20 @@ class FileCreatorAgentRuntime:
                     raise
                 except Exception as exc:
                     tool_failed = True
-                    error_result = {
-                        "ok": False,
-                        "error": {
-                            "type": type(exc).__name__,
-                            "message": str(exc),
-                        },
-                    }
+                    if isinstance(exc, MalformedJqProjectArguments):
+                        error_result = exc.tool_result()
+                        malformed_budget_exhausted = (
+                            exc.attempt
+                            > MAX_MALFORMED_JQ_PROJECT_RETRIES
+                        )
+                    else:
+                        error_result = {
+                            "ok": False,
+                            "error": {
+                                "type": type(exc).__name__,
+                                "message": str(exc),
+                            },
+                        }
                     await self._persist_tool_result(
                         project_id,
                         session_id,
@@ -1085,6 +1317,12 @@ class FileCreatorAgentRuntime:
                         "failed": tool_failed,
                     },
                 )
+                if malformed_budget_exhausted:
+                    raise AgentModelError(
+                        "jq_project produced structurally corrupted tool "
+                        "arguments after 2 bounded retries; the run stopped "
+                        "before jq execution",
+                    )
         raise AgentModelError(
             f"Creator Agent exceeded {self.max_model_turns} model turns",
         )
@@ -1579,6 +1817,8 @@ class FileCreatorAgentRuntime:
         )
         tool_call_count = 0
         review_ids: list[str] = []
+        malformed_jq_attempts = 0
+        malformed_jq_fingerprints: set[str] = set()
         try:
             for _turn_number in range(1, self.max_model_turns + 1):
                 self._assert_epoch(project_id, parent_run_id, epoch)
@@ -1792,10 +2032,6 @@ class FileCreatorAgentRuntime:
 
                 call = turn.tool_calls[0]
                 tool_call_count += 1
-                if call.arguments.get("projectId") != project_id:
-                    raise FileAgentRuntimeError(
-                        "specialist tool call attempted another Project",
-                    )
                 await self._event(
                     project_id,
                     session_id,
@@ -1810,7 +2046,53 @@ class FileCreatorAgentRuntime:
                     },
                 )
                 failed = False
+                malformed_budget_exhausted = False
                 try:
+                    if call.name == JQ_PROJECT_TOOL_NAME:
+                        diagnosis = _jq_project_argument_diagnosis(call)
+                        schema_valid = not (
+                            diagnosis.missing_top_level
+                            or diagnosis.invalid_top_level
+                            or diagnosis.unexpected_top_level
+                        )
+                        next_attempt = (
+                            0 if schema_valid else malformed_jq_attempts + 1
+                        )
+                        await self._event(
+                            project_id,
+                            session_id,
+                            "subagent.tool_arguments_checked",
+                            parent_run_id,
+                            request,
+                            {
+                                **common,
+                                "messageId": message_id,
+                                "toolCallId": call.call_id,
+                                "tool": call.name,
+                                "malformedAttempt": next_attempt,
+                                **diagnosis.event_payload(),
+                            },
+                        )
+                        if not schema_valid:
+                            malformed_jq_attempts = next_attempt
+                            repeated_payload = (
+                                diagnosis.fingerprint
+                                in malformed_jq_fingerprints
+                            )
+                            malformed_jq_fingerprints.add(
+                                diagnosis.fingerprint,
+                            )
+                            raise MalformedJqProjectArguments(
+                                diagnosis,
+                                attempt=malformed_jq_attempts,
+                                repeated_payload=repeated_payload,
+                            )
+                        malformed_jq_attempts = 0
+                        malformed_jq_fingerprints.clear()
+                    if call.arguments.get("projectId") != project_id:
+                        raise FileAgentRuntimeError(
+                            "specialist tool call attempted another Project",
+                        )
                     result = await self._invoke_specialist_tool(
                         project_id=project_id,
                         session_id=session_id,
@@ -1850,14 +2132,21 @@ class FileCreatorAgentRuntime:
                     raise
                 except Exception as exc:
                     failed = True
-                    result = {
-                        "ok": False,
-                        "error": {
-                            "type": type(exc).__name__,
-                            "message": str(exc),
-                            "recovery": _specialist_tool_recovery(call.name),
-                        },
-                    }
+                    if isinstance(exc, MalformedJqProjectArguments):
+                        result = exc.tool_result()
+                        malformed_budget_exhausted = (
+                            exc.attempt
+                            > MAX_MALFORMED_JQ_PROJECT_RETRIES
+                        )
+                    else:
+                        result = {
+                            "ok": False,
+                            "error": {
+                                "type": type(exc).__name__,
+                                "message": str(exc),
+                                "recovery": _specialist_tool_recovery(call.name),
+                            },
+                        }
                 await asyncio.to_thread(
                     self.executions.append_specialist_message,
                     project_id,
@@ -1905,6 +2194,12 @@ class FileCreatorAgentRuntime:
                         "failed": failed,
                     },
                 )
+                if malformed_budget_exhausted:
+                    raise AgentModelError(
+                        "jq_project produced structurally corrupted tool "
+                        "arguments after 2 bounded retries; the specialist "
+                        "stopped before jq execution",
+                    )
             raise AgentModelError(
                 f"{role_name} exceeded {self.max_model_turns} model turns",
             )
