@@ -1,13 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Button, Input, Modal, Select, Tooltip, message } from "antd";
-import {
-  AlertTriangle,
-  ArrowLeft,
-  Clapperboard,
-  Image as ImageIcon,
-  Video,
-  Wand2,
-} from "lucide-react";
+import { AlertTriangle, ArrowLeft } from "lucide-react";
 import {
   navigate,
   useParams,
@@ -23,7 +16,6 @@ import {
 } from "@/store/projectSnapshotStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
-import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { selectPrimaryTimeline } from "@/selectors/timelineElementSelectors";
 import { getArtifactVersionMediaUrl, getAssetVersionMediaUrl, getResolvedModels } from "@/api/creator";
 import { projectJsonPointer } from "@/lib/projectJsonPointer";
@@ -272,15 +264,6 @@ export default function R2VWorkbenchPage() {
       },
     });
   }, [element, elementDraft, planPath]);
-  const focusAgent = useCallback(
-    (prompt: string) => {
-      useCreatorInteractionStore.getState().select(`element:${elementId}`);
-      useAgentDockUiStore.getState().setOpen(true);
-      useAgentDockUiStore.getState().setTab("conversation");
-      useAgentDockUiStore.getState().setDraft(prompt);
-    },
-    [elementId],
-  );
 
   if (!project || !timeline) {
     if (syncStatus === "invalid" || syncStatus === "not_found") {
@@ -730,64 +713,6 @@ export default function R2VWorkbenchPage() {
             {elementDraft.dirty
               ? `应用修改（${elementDraft.dirtyCount}）`
               : "应用修改"}
-          </Button>
-          <Button
-            size="small"
-            icon={<Wand2 className="h-3 w-3" />}
-            disabled={elementDraft.dirty || patching}
-            title={elementDraft.dirty ? "请先应用当前修改" : undefined}
-            onClick={() =>
-              focusAgent(
-                `请为「${elementLabel}」生成分镜图 Prompt，先读取当前分镜与创作意图。`,
-              )
-            }
-            className="!text-xs"
-          >
-            生成分镜 Prompt
-          </Button>
-          <Button
-            size="small"
-            icon={<ImageIcon className="h-3 w-3" />}
-            disabled={elementDraft.dirty || patching}
-            title={elementDraft.dirty ? "请先应用当前修改" : undefined}
-            onClick={() =>
-              focusAgent(
-                `请为「${elementLabel}」生成分镜图，基于当前分镜图 Prompt 与引用资产。`,
-              )
-            }
-            className="!text-xs"
-          >
-            生成分镜图
-          </Button>
-          <Button
-            size="small"
-            icon={<Clapperboard className="h-3 w-3" />}
-            disabled={elementDraft.dirty || patching}
-            title={elementDraft.dirty ? "请先应用当前修改" : undefined}
-            onClick={() =>
-              focusAgent(
-                `请为「${elementLabel}」生成视频 Prompt，覆盖全部分镜与运镜要求。`,
-              )
-            }
-            className="!text-xs"
-          >
-            生成视频 Prompt
-          </Button>
-          <Button
-            size="small"
-            type="primary"
-            icon={<Video className="h-3 w-3" />}
-            loading={videoGenerating}
-            disabled={videoGenerating || elementDraft.dirty || patching}
-            title={elementDraft.dirty ? "请先应用当前修改" : undefined}
-            onClick={() =>
-              focusAgent(
-                `请为「${elementLabel}」生成视频，基于当前分镜与视频 Prompt 完成制作。`,
-              )
-            }
-            className="!text-xs"
-          >
-            {videoGenerating ? "视频生成中" : "生成视频"}
           </Button>
         </div>
       </div>
