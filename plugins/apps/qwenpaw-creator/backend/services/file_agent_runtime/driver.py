@@ -296,11 +296,11 @@ class MalformedJqProjectArguments(FileAgentRuntimeError):
     def tool_result(self) -> dict[str, Any]:
         recovery = (
             "Do not reuse or auto-hoist any nested field from this corrupted payload. "
-            "Call read_project to obtain the latest ETag, then issue a new jq_project "
-            "call with projectId, baseEtag, and program at the top level. Keep program "
-            "small and put structured values in jsonArgs. Split bulk work into separate "
-            "commits for strategy/settings, visual entities, and timeline elements; "
-            "write only 2-3 timeline elements per call and re-read project.json between "
+            "Call read_project to refresh your snapshot, then issue a new jq_project "
+            "call with projectId and program at the top level; the Runtime selects "
+            "the base snapshot itself. Keep program small and put structured values "
+            "in jsonArgs. Split bulk work into separate commits for strategy/settings, "
+            "visual entities, and timeline elements, re-reading project.json between "
             "commits."
         )
         if self.repeated_payload:
@@ -358,8 +358,10 @@ def _jq_project_argument_diagnosis(
     call: AgentToolCall,
 ) -> _JqProjectArgumentDiagnosis:
     arguments = call.arguments
-    required = {"projectId", "baseEtag", "program"}
-    allowed = required | {"stringArgs", "jsonArgs"}
+    required = {"projectId", "program"}
+    # ``baseEtag`` is deprecated on the model surface but still tolerated so
+    # an older prompt/history echo is never misdiagnosed as corruption.
+    allowed = required | {"baseEtag", "stringArgs", "jsonArgs"}
     missing = tuple(sorted(required - arguments.keys()))
     invalid: list[str] = []
     for key in sorted(required & arguments.keys()):
@@ -396,6 +398,14 @@ def _jq_project_argument_diagnosis(
         strict_json_error=call.strict_json_error,
         fingerprint=fingerprint,
     )
+
+
+class ToolArgumentsJSONError(FileAgentRuntimeError):
+    """The model streamed tool arguments that never became a JSON object.
+
+    Raised per tool call and fed back to the model as a failed tool result;
+    it must never terminate the whole run.
+    """
 
 
 class StaleAgentRun(FileAgentRuntimeError, AgentStreamCallbackPassthrough):
@@ -474,7 +484,7 @@ class FileCreatorAgentRuntime:
         self.source_model_client = source_model_client or (
             self.model_client
             if injected_model_client
-            else AgentScopeVlmChatClient(max_tokens=24_000)
+            else AgentScopeVlmChatClient()
         )
         self.poll_interval_seconds = poll_interval_seconds
         self.max_model_turns = max_model_turns
@@ -1168,6 +1178,8 @@ class FileCreatorAgentRuntime:
                     },
                 )
                 try:
+                    if call.parse_error is not None:
+                        raise ToolArgumentsJSONError(call.parse_error)
                     if call.name == JQ_PROJECT_TOOL_NAME:
                         diagnosis = _jq_project_argument_diagnosis(call)
                         schema_valid = not (
@@ -1288,6 +1300,9 @@ class FileCreatorAgentRuntime:
                             "error": {
                                 "type": type(exc).__name__,
                                 "message": str(exc),
+                                "recovery": _specialist_tool_recovery(
+                                    call.name,
+                                ),
                             },
                         }
                     await self._persist_tool_result(
@@ -2045,6 +2060,8 @@ class FileCreatorAgentRuntime:
                 failed = False
                 malformed_budget_exhausted = False
                 try:
+                    if call.parse_error is not None:
+                        raise ToolArgumentsJSONError(call.parse_error)
                     if call.name == JQ_PROJECT_TOOL_NAME:
                         diagnosis = _jq_project_argument_diagnosis(call)
                         schema_valid = not (
@@ -3381,12 +3398,15 @@ def _specialist_tool_recovery(name: str) -> str:
             "complete Project root and preserves all Runtime-protected root fields. "
             "Never assign schema_version, project_id, generation, created_at, or updated_at; "
             "the Runtime maintains them. Start from the input Project `.`, not `$jsonArgs`. "
-            "Put bulk objects in jsonArgs. For every Edit item, set duration_tick to "
-            "round((source_out_tick - source_in_tick) / playback_rate). Remove nonexistent "
-            "references; not-yet-produced artifacts stay null. Parenthesize computed jq "
-            'values before binding them, for example ("source:" + $logicalId) as '
-            "$sourceKey, and parenthesize expressions used as object values. Never finish "
-            "with a saved pre-edit root such as $project because that discards mutations."
+            "Put bulk objects in jsonArgs. If the failure was malformed or misnested argument "
+            "JSON, regenerate the call with program as a top-level field and split an "
+            "oversized jsonArgs into a few smaller jq_project calls. For every Edit item, "
+            "set duration_tick to round((source_out_tick - source_in_tick) / playback_rate). "
+            "Remove nonexistent references; not-yet-produced artifacts stay null. "
+            "Parenthesize computed jq values before binding them, for example "
+            '("source:" + $logicalId) as $sourceKey, and parenthesize expressions used as '
+            "object values. Never finish with a saved pre-edit root such as $project "
+            "because that discards mutations."
         )
     if name == "ai_edit":
         return (

@@ -3,7 +3,8 @@
 # pylint: disable=ungrouped-imports
 """OpenAI Images API image provider (routify / gpt-image-2).
 
-Endpoint:  POST {IMAGE_BASE_URL}/v1/images/generations[/edits]
+Endpoint:  POST {IMAGE_BASE_URL}[/v1]/images/generations[/edits]
+           (the /v1 segment is added only when the base URL lacks it)
 Protocol:  https://developers.openai.com/api/reference/resources/images/methods/generate/
 """
 
@@ -64,7 +65,7 @@ async def build_reference_image_files(
 
 
 class OpenAIImageModel(BaseImageModel):
-    """OpenAI Images API format: POST {base}/v1/images/generations[/edits]."""
+    """OpenAI Images API format: POST {base}[/v1]/images/generations[/edits]."""
 
     backend_name = "openai"
 
@@ -142,12 +143,16 @@ class OpenAIImageModel(BaseImageModel):
 
     def _url(self, clean_reference_urls: list[str]) -> str:
         base = self.base_url.rstrip("/")
-        suffix = (
-            "/v1/images/edits"
-            if clean_reference_urls
-            else "/v1/images/generations"
+        resource = (
+            "images/edits" if clean_reference_urls else "images/generations"
         )
-        return f"{base}{suffix}"
+        # UI-saved OpenAI endpoints usually already carry the version
+        # segment (e.g. https://api.openai.com/v1); only prepend /v1 when
+        # absent so both styles resolve to a single /v1/images/... path
+        # instead of the broken /v1/v1/... duplicate.
+        if base.endswith("/v1"):
+            return f"{base}/{resource}"
+        return f"{base}/v1/{resource}"
 
     async def _request(
         self,

@@ -2,10 +2,11 @@
 # flake8: noqa: E501
 """Model-facing read/jq tools over the single-file Project authority.
 
-The model supplies only the Project identity, the ETag it actually observed and
-a jq transformation.  Request provenance and Review policy are captured by the
-Runtime before this request-scoped boundary is constructed; they are never
-accepted as model tool arguments.
+The model supplies only the Project identity and a jq transformation.  The
+base snapshot for three-way merge is the last snapshot this request-scoped
+boundary actually observed; the model never echoes ETags.  Request
+provenance and Review policy are captured by the Runtime before this
+boundary is constructed; they are never accepted as model tool arguments.
 """
 
 from __future__ import annotations
@@ -15,7 +16,13 @@ from copy import deepcopy
 from typing import Any, Mapping
 import threading
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    model_validator,
+)
 
 from services.runtime_files.models import (
     ChangeOrigin,
@@ -47,25 +54,6 @@ class UnknownAgentProjectTool(AgentProjectToolError):
     pass
 
 
-class AgentProjectBaseRequired(AgentProjectToolError):
-    """The requested historical base is not available in this Runtime."""
-
-    def __init__(
-        self,
-        *,
-        project_id: str,
-        base_etag: str,
-        latest_etag: str,
-    ) -> None:
-        self.project_id = project_id
-        self.base_etag = base_etag
-        self.latest_etag = latest_etag
-        super().__init__(
-            "jq_project baseEtag is stale; its base snapshot is not cached. "
-            f"call read_project again for {project_id!r} before retrying",
-        )
-
-
 class _ToolModel(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -94,7 +82,10 @@ class ReadProjectFileToolInput(_ToolModel):
 
 class JqProjectToolInput(_ToolModel):
     project_id: str = Field(alias="projectId", min_length=1)
-    base_etag: str = Field(alias="baseEtag", min_length=1)
+    # Deprecated model-facing field. The Runtime now selects the base
+    # snapshot itself; a value sent by an older prompt/history is tolerated
+    # and ignored so it cannot fail an otherwise valid call.
+    base_etag: str | None = Field(default=None, alias="baseEtag")
     program: str = Field(min_length=1)
     string_args: dict[str, str] = Field(
         default_factory=dict,
@@ -213,8 +204,8 @@ AGENT_PROJECT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     READ_PROJECT_TOOL_NAME: {
         "description": (
             "读取 project.json 的完整已验证快照，"
-            "并返回 generation 与 ETag。修改前先调用此工具；"
-            "后续 jq_project 必须回传这里得到的 ETag。"
+            "并返回 generation 与 ETag。修改前先调用此工具了解当前结构；"
+            "jq_project 会自动基于你最近一次读到的快照提交，无需回传 ETag。"
         ),
         "parameters": {
             "type": "object",
@@ -250,16 +241,15 @@ AGENT_PROJECT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     JQ_PROJECT_TOOL_NAME: {
         "description": (
-            "在最近读取的 Project base 上运行一段 jq，"
-            "Runtime 再执行字段 CAS、三方合并、"
+            "在你最近读取的 Project 快照上运行一段 jq，"
+            "Runtime 自动选择 base 并执行字段 CAS、三方合并、"
             "Pydantic 校验和原子发布。"
             "jq 必须输出且只输出完整 Project 根对象；不得以嵌套路径或子对象变量结束。"
             "必须原样保留 schema_version/project_id/generation/created_at/updated_at。"
             "绝不能在 program 中给这些保护字段赋值；updated_at 由 Runtime 自动维护。"
             "不要以 `$jsonArgs | ...` 开始变换；输入 Project `.` 必须始终作为输出根对象。"
             "批量内容通过 jsonArgs 传入，program 只负责结构化赋值。"
-            "不要在一次调用中同时写策略、视觉实体和整条时间线；应分成独立提交，"
-            "每次最多新增或替换 2-3 个 Timeline Element，并在每次提交后重新读取最新 ETag。"
+            "若单次参数体量极大（如数十个 Element），可拆分为少量几次调用以降低 JSON 出错风险。"
             "动态加法表达式在绑定 jq 变量前必须加括号，例如 "
             '("source:" + $logicalId) as $sourceKey；对象字段值中的运算也必须加括号。'
             "修改后自然返回当前完整 Project；不要在结尾返回修改前保存的根对象，"
@@ -269,7 +259,6 @@ AGENT_PROJECT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "type": "object",
             "properties": {
                 "projectId": {"type": "string", "minLength": 1},
-                "baseEtag": {"type": "string", "minLength": 1},
                 "program": {
                     "type": "string",
                     "minLength": 1,
@@ -290,14 +279,13 @@ AGENT_PROJECT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "type": "object",
                     "description": (
                         "通过 --argjson 传入的结构化 JSON；新增多项时间线内容时应把对象集合放这里，"
-                        "但每次调用最多写入 2-3 个 Timeline Element；"
                         "避免在 program 中拼接大段 JSON。program 可使用 "
                         "$jsonArgs.elements，也兼容按 key 使用 $elements。"
                     ),
                     "additionalProperties": True,
                 },
             },
-            "required": ["projectId", "baseEtag", "program"],
+            "required": ["projectId", "program"],
             "additionalProperties": False,
         },
     },
@@ -338,6 +326,102 @@ def agent_project_tool_manifest() -> tuple[dict[str, Any], ...]:
     )
 
 
+def _find_key_paths(
+    data: Any,
+    key: str,
+    *,
+    limit: int = 3,
+) -> list[str]:
+    """Locate every (nested) occurrence of ``key`` for diagnostics."""
+
+    found: list[str] = []
+
+    def walk(node: Any, path: str) -> None:
+        if len(found) >= limit:
+            return
+        if isinstance(node, Mapping):
+            for child_key, child in node.items():
+                child_path = f"{path}.{child_key}"
+                if child_key == key:
+                    found.append(child_path)
+                    if len(found) >= limit:
+                        return
+                walk(child, child_path)
+        elif isinstance(node, list):
+            for index, child in enumerate(node):
+                walk(child, f"{path}[{index}]")
+
+    walk(data, "$")
+    return found
+
+
+def _translate_jq_input_error(
+    arguments: Mapping[str, Any],
+    error: ValidationError,
+) -> str | None:
+    """Model-actionable message for the classic brace-misnesting failure."""
+
+    missing = {
+        item["loc"][0]
+        for item in error.errors()
+        if item.get("type") == "missing" and item.get("loc")
+    }
+    if "program" not in missing:
+        return None
+    nested = _find_key_paths(dict(arguments), "program")
+    if nested:
+        return (
+            "jq_project 参数缺少顶层 program 字段，但在 "
+            + "、".join(nested)
+            + " 检测到 program——参数 JSON 花括号遗漏/错位，"
+            "program 被嵌套进了其他字段内部。请重新生成调用："
+            "program 必须是顶层字段；若 jsonArgs 体量巨大，"
+            "请拆分为少量几次较小的 jq_project 调用。项目未被修改。"
+        )
+    return (
+        "jq_project 参数缺少顶层 program 字段，请补全后重试；项目未被修改。"
+    )
+
+
+_PROJECT_SCHEMA_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (
+        ("visual", "variants"),
+        "variants 定义在 visual.entities.items[<entityId>].variants 之下，"
+        "visual 顶层没有 variants 字段",
+    ),
+)
+_MAX_SCHEMA_ERROR_LINES = 8
+
+
+def _translate_project_schema_error(error: ValidationError) -> str:
+    """Render post-jq Project validation errors as located, fixable items."""
+
+    items = error.errors()
+    lines: list[str] = []
+    for item in items[:_MAX_SCHEMA_ERROR_LINES]:
+        loc = tuple(str(part) for part in item.get("loc", ()))
+        path = ".".join(loc) or "$"
+        hint = ""
+        for prefix, text in _PROJECT_SCHEMA_HINTS:
+            if loc[: len(prefix)] == prefix:
+                hint = f"（{text}）"
+                break
+        else:
+            if item.get("type") == "extra_forbidden":
+                hint = (
+                    "（该字段不在 Project Schema 中，"
+                    "请对照 system prompt 里的 PROJECT_JSON_SCHEMA）"
+                )
+        lines.append(f"- {path}: {item.get('msg', 'invalid')}{hint}")
+    if len(items) > _MAX_SCHEMA_ERROR_LINES:
+        lines.append(f"- ...另有 {len(items) - _MAX_SCHEMA_ERROR_LINES} 处错误")
+    return (
+        "jq 输出未通过 Project Schema 校验，项目未被修改：\n"
+        + "\n".join(lines)
+        + "\n请修正 program/jsonArgs 后重试。"
+    )
+
+
 class AgentProjectTools:
     """Request-scoped implementation of the indexed Project tool surface."""
 
@@ -361,10 +445,9 @@ class AgentProjectTools:
         self.schema_prompt: ProjectSchemaPrompt = build_project_schema_prompt()
         self.max_cached_bases = max_cached_bases
         self._cache_lock = threading.RLock()
-        self._bases: OrderedDict[
-            tuple[str, str],
-            ProjectSnapshot,
-        ] = OrderedDict()
+        # Last snapshot this request-scoped boundary observed per Project.
+        # jq_project commits against it; the model never echoes ETags.
+        self._observed: OrderedDict[str, ProjectSnapshot] = OrderedDict()
 
     @staticmethod
     def _snapshot_result(
@@ -378,38 +461,22 @@ class AgentProjectTools:
         )
 
     def _remember(self, snapshot: ProjectSnapshot) -> None:
-        key = (snapshot.project.project_id, snapshot.etag)
+        key = snapshot.project.project_id
         with self._cache_lock:
-            self._bases[key] = snapshot
-            self._bases.move_to_end(key)
-            while len(self._bases) > self.max_cached_bases:
-                self._bases.popitem(last=False)
+            self._observed[key] = snapshot
+            self._observed.move_to_end(key)
+            while len(self._observed) > self.max_cached_bases:
+                self._observed.popitem(last=False)
 
-    def _cached(
-        self,
-        project_id: str,
-        etag: str,
-    ) -> ProjectSnapshot | None:
-        key = (project_id, etag)
+    def _base(self, project_id: str) -> ProjectSnapshot:
+        """The last observed snapshot, or the latest one on first contact."""
+
         with self._cache_lock:
-            snapshot = self._bases.get(key)
-            if snapshot is not None:
-                self._bases.move_to_end(key)
-            return snapshot
-
-    def _base(self, project_id: str, base_etag: str) -> ProjectSnapshot:
-        cached = self._cached(project_id, base_etag)
-        if cached is not None:
-            return cached
+            observed = self._observed.get(project_id)
+            if observed is not None:
+                self._observed.move_to_end(project_id)
+                return observed
         latest = self.store.read(project_id)
-        if latest.etag != base_etag:
-            raise AgentProjectBaseRequired(
-                project_id=project_id,
-                base_etag=base_etag,
-                latest_etag=latest.etag,
-            )
-        # A caller may reconnect with an ETag that is still current. It is
-        # safe to reconstruct that base: latest and base are byte-identical.
         self._remember(latest)
         return latest
 
@@ -503,19 +570,17 @@ class AgentProjectTools:
         self,
         *,
         project_id: str,
-        base_etag: str,
         program: str,
         string_args: Mapping[str, str] | None = None,
         json_args: Mapping[str, Any] | None = None,
     ) -> AgentProjectCommitResult:
         request = JqProjectToolInput(
             projectId=project_id,
-            baseEtag=base_etag,
             program=program,
             stringArgs=dict(string_args or {}),
             jsonArgs=dict(json_args or {}),
         )
-        base = self._base(request.project_id, request.base_etag)
+        base = self._base(request.project_id)
         candidate = self.transformer.transform(
             base.project.model_dump(mode="json"),
             request.program,
@@ -602,14 +667,24 @@ class AgentProjectTools:
                 max_bytes=request.max_bytes,
             )
         elif tool_name == JQ_PROJECT_TOOL_NAME:
-            request = JqProjectToolInput.model_validate(dict(arguments))
-            result = self.jq_project(
-                project_id=request.project_id,
-                base_etag=request.base_etag,
-                program=request.program,
-                string_args=request.string_args,
-                json_args=request.json_args,
-            )
+            try:
+                request = JqProjectToolInput.model_validate(dict(arguments))
+            except ValidationError as exc:
+                translated = _translate_jq_input_error(arguments, exc)
+                if translated is None:
+                    raise
+                raise AgentProjectToolError(translated) from exc
+            try:
+                result = self.jq_project(
+                    project_id=request.project_id,
+                    program=request.program,
+                    string_args=request.string_args,
+                    json_args=request.json_args,
+                )
+            except ValidationError as exc:
+                raise AgentProjectToolError(
+                    _translate_project_schema_error(exc),
+                ) from exc
         elif tool_name == ELEMENTS_AT_TOOL_NAME:
             request = ElementsAtToolInput.model_validate(dict(arguments))
             result = self.elements_at(
@@ -636,7 +711,6 @@ __all__ = [
     "JQ_PROJECT_TOOL_NAME",
     "READ_PROJECT_FILE_TOOL_NAME",
     "READ_PROJECT_TOOL_NAME",
-    "AgentProjectBaseRequired",
     "AgentProjectCommitResult",
     "AgentElementsAtResult",
     "AgentProjectFileResult",

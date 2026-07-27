@@ -11,6 +11,8 @@ import inspect
 import json
 from typing import Any, Protocol
 
+from json_repair import repair_json
+
 from agentscope.credential import DashScopeCredential
 from agentscope.formatter import DashScopeChatFormatter
 from agentscope.message import (
@@ -25,7 +27,6 @@ from agentscope.message import (
     UserMsg,
 )
 from agentscope.model import DashScopeChatModel
-from json_repair import repair_json
 
 from models import config as model_config
 from models.concurrency import model_slot
@@ -43,45 +44,6 @@ class AgentModelError(RuntimeError):
 
 class AgentModelConfigurationError(AgentModelError):
     pass
-
-
-def _tool_call_arguments(
-    raw_input: str,
-) -> tuple[dict[str, Any], bool, str | None]:
-    """Decode provider tool arguments, repairing syntax-only JSON damage.
-
-    Streaming providers occasionally finish a native ToolCallBlock with a
-    truncated closing delimiter or a trailing comma.  Treating that transport
-    defect as a terminal model failure strands an otherwise healthy Creator
-    run.  Repaired values still pass through the normal tool input and project
-    fencing validation before any side effect can occur.
-    """
-
-    repaired = False
-    strict_error: str | None = None
-    try:
-        arguments = json.loads(raw_input or "{}")
-    except json.JSONDecodeError as error:
-        repaired = True
-        strict_error = str(error)
-        try:
-            arguments = repair_json(
-                raw_input or "{}",
-                return_objects=True,
-            )
-        except Exception as repair_error:
-            raise AgentModelError(
-                "Creator AgentScope ToolCallBlock input is invalid JSON",
-            ) from repair_error
-        if not isinstance(arguments, dict):
-            raise AgentModelError(
-                "Creator AgentScope ToolCallBlock input is invalid JSON",
-            ) from error
-    if not isinstance(arguments, dict):
-        raise AgentModelError(
-            "Creator AgentScope ToolCallBlock input must be an object",
-        )
-    return arguments, repaired, strict_error
 
 
 class AgentStreamCallbackError(RuntimeError):
@@ -105,6 +67,10 @@ class AgentToolCall:
     call_id: str
     name: str
     arguments: dict[str, Any]
+    # Set when the streamed arguments could not be recovered into a JSON
+    # object even after repair. The driver must surface this back to the
+    # model as a failed tool result instead of failing the whole run.
+    parse_error: str | None = None
     # Transport diagnostics are intentionally excluded from equality, repr,
     # and provider history. They let the Runtime distinguish strict provider
     # JSON from syntax-repaired JSON without leaking malformed payloads back
@@ -140,6 +106,62 @@ class AgentModelTurn:
     thinking: str = ""
     tool_calls: tuple[AgentToolCall, ...] = ()
     provider_message_id: str | None = None
+
+
+_ARGS_PREVIEW_CHARS = 160
+
+
+def _parse_tool_arguments(
+    raw: str,
+) -> tuple[dict[str, Any], str | None, bool, str | None]:
+    """Parse streamed tool-call arguments into a JSON object.
+
+    Strict ``json.loads`` first; malformed payloads (truncated stream,
+    unbalanced braces) go through ``json_repair`` exactly like AgentScope's
+    own ``_json_loads_with_repair``. Returns ``(arguments, parse_error,
+    repaired, strict_error)``—an unrecoverable payload yields a
+    ``parse_error`` message so the tool call can fail individually while the
+    run keeps going, and ``repaired``/``strict_error`` let the Runtime tell
+    strict provider JSON from syntax-repaired JSON.
+    """
+
+    if not raw.strip():
+        return {}, None, False, None
+    decode_error: json.JSONDecodeError | None = None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as error:
+        decode_error = error
+    else:
+        if isinstance(parsed, dict):
+            return parsed, None, False, None
+    strict_error = (
+        f"JSONDecodeError: {decode_error}"
+        if decode_error is not None
+        else "decoded into a non-object value"
+    )
+    try:
+        repaired = repair_json(raw, stream_stable=True, return_objects=True)
+    except Exception:
+        repaired = None
+    if isinstance(repaired, dict):
+        return repaired, None, True, strict_error
+    if len(raw) > 2 * _ARGS_PREVIEW_CHARS:
+        preview = (
+            raw[:_ARGS_PREVIEW_CHARS]
+            + "...[TRUNCATED]..."
+            + raw[-_ARGS_PREVIEW_CHARS:]
+        )
+    else:
+        preview = raw
+    parse_error = (
+        "工具调用参数不是合法的 JSON 对象且无法自动修复（"
+        + strict_error
+        + "）。常见原因：花括号遗漏/错位或输出被截断。"
+        "请重新生成本次工具调用；若参数体量巨大，可拆分为少量几次较小的调用。"
+        f"参数原文预览：{preview!r}"
+    )
+    return {}, parse_error, False, strict_error
 
 
 AgentTextDeltaCallback = Callable[[str], Awaitable[None]]
@@ -411,7 +433,9 @@ class AgentScopeAgentChatClient:
         model: DashScopeChatModel | None = None,
         *,
         timeout_seconds: float = 180.0,
-        max_tokens: int = 12000,
+        # ``None`` omits the parameter entirely so the provider/model keeps
+        # control over its own output budget.
+        max_tokens: int | None = None,
         temperature: float = 0.2,
     ) -> None:
         self.timeout_seconds = timeout_seconds
@@ -593,15 +617,16 @@ class AgentScopeAgentChatClient:
                     raise AgentModelError(
                         f"Creator AgentScope returned a tool not offered this turn: {name}",
                     )
-                raw_arguments = block.input or "{}"
-                arguments, repaired, strict_error = _tool_call_arguments(
-                    raw_arguments,
+                raw_arguments = block.input or ""
+                arguments, parse_error, repaired, strict_error = (
+                    _parse_tool_arguments(raw_arguments)
                 )
                 calls.append(
                     AgentToolCall(
                         call_id=call_id,
                         name=name,
                         arguments=arguments,
+                        parse_error=parse_error,
                         raw_arguments_bytes=len(
                             raw_arguments.encode("utf-8"),
                         ),

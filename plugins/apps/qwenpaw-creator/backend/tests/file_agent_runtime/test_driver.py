@@ -300,7 +300,7 @@ def test_malformed_jq_project_arguments_recover_with_a_fresh_small_call(
             assert rejected["error"]["details"]["nestedRequiredPaths"] == [
                 "$.jsonArgs.timeline_elements.elem-01.program"
             ]
-            assert "2-3 timeline elements" in rejected["error"]["recovery"]
+            assert "Split bulk work" in rejected["error"]["recovery"]
             assert "ValidationError" not in messages[-1]["content"]
             return AgentModelTurn(
                 tool_calls=(

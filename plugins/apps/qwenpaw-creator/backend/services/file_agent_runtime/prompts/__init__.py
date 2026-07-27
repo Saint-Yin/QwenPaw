@@ -40,7 +40,7 @@ FILE_AGENT_PROMPT_SPECS = {
         _spec(
             "creator_agent.system",
             "creator_agent.system.txt",
-            "761fedf596411a5d7ee7ea4a172baa2136cd79ff9a4eaaa724862fbc0ccb2c8a",
+            "e5d82de05e71935edd84dd133f75de71b1ef9930f3ec0f65e1143bb982db75c5",
             "project_id",
             "workspace_schema",
         ),
