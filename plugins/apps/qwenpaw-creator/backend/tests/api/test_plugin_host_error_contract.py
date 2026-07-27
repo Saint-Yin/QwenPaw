@@ -150,6 +150,11 @@ def test_plugin_manifest_declares_every_creator_config_tool(
     assert set(grounding_fields) == {
         "enabled",
         "tavily_api_key",
+        "native_search_enabled",
+        "search_reuse_llm",
+        "search_api_key",
+        "search_model",
+        "search_base_url",
         "reuse_llm",
         "api_key",
         "model",

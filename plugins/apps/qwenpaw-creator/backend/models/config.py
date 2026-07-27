@@ -605,23 +605,45 @@ def get_web_grounding_tavily_api_key() -> str:
     )
 
 
-def get_web_grounding_reuse_llm() -> bool:
+def _grounding_bool(
+    field: str,
+    env_name: str,
+    *,
+    default: bool,
+) -> bool:
+    raw = _grounding_value(field, env_name, "1" if default else "0")
+    return str(raw).strip().casefold() not in {"0", "false", "no", "off"}
+
+
+def get_web_grounding_validation_source() -> str:
+    source = _grounding_value(
+        "validation_source",
+        "WEB_GROUNDING_VALIDATION_SOURCE",
+    ).strip().casefold()
+    if source in {"llm", "vlm", "custom"}:
+        return source
     env_name = (
         "WEB_GROUNDING_REUSE_LLM"
         if "WEB_GROUNDING_REUSE_LLM" in os.environ
         else "WEB_GROUNDING_REUSE_VLM"
     )
-    raw = _grounding_value(
-        "reuse_llm",
-        env_name,
-        "1",
+    return (
+        "llm"
+        if _grounding_bool("reuse_llm", env_name, default=True)
+        else "custom"
     )
-    return str(raw).strip().casefold() not in {"0", "false", "no", "off"}
+
+
+def get_web_grounding_reuse_llm() -> bool:
+    return get_web_grounding_validation_source() == "llm"
 
 
 def get_web_grounding_model_api_key() -> str:
-    if get_web_grounding_reuse_llm():
+    source = get_web_grounding_validation_source()
+    if source == "llm":
         return get_text_api_key()
+    if source == "vlm":
+        return get_vlm_api_key()
     return _grounding_explicit(
         "api_key",
         ("WEB_GROUNDING_LLM_API_KEY", "WEB_GROUNDING_VLM_API_KEY"),
@@ -629,8 +651,11 @@ def get_web_grounding_model_api_key() -> str:
 
 
 def get_web_grounding_model_base_url() -> str:
-    if get_web_grounding_reuse_llm():
+    source = get_web_grounding_validation_source()
+    if source == "llm":
         return get_text_base_url()
+    if source == "vlm":
+        return get_vlm_base_url()
     return _grounding_explicit(
         ("base_url", "endpoint"),
         ("WEB_GROUNDING_LLM_BASE_URL", "WEB_GROUNDING_VLM_BASE_URL"),
@@ -638,12 +663,100 @@ def get_web_grounding_model_base_url() -> str:
 
 
 def get_web_grounding_model_name() -> str:
-    if get_web_grounding_reuse_llm():
+    source = get_web_grounding_validation_source()
+    if source == "llm":
         return get_text_model_name()
+    if source == "vlm":
+        return get_vlm_model_name()
     return _grounding_explicit(
         "model",
         ("WEB_GROUNDING_LLM_MODEL_NAME", "WEB_GROUNDING_VLM_MODEL_NAME"),
     )
+
+
+def get_web_grounding_native_search_enabled() -> bool:
+    return _grounding_bool(
+        "native_search_enabled",
+        "WEB_GROUNDING_NATIVE_SEARCH_ENABLED",
+        default=True,
+    )
+
+
+def get_web_grounding_search_provider() -> str:
+    provider = _grounding_value(
+        "search_provider",
+        "WEB_GROUNDING_SEARCH_PROVIDER",
+        "dashscope_qwen",
+    ).strip().casefold()
+    return provider or "dashscope_qwen"
+
+
+def get_web_grounding_search_reuse_llm() -> bool:
+    raw = _grounding_value(
+        "search_reuse_llm",
+        "WEB_GROUNDING_SEARCH_REUSE_LLM",
+    )
+    if raw:
+        return str(raw).strip().casefold() not in {"0", "false", "no", "off"}
+    # Legacy grounding used one model for both retrieval and verification.
+    env_name = (
+        "WEB_GROUNDING_REUSE_LLM"
+        if "WEB_GROUNDING_REUSE_LLM" in os.environ
+        else "WEB_GROUNDING_REUSE_VLM"
+    )
+    return _grounding_bool("reuse_llm", env_name, default=True)
+
+
+def get_web_grounding_search_api_key() -> str:
+    if get_web_grounding_search_reuse_llm():
+        return get_text_api_key()
+    return _grounding_explicit(
+        "search_api_key",
+        ("WEB_GROUNDING_SEARCH_API_KEY",),
+    ) or _grounding_explicit(
+        "api_key",
+        ("WEB_GROUNDING_LLM_API_KEY", "WEB_GROUNDING_VLM_API_KEY"),
+    )
+
+
+def get_web_grounding_search_base_url() -> str:
+    if get_web_grounding_search_reuse_llm():
+        return get_text_base_url()
+    return _grounding_explicit(
+        "search_base_url",
+        ("WEB_GROUNDING_SEARCH_BASE_URL",),
+    ) or _grounding_explicit(
+        ("base_url", "endpoint"),
+        ("WEB_GROUNDING_LLM_BASE_URL", "WEB_GROUNDING_VLM_BASE_URL"),
+    )
+
+
+def get_web_grounding_search_model_name() -> str:
+    if get_web_grounding_search_reuse_llm():
+        return get_text_model_name()
+    return _grounding_explicit(
+        ("search_model", "search_model_name"),
+        ("WEB_GROUNDING_SEARCH_MODEL_NAME",),
+    ) or _grounding_explicit(
+        "model",
+        ("WEB_GROUNDING_LLM_MODEL_NAME", "WEB_GROUNDING_VLM_MODEL_NAME"),
+    )
+
+
+def get_web_grounding_search_protocol() -> str:
+    if get_web_grounding_search_reuse_llm():
+        text_tool_config = get_request_tool_config(CREATOR_TEXT_CONFIG_TOOL)
+        if text_tool_config:
+            return str(text_tool_config.get("protocol") or "").strip()
+        llm_section = _get_user_config().get("llm")
+        if isinstance(llm_section, dict) and llm_section.get("protocol"):
+            return str(llm_section["protocol"]).strip()
+        if os.environ.get("TEXT_PROTOCOL"):
+            return os.environ["TEXT_PROTOCOL"].strip()
+    return _grounding_value(
+        "search_protocol",
+        "WEB_GROUNDING_SEARCH_PROTOCOL",
+    ).strip()
 
 
 def get_asr_api_key() -> str:

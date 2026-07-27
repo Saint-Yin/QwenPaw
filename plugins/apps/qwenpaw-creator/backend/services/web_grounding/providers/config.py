@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 
 import httpx
 
@@ -19,7 +20,7 @@ def tavily_api_key() -> str:
 
 def dashscope_api_key() -> str:
     try:
-        return model_config.get_web_grounding_model_api_key() or os.environ.get(
+        return model_config.get_web_grounding_search_api_key() or os.environ.get(
             "DASHSCOPE_API_KEY",
             "",
         )
@@ -29,14 +30,14 @@ def dashscope_api_key() -> str:
 
 def dashscope_base_url() -> str:
     try:
-        return model_config.get_web_grounding_model_base_url()
+        return model_config.get_web_grounding_search_base_url()
     except Exception:
         return "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
 def dashscope_model() -> str:
     try:
-        return model_config.get_web_grounding_model_name() or "qwen3.7-plus"
+        return model_config.get_web_grounding_search_model_name() or "qwen3.7-plus"
     except Exception:
         return "qwen3.7-plus"
 
@@ -56,6 +57,40 @@ def dashscope_web_search_model() -> str:
     return dashscope_model()
 
 
+def dashscope_native_search_unavailable_reason(
+    *,
+    api_key_override: str | None = None,
+) -> str:
+    """Explain why the DashScope/Qwen native-search adapter cannot run."""
+
+    try:
+        if not model_config.get_web_grounding_native_search_enabled():
+            return "native_search_disabled"
+        provider = model_config.get_web_grounding_search_provider()
+        if provider != "dashscope_qwen":
+            return f"native_search_provider_unsupported:{provider}"
+        api_key = (
+            api_key_override
+            if api_key_override is not None
+            else dashscope_api_key()
+        )
+        base_url = dashscope_base_url()
+        model = dashscope_model()
+        if not api_key or not base_url or not model:
+            return "native_search_config_incomplete"
+        protocol = model_config.get_web_grounding_search_protocol()
+        hostname = urlparse(base_url).hostname or ""
+        if (
+            "dashscope" not in protocol.casefold()
+            and "百炼" not in protocol
+            and "dashscope" not in hostname.casefold()
+        ):
+            return "native_search_provider_incompatible"
+        return ""
+    except Exception:
+        return "native_search_config_unavailable"
+
+
 def responses_url_from_base(base_url: str) -> str:
     base = str(base_url or "").strip().rstrip("/")
     if not base:
@@ -72,14 +107,14 @@ def visual_search_provider_order() -> tuple[str, ...]:
 
     available = {
         "tavily": bool(tavily_api_key()),
-        "dashscope_web_search_image": bool(dashscope_api_key()),
+        "dashscope_web_search_image": not dashscope_native_search_unavailable_reason(),
     }
     providers = tuple(
         provider
         for provider in DEFAULT_VISUAL_SEARCH_PROVIDERS
         if available[provider]
     )
-    return providers or DEFAULT_VISUAL_SEARCH_PROVIDERS
+    return providers
 
 
 def visual_search_min_results_for_fallback() -> int:

@@ -122,6 +122,78 @@ def test_enabled_grounding_requires_global_or_override_llm() -> None:
     )
 
 
+def test_grounding_accepts_generic_vlm_validation_with_tavily_search() -> None:
+    payload = _config()
+    payload["llm"].update(
+        {
+            "model_name": "generic-text-model",
+            "base_url": "https://text.example.test/v1",
+            "protocol": "OpenAI 协议",
+        },
+    )
+    payload["vlm"].update(
+        {
+            "enabled": True,
+            "use_llm": False,
+            "model_name": "generic-vision-model",
+            "api_key": "vision-key",
+            "base_url": "https://vision.example.test/v1",
+        },
+    )
+    payload["grounding"]["validation_source"] = "vlm"
+
+    model_routes._ensure_grounding_model_configured(
+        ModelConfigData.model_validate(payload),
+    )
+
+
+def test_grounding_rejects_non_search_llm_when_tavily_is_absent() -> None:
+    payload = _config()
+    payload["grounding"]["tavily_api_key"] = ""
+    payload["llm"].update(
+        {
+            "model_name": "generic-text-model",
+            "base_url": "https://text.example.test/v1",
+            "protocol": "OpenAI 协议",
+        },
+    )
+
+    with pytest.raises(ValidationError, match="不支持.*原生 web_search"):
+        model_routes._ensure_grounding_model_configured(
+            ModelConfigData.model_validate(payload),
+        )
+
+
+def test_load_migrates_legacy_grounding_model_to_search_and_validation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path.resolve()))
+    config_path = (tmp_path / "config" / "model_config.json").resolve()
+    monkeypatch.setenv("CREATOR_MODEL_CONFIG_PATH", str(config_path))
+    payload = _config()
+    payload["grounding"].update(
+        {
+            "reuse_llm": False,
+            "model_name": "legacy-qwen",
+            "api_key": "legacy-key",
+            "base_url": (
+                "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            ),
+            "protocol": "DashScope（百炼）",
+        },
+    )
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = model_routes.load_model_config(include_environment=False)
+
+    assert loaded.grounding.validation_source == "custom"
+    assert loaded.grounding.search_reuse_llm is False
+    assert loaded.grounding.search_model_name == "legacy-qwen"
+    assert loaded.grounding.search_api_key == "legacy-key"
+
+
 def test_model_config_is_single_file_native_and_idempotent(
     tmp_path,
     monkeypatch,
@@ -176,7 +248,15 @@ def test_model_config_is_single_file_native_and_idempotent(
         "protocol": "OpenAI 协议",
         "custom_protocol": "",
         "reuse_llm": True,
+        "validation_source": "llm",
         "tavily_api_key": "tvly-test",
+        "native_search_enabled": True,
+        "search_provider": "dashscope_qwen",
+        "search_reuse_llm": True,
+        "search_model_name": "",
+        "search_api_key": "",
+        "search_base_url": "",
+        "search_protocol": "DashScope（百炼）",
     }
     assert loaded.json()["oss"] == {
         "enabled": False,

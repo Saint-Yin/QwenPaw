@@ -142,11 +142,49 @@
             "type": "password",
             "required": false,
             "placeholder": "tvly-...",
-            "help": "Optional. Provider policy is fixed: Tavily first, then the built-in Qwen search fallback."
+            "help": "Optional primary text and image retrieval provider."
+          },
+          {
+            "name": "native_search_enabled",
+            "label": "Qwen Native Search Fallback",
+            "type": "select",
+            "required": false,
+            "default": "true",
+            "options": ["true", "false"],
+            "help": "Uses DashScope Responses web_search/web_search_image only when the selected search adapter is compatible."
+          },
+          {
+            "name": "search_reuse_llm",
+            "label": "Reuse Creator LLM for Search",
+            "type": "select",
+            "required": false,
+            "default": "true",
+            "options": ["true", "false"]
+          },
+          {
+            "name": "search_api_key",
+            "label": "Qwen Search API Key",
+            "type": "password",
+            "required": false,
+            "help": "Used only when search_reuse_llm is false."
+          },
+          {
+            "name": "search_model",
+            "label": "Qwen Search Model",
+            "type": "text",
+            "required": false,
+            "help": "Used only when search_reuse_llm is false."
+          },
+          {
+            "name": "search_base_url",
+            "label": "Qwen Search Base URL",
+            "type": "text",
+            "required": false,
+            "help": "Used only when search_reuse_llm is false."
           },
           {
             "name": "reuse_llm",
-            "label": "Reuse Creator LLM",
+            "label": "Reuse Creator LLM for Validation",
             "type": "select",
             "required": false,
             "default": "true",

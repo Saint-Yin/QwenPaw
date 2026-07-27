@@ -31,7 +31,15 @@ const emptyConfig = {
     protocol: "OpenAI 协议",
     custom_protocol: "",
     reuse_llm: true,
+    validation_source: "llm" as const,
     tavily_api_key: "",
+    native_search_enabled: true,
+    search_provider: "dashscope_qwen" as const,
+    search_reuse_llm: true,
+    search_model_name: "",
+    search_api_key: "",
+    search_base_url: "",
+    search_protocol: "DashScope（百炼）",
   },
   image: {
     enabled: false,
@@ -88,7 +96,15 @@ describe("ModelConfigModal configuration lifecycle", () => {
       {
         match: "/models/config",
         method: "GET",
-        response: { json: emptyConfig },
+        response: {
+          json: {
+            ...emptyConfig,
+            grounding: {
+              ...emptyConfig.grounding,
+              tavily_api_key: "tvly-test",
+            },
+          },
+        },
       },
       {
         match: "/models/test",
@@ -135,7 +151,7 @@ describe("ModelConfigModal configuration lifecycle", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
   });
 
-  it("shows fixed Grounding providers and can disable grounding without exposing runtime budgets", async () => {
+  it("shows separate Grounding search and validation sections and can disable grounding", async () => {
     const onClose = vi.fn();
     const { calls } = installMockFetch([
       {
@@ -159,13 +175,12 @@ describe("ModelConfigModal configuration lifecycle", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /Grounding/ }),
     );
-    expect(screen.getByText("Tavily → Qwen Web Search")).toBeInTheDocument();
-    expect(
-      screen.getByText("Tavily Images → Qwen web_search_image"),
-    ).toBeInTheDocument();
-    expect(screen.getAllByText("tavily/qwen3.7-plus")).toHaveLength(2);
-    expect(screen.queryByText("复用 qwen3.7-plus")).not.toBeInTheDocument();
+    expect(screen.getByText("1. 搜索")).toBeInTheDocument();
+    expect(screen.getByText("2. 验证")).toBeInTheDocument();
+    expect(screen.getByText("搜索复用 LLM 配置")).toBeInTheDocument();
     expect(screen.getByText("复用 LLM 配置")).toBeInTheDocument();
+    expect(screen.getByText(/Tavily 优先/)).toBeInTheDocument();
+    expect(screen.queryByText("复用 qwen3.7-plus")).not.toBeInTheDocument();
     expect(screen.queryByText("超时、重试与来源上限")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("checkbox", { name: "启用 Grounding" }));

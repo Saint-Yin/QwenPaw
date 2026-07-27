@@ -48,7 +48,7 @@ def test_dashscope_model_falls_back_when_model_config_raises(monkeypatch):
 
     monkeypatch.setattr(
         provider_config.model_config,
-        "get_web_grounding_model_name",
+        "get_web_grounding_search_model_name",
         fail_model_name,
     )
 
@@ -2442,6 +2442,37 @@ def test_search_web_reports_when_both_provider_keys_are_missing(monkeypatch):
         "tavily_api_key_missing",
         "dashscope_web_search_api_key_missing",
     ]
+
+
+def test_search_web_skips_incompatible_native_search_model(monkeypatch):
+    monkeypatch.setattr(provider_search, "_tavily_api_key", lambda: "")
+    monkeypatch.setattr(
+        provider_search,
+        "_dashscope_web_search_api_key",
+        lambda: "generic-key",
+    )
+    monkeypatch.setattr(
+        provider_search,
+        "_dashscope_native_search_unavailable_reason",
+        lambda **kwargs: "native_search_provider_incompatible",
+    )
+
+    async def fail_native_search(*args, **kwargs):
+        raise AssertionError("incompatible model must not receive web_search")
+
+    monkeypatch.setattr(
+        provider_search,
+        "_search_dashscope_web",
+        fail_native_search,
+    )
+
+    result = asyncio.run(web_grounding.search_web("Erling Haaland"))
+
+    assert result["providers_attempted"] == []
+    assert (
+        "dashscope_web_search:native_search_provider_incompatible"
+        in result["issues"]
+    )
 
 
 def test_public_provider_helpers_are_removed():

@@ -142,8 +142,8 @@ def _is_media_related_error(text: str) -> bool:
     return any(phrase in text_lower for phrase in _MEDIA_REJECT_PHRASES)
 
 
-def _is_dashscope_provider() -> bool:
-    host = urlparse(model_config.get_vlm_base_url()).hostname or ""
+def _is_dashscope_provider(base_url: str) -> bool:
+    host = urlparse(base_url).hostname or ""
     return "dashscope" in host
 
 
@@ -151,6 +151,7 @@ async def _transport_local_media_part(
     part: dict,
     api_key: str,
     model_name: str,
+    base_url: str,
 ) -> tuple[dict, bool]:
     """Replace a local media URL with a provider-transportable URL.
 
@@ -170,7 +171,7 @@ async def _transport_local_media_part(
         return part, False
     fallback = "video/mp4" if part_type == "video_url" else "image/png"
     transported = dict(part)
-    if _is_dashscope_provider():
+    if _is_dashscope_provider(base_url):
         try:
             resolved = await upload_local_file_to_dashscope_temp(
                 local_path,
@@ -240,6 +241,7 @@ async def chat_completion(
             normalized,
             api_key,
             model_name,
+            base_url,
         )
         uses_temp_oss = uses_temp_oss or is_temp_oss
         provider_content.append(normalized)

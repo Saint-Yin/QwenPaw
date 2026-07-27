@@ -84,3 +84,35 @@ def test_grounding_can_override_creator_llm():
         assert config.get_web_grounding_model_name() == "grounding-qwen"
     finally:
         config.reset_request_tool_configs(token)
+
+
+def test_grounding_search_and_validation_models_are_independent(monkeypatch):
+    monkeypatch.setattr(config, "get_vlm_api_key", lambda: "verifier-key")
+    monkeypatch.setattr(
+        config,
+        "get_vlm_base_url",
+        lambda: "https://vision.example.test/v1",
+    )
+    monkeypatch.setattr(config, "get_vlm_model_name", lambda: "generic-vlm")
+    token = config.set_request_tool_configs(
+        {
+            config.CREATOR_GROUNDING_CONFIG_TOOL: {
+                "enabled": True,
+                "validation_source": "vlm",
+                "search_reuse_llm": False,
+                "search_api_key": "search-key",
+                "search_base_url": (
+                    "https://dashscope.aliyuncs.com/compatible-mode/v1"
+                ),
+                "search_model": "qwen3.7-plus",
+                "search_protocol": "DashScope（百炼）",
+            },
+        },
+    )
+    try:
+        assert config.get_web_grounding_model_api_key() == "verifier-key"
+        assert config.get_web_grounding_model_name() == "generic-vlm"
+        assert config.get_web_grounding_search_api_key() == "search-key"
+        assert config.get_web_grounding_search_model_name() == "qwen3.7-plus"
+    finally:
+        config.reset_request_tool_configs(token)
