@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-"""Non-destructive smoke tests for the current Creator shell."""
 
 from uuid import uuid4
 

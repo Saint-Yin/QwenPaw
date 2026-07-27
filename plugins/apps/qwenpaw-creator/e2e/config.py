@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-"""Configuration for the schema-v2 Timeline/Element browser suite."""
 
 from __future__ import annotations
 

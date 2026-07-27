@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-"""Page object for the retained origin/main ProjectComposer surface."""
 from __future__ import annotations
 
 import re

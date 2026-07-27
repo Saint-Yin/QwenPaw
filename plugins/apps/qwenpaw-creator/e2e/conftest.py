@@ -2,7 +2,6 @@
 # flake8: noqa: E501
 # pylint: disable=redefined-outer-name,use-sequence-for-iteration
 # pylint: disable=wrong-import-position
-"""Shared fixtures for the file-native Creator browser acceptance suite."""
 
 from __future__ import annotations
 

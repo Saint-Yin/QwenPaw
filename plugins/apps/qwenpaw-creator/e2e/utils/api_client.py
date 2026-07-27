@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
 # pylint: disable=redefined-outer-name
-"""Small client for the file-native Creator REST surface."""
 
 from __future__ import annotations
 
