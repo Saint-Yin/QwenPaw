@@ -81,7 +81,15 @@ const DEFAULT_CONFIG: ModelConfigData = {
     protocol: "OpenAI 协议",
     custom_protocol: "",
     reuse_llm: true,
+    validation_source: "llm",
     tavily_api_key: "",
+    native_search_enabled: true,
+    search_provider: "dashscope_qwen",
+    search_reuse_llm: true,
+    search_model_name: "",
+    search_api_key: "",
+    search_base_url: "",
+    search_protocol: "DashScope（百炼）",
   },
   asr: {
     enabled: false,
@@ -124,6 +132,57 @@ const DEFAULT_CONFIG: ModelConfigData = {
 
 function hasUsableApiKey(item: ModelConfigItem): boolean {
   return item.api_key !== undefined && item.api_key.length > 0;
+}
+
+function groundingValidationModel(config: ModelConfigData): ModelConfigItem {
+  if (config.grounding.validation_source === "llm") return config.llm;
+  if (config.grounding.validation_source === "vlm") {
+    return config.vlm.use_llm ? config.llm : config.vlm;
+  }
+  return config.grounding;
+}
+
+function groundingSearchModel(config: ModelConfigData): ModelConfigItem {
+  if (config.grounding.search_reuse_llm) return config.llm;
+  return {
+    enabled: config.grounding.native_search_enabled,
+    model_name: config.grounding.search_model_name,
+    api_key: config.grounding.search_api_key,
+    base_url: config.grounding.search_base_url,
+    protocol: config.grounding.search_protocol,
+    custom_protocol: "",
+  };
+}
+
+/**
+ * Check whether a model's protocol/host indicates DashScope/Qwen native
+ * search capability. Mirrors the backend ``dashscope_native_search_unavailable_reason``
+ * hostname extraction so UI and server agree on edge-case URLs.
+ */
+export function supportsQwenNativeSearch(item: ModelConfigItem): boolean {
+  const protocol = item.protocol.toLocaleLowerCase();
+  if (protocol.includes("dashscope") || item.protocol.includes("百炼"))
+    return true;
+  try {
+    const host = new URL(item.base_url).hostname.toLocaleLowerCase();
+    return host.includes("dashscope");
+  } catch {
+    return false;
+  }
+}
+
+function groundingSearchLabel(config: ModelConfigData): string {
+  const providers: string[] = [];
+  if (config.grounding.tavily_api_key) providers.push("tavily");
+  const searchModel = groundingSearchModel(config);
+  if (
+    config.grounding.native_search_enabled &&
+    searchModel.model_name &&
+    supportsQwenNativeSearch(searchModel)
+  ) {
+    providers.push(searchModel.model_name);
+  }
+  return providers.join("/");
 }
 
 interface Props {
@@ -212,12 +271,22 @@ export default function ModelConfigModal({ open, onClose }: Props) {
   const loadConfig = useCallback(async () => {
     try {
       const data = await getModelConfig();
+      const receivedGrounding = data.grounding as Partial<GroundingConfig>;
+      const validationSource =
+        receivedGrounding.validation_source ??
+        (receivedGrounding.reuse_llm === false ? "custom" : "llm");
       const merged: ModelConfigData = {
         ...DEFAULT_CONFIG,
         ...data,
         grounding: {
           ...DEFAULT_CONFIG.grounding,
           ...data.grounding,
+          validation_source: validationSource,
+          reuse_llm: validationSource === "llm",
+          search_reuse_llm:
+            receivedGrounding.search_reuse_llm ??
+            receivedGrounding.reuse_llm ??
+            true,
         },
         oss: { ...DEFAULT_CONFIG.oss, ...data.oss },
         executionAuthorization: {
@@ -288,15 +357,19 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       });
       if (field !== "enabled") {
         setTested((prev) => ({ ...prev, [type]: false }));
-        if (
-          (type === "llm" || type === "vlm") &&
-          config.grounding.reuse_llm
-        ) {
-          setTested((prev) => ({ ...prev, grounding: false }));
+        if (type === "llm" || type === "vlm") {
+          setTested((prev) => ({
+            ...prev,
+            groundingValidation: false,
+            groundingSearch:
+              type === "llm" && config.grounding.search_reuse_llm
+                ? false
+                : prev.groundingSearch,
+          }));
         }
       }
     },
-    [config.grounding.reuse_llm],
+    [config.grounding.search_reuse_llm],
   );
 
   const updateGrounding = useCallback(
@@ -307,12 +380,24 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       }));
       if (
         field === "reuse_llm" ||
+        field === "validation_source" ||
         field === "api_key" ||
         field === "base_url" ||
         field === "model_name" ||
         field === "protocol"
       ) {
-        setTested((prev) => ({ ...prev, grounding: false }));
+        setTested((prev) => ({ ...prev, groundingValidation: false }));
+      }
+      if (
+        field === "tavily_api_key" ||
+        field === "native_search_enabled" ||
+        field === "search_reuse_llm" ||
+        field === "search_api_key" ||
+        field === "search_base_url" ||
+        field === "search_model_name" ||
+        field === "search_protocol"
+      ) {
+        setTested((prev) => ({ ...prev, groundingSearch: false }));
       }
     },
     [],
@@ -493,14 +578,10 @@ export default function ModelConfigModal({ open, onClose }: Props) {
   );
 
   const handleGroundingTest = useCallback(async (): Promise<boolean> => {
-    const item: ModelConfigItem = config.grounding.reuse_llm
-      ? config.llm
-      : config.grounding;
+    const item = groundingValidationModel(config);
     if (!item.base_url || !hasUsableApiKey(item) || !item.model_name) {
       message.warning(
-        config.grounding.reuse_llm
-          ? "当前 LLM 配置不完整，请先配置可用的 LLM"
-          : "请填写完整的 Grounding LLM 配置（Base URL、API Key、模型名称）",
+        "请完整配置 Grounding 验证模型（Base URL、API Key、模型名称）",
       );
       return false;
     }
@@ -516,15 +597,15 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       });
       if (!data.ok) {
         message.warning(data.error || "Grounding LLM 图片输入测试失败");
-        setTested((prev) => ({ ...prev, grounding: false }));
+        setTested((prev) => ({ ...prev, groundingValidation: false }));
         return false;
       }
       message.success("Grounding LLM 图片输入测试成功");
-      setTested((prev) => ({ ...prev, grounding: true }));
+      setTested((prev) => ({ ...prev, groundingValidation: true }));
       return true;
     } catch (err) {
       message.error((err as Error).message || "测试 Grounding LLM 时发生错误");
-      setTested((prev) => ({ ...prev, grounding: false }));
+      setTested((prev) => ({ ...prev, groundingValidation: false }));
       return false;
     } finally {
       setTesting((prev) => ({ ...prev, grounding: false }));
@@ -539,18 +620,27 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       if (!prev) throw new Error("快照丢失，请重新打开配置");
 
       if (config.grounding.enabled) {
-        const groundingModel = config.grounding.reuse_llm
-          ? config.llm
-          : config.grounding;
+        const groundingModel = groundingValidationModel(config);
         if (
           !groundingModel.base_url ||
           !groundingModel.model_name ||
           !hasUsableApiKey(groundingModel)
         ) {
           message.warning(
-            config.grounding.reuse_llm
-              ? "Grounding 默认开启，请先完整配置 LLM，或关闭 Grounding"
-              : "请完整配置 Grounding LLM，或关闭 Grounding",
+            "Grounding 默认开启，请完整配置验证模型，或关闭 Grounding",
+          );
+          return;
+        }
+        const searchModel = groundingSearchModel(config);
+        const nativeSearchReady =
+          config.grounding.native_search_enabled &&
+          !!searchModel.base_url &&
+          !!searchModel.model_name &&
+          hasUsableApiKey(searchModel) &&
+          supportsQwenNativeSearch(searchModel);
+        if (!config.grounding.tavily_api_key && !nativeSearchReady) {
+          message.warning(
+            "Grounding 搜索未配置：请填写 Tavily API Key，或配置支持原生搜索的 Qwen/DashScope 模型",
           );
           return;
         }
@@ -754,11 +844,18 @@ export default function ModelConfigModal({ open, onClose }: Props) {
   ) => {
     const { type, label, icon } = meta;
     const isExpanded = expanded.grounding;
-    const verifier = config.grounding.reuse_llm
-      ? config.llm
-      : config.grounding;
+    const verifier = groundingValidationModel(config);
+    const searchModel = groundingSearchModel(config);
     const verifierReady =
       !!verifier.model_name && !!verifier.base_url && hasUsableApiKey(verifier);
+    const nativeSearchReady =
+      config.grounding.native_search_enabled &&
+      !!searchModel.model_name &&
+      !!searchModel.base_url &&
+      hasUsableApiKey(searchModel) &&
+      supportsQwenNativeSearch(searchModel);
+    const searchReady = !!config.grounding.tavily_api_key || nativeSearchReady;
+    const searchLabel = groundingSearchLabel(config);
 
     return (
       <div key={type} className="glass-card">
@@ -786,14 +883,14 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                 borderRadius: 4,
               }}
             >
-              固定提供商策略
+              搜索 / 验证解耦
             </span>
-            {config.grounding.enabled && verifier.model_name && (
+            {config.grounding.enabled && (searchLabel || verifier.model_name) && (
               <span
                 className="text-ellipsis"
                 style={{
                   fontSize: 10,
-                  color: verifierReady
+                  color: verifierReady && searchReady
                     ? "var(--color-success)"
                     : "var(--color-text-tertiary)",
                   background: "var(--color-success-soft)",
@@ -802,8 +899,8 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                   maxWidth: 140,
                 }}
               >
-                {config.grounding.tavily_api_key ? "tavily/" : ""}
-                {verifier.model_name}
+                {searchLabel || "未配置搜索"}
+                {verifier.model_name ? ` · ${verifier.model_name}` : ""}
               </span>
             )}
           </div>
@@ -852,58 +949,20 @@ export default function ModelConfigModal({ open, onClose }: Props) {
               gap: 16,
             }}
           >
+            <div style={{ fontSize: 13, fontWeight: 600 }}>1. 搜索</div>
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 12,
+                border: "1px solid var(--color-border)",
+                borderRadius: 8,
+                padding: "10px 12px",
+                background: "var(--color-bg-secondary)",
+                fontSize: 11,
+                color: "var(--color-text-tertiary)",
               }}
             >
-              {[
-                {
-                  title: "文字来源",
-                  chain: "Tavily → Qwen Web Search",
-                  detail: "Tavily 不可用或无结果时自动回退。",
-                },
-                {
-                  title: "图片来源",
-                  chain: "Tavily Images → Qwen web_search_image",
-                  detail: "结果不足时补充检索；顺序不可调整。",
-                },
-              ].map((provider) => (
-                <div
-                  key={provider.title}
-                  style={{
-                    border: "1px solid var(--color-border)",
-                    borderRadius: 8,
-                    padding: "10px 12px",
-                    background: "var(--color-bg-secondary)",
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: "var(--color-text-tertiary)",
-                    }}
-                  >
-                    {provider.title}
-                  </div>
-                  <div style={{ marginTop: 3, fontSize: 12, fontWeight: 600 }}>
-                    {provider.chain}
-                  </div>
-                  <div
-                    style={{
-                      marginTop: 3,
-                      fontSize: 11,
-                      color: "var(--color-text-tertiary)",
-                    }}
-                  >
-                    {provider.detail}
-                  </div>
-                </div>
-              ))}
+              Tavily 优先；无结果时才回退到 Qwen/DashScope 的
+              web_search 与 web_search_image。其他模型不会被误当作原生搜索模型。
             </div>
-
             <div>
               <label className="field-label">Tavily API Key（可选）</label>
               <Input.Password
@@ -914,33 +973,131 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                 }
               />
             </div>
+            <Checkbox
+              checked={config.grounding.native_search_enabled}
+              onChange={(event) =>
+                updateGrounding("native_search_enabled", event.target.checked)
+              }
+            >
+              启用 Qwen 原生搜索回退
+            </Checkbox>
+            {config.grounding.native_search_enabled && (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <Checkbox
+                    checked={config.grounding.search_reuse_llm}
+                    onChange={(event) =>
+                      updateGrounding("search_reuse_llm", event.target.checked)
+                    }
+                  >
+                    搜索复用 LLM 配置
+                  </Checkbox>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: nativeSearchReady
+                        ? "var(--color-success)"
+                        : "var(--color-text-tertiary)",
+                    }}
+                  >
+                    {searchModel.model_name
+                      ? `当前：${searchModel.model_name}${nativeSearchReady ? "" : "（不支持原生搜索）"}`
+                      : "未配置"}
+                  </span>
+                </div>
+                {!config.grounding.search_reuse_llm && (
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: "0 16px",
+                    }}
+                  >
+                    <div>
+                      <label className="field-label">Qwen 搜索模型</label>
+                      <Input
+                        placeholder="qwen3.7-plus"
+                        value={config.grounding.search_model_name}
+                        onChange={(event) =>
+                          updateGrounding("search_model_name", event.target.value)
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="field-label">Qwen 搜索 API Key</label>
+                      <Input.Password
+                        placeholder="sk-search-..."
+                        value={config.grounding.search_api_key}
+                        onChange={(event) =>
+                          updateGrounding("search_api_key", event.target.value)
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="field-label">Qwen 搜索 Base URL</label>
+                      <Input
+                        placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
+                        value={config.grounding.search_base_url}
+                        onChange={(event) =>
+                          updateGrounding("search_base_url", event.target.value)
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="field-label">搜索 Adapter</label>
+                      <Select
+                        value={config.grounding.search_protocol}
+                        onChange={(value) =>
+                          updateGrounding("search_protocol", value)
+                        }
+                        options={[{ value: "DashScope（百炼）", label: "Qwen / DashScope（百炼）" }]}
+                      />
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
 
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <Checkbox
-                checked={config.grounding.reuse_llm}
-                onChange={(event) =>
-                  updateGrounding("reuse_llm", event.target.checked)
-                }
-              >
-                复用 LLM 配置
-              </Checkbox>
-              {config.grounding.reuse_llm && (
-                <span
+            <div
+              style={{
+                borderTop: "1px solid var(--color-border)",
+                paddingTop: 16,
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              2. 验证
+            </div>
+            <div>
+              <label className="field-label">验证模型来源</label>
+              <Select
+                value={config.grounding.validation_source}
+                onChange={(value) => {
+                  updateGrounding("validation_source", value);
+                  updateGrounding("reuse_llm", value === "llm");
+                }}
+                options={[
+                  { value: "llm", label: "复用 LLM 配置" },
+                  { value: "vlm", label: "复用 VLM 配置" },
+                  { value: "custom", label: "自定义验证模型" },
+                ]}
+              />
+              {config.grounding.validation_source !== "custom" && (
+                <div
                   style={{
+                    marginTop: 6,
                     fontSize: 11,
                     color: verifierReady
                       ? "var(--color-success)"
-                      : "var(--color-danger)",
+                      : "var(--color-text-tertiary)",
                   }}
                 >
-                  {verifier.model_name
-                    ? `当前：${verifier.model_name}`
-                    : "当前 LLM 未配置"}
-                </span>
+                  {verifier.model_name ? `当前：${verifier.model_name}` : "未配置"}
+                </div>
               )}
             </div>
 
-            {!config.grounding.reuse_llm && (
+            {config.grounding.validation_source === "custom" && (
               <div
                 style={{
                   display: "grid",
@@ -949,7 +1106,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                 }}
               >
                 <div>
-                  <label className="field-label">Grounding LLM 模型</label>
+                  <label className="field-label">验证模型</label>
                   <Input
                     placeholder="model"
                     value={config.grounding.model_name}
@@ -959,7 +1116,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                   />
                 </div>
                 <div>
-                  <label className="field-label">Grounding LLM API Key</label>
+                  <label className="field-label">验证模型 API Key</label>
                   <Input.Password
                     placeholder="sk-..."
                     value={config.grounding.api_key}
@@ -969,7 +1126,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                   />
                 </div>
                 <div>
-                  <label className="field-label">Grounding LLM Base URL</label>
+                  <label className="field-label">验证模型 Base URL</label>
                   <Input
                     placeholder="https://api.example.com"
                     value={config.grounding.base_url}
@@ -1001,7 +1158,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                 loading={testing.grounding}
                 onClick={handleGroundingTest}
               >
-                测试 LLM 图片输入
+                测试验证模型图片输入
               </Button>
             </div>
             <div
@@ -1011,8 +1168,8 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                 color: "var(--color-text-tertiary)",
               }}
             >
-              Grounding 默认开启。复用或覆盖的 LLM
-              都必须完整配置；用于图片结果复核时还需支持图片输入。
+              搜索负责取得网页与图片来源；验证模型只负责理解候选图片并筛选结果，
+              可以使用任意兼容图片输入的 VLM，不要求支持 web_search 工具。
             </div>
           </div>
         )}
@@ -1338,17 +1495,16 @@ export default function ModelConfigModal({ open, onClose }: Props) {
             let subText: string;
             let subColor: string;
             if (meta.type === "grounding") {
-              const verifier = config.grounding.reuse_llm
-                ? config.llm
-                : config.grounding;
+              const verifier = groundingValidationModel(config);
+              const searchLabel = groundingSearchLabel(config);
               subText = !config.grounding.enabled
                 ? "已关闭"
-                : verifier.model_name
-                ? `${config.grounding.tavily_api_key ? "tavily/" : ""}${verifier.model_name}`
+                : searchLabel && verifier.model_name
+                ? `${searchLabel} · ${verifier.model_name}`
                 : "未配置";
               subColor = !config.grounding.enabled
                 ? "var(--color-text-tertiary)"
-                : verifier.model_name
+                : searchLabel && verifier.model_name
                 ? "var(--color-success)"
                 : "var(--color-text-tertiary)";
             } else if (
