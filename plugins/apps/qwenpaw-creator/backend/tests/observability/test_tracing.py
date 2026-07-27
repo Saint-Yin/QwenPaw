@@ -103,15 +103,13 @@ def test_trace_span_persists_parent_context_redaction_and_error(
     assert failure["attributes"]["durationMs"] >= 0
 
 
-def test_trace_reader_filters_limits_and_emits_logger(
+def test_trace_reader_filters_and_limits(
     tmp_path,
     monkeypatch,
-    caplog,
 ):
     monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path / "creator-runtime"))
     monkeypatch.setenv("CREATOR_TRACE_DIR", str(tmp_path / "traces"))
     monkeypatch.setenv("CREATOR_TRACING_ENABLED", "true")
-    caplog.set_level("INFO", logger="qwenpaw.creator.trace")
     for index in range(5):
         trace_event(
             "test.record",
@@ -122,9 +120,6 @@ def test_trace_reader_filters_limits_and_emits_logger(
 
     records = read_trace_records(filters={"sessionId": "wanted"}, limit=2)
     assert [item["attributes"]["index"] for item in records] == [2, 4]
-    assert any(
-        '"name":"test.record"' in item.message for item in caplog.records
-    )
 
     with pytest.raises(ValueError, match="between 1 and 2000"):
         read_trace_records(limit=0)
@@ -220,17 +215,17 @@ def test_creator_file_logging_and_trace_are_isolated_by_project(
         assert system_log_path.stat().st_mode & 0o777 == 0o600
         assert project_log_path.stat().st_mode & 0o777 == 0o600
 
+        # Trace records persist only to the trace jsonl files; log files
+        # carry business log lines exclusively.
         system_content = system_log_path.read_text(encoding="utf-8")
         assert "system logging is active" in system_content
-        assert '"name":"creator.test.system_logging"' in system_content
         assert "project file logging is active" not in system_content
-        assert '"name":"creator.test.file_logging"' not in system_content
+        assert '"name":"creator.test.' not in system_content
 
         project_content = project_log_path.read_text(encoding="utf-8")
         assert "project file logging is active" in project_content
-        assert '"name":"creator.test.file_logging"' in project_content
         assert "system logging is active" not in project_content
-        assert '"name":"creator.test.system_logging"' not in project_content
+        assert '"name":"creator.test.' not in project_content
 
         system_traces = list(
             (data_root / "observability" / "traces").glob(
@@ -244,18 +239,15 @@ def test_creator_file_logging_and_trace_are_isolated_by_project(
         )
         assert len(system_traces) == 1
         assert len(project_traces) == 1
-        assert (
-            '"name":"creator.test.system_logging"'
-            in system_traces[0].read_text(encoding="utf-8")
-        )
-        assert (
-            '"name":"creator.test.file_logging"'
-            not in system_traces[0].read_text(encoding="utf-8")
-        )
-        assert (
-            '"name":"creator.test.file_logging"'
-            in project_traces[0].read_text(encoding="utf-8")
-        )
+        assert '"name":"creator.test.system_logging"' in system_traces[
+            0
+        ].read_text(encoding="utf-8")
+        assert '"name":"creator.test.file_logging"' not in system_traces[
+            0
+        ].read_text(encoding="utf-8")
+        assert '"name":"creator.test.file_logging"' in project_traces[
+            0
+        ].read_text(encoding="utf-8")
         assert project_traces[0].stat().st_mode & 0o777 == 0o600
         assert (
             read_trace_records(
@@ -326,16 +318,16 @@ def test_creator_http_dependency_persists_correlated_request_span(
             "creator-trace-*.jsonl",
         ),
     )
-    assert len(
-        list(
-            (
-                data_root
-                / "project-http-1"
-                / "observability"
-                / "traces"
-            ).glob("creator-trace-*.jsonl"),
-        ),
-    ) == 1
+    assert (
+        len(
+            list(
+                (
+                    data_root / "project-http-1" / "observability" / "traces"
+                ).glob("creator-trace-*.jsonl"),
+            ),
+        )
+        == 1
+    )
 
 
 def test_unknown_project_trace_falls_back_to_system_without_creating_project(
@@ -359,10 +351,9 @@ def test_unknown_project_trace_falls_back_to_system_without_creating_project(
         ),
     )
     assert len(system_traces) == 1
-    assert (
-        '"name":"creator.test.unknown_project"'
-        in system_traces[0].read_text(encoding="utf-8")
-    )
+    assert '"name":"creator.test.unknown_project"' in system_traces[
+        0
+    ].read_text(encoding="utf-8")
 
 
 def test_project_observability_symlink_is_rejected_and_never_written(
@@ -398,7 +389,7 @@ def test_project_observability_symlink_is_rejected_and_never_written(
         for handler in logger.handlers:
             handler.flush()
 
-        assert list(outside.iterdir()) == []
+        assert not list(outside.iterdir())
         assert (
             "unsafe project path is a system diagnostic"
             in system_log_path.read_text(encoding="utf-8")
@@ -409,9 +400,8 @@ def test_project_observability_symlink_is_rejected_and_never_written(
             ),
         )
         assert len(system_traces) == 1
-        assert (
-            '"name":"creator.test.symlink_rejected"'
-            in system_traces[0].read_text(encoding="utf-8")
-        )
+        assert '"name":"creator.test.symlink_rejected"' in system_traces[
+            0
+        ].read_text(encoding="utf-8")
     finally:
         shutdown_creator_file_logging()
