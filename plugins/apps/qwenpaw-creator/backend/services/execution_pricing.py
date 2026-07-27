@@ -193,7 +193,7 @@ def _match_prefix_price(
 def _is_same_priced_version(model: str, prefix: str) -> bool:
     """True only for the exact catalog model or its dated official snapshot."""
 
-    remainder = model.casefold()[len(prefix):]
+    remainder = model.casefold()[len(prefix) :]
     return remainder == "" or bool(_DATED_VERSION_SUFFIX.match(remainder))
 
 
@@ -242,7 +242,11 @@ def estimate_image_cost(
         )
 
     # OpenAI Images API：按质量 × 尺寸对应的每张价格。
-    quality_key = quality.casefold() if quality.casefold() in _OPENAI_IMAGE_PRICES else "low"
+    quality_key = (
+        quality.casefold()
+        if quality.casefold() in _OPENAI_IMAGE_PRICES
+        else "low"
+    )
     size = _OPENAI_SIZE_BY_RATIO.get(aspect_ratio, "1536x1024")
     billed_size = _OPENAI_SIZE_ALIAS.get(size, size)
     unit = _OPENAI_IMAGE_PRICES[quality_key].get(

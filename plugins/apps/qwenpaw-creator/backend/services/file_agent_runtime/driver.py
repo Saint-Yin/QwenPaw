@@ -277,13 +277,11 @@ class MalformedJqProjectArguments(FileAgentRuntimeError):
         details: list[str] = []
         if diagnosis.missing_top_level:
             details.append(
-                "missing top-level "
-                + ", ".join(diagnosis.missing_top_level),
+                "missing top-level " + ", ".join(diagnosis.missing_top_level),
             )
         if diagnosis.invalid_top_level:
             details.append(
-                "invalid top-level "
-                + ", ".join(diagnosis.invalid_top_level),
+                "invalid top-level " + ", ".join(diagnosis.invalid_top_level),
             )
         if diagnosis.unexpected_top_level:
             details.append(
@@ -1282,8 +1280,7 @@ class FileCreatorAgentRuntime:
                     if isinstance(exc, MalformedJqProjectArguments):
                         error_result = exc.tool_result()
                         malformed_budget_exhausted = (
-                            exc.attempt
-                            > MAX_MALFORMED_JQ_PROJECT_RETRIES
+                            exc.attempt > MAX_MALFORMED_JQ_PROJECT_RETRIES
                         )
                     else:
                         error_result = {
@@ -2135,8 +2132,7 @@ class FileCreatorAgentRuntime:
                     if isinstance(exc, MalformedJqProjectArguments):
                         result = exc.tool_result()
                         malformed_budget_exhausted = (
-                            exc.attempt
-                            > MAX_MALFORMED_JQ_PROJECT_RETRIES
+                            exc.attempt > MAX_MALFORMED_JQ_PROJECT_RETRIES
                         )
                     else:
                         result = {
@@ -2144,7 +2140,9 @@ class FileCreatorAgentRuntime:
                             "error": {
                                 "type": type(exc).__name__,
                                 "message": str(exc),
-                                "recovery": _specialist_tool_recovery(call.name),
+                                "recovery": _specialist_tool_recovery(
+                                    call.name
+                                ),
                             },
                         }
                 await asyncio.to_thread(

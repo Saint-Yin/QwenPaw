@@ -267,7 +267,7 @@ async def verify_visual_grounding_with_vlm(
     effective_timeout = float(
         timeout
         if timeout is not None
-        else model_config.get_web_grounding_verification_timeout_seconds()
+        else model_config.get_web_grounding_verification_timeout_seconds(),
     )
     max_attempts = model_config.get_web_grounding_verification_max_attempts()
     total_budget = float(
@@ -378,7 +378,9 @@ async def verify_visual_grounding_with_vlm(
             if remaining_after_attempt <= 0:
                 break
             backoff_cap = min(retry_cap, retry_base * (2 ** (attempt - 1)))
-            delay = min(random.uniform(0.0, backoff_cap), remaining_after_attempt)
+            delay = min(
+                random.uniform(0.0, backoff_cap), remaining_after_attempt
+            )
             attempts[-1]["backoff_seconds"] = round(delay, 3)
             if delay > 0:
                 await asyncio.sleep(delay)

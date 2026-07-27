@@ -226,7 +226,9 @@ def test_reference_media_data_url_rejects_oversized_media() -> None:
         reference_media_data_url(oversized, "reference.png")
 
 
-def test_reference_media_uses_bounded_safe_remote_download(monkeypatch) -> None:
+def test_reference_media_uses_bounded_safe_remote_download(
+    monkeypatch,
+) -> None:
     observed = {}
 
     def download(url, *, max_bytes, timeout):

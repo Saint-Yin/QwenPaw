@@ -616,10 +616,14 @@ def _grounding_bool(
 
 
 def get_web_grounding_validation_source() -> str:
-    source = _grounding_value(
-        "validation_source",
-        "WEB_GROUNDING_VALIDATION_SOURCE",
-    ).strip().casefold()
+    source = (
+        _grounding_value(
+            "validation_source",
+            "WEB_GROUNDING_VALIDATION_SOURCE",
+        )
+        .strip()
+        .casefold()
+    )
     if source in {"llm", "vlm", "custom"}:
         return source
     env_name = (
@@ -683,11 +687,15 @@ def get_web_grounding_native_search_enabled() -> bool:
 
 
 def get_web_grounding_search_provider() -> str:
-    provider = _grounding_value(
-        "search_provider",
-        "WEB_GROUNDING_SEARCH_PROVIDER",
-        "dashscope_qwen",
-    ).strip().casefold()
+    provider = (
+        _grounding_value(
+            "search_provider",
+            "WEB_GROUNDING_SEARCH_PROVIDER",
+            "dashscope_qwen",
+        )
+        .strip()
+        .casefold()
+    )
     return provider or "dashscope_qwen"
 
 

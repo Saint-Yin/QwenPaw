@@ -69,7 +69,9 @@ def _find_element(
         "timelines",
         "items",
     ).items():
-        element = _items(_record(raw_timeline), "elements_by_id").get(element_id)
+        element = _items(_record(raw_timeline), "elements_by_id").get(
+            element_id
+        )
         if isinstance(element, dict):
             return timeline_id, element
     return None
@@ -308,7 +310,13 @@ def _rebind_motion_copy(
     total_weight = sum(item[4] for item in affected)
     consumed_weight = 0
     consumed_copy = 0
-    for position, (index, normalized, local_start, local_end, weight) in enumerate(
+    for position, (
+        index,
+        normalized,
+        local_start,
+        local_end,
+        weight,
+    ) in enumerate(
         affected,
     ):
         consumed_weight += weight
@@ -429,12 +437,9 @@ def _apply_element_path(
                     # deterministic fallback rather than rendering stale text.
                     creation["motion"] = None
         elif (
-            (
-                field_name in _OVERLAY_GENERATION_INPUT_FIELDS
-                or (field_name == "text" and overlay_kind == "motion")
-            )
-            and creation.get("motion") is not None
-        ):
+            field_name in _OVERLAY_GENERATION_INPUT_FIELDS
+            or (field_name == "text" and overlay_kind == "motion")
+        ) and creation.get("motion") is not None:
             # Styling/prompt changes intentionally request a new projection.
             creation["motion"] = None
         if generation_input_changed:

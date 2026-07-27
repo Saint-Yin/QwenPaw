@@ -248,9 +248,8 @@ def load_model_config(*, include_environment: bool = True) -> ModelConfigData:
     grounding_explicit = (
         grounding_section if isinstance(grounding_section, dict) else {}
     )
-    if (
-        "validation_source" not in grounding_explicit
-        and not os.environ.get("WEB_GROUNDING_VALIDATION_SOURCE")
+    if "validation_source" not in grounding_explicit and not os.environ.get(
+        "WEB_GROUNDING_VALIDATION_SOURCE"
     ):
         base["grounding"]["validation_source"] = (
             "llm" if base["grounding"].get("reuse_llm", True) else "custom"
@@ -258,9 +257,8 @@ def load_model_config(*, include_environment: bool = True) -> ModelConfigData:
     base["grounding"]["reuse_llm"] = (
         base["grounding"].get("validation_source") == "llm"
     )
-    if (
-        "search_reuse_llm" not in grounding_explicit
-        and not os.environ.get("WEB_GROUNDING_SEARCH_REUSE_LLM")
+    if "search_reuse_llm" not in grounding_explicit and not os.environ.get(
+        "WEB_GROUNDING_SEARCH_REUSE_LLM"
     ):
         # Before retrieval and verification were split, both reused the same
         # model selection. Preserve that behavior when loading an old file.
@@ -337,7 +335,9 @@ def _grounding_search_model(data: ModelConfigData) -> ModelConfigItem:
 def _supports_dashscope_native_search(item: ModelConfigItem) -> bool:
     protocol = item.protocol.casefold()
     host = urlparse(item.base_url).hostname or ""
-    return "dashscope" in protocol or "百炼" in item.protocol or "dashscope" in host
+    return (
+        "dashscope" in protocol or "百炼" in item.protocol or "dashscope" in host
+    )
 
 
 def _ensure_grounding_model_configured(data: ModelConfigData) -> None:
@@ -353,10 +353,7 @@ def _ensure_grounding_model_configured(data: ModelConfigData) -> None:
         }[grounding.validation_source]
         # When VLM reuses the LLM config, the missing piece is actually the
         # LLM, not the VLM — say so to avoid confusing the user.
-        if (
-            grounding.validation_source == "vlm"
-            and data.vlm.use_llm
-        ):
+        if grounding.validation_source == "vlm" and data.vlm.use_llm:
             raise ValidationError(
                 "Grounding 验证模型复用了 LLM 配置，但 LLM 尚未完整配置；"
                 "请完整配置 LLM 的 Base URL、API Key 和模型名称，或关闭 Grounding",

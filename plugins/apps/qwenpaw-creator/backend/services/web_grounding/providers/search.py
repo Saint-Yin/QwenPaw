@@ -246,7 +246,7 @@ async def search_web(
                 issues.append(
                     "dashscope_web_search_api_key_missing"
                     if not native_search_key
-                    else f"dashscope_web_search:{native_search_issue}"
+                    else f"dashscope_web_search:{native_search_issue}",
                 )
                 logger.info(
                     "Web grounding provider skipped query=%r provider=dashscope_web_search reason=%s",
@@ -312,7 +312,7 @@ async def search_visual_refs(
         issues.append(
             "dashscope_web_search_image_api_key_missing"
             if not native_search_key
-            else f"dashscope_web_search_image:{native_search_issue}"
+            else f"dashscope_web_search_image:{native_search_issue}",
         )
     async with httpx.AsyncClient(
         timeout=effective_timeout,
@@ -362,7 +362,7 @@ async def search_visual_refs(
                     issues.append(
                         "dashscope_web_search_image_api_key_missing"
                         if not native_search_key
-                        else f"dashscope_web_search_image:{native_search_issue}"
+                        else f"dashscope_web_search_image:{native_search_issue}",
                     )
                     logger.info(
                         "Visual grounding provider skipped query=%r provider=dashscope_web_search_image reason=%s",

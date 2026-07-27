@@ -118,9 +118,7 @@ def test_plugin_manifest_declares_every_creator_config_tool(
     monkeypatch,
 ) -> None:
     manifest = json.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
-    tools = {
-        item["name"]: item for item in manifest["meta"]["tools"]
-    }
+    tools = {item["name"]: item for item in manifest["meta"]["tools"]}
     assert set(tools) == {
         "creator_text_model",
         "creator_vlm_model",

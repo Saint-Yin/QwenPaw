@@ -49,7 +49,9 @@ _CAPTURE_BASE_TIMEOUT_SECONDS = 120
 _CAPTURE_PER_FRAME_SECONDS = 3.0
 _PROBE_CACHE_MAX_ITEMS = 128
 _FRAME_CACHE_MAX_ITEMS = 32
-_probe_cache: OrderedDict[tuple[str, int, int, str], MotionDocumentProbe] = OrderedDict()
+_probe_cache: OrderedDict[
+    tuple[str, int, int, str], MotionDocumentProbe
+] = OrderedDict()
 _probe_cache_lock = threading.Lock()
 
 # Self-contained capture worker: it imports nothing from this backend, reads

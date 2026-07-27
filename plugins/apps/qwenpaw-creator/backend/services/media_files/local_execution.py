@@ -596,10 +596,7 @@ class FfmpegLocalMediaRunner:
             # 文案已更新但动效文档还是旧版：跳过过期文档，用回退模板
             # 把当前文案烧进成片，绝不把旧文案交付给用户。
             motion = None
-            styled_error = (
-                f"{overlay['kind']} 动效文档与当前文案不一致，"
-                "已用回退样式渲染最新文案"
-            )
+            styled_error = f"{overlay['kind']} 动效文档与当前文案不一致，" "已用回退样式渲染最新文案"
         if (
             isinstance(motion, Mapping)
             and str(motion.get("html") or "").strip()

@@ -52,7 +52,9 @@ CONVERSATION_ID = "conversation-1"
 GOAL_ID = "goal-1"
 
 
-def test_grounding_tool_is_absent_when_grounding_is_disabled(monkeypatch) -> None:
+def test_grounding_tool_is_absent_when_grounding_is_disabled(
+    monkeypatch,
+) -> None:
     from services.file_agent_runtime import driver as driver_module
 
     monkeypatch.setattr(
@@ -286,9 +288,7 @@ def test_malformed_jq_project_arguments_recover_with_a_fresh_small_call(
             )
         if turn == 3:
             rejected = json.loads(messages[-1]["content"])
-            assert rejected["error"]["type"] == (
-                "MalformedJqProjectArguments"
-            )
+            assert rejected["error"]["type"] == ("MalformedJqProjectArguments")
             assert rejected["error"]["retry"] == {
                 "attempt": 1,
                 "retriesRemaining": 2,
@@ -297,9 +297,9 @@ def test_malformed_jq_project_arguments_recover_with_a_fresh_small_call(
             assert rejected["error"]["details"]["missingTopLevel"] == [
                 "program",
             ]
-            assert rejected["error"]["details"][
-                "nestedRequiredPaths"
-            ] == ["$.jsonArgs.timeline_elements.elem-01.program"]
+            assert rejected["error"]["details"]["nestedRequiredPaths"] == [
+                "$.jsonArgs.timeline_elements.elem-01.program"
+            ]
             assert "2-3 timeline elements" in rejected["error"]["recovery"]
             assert "ValidationError" not in messages[-1]["content"]
             return AgentModelTurn(

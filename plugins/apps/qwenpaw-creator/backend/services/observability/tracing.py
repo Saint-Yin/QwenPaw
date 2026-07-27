@@ -42,7 +42,7 @@ from .config import (
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
-_TRACE_LOGGER = setup_logger('tracing')
+_TRACE_LOGGER = setup_logger("tracing")
 _CONTEXT: ContextVar[dict[str, str]] = ContextVar(
     "creator_trace_context",
     default={},
@@ -214,9 +214,12 @@ def _write(record: Mapping[str, Any]) -> None:
         project_id = safe.get("projectId")
         if isinstance(project_id, str) and project_id:
             try:
-                path = _trace_root(
-                    project_id=project_id,
-                ) / f"creator-trace-{day}.jsonl"
+                path = (
+                    _trace_root(
+                        project_id=project_id,
+                    )
+                    / f"creator-trace-{day}.jsonl"
+                )
             except Exception:
                 path = _trace_root() / f"creator-trace-{day}.jsonl"
         else:
@@ -233,7 +236,9 @@ def _write(record: Mapping[str, Any]) -> None:
             finally:
                 os.close(descriptor)
         except Exception:
-            _TRACE_LOGGER.exception(f"failed to write creator trace to {str(path)}", exc_info=True)
+            _TRACE_LOGGER.exception(
+                f"failed to write creator trace to {str(path)}", exc_info=True
+            )
     except Exception:
         # Bad diagnostic data (for example a NaN provider metric) must never
         # fail the business operation that attempted to emit it.

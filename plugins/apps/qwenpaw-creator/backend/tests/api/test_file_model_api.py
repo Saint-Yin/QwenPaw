@@ -177,9 +177,7 @@ def test_load_migrates_legacy_grounding_model_to_search_and_validation(
             "reuse_llm": False,
             "model_name": "legacy-qwen",
             "api_key": "legacy-key",
-            "base_url": (
-                "https://dashscope.aliyuncs.com/compatible-mode/v1"
-            ),
+            "base_url": ("https://dashscope.aliyuncs.com/compatible-mode/v1"),
             "protocol": "DashScope（百炼）",
         },
     )

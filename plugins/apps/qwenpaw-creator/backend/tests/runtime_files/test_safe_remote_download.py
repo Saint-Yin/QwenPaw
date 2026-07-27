@@ -50,7 +50,9 @@ def _install_transport(
     return observed
 
 
-def test_public_url_validation_rejects_private_literal_and_dns_result() -> None:
+def test_public_url_validation_rejects_private_literal_and_dns_result() -> (
+    None
+):
     with pytest.raises(SafeRemoteDownloadError, match="私有或保留网络"):
         validate_public_remote_url("http://127.0.0.1/metadata")
 
@@ -92,11 +94,14 @@ def test_safe_download_bytes_disables_redirects_proxies_and_compression(
 
     observed = _install_transport(monkeypatch, handler)
 
-    assert safe_download_bytes(
-        "https://public.example/image.png",
-        max_bytes=6,
-        timeout=5.0,
-    ) == b"abcdef"
+    assert (
+        safe_download_bytes(
+            "https://public.example/image.png",
+            max_bytes=6,
+            timeout=5.0,
+        )
+        == b"abcdef"
+    )
     assert observed["follow_redirects"] is False
     assert observed["trust_env"] is False
     assert observed["headers"]["Accept-Encoding"] == "identity"

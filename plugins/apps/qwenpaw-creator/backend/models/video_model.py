@@ -105,8 +105,7 @@ async def _resolve_reference_media_url(
         kind = _reference_media_kind(filename)
         if backend == "wan":
             media_type = (
-                mimetypes.guess_type(filename)[0]
-                or "application/octet-stream"
+                mimetypes.guess_type(filename)[0] or "application/octet-stream"
             )
             if url.startswith(("http://", "https://")):
                 with tempfile.TemporaryDirectory(

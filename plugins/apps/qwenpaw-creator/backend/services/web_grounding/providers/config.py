@@ -20,9 +20,12 @@ def tavily_api_key() -> str:
 
 def dashscope_api_key() -> str:
     try:
-        return model_config.get_web_grounding_search_api_key() or os.environ.get(
-            "DASHSCOPE_API_KEY",
-            "",
+        return (
+            model_config.get_web_grounding_search_api_key()
+            or os.environ.get(
+                "DASHSCOPE_API_KEY",
+                "",
+            )
         )
     except Exception:
         return os.environ.get("DASHSCOPE_API_KEY", "")
@@ -37,7 +40,10 @@ def dashscope_base_url() -> str:
 
 def dashscope_model() -> str:
     try:
-        return model_config.get_web_grounding_search_model_name() or "qwen3.7-plus"
+        return (
+            model_config.get_web_grounding_search_model_name()
+            or "qwen3.7-plus"
+        )
     except Exception:
         return "qwen3.7-plus"
 

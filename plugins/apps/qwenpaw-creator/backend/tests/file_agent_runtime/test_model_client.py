@@ -358,7 +358,9 @@ def test_agentscope_client_repairs_truncated_native_tool_argument_json() -> (
     assert repaired_call.strict_json_error is not None
 
 
-def test_agentscope_client_rejects_repaired_non_object_tool_arguments() -> None:
+def test_agentscope_client_rejects_repaired_non_object_tool_arguments() -> (
+    None
+):
     class NonObjectToolArgumentsModel:
         model = "qwen3.7-plus"
 

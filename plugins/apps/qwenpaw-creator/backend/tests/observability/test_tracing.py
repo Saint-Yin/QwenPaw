@@ -235,18 +235,15 @@ def test_creator_file_logging_and_trace_are_isolated_by_project(
         )
         assert len(system_traces) == 1
         assert len(project_traces) == 1
-        assert (
-            '"name":"creator.test.system_logging"'
-            in system_traces[0].read_text(encoding="utf-8")
-        )
-        assert (
-            '"name":"creator.test.file_logging"'
-            not in system_traces[0].read_text(encoding="utf-8")
-        )
-        assert (
-            '"name":"creator.test.file_logging"'
-            in project_traces[0].read_text(encoding="utf-8")
-        )
+        assert '"name":"creator.test.system_logging"' in system_traces[
+            0
+        ].read_text(encoding="utf-8")
+        assert '"name":"creator.test.file_logging"' not in system_traces[
+            0
+        ].read_text(encoding="utf-8")
+        assert '"name":"creator.test.file_logging"' in project_traces[
+            0
+        ].read_text(encoding="utf-8")
         assert project_traces[0].stat().st_mode & 0o777 == 0o600
         assert (
             read_trace_records(
@@ -317,16 +314,16 @@ def test_creator_http_dependency_persists_correlated_request_span(
             "creator-trace-*.jsonl",
         ),
     )
-    assert len(
-        list(
-            (
-                data_root
-                / "project-http-1"
-                / "observability"
-                / "traces"
-            ).glob("creator-trace-*.jsonl"),
-        ),
-    ) == 1
+    assert (
+        len(
+            list(
+                (
+                    data_root / "project-http-1" / "observability" / "traces"
+                ).glob("creator-trace-*.jsonl"),
+            ),
+        )
+        == 1
+    )
 
 
 def test_unknown_project_trace_falls_back_to_system_without_creating_project(
@@ -350,10 +347,9 @@ def test_unknown_project_trace_falls_back_to_system_without_creating_project(
         ),
     )
     assert len(system_traces) == 1
-    assert (
-        '"name":"creator.test.unknown_project"'
-        in system_traces[0].read_text(encoding="utf-8")
-    )
+    assert '"name":"creator.test.unknown_project"' in system_traces[
+        0
+    ].read_text(encoding="utf-8")
 
 
 def test_project_observability_symlink_is_rejected_and_never_written(
@@ -400,9 +396,8 @@ def test_project_observability_symlink_is_rejected_and_never_written(
             ),
         )
         assert len(system_traces) == 1
-        assert (
-            '"name":"creator.test.symlink_rejected"'
-            in system_traces[0].read_text(encoding="utf-8")
-        )
+        assert '"name":"creator.test.symlink_rejected"' in system_traces[
+            0
+        ].read_text(encoding="utf-8")
     finally:
         shutdown_creator_file_logging()
