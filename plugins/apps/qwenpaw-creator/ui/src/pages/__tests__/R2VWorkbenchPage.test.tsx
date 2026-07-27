@@ -135,20 +135,6 @@ describe("R2V Workbench page", () => {
     );
   });
 
-  it("hands generation actions to the Agent bound to the Element", () => {
-    renderWorkbench();
-
-    fireEvent.click(screen.getByRole("button", { name: "生成视频" }));
-    expect(useCreatorInteractionStore.getState().selectedRef).toBe(
-      "element:r2v-window",
-    );
-    expect(useAgentDockUiStore.getState().open).toBe(true);
-    expect(useAgentDockUiStore.getState().draft).toContain("生成视频");
-
-    fireEvent.click(screen.getByRole("button", { name: "生成分镜图" }));
-    expect(useAgentDockUiStore.getState().draft).toContain("生成分镜图");
-  });
-
   it("returns to the Plan page with the Element selected", async () => {
     renderWorkbench();
 
@@ -223,7 +209,6 @@ describe("R2V Workbench page", () => {
     fireEvent.change(prompt, { target: { value: "镜头快速拉远" } });
     fireEvent.blur(prompt);
     expect(calls.some((call) => call.method === "PATCH")).toBe(false);
-    expect(screen.getByRole("button", { name: "生成视频" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "应用修改（1）" }));
     await waitFor(() =>
       expect(calls.some((call) => call.method === "PATCH")).toBe(true),

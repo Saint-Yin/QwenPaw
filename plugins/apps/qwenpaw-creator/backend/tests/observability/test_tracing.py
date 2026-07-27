@@ -215,13 +215,17 @@ def test_creator_file_logging_and_trace_are_isolated_by_project(
         assert system_log_path.stat().st_mode & 0o777 == 0o600
         assert project_log_path.stat().st_mode & 0o777 == 0o600
 
+        # Trace records persist only to the trace jsonl files; log files
+        # carry business log lines exclusively.
         system_content = system_log_path.read_text(encoding="utf-8")
         assert "system logging is active" in system_content
         assert "project file logging is active" not in system_content
+        assert '"name":"creator.test.' not in system_content
 
         project_content = project_log_path.read_text(encoding="utf-8")
         assert "project file logging is active" in project_content
         assert "system logging is active" not in project_content
+        assert '"name":"creator.test.' not in project_content
 
         system_traces = list(
             (data_root / "observability" / "traces").glob(

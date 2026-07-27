@@ -36,6 +36,17 @@ TOKEN_PLAN_BASE_URL = (
     "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
 )
 
+# Exact hostnames of the DashScope OpenAI-compatible endpoints (mainland,
+# international and US), matched against the parsed URL hostname so
+# lookalike domains cannot select the DashScope probe.
+_DASHSCOPE_HOSTNAMES = frozenset(
+    {
+        "dashscope.aliyuncs.com",
+        "dashscope-intl.aliyuncs.com",
+        "dashscope-us.aliyuncs.com",
+    },
+)
+
 
 def _uses_max_completion_tokens(model_id: str) -> bool:
     """Return whether an OpenAI model requires max_completion_tokens."""
@@ -324,13 +335,15 @@ class OpenAIProvider(Provider):
           endpoint and the API key at zero cost.
         * Other providers: fall back to provider-level reachability.
         """
-        host = urlparse(self.base_url).netloc.lower()
-        if "dashscope" in host:
+        host = (urlparse(self.base_url).hostname or "").lower()
+        if host in _DASHSCOPE_HOSTNAMES or host.endswith(
+            ".dashscope.aliyuncs.com",
+        ):
             return await self._check_dashscope_non_chat_model(
                 model_id,
                 timeout,
             )
-        if host.endswith("volces.com"):
+        if host == "volces.com" or host.endswith(".volces.com"):
             return await self._check_ark_non_chat_credentials(
                 model_id,
                 timeout,
