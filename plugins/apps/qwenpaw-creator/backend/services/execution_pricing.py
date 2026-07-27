@@ -120,7 +120,7 @@ _OPENAI_SIZE_ALIAS = {
     "2560x1080": "1536x1024",
 }
 
-# ── Video: DashScope 百炼 万相（元/秒，按输出分辨率） ─────────────────────────
+# ── Video: DashScope 百炼 万相 / HappyHorse（元/秒，按输出分辨率） ───────────
 # help.aliyun.com/zh/model-studio/model-pricing · 华北2（北京）· 2026-07 抄录
 _WAN_VIDEO_SOURCE = "阿里云百炼官网价（元/秒，按输出分辨率）"
 _WAN_VIDEO_PRICES: tuple[tuple[str, dict[str, float]], ...] = (
@@ -138,6 +138,10 @@ _WAN_VIDEO_PRICES: tuple[tuple[str, dict[str, float]], ...] = (
     ("wan2.2-i2v-flash", {"480P": 0.1, "720P": 0.1, "1080P": 0.1}),
     ("wanx2.1-t2v-turbo", {"480P": 0.24, "720P": 0.24}),
     ("wanx2.1-t2v-plus", {"720P": 0.7}),
+    # HappyHorse 参考生视频：按官网原价抄录（官网当前标注限时 6 折/8 折，
+    # 折扣期估算偏高属安全侧，实际以账单为准）。无静音折扣档位。
+    ("happyhorse-1.1-r2v", {"720P": 0.9, "1080P": 1.2}),
+    ("happyhorse-1.0-r2v", {"720P": 0.9, "1080P": 1.6}),
 )
 _WAN_VIDEO_MUTED_PRICES: dict[str, dict[str, float]] = {
     "wan2.6-r2v-flash": {"720P": 0.15, "1080P": 0.25},

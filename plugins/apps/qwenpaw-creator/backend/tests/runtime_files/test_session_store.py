@@ -628,10 +628,119 @@ def test_only_active_agentdock_mutation_persists_review_boundary(tmp_path):
         SESSION_ID,
         "request-review",
     ).is_file()
-    for result in (read_only, hard_stop, initial, idle):
+    # Post-run feedback on a settled Session is still a review boundary: the
+    # user is commenting on completed work, so its related changes must be
+    # gated behind a review exactly like an interrupt.
+    assert idle.review_policy is ReviewPolicy.REQUIRE_REVIEW
+    assert idle.review_boundary is not None
+    assert idle.message.review_boundary == idle.review_boundary
+    assert store.review_boundary_path(
+        PROJECT_ID,
+        SESSION_ID,
+        "request-idle",
+    ).is_file()
+    for result in (read_only, hard_stop, initial):
         assert result.review_policy is ReviewPolicy.AUTO_FIX
         assert result.review_boundary is None
         assert result.message.review_boundary is None
+
+
+def test_idle_agentdock_mutation_without_run_captures_feedback_boundary(
+    tmp_path,
+):
+    """Feedback sent after a run settles must still gate behind a review."""
+
+    root, snapshot, store, _bootstrap = _runtime(tmp_path)
+    _activate_runtime(root, snapshot, store)
+    store.clear_active_run(
+        PROJECT_ID,
+        SESSION_ID,
+        expected_run_id="run-1",
+        status=CreatorSessionStatus.IDLE,
+    )
+
+    idle = store.admit_user_request(
+        PROJECT_ID,
+        SESSION_ID,
+        CONVERSATION_ID,
+        request_id="request-idle-feedback",
+        client_message_id="client-idle-feedback",
+        content_parts=_text("把第二个分镜改成夜景"),
+        channel=MessageChannel.AGENTDOCK,
+        classification=MessageClassification.MUTATION_INSTRUCTION,
+    )
+
+    assert idle.review_policy is ReviewPolicy.REQUIRE_REVIEW
+    assert idle.review_boundary is not None
+    assert idle.review_boundary.interrupted_run_id is None
+    assert idle.review_boundary.request_id == "request-idle-feedback"
+    assert idle.message.review_boundary == idle.review_boundary
+    assert store.review_boundary_path(
+        PROJECT_ID,
+        SESSION_ID,
+        "request-idle-feedback",
+    ).is_file()
+
+
+def test_cancelled_session_feedback_still_captures_review_boundary(tmp_path):
+    """用户停止 Agent 后（CANCELLED，前端展示为待命）发出的修改意见
+    仍是针对已产出内容的反馈，必须捕获 idle-goal 审阅边界。"""
+
+    root, snapshot, store, _bootstrap = _runtime(tmp_path)
+    _activate_runtime(root, snapshot, store)
+    store.clear_active_run(
+        PROJECT_ID,
+        SESSION_ID,
+        expected_run_id="run-1",
+        status=CreatorSessionStatus.CANCELLED,
+    )
+
+    feedback = store.admit_user_request(
+        PROJECT_ID,
+        SESSION_ID,
+        CONVERSATION_ID,
+        request_id="request-cancelled-feedback",
+        client_message_id="client-cancelled-feedback",
+        content_parts=_text("把视频 Prompt 写得更丰富一点"),
+        channel=MessageChannel.AGENTDOCK,
+        classification=MessageClassification.MUTATION_INSTRUCTION,
+    )
+
+    assert feedback.review_policy is ReviewPolicy.REQUIRE_REVIEW
+    assert feedback.review_boundary is not None
+    assert feedback.review_boundary.interrupted_run_id is None
+
+
+def test_first_mainline_request_without_goal_skips_review_boundary(tmp_path):
+    """A Session with no Goal yet is receiving its mainline kick-off.
+
+    The first AgentDock instruction (e.g. after an attachment-driven Project
+    creation) starts the mainline; everything it produces is auto-applied
+    without capturing a ReviewBoundary.
+    """
+
+    root, snapshot, store, _bootstrap = _runtime(tmp_path)
+    _seed_runtime_state(root, snapshot)
+
+    kickoff = store.admit_user_request(
+        PROJECT_ID,
+        SESSION_ID,
+        CONVERSATION_ID,
+        request_id="request-mainline-kickoff",
+        client_message_id="client-mainline-kickoff",
+        content_parts=_text("根据已导入的剧本生成完整短片"),
+        channel=MessageChannel.AGENTDOCK,
+        classification=MessageClassification.MUTATION_INSTRUCTION,
+    )
+
+    assert kickoff.review_policy is ReviewPolicy.AUTO_FIX
+    assert kickoff.review_boundary is None
+    assert kickoff.message.review_boundary is None
+    assert not store.review_boundary_path(
+        PROJECT_ID,
+        SESSION_ID,
+        "request-mainline-kickoff",
+    ).is_file()
 
 
 def test_active_review_admission_requires_durable_project_baseline(tmp_path):

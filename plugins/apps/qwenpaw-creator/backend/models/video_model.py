@@ -22,6 +22,14 @@ from models.media_transport import (
     reference_media_data_url,
     upload_local_file_to_dashscope_temp,
 )
+from models.video_capabilities import (
+    HAPPYHORSE_MAX_DURATION_SECONDS,
+    HAPPYHORSE_MAX_REFERENCE_IMAGES,
+    HAPPYHORSE_MIN_DURATION_SECONDS,
+    HAPPYHORSE_RATIOS,
+    HAPPYHORSE_RESOLUTIONS,
+    is_happyhorse_model,
+)
 from services.runtime_files.safe_remote_download import safe_download_to_file
 from utils.paths import media_path_from_url
 from utils.logger import setup_logger
@@ -197,6 +205,57 @@ def _normalize_seedance_duration(duration: int, model_name: str) -> int:
     return duration
 
 
+def _validate_happyhorse_request(
+    *,
+    reference_count: int,
+    resolution: str,
+    ratio: str,
+    duration: int,
+    model_name: str,
+) -> str:
+    """Enforce the HappyHorse r2v request contract before any upload.
+
+    Returns the normalized resolution.  Constraints follow the official API
+    reference (see ``models.video_capabilities``): 1-9 reference images,
+    720P/1080P output, integer duration in [3, 15], and a fixed ratio set.
+    """
+    if reference_count < 1:
+        raise ModelError(
+            "HappyHorse r2v requires at least 1 reference image",
+            model_name=model_name,
+        )
+    if reference_count > HAPPYHORSE_MAX_REFERENCE_IMAGES:
+        raise ModelError(
+            f"HappyHorse r2v accepts at most {HAPPYHORSE_MAX_REFERENCE_IMAGES} "
+            f"reference images, got {reference_count}",
+            model_name=model_name,
+        )
+    normalized_resolution = (resolution or "720P").upper()
+    if normalized_resolution not in HAPPYHORSE_RESOLUTIONS:
+        raise ModelError(
+            f"HappyHorse r2v resolution must be one of "
+            f"{sorted(HAPPYHORSE_RESOLUTIONS)}, got {resolution!r}",
+            model_name=model_name,
+        )
+    if ratio not in HAPPYHORSE_RATIOS:
+        raise ModelError(
+            f"HappyHorse r2v ratio must be one of "
+            f"{sorted(HAPPYHORSE_RATIOS)}, got {ratio!r}",
+            model_name=model_name,
+        )
+    if (
+        duration < HAPPYHORSE_MIN_DURATION_SECONDS
+        or duration > HAPPYHORSE_MAX_DURATION_SECONDS
+    ):
+        raise ModelError(
+            f"HappyHorse r2v duration must be an integer between "
+            f"{HAPPYHORSE_MIN_DURATION_SECONDS} and "
+            f"{HAPPYHORSE_MAX_DURATION_SECONDS} seconds, got {duration}",
+            model_name=model_name,
+        )
+    return normalized_resolution
+
+
 async def submit_video_task(
     prompt: str,
     reference_image_url: Optional[str] = None,
@@ -204,7 +263,7 @@ async def submit_video_task(
     ratio: str = "16:9",
     duration: int = 5,
     resolution: str = "720p",
-    watermark: bool = True,
+    watermark: bool = False,
     generate_audio: bool = True,
 ) -> str:
     """Submit a Wan2.7 reference-to-video task. Returns task_id."""
@@ -224,22 +283,45 @@ async def submit_video_task(
         all_images.extend(reference_image_url_list)
     uses_seedance = _uses_seedance_protocol()
     upload_backend = "seedance2" if uses_seedance else "wan"
-    for img_url in dict.fromkeys(all_images):
-        if img_url and img_url.strip():
-            resolved_url, media_kind = await _resolve_reference_media_url(
-                img_url.strip(),
-                upload_backend,
+    unique_references = [
+        item.strip()
+        for item in dict.fromkeys(all_images)
+        if item and item.strip()
+    ]
+    uses_happyhorse = not uses_seedance and is_happyhorse_model(model_name)
+    happyhorse_resolution = ""
+    if uses_happyhorse:
+        # Validate before any provider-bound upload so contract violations
+        # fail fast without wasting reference transport.
+        happyhorse_resolution = _validate_happyhorse_request(
+            reference_count=len(unique_references),
+            resolution=resolution,
+            ratio=ratio,
+            duration=duration,
+            model_name=model_name,
+        )
+    for img_url in unique_references:
+        resolved_url, media_kind = await _resolve_reference_media_url(
+            img_url,
+            upload_backend,
+        )
+        if uses_happyhorse and media_kind == "video":
+            raise ModelError(
+                "HappyHorse r2v only accepts image references; replace the "
+                f"video reference ({img_url[:120]}) with images or switch "
+                "the video model to a Wan r2v model",
+                model_name=model_name,
             )
-            media.append(
-                {
-                    "type": (
-                        "reference_video"
-                        if media_kind == "video"
-                        else "reference_image"
-                    ),
-                    "url": resolved_url,
-                },
-            )
+        media.append(
+            {
+                "type": (
+                    "reference_video"
+                    if media_kind == "video"
+                    else "reference_image"
+                ),
+                "url": resolved_url,
+            },
+        )
 
     url = model_config.get_video_submit_url()
     submit_timeout = model_config.get_video_submit_timeout()
@@ -276,19 +358,25 @@ async def submit_video_task(
             "audio": bool(generate_audio),
         }
     else:
+        parameters: dict = {
+            "resolution": resolution.upper() if resolution else "720P",
+            "ratio": ratio,
+            "prompt_extend": False,
+            "watermark": watermark,
+            "duration": duration,
+        }
+        if uses_happyhorse:
+            # HappyHorse documents resolution/ratio/duration/watermark/seed
+            # only; Wan-specific fields would risk InvalidParameter.
+            parameters["resolution"] = happyhorse_resolution
+            parameters.pop("prompt_extend")
         body = {
             "model": model_name,
             "input": {
                 "prompt": prompt,
                 "media": media,
             },
-            "parameters": {
-                "resolution": resolution.upper() if resolution else "720P",
-                "ratio": ratio,
-                "prompt_extend": False,
-                "watermark": watermark,
-                "duration": duration,
-            },
+            "parameters": parameters,
         }
     logger.info(
         f"Submitting video task | model={model_name}, prompt_length={len(prompt)}, "

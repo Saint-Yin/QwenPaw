@@ -10,6 +10,8 @@ export interface MentionRef {
   ref: string;
   name: string;
   type?: string;
+  /** 可预览引用（图片/视频帧）的缩略图；悬浮在 @pill 上时展示。 */
+  thumbnailUrl?: string;
 }
 
 export interface MentionInputHandle {
@@ -62,6 +64,7 @@ function createMentionPill(obj: MentionRef): HTMLSpanElement {
   pill.dataset.ref = obj.ref;
   pill.dataset.name = obj.name;
   if (obj.type) pill.dataset.type = obj.type;
+  if (obj.thumbnailUrl) pill.dataset.thumb = obj.thumbnailUrl;
   pill.textContent = `@${obj.name}`;
   pill.title = "点击移除引用";
   return pill;
@@ -125,6 +128,7 @@ function serialize(root: HTMLElement) {
           ref: element.dataset.ref,
           name: element.dataset.name ?? "",
           type: element.dataset.type || undefined,
+          thumbnailUrl: element.dataset.thumb || undefined,
         });
         return;
       }
@@ -166,6 +170,18 @@ const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
     const savedRange = useRef<Range | null>(null);
     const composing = useRef(false);
     const [empty, setEmpty] = useState(true);
+    const [hoverThumb, setHoverThumb] = useState<string | null>(null);
+
+    const handleThumbHover = (event: ReactMouseEvent<HTMLDivElement>) => {
+      const pill = (event.target as HTMLElement).closest?.(
+        "[data-ref]",
+      ) as HTMLElement | null;
+      const thumb =
+        pill && editorRef.current?.contains(pill)
+          ? pill.dataset.thumb ?? null
+          : null;
+      setHoverThumb(thumb);
+    };
 
     const refresh = () => {
       const editor = editorRef.current;
@@ -467,6 +483,15 @@ const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
 
     return (
       <div className="relative min-w-0 flex-1">
+        {hoverThumb && (
+          <div className="pointer-events-none absolute bottom-full left-0 z-50 mb-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-1 shadow-lg">
+            <img
+              src={hoverThumb}
+              alt="引用预览"
+              className="max-h-36 max-w-[200px] rounded object-contain"
+            />
+          </div>
+        )}
         <div
           ref={editorRef}
           contentEditable={!disabled}
@@ -495,12 +520,14 @@ const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
           onPaste={handlePaste}
           onCopy={handleCopy}
           onMouseUp={saveRange}
+          onMouseOver={handleThumbHover}
+          onMouseLeave={() => setHoverThumb(null)}
           onClick={handleClick}
           onBlur={saveRange}
-          className="max-h-24 min-h-[32px] w-full overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2.5 py-1.5 text-xs leading-6 text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+          className="max-h-24 min-h-[32px] w-full overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2.5 py-1.5 text-[11px] leading-5 text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
         />
         {empty && (
-          <span className="pointer-events-none absolute left-2.5 top-1.5 text-xs leading-6 text-[var(--color-text-tertiary)]">
+          <span className="pointer-events-none absolute left-2.5 top-1.5 text-[11px] leading-5 text-[var(--color-text-tertiary)]">
             {placeholder}
           </span>
         )}

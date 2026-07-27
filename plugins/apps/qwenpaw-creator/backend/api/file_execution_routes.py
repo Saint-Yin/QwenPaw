@@ -368,6 +368,8 @@ async def render_timeline(
     from services.media_files.local_execution import (
         execute_file_local_media_command,
         file_local_media_task_id,
+        find_reusable_local_media_task,
+        validate_local_media_execution,
     )
 
     identity = (str(services.root), project_id, timeline_id)
@@ -398,7 +400,36 @@ async def render_timeline(
                 replayed=True,
             )
 
+        reusable = await asyncio.to_thread(
+            find_reusable_local_media_task,
+            services,
+            project_id=project_id,
+            command=CreatorCommandType.COMPOSE_FINAL_VIDEO,
+            target_ref=target_ref,
+        )
+        if reusable is not None:
+            # 渲染内容自上次成功合成后未变化且成片未过期：直接重放
+            # 已成功的 Task，前端观察到终态后继续使用现有成片。
+            return await asyncio.to_thread(
+                _render_dispatch_view,
+                services,
+                project_id,
+                task_id=reusable.task_id,
+                replayed=True,
+            )
+
         task_id = file_local_media_task_id(project_id, key)
+
+        # 后台 drive() 在建 Task 前失败时无处持久化错误，前端会等待一个
+        # 永不存在的 Task。先同步预检执行计划，结构性问题（如本地
+        # runner 不支持的 Overlay 叠加）直接以 400 返回给调用方。
+        await asyncio.to_thread(
+            validate_local_media_execution,
+            services,
+            project_id=project_id,
+            command=CreatorCommandType.COMPOSE_FINAL_VIDEO,
+            target_ref=target_ref,
+        )
 
         async def drive() -> None:
             try:

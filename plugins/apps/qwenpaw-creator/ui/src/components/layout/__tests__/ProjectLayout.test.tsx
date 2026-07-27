@@ -13,6 +13,7 @@ import type {
   ProjectDocument,
 } from "@/contracts/creator";
 import ProjectLayout from "@/components/layout/ProjectLayout";
+import { NavigationRuntime } from "@/routing/navigation";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
 import { useCreatorSessionStore } from "@/store/creatorSessionStore";
@@ -43,7 +44,10 @@ function commonRoutes(review?: FileProjectReviewRecord) {
     {
       match: "/projects/p1/runtime/reviews/active",
       response: review
-        ? { json: review, headers: { ETag: `"${review.decision_token}"` } }
+        ? {
+            json: [review],
+            headers: { ETag: `"${review.decision_token}"` },
+          }
         : { status: 204 },
     },
     {
@@ -138,7 +142,13 @@ function elementReview(): FileProjectReviewRecord {
         before: "旧 prompt",
         after: "新 prompt",
         operation_id: "operation-element-1",
-        ui_locator: {},
+        ui_locator: {
+          page: "plan",
+          mediaType: "text",
+          elementId: "r2v-window",
+          field:
+            "/timelines/items/timeline:main/elements_by_id/r2v-window/creation/video_prompt",
+        },
         decision: "PENDING",
       },
     ],
@@ -294,7 +304,12 @@ describe("ProjectLayout schema-v2 visible shell", () => {
       [
         {
           path: "/project/:id",
-          element: <ProjectLayout />,
+          element: (
+            <>
+              <NavigationRuntime />
+              <ProjectLayout />
+            </>
+          ),
           children: [
             {
               path: "plan",
@@ -326,6 +341,7 @@ describe("ProjectLayout schema-v2 visible shell", () => {
       expect(router.state.location.search).toContain("element=r2v-window"),
     );
     expect(router.state.location.search).toContain("review=1");
+    expect(router.state.location.search).toContain("field=");
     expect(useCreatorInteractionStore.getState().selectedRef).toBe(
       "element:r2v-window",
     );

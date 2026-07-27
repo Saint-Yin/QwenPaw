@@ -14,16 +14,18 @@ const FIELD = "element:element-1/label";
 function Harness({
   field = FIELD,
   showTarget = true,
+  pulse,
 }: {
   field?: string;
   showTarget?: boolean;
+  pulse: string;
 }) {
-  useReviewFieldFocus({ path: PATH, field, enabled: true, pulse: "1" });
+  useReviewFieldFocus({ path: PATH, field, enabled: true, pulse });
   return showTarget ? <div data-creator-field={field}>原文</div> : null;
 }
 
-function MultiFieldHarness() {
-  useReviewFieldFocus({ path: PATH, field: FIELD, enabled: true, pulse: "1" });
+function MultiFieldHarness({ pulse }: { pulse: string }) {
+  useReviewFieldFocus({ path: PATH, field: FIELD, enabled: true, pulse });
   return (
     <>
       <div data-creator-field={FIELD}>原文 A</div>
@@ -34,8 +36,8 @@ function MultiFieldHarness() {
   );
 }
 
-function DockCollisionHarness() {
-  useReviewFieldFocus({ path: PATH, field: FIELD, enabled: true, pulse: "1" });
+function DockCollisionHarness({ pulse }: { pulse: string }) {
+  useReviewFieldFocus({ path: PATH, field: FIELD, enabled: true, pulse });
   return (
     <>
       <aside data-agent-dock>
@@ -60,7 +62,7 @@ describe("useReviewFieldFocus", () => {
   });
 
   it("URL 审阅定位会滚动并闪烁字段", () => {
-    const { container } = render(<Harness />);
+    const { container } = render(<Harness pulse="pulse-url" />);
     const target = container.querySelector<HTMLElement>(
       "[data-creator-field]",
     )!;
@@ -86,7 +88,9 @@ describe("useReviewFieldFocus", () => {
   });
 
   it("同名字段同时存在时只定位工作区，不会闪烁 AgentDock", () => {
-    const { container } = render(<DockCollisionHarness />);
+    const { container } = render(
+      <DockCollisionHarness pulse="pulse-dock" />,
+    );
     const dockTarget = container.querySelector<HTMLElement>(
       "[data-agent-dock] [data-creator-field]",
     )!;
@@ -99,15 +103,15 @@ describe("useReviewFieldFocus", () => {
     expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
   });
 
-  it("同一字段的重复 reviewFocus 请求会重放定位", () => {
-    render(<Harness />);
+  it("同一字段的重复 reviewFocus 请求（新 pulse）会重放定位", () => {
+    render(<Harness pulse="pulse-replay" />);
     expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
 
     act(() => {
       useNavigationStore.getState().setReviewFocus({
         path: PATH,
         ref: "element:element-1",
-        query: { review: "1", field: FIELD, reviewPulse: "2" },
+        query: { review: "1", field: FIELD, reviewPulse: "pulse-replay-2" },
       });
     });
     expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(2);
@@ -116,18 +120,29 @@ describe("useReviewFieldFocus", () => {
       useNavigationStore.getState().setReviewFocus({
         path: PATH,
         ref: "element:element-1",
-        query: { review: "1", field: FIELD, reviewPulse: "3" },
+        query: { review: "1", field: FIELD, reviewPulse: "pulse-replay-3" },
       });
     });
     expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(3);
   });
 
+  it("已消费的 pulse 不会在重挂载/重渲染时重放定位动画", () => {
+    const { unmount } = render(<Harness pulse="pulse-consumed" />);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
+    unmount();
+
+    render(<Harness pulse="pulse-consumed" />);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
   it("详情节点延迟挂载时会重试，不依赖固定 360ms", () => {
-    const { container, rerender } = render(<Harness showTarget={false} />);
+    const { container, rerender } = render(
+      <Harness showTarget={false} pulse="pulse-retry" />,
+    );
     expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
 
     act(() => vi.advanceTimersByTime(400));
-    rerender(<Harness showTarget />);
+    rerender(<Harness showTarget pulse="pulse-retry" />);
     act(() => vi.advanceTimersByTime(50));
 
     expect(container.querySelector("[data-creator-field]")).toHaveClass(
@@ -137,7 +152,7 @@ describe("useReviewFieldFocus", () => {
   });
 
   it("切换查看字段会清理上一个目标的闪烁类", () => {
-    const { container } = render(<MultiFieldHarness />);
+    const { container } = render(<MultiFieldHarness pulse="pulse-switch" />);
     const first = container.querySelector<HTMLElement>(
       `[data-creator-field="${FIELD}"]`,
     )!;
@@ -153,7 +168,7 @@ describe("useReviewFieldFocus", () => {
         query: {
           review: "1",
           field: "element:element-1/creation/video_prompt",
-          reviewPulse: "2",
+          reviewPulse: "pulse-switch-2",
         },
       });
     });

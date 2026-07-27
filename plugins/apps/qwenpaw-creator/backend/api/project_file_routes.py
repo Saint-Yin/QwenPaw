@@ -875,7 +875,7 @@ async def release_field_block(
 
 
 @router.get("/runtime/reviews/active")
-async def active_project_review(
+async def active_project_reviews(
     project_id: str,
     if_none_match: str | None = Header(None, alias="If-None-Match"),
     services: CreatorFileServices = Depends(project_file_services),
@@ -886,24 +886,25 @@ async def active_project_review(
             services,
             project_id,
         )
-        review = await services.active_review(project_id)
+        reviews = await services.active_reviews(project_id)
     except Exception as exc:
         _translate_storage_error(exc)
         raise
     finally:
         if lifecycle_lock is not None:
             lifecycle_lock.release()
-    if review is None:
+    if not reviews:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
-    if _etag_matches(if_none_match, review.decision_token):
+    composite_token = "|".join(r.decision_token for r in reviews)
+    if _etag_matches(if_none_match, composite_token):
         return Response(
             status_code=status.HTTP_304_NOT_MODIFIED,
-            headers={"ETag": _etag_header(review.decision_token)},
+            headers={"ETag": _etag_header(composite_token)},
         )
     return JSONResponse(
-        content=review.model_dump(mode="json"),
+        content=[r.model_dump(mode="json") for r in reviews],
         headers={
-            "ETag": _etag_header(review.decision_token),
+            "ETag": _etag_header(composite_token),
             "Cache-Control": "no-cache",
         },
     )

@@ -187,11 +187,23 @@ export function resolveElementPlayback(
   if (resolved) {
     // render_source 解析成功时沿用其入出点/速率；outputs 兜底则从头整段播放。
     const timing = fromRender && renderSource ? renderSource : null;
+    const taskStatus = elementTaskStatus(element, tasks);
+    const artifactStatus: ElementPlaybackStatus = resolved.stale
+      ? "stale"
+      : "ready";
+    // 只有仍在排队/执行中的重新生成任务才覆盖已就绪画面；
+    // 历史终态任务（失败/隔离）不得把新鲜可播的已选产物
+    // 误报为“生成失败”，否则切换时间点时会看到已渲染片段
+    // 被当作待重渲。
+    const status: ElementPlaybackStatus =
+      taskStatus === "generating" || taskStatus === "queued"
+        ? taskStatus
+        : artifactStatus === "ready"
+          ? "ready"
+          : taskStatus ?? artifactStatus;
     return {
       element,
-      status:
-        elementTaskStatus(element, tasks) ??
-        (resolved.stale ? "stale" : "ready"),
+      status,
       media: {
         ...resolved,
         sourceInSeconds: timing ? timing.source_in_tick / ticksPerSecond : 0,

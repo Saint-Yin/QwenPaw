@@ -213,7 +213,7 @@ describe("TimelineLivePreview", () => {
     expect(visibleVideos).toHaveLength(2);
     expect(
       container.querySelector("[data-live-preview-incomplete]"),
-    ).toHaveTextContent("该时间点尚未渲染完成");
+    ).toHaveTextContent("正在定位画面");
 
     visibleVideos.forEach((video) => {
       Object.defineProperty(video, "readyState", {

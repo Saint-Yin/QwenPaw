@@ -98,10 +98,15 @@ export function parseFileProjectReview(
     !item ||
     !nonEmptyString(item.review_id) ||
     !nonEmptyString(item.round_id) ||
-    !nonEmptyString(item.request_id) ||
-    !Number.isInteger(item.request_message_seq) ||
-    Number(item.request_message_seq) < 1 ||
-    !nonEmptyString(item.interrupted_run_id) ||
+    // request_id / request_message_seq / interrupted_run_id are only present
+    // for AgentDock-originated reviews; media/runtime reviews leave them null.
+    !nullableString(item.request_id) ||
+    !(
+      item.request_message_seq === null ||
+      (Number.isInteger(item.request_message_seq) &&
+        Number(item.request_message_seq) >= 1)
+    ) ||
+    !nullableString(item.interrupted_run_id) ||
     !generation(item.baseline_generation) ||
     !nonEmptyString(item.baseline_etag) ||
     !generation(item.candidate_generation) ||
@@ -157,7 +162,9 @@ export async function getActiveFileProjectReview(
   if (etag) headers.set("If-None-Match", etag);
   const response = await creatorFetch(
     `/projects/${encodeURIComponent(projectId)}/runtime/reviews/active`,
-    { headers },
+    // 轮询自己管理 If-None-Match/ETag；绕过浏览器 HTTP 缓存，
+    // 避免旧部署缓存的响应体在 304 复用时被当作最新数据解析。
+    { headers, cache: "no-store" },
   );
   const responseEtag = response.headers?.get("ETag") ?? null;
 
@@ -167,14 +174,19 @@ export async function getActiveFileProjectReview(
   if (response.status === 204) return { kind: "empty" };
   if (!response.ok) throw await httpError(response);
 
-  const review = parseFileProjectReview(await response.json());
+  const payload = await response.json();
+  if (!Array.isArray(payload)) {
+    throw new Error("File Project Review response is not an array");
+  }
+  const reviews = payload.map(parseFileProjectReview);
   if (!responseEtag) {
     throw new Error("File Project Review response is missing ETag");
   }
-  if (semanticEtag(responseEtag) !== semanticEtag(review.decision_token)) {
-    throw new Error("File Project Review ETag does not match decision_token");
+  const compositeToken = reviews.map((r) => r.decision_token).join("|");
+  if (semanticEtag(responseEtag) !== semanticEtag(compositeToken)) {
+    throw new Error("File Project Review ETag does not match decision_tokens");
   }
-  return { kind: "updated", review, etag: responseEtag };
+  return { kind: "updated", reviews, etag: responseEtag };
 }
 
 export async function decideFileProjectReview(

@@ -76,11 +76,19 @@ export function creatorTargetLabel(
   }
   if (ref.startsWith("asset:")) {
     const logicalAssetId = ref.slice("asset:".length);
+    // 视觉实体（场景/角色/道具）的 asset:xxx 目标优先解析为实体真实名称，
+    // 避免向用户展示 asset:char:fox 这样的代号。
+    const entity = project?.visual?.entities?.items?.[logicalAssetId];
+    if (entity?.name) return entity.name;
     return (
       Object.values(project?.assets.source_versions_by_id ?? {}).find(
         (version) => version.logical_asset_id === logicalAssetId,
       )?.name || "当前素材"
     );
+  }
+  if (ref.startsWith("visual-entity:")) {
+    const entityId = ref.slice("visual-entity:".length);
+    return project?.visual?.entities?.items?.[entityId]?.name || "视觉设定";
   }
   if (ref.startsWith("asset-version:")) {
     return (

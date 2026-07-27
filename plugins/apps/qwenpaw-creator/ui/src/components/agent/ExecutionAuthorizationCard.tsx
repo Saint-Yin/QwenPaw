@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { message } from "antd";
-import { Coins, PlayCircle } from "lucide-react";
+import { Coins, Eye, PlayCircle } from "lucide-react";
 import type {
   ExecutionAuthorizationApproval,
   ExecutionAuthorizationView,
@@ -9,6 +9,8 @@ import type {
 import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationStore";
 import { creatorTargetLabel, taskKindLabel } from "@/lib/creatorPresentation";
 import OnboardingHint from "@/components/onboarding/OnboardingHint";
+import { navigateToLocator } from "@/routing/locators";
+import { selectPrimaryTimeline } from "@/selectors/timelineElementSelectors";
 
 const BUTTON_BASE =
   "rounded-md px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50";
@@ -80,18 +82,85 @@ function authorizationParameterSummary(
   return parts.join(" · ");
 }
 
+/** 把后端文案中的 ref 代号（asset:char:fox / element:xxx 等）替换为真实名称。 */
+function humanizeRefTokens(
+  text: string,
+  project?: ProjectDocument | null,
+): string {
+  return text.replace(
+    /(?:visual-entity|artifact-version|asset-version|element|asset|source):[\w.-]+(?::[\w.-]+)*/g,
+    (token) => {
+      const label = creatorTargetLabel(token, project);
+      return label && label !== "当前项目" ? `「${label}」` : token;
+    },
+  );
+}
+
 export function authorizationDetail(
   authorization: ExecutionAuthorizationView,
+  project?: ProjectDocument | null,
 ): string {
   const messageText = authorization.scope.message;
-  if (typeof messageText === "string" && messageText.trim()) return messageText;
+  if (typeof messageText === "string" && messageText.trim())
+    return humanizeRefTokens(messageText, project);
   const detail = `${authorizationOperation(authorization)} · ${creatorTargetLabel(
     authorization.targetRef,
+    project,
   )} · ${authorization.provider}/${authorization.model}`;
   const billing = authorizationBilling(authorization);
   return billing?.displayText
     ? `${detail} · 预计费用 ${billing.displayText}`
     : detail;
+}
+
+/**
+ * 生产确认的“查看”跳转目标：定位到即将用于生成的 prompt 编辑位置，
+ * 让用户在确认消费前能真正检查生成输入。
+ */
+export function authorizationJumpTarget(
+  authorization: ExecutionAuthorizationView,
+  project?: ProjectDocument | null,
+): { locator: Record<string, string>; field?: string } | null {
+  const targetRef = authorization.targetRef ?? "";
+  if (targetRef.startsWith("element:")) {
+    const elementId = targetRef.slice("element:".length);
+    const timeline = selectPrimaryTimeline(project ?? null);
+    const operation =
+      typeof authorization.scope.operation === "string"
+        ? authorization.scope.operation.toLowerCase()
+        : "";
+    const promptField = operation.includes("video")
+      ? "video_prompt"
+      : "storyboard_prompt";
+    const field = timeline
+      ? `/timelines/items/${timeline.timeline_id}/elements_by_id/${elementId}/creation/${promptField}`
+      : undefined;
+    return {
+      locator: {
+        page: "element",
+        elementId,
+        ...(field ? { field } : {}),
+      },
+      field,
+    };
+  }
+  if (targetRef.startsWith("asset:")) {
+    return {
+      locator: { page: "assets", assetId: targetRef.slice("asset:".length) },
+    };
+  }
+  if (targetRef.startsWith("visual-entity:")) {
+    return {
+      locator: {
+        page: "assets",
+        assetId: targetRef.slice("visual-entity:".length),
+      },
+    };
+  }
+  if (targetRef.startsWith("timeline:")) {
+    return { locator: { page: "plan" } };
+  }
+  return null;
 }
 
 export default function ExecutionAuthorizationCard({
@@ -103,11 +172,22 @@ export default function ExecutionAuthorizationCard({
 }) {
   const approve = useExecutionAuthorizationStore((state) => state.approve);
   const decline = useExecutionAuthorizationStore((state) => state.decline);
+  const projectId = useExecutionAuthorizationStore((state) => state.projectId);
   const [busy, setBusy] = useState(false);
   if (authorization.status !== "PENDING") return null;
 
   const billing = authorizationBilling(authorization);
   const parameterSummary = authorizationParameterSummary(authorization);
+  const jumpTarget = authorizationJumpTarget(authorization, project);
+
+  const openTarget = () => {
+    if (!jumpTarget || !projectId) return;
+    navigateToLocator(projectId, jumpTarget.locator, {
+      review: true,
+      field: jumpTarget.field,
+      description: "生产确认 / 查看生成输入",
+    });
+  };
 
   const continueRun = async () => {
     setBusy(true);
@@ -153,6 +233,18 @@ export default function ExecutionAuthorizationCard({
             <span className="min-w-0 flex-1 truncate text-xs font-semibold text-[var(--color-text-primary)]">
               {authorizationOperation(authorization)}等待确认
             </span>
+            {jumpTarget && projectId && (
+              <button
+                type="button"
+                onClick={openTarget}
+                aria-label="查看生成输入"
+                title="跳转到将要生成的 Prompt / 编辑位置，确认前先检查输入"
+                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-[var(--color-text-secondary)] hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent)]"
+              >
+                <Eye className="h-3 w-3" />
+                查看
+              </button>
+            )}
           </div>
           <dl className="mt-1.5 space-y-0.5 text-[11px] leading-4">
             <div className="flex gap-1">
@@ -205,7 +297,7 @@ export default function ExecutionAuthorizationCard({
             </div>
           ) : (
             <p className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-[var(--color-text-tertiary)]">
-              {authorizationDetail(authorization)}
+              {authorizationDetail(authorization, project)}
             </p>
           )}
         </div>

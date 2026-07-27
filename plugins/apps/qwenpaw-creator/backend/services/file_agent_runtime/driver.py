@@ -747,6 +747,19 @@ class FileCreatorAgentRuntime:
                     "summary": result.summary,
                 },
             )
+            if (
+                context.review_boundary is not None
+                and context.review_boundary.interrupted_run_id is not None
+            ):
+                await self._queue_mainline_resume(
+                    project_id=project_id,
+                    session_id=session.session_id,
+                    conversation_id=message.conversation_id,
+                    intervention_run_id=run_id,
+                    interrupted_run_id=(
+                        context.review_boundary.interrupted_run_id
+                    ),
+                )
             self._blocked_heads.pop(project_id, None)
         except asyncio.CancelledError:
             await self._cancel_run(
@@ -2459,6 +2472,112 @@ class FileCreatorAgentRuntime:
             metadata={"source": "file_agent_runtime"},
         )
 
+    MAINLINE_RESUME_SOURCE = "mainline_resume"
+
+    async def _queue_mainline_resume(
+        self,
+        *,
+        project_id: str,
+        session_id: str,
+        conversation_id: str,
+        intervention_run_id: str,
+        interrupted_run_id: str,
+    ) -> None:
+        """Return the Agent to its interrupted mainline after an intervention.
+
+        An AgentDock interrupt cancels the running mainline and gates every
+        branch change behind a Review.  Once the branch run has finished, the
+        Session would otherwise sit still and the original task would never
+        complete.  Queue one runtime-channel user message — never AgentDock,
+        so it can never capture a ReviewBoundary — that tells the Agent to
+        continue the mainline.  Everything the resumed run produces is plain
+        auto-fix mainline work again and does not require review.
+        """
+
+        try:
+            interrupted = await asyncio.to_thread(
+                self.runs.get,
+                project_id,
+                interrupted_run_id,
+            )
+        except Exception:
+            interrupted = None
+        # Only a run that never reached its own terminal success/failure
+        # left unfinished mainline work behind.  A run that succeeded or
+        # failed on its own terms must not be relaunched automatically —
+        # restarting a failed mainline could loop forever.  A CANCELLED (or
+        # still RUNNING/QUEUED after a cross-process takeover) record is the
+        # superseded mainline we return to.
+        if interrupted is None or interrupted.status in {
+            AgentRunStatus.SUCCEEDED,
+            AgentRunStatus.FAILED,
+        }:
+            return
+        messages = await asyncio.to_thread(
+            self.sessions.list_messages,
+            project_id,
+            session_id,
+            after_seq=0,
+            limit=None,
+        )
+        if any(
+            item.source == self.MAINLINE_RESUME_SOURCE
+            and item.metadata.get("resumeAfterRunId") == intervention_run_id
+            for item in messages
+        ):
+            return
+        mainline_request = next(
+            (
+                item
+                for item in messages
+                if item.message_seq == interrupted.caused_by_message_seq
+            ),
+            None,
+        )
+        mainline_goal = (
+            _message_text(mainline_request)
+            if mainline_request is not None
+            else ""
+        )
+        text = (
+            "【系统自动消息 · 主线恢复】用户提出的修改意见（支线任务）已处理完成。"
+            "请回顾本会话的历史上下文，找到此前被中断的主线任务，并从中断处继续"
+            "执行主线工作，直到主线目标完成。\n"
+            "注意：\n"
+            "1. 不要重复已经完成的步骤；\n"
+            "2. 本消息不是新的修改意见，只是提醒你继续之前的主线；\n"
+            "3. 如果主线任务实际上已全部完成，请直接确认完成状态，不要进行任何新的修改。"
+        )
+        if mainline_goal:
+            text += f"\n\n被中断的主线任务原始请求：\n{mainline_goal}"
+        appended = await asyncio.to_thread(
+            self.sessions.append_message,
+            project_id,
+            session_id,
+            conversation_id,
+            role="user",
+            content_parts=[{"type": "text", "text": text}],
+            source=self.MAINLINE_RESUME_SOURCE,
+            channel=MessageChannel.RUNTIME,
+            metadata={
+                "resumeAfterRunId": intervention_run_id,
+                "interruptedRunId": interrupted_run_id,
+            },
+        )
+        await self._event(
+            project_id,
+            session_id,
+            "agent.mainline.resumed",
+            intervention_run_id,
+            appended.message,
+            {
+                "runId": intervention_run_id,
+                "interruptedRunId": interrupted_run_id,
+                "messageSeq": appended.message.message_seq,
+            },
+        )
+        self._wake.set()
+
     async def _converge_resolved_review(self, project_id: str, session: Any):
         """Recover Session/Goal projections after a Review becomes terminal."""
 
@@ -2490,7 +2609,14 @@ class FileCreatorAgentRuntime:
     ) -> AgentProjectToolContext:
         boundary = message.review_boundary
         if boundary is not None:
-            origin = ChangeOrigin.AGENTDOCK_INTERRUPT
+            # A boundary captured while a Run was active is an interrupt; one
+            # captured on an idle Session is post-run feedback.  Both gate all
+            # related changes behind the same review flow.
+            origin = (
+                ChangeOrigin.AGENTDOCK_INTERRUPT
+                if boundary.interrupted_run_id is not None
+                else ChangeOrigin.AGENTDOCK_IDLE_GOAL
+            )
             policy = ReviewPolicy.REQUIRE_REVIEW
             request_id = boundary.request_id
             message_seq = boundary.request_message_seq

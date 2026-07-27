@@ -62,7 +62,8 @@ const PROVIDER_GUIDES: ProviderGuide[] = [
   {
     type: "视频生成",
     icon: <VideoCameraOutlined style={{ fontSize: 12 }} />,
-    protocols: "DashScope（百炼）、Volcano Engine（火山引擎）",
+    protocols:
+      "DashScope（百炼：wan2.x r2v、happyhorse-1.x-r2v）、Volcano Engine（火山引擎：doubao-seedance-2.x）",
   },
   {
     type: "ASR 语音识别",

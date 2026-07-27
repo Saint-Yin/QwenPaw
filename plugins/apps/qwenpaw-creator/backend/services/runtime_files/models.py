@@ -68,6 +68,19 @@ class ReviewPolicy(StrEnum):
     REQUIRE_REVIEW = "require_review"
 
 
+# Origins whose commits are allowed to gate their changes behind a review.
+# AgentDock interrupts and idle goals capture a user-intent boundary; runtime
+# tasks cover autonomously generated media (images/videos) that must always be
+# reviewed before they are treated as accepted.
+_REVIEW_REQUIRING_ORIGINS = frozenset(
+    {
+        ChangeOrigin.AGENTDOCK_INTERRUPT,
+        ChangeOrigin.AGENTDOCK_IDLE_GOAL,
+        ChangeOrigin.RUNTIME_TASK,
+    },
+)
+
+
 class ProjectChangeKind(StrEnum):
     CREATE = "create"
     UPDATE = "update"
@@ -295,9 +308,12 @@ class RuntimeProjectState(StrictRuntimeModel):
 
 
 class ReviewBoundary(StrictRuntimeModel):
-    request_message_seq: int = Field(ge=1)
-    request_id: NonEmptyString
-    interrupted_run_id: NonEmptyString
+    # AgentDock interrupts carry a user request message; media/runtime reviews
+    # (e.g. an autonomously generated image or video) have no originating
+    # message, so the request provenance and interrupted run are optional.
+    request_message_seq: int | None = Field(default=None, ge=1)
+    request_id: NonEmptyString | None = None
+    interrupted_run_id: NonEmptyString | None = None
     accepted_generation: Generation
     accepted_etag: NonEmptyString
     captured_at: AwareDatetime = Field(default_factory=utc_now)
@@ -318,9 +334,10 @@ class ChangeRoundRecord(StrictRuntimeModel):
     @model_validator(mode="after")
     def validate_review_boundary(self) -> ChangeRoundRecord:
         if self.review_policy is ReviewPolicy.REQUIRE_REVIEW:
-            if self.origin is not ChangeOrigin.AGENTDOCK_INTERRUPT:
+            if self.origin not in _REVIEW_REQUIRING_ORIGINS:
                 raise ValueError(
-                    "only an AgentDock interrupt may require review",
+                    "only an AgentDock interrupt/idle goal or a runtime task "
+                    "may require review",
                 )
             if self.review_boundary is None:
                 raise ValueError(
@@ -406,9 +423,11 @@ class ReviewOperation(ProjectChange):
 class ReviewRecord(StrictRuntimeModel):
     review_id: NonEmptyString
     round_id: NonEmptyString
-    request_id: NonEmptyString
-    request_message_seq: int = Field(ge=1)
-    interrupted_run_id: NonEmptyString
+    # Optional for media/runtime reviews that have no originating AgentDock
+    # message (see ReviewBoundary).
+    request_id: NonEmptyString | None = None
+    request_message_seq: int | None = Field(default=None, ge=1)
+    interrupted_run_id: NonEmptyString | None = None
     baseline_generation: Generation
     baseline_etag: NonEmptyString
     candidate_generation: Generation

@@ -292,7 +292,9 @@ def test_active_review_poll_is_created_only_from_review_boundary(
 
     first, second = _run(scenario())
     assert first.status_code == 200
-    assert first.json()["request_id"] == "request-2"
+    reviews = first.json()
+    assert isinstance(reviews, list) and len(reviews) == 1
+    assert reviews[0]["request_id"] == "request-2"
     assert second.status_code == 304
 
 

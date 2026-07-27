@@ -265,7 +265,8 @@
             "type": "text",
             "required": false,
             "default": "wan2.7-r2v",
-            "placeholder": "wan2.7-r2v"
+            "placeholder": "wan2.7-r2v",
+            "help": "Supported: Bailian wan2.x r2v family, Bailian happyhorse-1.x-r2v, Volcano doubao-seedance-2.x. Environment fallback: VIDEO_MODEL_NAME."
           },
           {
             "name": "submit_timeout",

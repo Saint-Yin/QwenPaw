@@ -198,10 +198,14 @@ _R2V_ARGUMENTS = _arguments_schema(
             "type": "string",
             "enum": ["720P", "1080P", "720p", "1080p"],
         },
-        "watermark": {"type": "boolean"},
+        "watermark": {
+            "type": "boolean",
+            "default": False,
+            "description": "默认 false（无水印）；仅在用户明确要求时传 true",
+        },
         "generateAudio": {"type": "boolean"},
     },
-    ("prompt", "durationSeconds", "ratio", "resolution", "watermark"),
+    ("prompt", "durationSeconds", "ratio", "resolution"),
 )
 
 _SOURCE_SHOT_SCHEMA = {

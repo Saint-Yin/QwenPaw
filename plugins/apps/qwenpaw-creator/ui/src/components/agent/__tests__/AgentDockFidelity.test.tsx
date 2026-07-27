@@ -141,9 +141,14 @@ describe("AgentDock origin/main visible fidelity", () => {
     expect(
       screen.queryByText("未绑定上下文，作用于整个项目"),
     ).not.toBeInTheDocument();
+    // 独立决策中心已被内联决策托盘取代，顶栏不再提供入口按钮。
     expect(
-      screen.getByRole("button", { name: "审阅与决策中心" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "审阅与决策中心" }),
+    ).not.toBeInTheDocument();
+    // 无待决策项时托盘不占据任何空间。
+    expect(
+      document.querySelector("[data-decision-tray]"),
+    ).not.toBeInTheDocument();
     // 新对话与历史聊天入口已移除。
     expect(
       screen.queryByRole("button", { name: "新对话" }),
@@ -174,7 +179,7 @@ describe("AgentDock origin/main visible fidelity", () => {
     ).toHaveClass("min-h-[32px]", "max-h-24");
   });
 
-  it("opens the existing decision center when a production confirmation arrives live", async () => {
+  it("pops the dock open with the inline tray when a production confirmation arrives live", async () => {
     useAgentDockUiStore.getState().setOpen(false);
     renderDock();
     expect(document.querySelector("[data-agent-dock]")).not.toBeInTheDocument();
@@ -203,12 +208,20 @@ describe("AgentDock origin/main visible fidelity", () => {
 
     await waitFor(() => {
       expect(document.querySelector("[data-agent-dock]")).toBeInTheDocument();
-      expect(useAgentDockUiStore.getState().tab).toBe("review");
+      // 阻塞级到达：托盘强制展开并标记紧急。
+      const tray = document.querySelector("[data-decision-tray]");
+      expect(tray).toBeInTheDocument();
+      expect(tray).toHaveAttribute("data-decision-tray-urgent", "true");
+      expect(tray).not.toHaveAttribute("data-decision-tray-collapsed");
     });
     expect(screen.getAllByText("生产确认").length).toBeGreaterThan(0);
+    // 对话输入框与托盘同屏，无需切换视图。
+    expect(
+      screen.getByRole("textbox", { name: "输入修改意图，@ 可引用对象…" }),
+    ).toBeInTheDocument();
   });
 
-  it("keeps workspace, decisions and collapse interactions without maximize controls", async () => {
+  it("keeps workspace and collapse interactions without maximize controls", async () => {
     useAgentDockUiStore.getState().setOpen(true);
     renderDock();
 
@@ -216,14 +229,10 @@ describe("AgentDock origin/main visible fidelity", () => {
     expect(screen.getByText("当前任务")).toBeInTheDocument();
     expect(screen.getByText("素材概况（0）")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "审阅与决策中心" }));
-    expect(screen.getByText("暂无待处理的决策")).toBeInTheDocument();
+    // 工作区面板展开时对话输入框仍在（聊天视图不再被决策视图替换）。
     expect(
-      screen.getByRole("button", { name: "返回对话" }),
+      screen.getByRole("textbox", { name: "输入修改意图，@ 可引用对象…" }),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("textbox", { name: "输入修改意图，@ 可引用对象…" }),
-    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "最大化面板" }),
     ).not.toBeInTheDocument();
@@ -786,16 +795,18 @@ describe("AgentDock origin/main visible fidelity", () => {
     }));
     useFileProjectReviewStore.setState({
       projectId: "p1",
-      review: fileProjectReview(),
+      reviews: [fileProjectReview()],
       etag: '"file-token-1"',
       syncStatus: "healthy",
     });
     useAgentDockUiStore.getState().setOpen(true);
     renderDock();
+    // 文件审阅内容直接出现在内联决策托盘，对话输入框同屏可用。
     await waitFor(() =>
-      expect(useAgentDockUiStore.getState().tab).toBe("review"),
+      expect(
+        document.querySelector("[data-decision-tray]"),
+      ).toBeInTheDocument(),
     );
-    act(() => useAgentDockUiStore.getState().setTab("conversation"));
 
     const textbox = screen.getByRole("textbox", {
       name: "输入修改意图，@ 可引用对象…",

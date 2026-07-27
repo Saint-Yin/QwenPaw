@@ -6,9 +6,10 @@ import type {
   TimelineElementDocument,
 } from "@/contracts/creator";
 import {
-  ELEMENT_TYPE_META,
+  classifyElementTrack,
   elementCreationSummary,
-  orderedTimelineElements,
+  trackOrderedTimelineElements,
+  resolveElementVisualMeta,
 } from "@/selectors/timelineElementSelectors";
 import { useAgentWorkingState } from "@/selectors/agentWorkingSelectors";
 
@@ -22,13 +23,16 @@ interface ElementListProps {
 }
 
 function TypeIcon({ element }: { element: TimelineElementDocument }) {
-  if (element.creation.type === "audio")
+  const track = classifyElementTrack(element);
+  if (element.creation.type === "audio" || track === null)
     return <Music2 className="h-3.5 w-3.5" />;
-  if (element.creation.type === "overlay")
+  if (track === "subtitle")
     return <Layers3 className="h-3.5 w-3.5" />;
-  if (element.creation.type === "transition")
+  if (track === "motion")
+    return <Sparkles className="h-3.5 w-3.5" />;
+  if (track === "transition")
     return <WandSparkles className="h-3.5 w-3.5" />;
-  if (element.creation.type === "r2v")
+  if (track === "ai")
     return <Sparkles className="h-3.5 w-3.5" />;
   return <Film className="h-3.5 w-3.5" />;
 }
@@ -84,7 +88,7 @@ export default function ElementList({
   const listRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef(new Map<string, HTMLButtonElement>());
   const agentWorking = useAgentWorkingState();
-  const elements = useMemo(() => orderedTimelineElements(timeline), [timeline]);
+  const elements = useMemo(() => trackOrderedTimelineElements(timeline), [timeline]);
 
   useEffect(() => {
     if (!selectedElementId) return;
@@ -158,7 +162,7 @@ export default function ElementList({
             .map((element) => {
               const selected = selectedElementId === element.element_id;
               const active = activeElementIds.includes(element.element_id);
-              const meta = ELEMENT_TYPE_META[element.creation.type];
+              const meta = resolveElementVisualMeta(element);
               const status = statusOf(element, tasks);
               const start = element.span.start_tick;
               const end = start + element.span.duration_tick;
@@ -203,23 +207,23 @@ export default function ElementList({
                           "尚未补充创作说明"}
                       </p>
                     </div>
-                    <span
-                      className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-semibold ${status.tone}`}
-                    >
-                      {status.label}
-                    </span>
-                  </div>
-                  <div className="mt-2 flex items-center justify-between gap-2 pl-1 text-[10px]">
-                    <span
-                      className="rounded-full px-2 py-0.5 font-semibold"
-                      style={{ color: meta.color, background: meta.soft }}
-                    >
-                      {meta.label}
-                    </span>
-                    <span className="font-mono text-[var(--color-text-tertiary)]">
-                      {sec(start, timeline.ticks_per_second)}s –{" "}
-                      {sec(end, timeline.ticks_per_second)}s
-                    </span>
+                    <div className="ml-auto flex shrink-0 items-center gap-1">
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-semibold`}
+                        style={{ color: meta.color, background: meta.soft }}
+                      >
+                        {meta.label}
+                      </span>
+                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-semibold text-[var(--color-text-tertiary)]`}>
+                        {sec(start, timeline.ticks_per_second)}s –{" "}
+                        {sec(end, timeline.ticks_per_second)}s
+                      </span>
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-semibold ${status.tone}`}
+                      >
+                        {status.label}
+                      </span>
+                    </div>
                   </div>
                 </button>
               );

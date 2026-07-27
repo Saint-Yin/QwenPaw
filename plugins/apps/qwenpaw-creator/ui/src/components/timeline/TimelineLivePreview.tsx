@@ -686,12 +686,14 @@ export default function TimelineLivePreview({
           >
             <Loader2 className="h-7 w-7 animate-spin text-white/75" />
             <span className="text-sm font-semibold text-white/90">
-              该时间点尚未渲染完成
+              {semanticIncompleteLayers.length > 0
+                ? "该时间点尚未渲染完成"
+                : "正在定位画面"}
             </span>
             <span className="max-w-md text-xs leading-5 text-white/60">
               {semanticIncompleteLayers.length > 0
                 ? `${incompleteLayerCount} 个图层仍在生成、排队或等待重新渲染，完整画面就绪后才能预览。`
-                : `正在准备该时间点的 ${incompleteLayerCount} 个图层，完整画面就绪前不会显示未完成的预览。`}
+                : "已渲染内容加载寻帧中，画面就绪后立即显示，无需重新渲染。"}
             </span>
           </div>
         )}

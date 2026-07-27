@@ -10,6 +10,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from domain.enums import SpecialistRole
+from models import config as model_config
+from models.video_capabilities import video_model_prompt_guidance
 from services.file_agent_runtime.prompts import render_file_agent_prompt
 from services.project_files.models import Project
 from services.project_files.schema_prompt import build_project_schema_prompt
@@ -143,6 +145,13 @@ def specialist_system_prompt(
         "workspace_schema": workspace_schema
         or build_project_schema_prompt().text,
     }
+    if role is SpecialistRole.R2V_GENERATION_DIRECTOR:
+        # Model-specific prompt rules (e.g. HappyHorse [Image N] citations)
+        # are injected from the runtime-resolved video model so the static
+        # prompt stays model-agnostic.
+        values["video_model_guidance"] = video_model_prompt_guidance(
+            model_config.get_video_model_name(),
+        )
     if role is SpecialistRole.AI_EDITING_DIRECTOR:
         content_type = (
             project.settings.content_type if project is not None else None
