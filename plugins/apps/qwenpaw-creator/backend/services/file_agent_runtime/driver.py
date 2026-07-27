@@ -341,6 +341,33 @@ class MalformedJqProjectArguments(FileAgentRuntimeError):
             "corrupted payload. Call read_project to refresh your "
             "snapshot. " + _JQ_PROJECT_CALL_SHAPE_RECOVERY
         )
+        if self.diagnosis.json_repair_applied:
+            strict_error = self.diagnosis.strict_json_error or ""
+            if "Extra data" in strict_error:
+                # The model emitted a complete object and kept writing:
+                # it closed jsonArgs and the root brace too early, then
+                # streamed the remaining entries as orphan text. "Send
+                # smaller batches" alone does not break this loop — name
+                # the exact mistake and force one entry per call.
+                syntax_hint = (
+                    "Your previous arguments closed the top-level JSON "
+                    f"object too early ({strict_error}) and kept "
+                    "emitting content after the closing brace. "
+                )
+            else:
+                syntax_hint = (
+                    "Your previous arguments only became a JSON object "
+                    "after automatic repair"
+                    + (f" ({strict_error})" if strict_error else "")
+                    + "; the stream was likely cut off before the "
+                    "payload was complete. "
+                )
+            recovery = (
+                syntax_hint
+                + "Re-send the work as one jq_project call per timeline "
+                "element or settings change, keeping every payload well "
+                "under the size that failed. " + recovery
+            )
         if self.repeated_payload:
             recovery = (
                 "The same malformed payload was repeated. Do not resend it. "

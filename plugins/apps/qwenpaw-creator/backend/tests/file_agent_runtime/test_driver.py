@@ -22,6 +22,10 @@ from services.file_agent_runtime import (
     CallbackAgentChatClient,
     FileCreatorAgentRuntime,
 )
+from services.file_agent_runtime.driver import (
+    MalformedJqProjectArguments,
+    _jq_project_argument_diagnosis,
+)
 from services.file_agent_runtime.prompts import render_creator_system_prompt
 from services.observability import read_trace_records
 from services.project_files.facade import CreatorFileServices
@@ -384,6 +388,44 @@ def test_malformed_jq_project_arguments_recover_with_a_fresh_small_call(
     )
 
 
+def test_extra_data_recovery_names_the_premature_close() -> None:
+    """An "Extra data" strict error gets the premature-close hint.
+
+    The model closed the root object early and kept streaming entries;
+    the recovery must name that mistake with the byte offset instead of
+    only suggesting smaller batches.
+    """
+
+    diagnosis = _jq_project_argument_diagnosis(
+        AgentToolCall(
+            call_id="extra-data-write",
+            name="jq_project",
+            arguments={
+                "projectId": PROJECT_ID,
+                "program": ".description = $description",
+                "stringArgs": {"description": "partial"},
+            },
+            raw_arguments_bytes=9_364,
+            arguments_repaired=True,
+            strict_json_error=(
+                "JSONDecodeError: Extra data: line 1 column 5757 (char 5756)"
+            ),
+        ),
+    )
+    assert diagnosis.schema_valid is True
+    assert diagnosis.safe_to_execute is False
+
+    recovery = MalformedJqProjectArguments(
+        diagnosis,
+        attempt=1,
+        repeated_payload=False,
+    ).tool_result()["error"]["recovery"]
+
+    assert "closed the top-level JSON object too early" in recovery
+    assert "char 5756" in recovery
+    assert "one jq_project call per timeline" in recovery
+
+
 def test_repaired_jq_project_arguments_never_execute_even_when_schema_valid(
     tmp_path,
 ) -> None:
@@ -438,6 +480,12 @@ def test_repaired_jq_project_arguments_never_execute_even_when_schema_valid(
             assert rejected["error"]["details"]["safeToExecute"] is False
             assert rejected["error"]["details"]["jsonRepairApplied"] is True
             assert rejected["error"]["retry"]["attempt"] == 1
+            # The truncation-specific hint names the cause and forces
+            # one entry per call instead of generic "smaller batches".
+            recovery = rejected["error"]["recovery"]
+            assert "cut off" in recovery
+            assert "Unterminated string at EOF" in recovery
+            assert "one jq_project call per timeline" in recovery
             return AgentModelTurn(
                 tool_calls=(
                     AgentToolCall(
