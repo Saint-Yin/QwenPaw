@@ -300,7 +300,6 @@ function visualEntityPromptTarget(
   };
 }
 
-/** Original generation prompt of an AI-generated artifact plus its editable location in the Project. */
 function generationPromptTarget(
   project: ProjectDocument,
   selected: AssetItem,

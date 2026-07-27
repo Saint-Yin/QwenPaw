@@ -9,9 +9,9 @@ type ReviewFocusRuntime = Window & {
 };
 
 interface UseReviewFieldFocusOptions {
-  /** Current page path (without query); requests targeting other pages are ignored. */
+  /** Page path without query; requests for other pages are ignored. */
   path: string;
-  /** The `field` URL param; lets the focus restore directly after a refresh. */
+  /** The `field` URL param; lets focus restore after a refresh. */
   field: string | null;
   /** True when the URL has review=1. */
   enabled: boolean;
@@ -36,7 +36,7 @@ function consumePulse(pulse: string | null | undefined): boolean {
   return true;
 }
 
-/** Find the field node exactly, avoiding splicing field paths containing `:`, `/` etc. straight into a CSS selector. */
+/** Attribute scan; field paths with `:` or `/` can't go into a CSS selector. */
 export function findCreatorFieldElement(
   field: string,
   root: ParentNode = document,
@@ -59,7 +59,7 @@ export function findCreatorFieldElement(
   );
 }
 
-/** textarea/input can't reliably host ::after; flash the enclosing content block instead. */
+/** textarea/input can't host ::after; flash the enclosing block instead. */
 export function reviewFlashElementForField(
   field: string,
   root: ParentNode = document,
@@ -97,7 +97,7 @@ export function flashCreatorReviewField(
   return target;
 }
 
-/** Landing anchor for a media review's "View generation detail": match the preview block by artifact version. */
+/** Media-review "View" landing anchor: preview block by artifact version. */
 export function findReviewMediaAnchor(
   versionId: string,
   root: ParentNode = document,
@@ -125,9 +125,9 @@ export function useReviewMediaFocus({
   enabled,
   pulse,
 }: {
-  /** The `version` URL param; media-review jumps point it at the artifact version awaiting review. */
+  /** The `version` URL param; points at the artifact version awaiting review. */
   versionId: string | null;
-  /** True when the URL has review=1 and no field (with a field, field focus takes over). */
+  /** True when URL has review=1 and no field (field focus takes over then). */
   enabled: boolean;
   pulse: string | null;
 }): void {

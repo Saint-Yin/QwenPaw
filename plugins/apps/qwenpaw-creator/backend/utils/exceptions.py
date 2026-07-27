@@ -19,16 +19,12 @@ class AppError(Exception):
 
 
 class AgentError(AppError):
-    """Agent execution exception."""
-
     def __init__(self, message: str, agent_name: str = ""):
         super().__init__(message, code="AGENT_ERROR", status_code=500)
         self.agent_name = agent_name
 
 
 class ModelError(AppError):
-    """Model invocation exception (upstream API failure)."""
-
     def __init__(
         self,
         message: str,
@@ -44,15 +40,11 @@ class ModelError(AppError):
 
 
 class ValidationError(AppError):
-    """Request validation exception."""
-
     def __init__(self, message: str):
         super().__init__(message, code="VALIDATION_ERROR", status_code=422)
 
 
 class TimeoutError(AppError):
-    """Operation timeout exception."""
-
     def __init__(self, message: str, operation: str = ""):
         super().__init__(message, code="TIMEOUT_ERROR", status_code=504)
         self.operation = operation

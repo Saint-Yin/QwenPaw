@@ -37,7 +37,6 @@ function ClickCursor({ label }: { label: string }) {
   );
 }
 
-/** Mini timeline: overlapping blocks of several content types, one carrying a click hint. */
 export function MockTimeline() {
   return (
     <MockFrame>
@@ -73,7 +72,6 @@ export function MockTimeline() {
   );
 }
 
-/** Mini element detail: type badge, editable fields and an "apply changes" button. */
 export function MockElementDetail() {
   return (
     <MockFrame>
@@ -116,8 +114,6 @@ export function MockElementDetail() {
   );
 }
 
-/** Mini selection demo: text drag-select + time-range box-select, both surfacing
- * an "add to conversation" chip. */
 export function MockSelectionDemo() {
   const chip = (
     <span className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-white px-1.5 py-0.5 text-[9px] font-semibold text-[var(--color-text-primary)] shadow-sm">
@@ -150,7 +146,6 @@ export function MockSelectionDemo() {
   );
 }
 
-/** Mini chat demo: a change request → Agent responds and schedules generation. */
 export function MockAgentChat() {
   return (
     <MockFrame>
@@ -170,7 +165,6 @@ export function MockAgentChat() {
   );
 }
 
-/** Mini asset cards: character / scene / artifact sample trio. */
 export function MockAssetCards() {
   const cards = [
     { label: "角色", name: "主角小狐", tone: "bg-orange-100 text-orange-500" },
@@ -230,8 +224,6 @@ export function LiveSelectionDemo() {
     selection.addRange(range);
   };
 
-  // Auto-run the demo once when the step is entered; on leaving, clean up the
-  // selection and reference the demo left behind.
   useEffect(() => {
     const timer = window.setTimeout(runDemo, 600);
     return () => {

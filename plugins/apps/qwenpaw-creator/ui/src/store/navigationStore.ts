@@ -10,9 +10,8 @@ import { create } from "zustand";
 export interface SavedLocation {
   /** Hash route path, e.g. /project/xxx/assets */
   path: string;
-  /** Source description, e.g. "Assets / product key visual" */
   description: string;
-  /** Selected object identifier (element:xxx / timeline:xxx / asset-version:xxx) */
+  /** Selected object ref (element:xxx / timeline:xxx / asset-version:xxx) */
   selectedRef?: string;
   /** scrollTop of the main scroll container */
   scrollTop?: number;
@@ -28,9 +27,12 @@ export interface ReviewFocusRequest {
 
 interface NavigationStore {
   stack: SavedLocation[];
-  /** Selection/scroll state to apply after restoring a location (consumed by the target page) */
+  /** Selection/scroll to apply after restore; consumed by the target page. */
   pendingRestore: SavedLocation | null;
-  /** Latest review-focus request; repeated clicks on the same route still bump the nonce so the target page replays the flash. */
+  /**
+   * Latest review-focus request; same-route repeat clicks still bump the
+   * nonce so the target page replays the flash.
+   */
   reviewFocus: ReviewFocusRequest | null;
   /**
    * Target path (without query) of the last navigateToRef / returnToSavedLocation

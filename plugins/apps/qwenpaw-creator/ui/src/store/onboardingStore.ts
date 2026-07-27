@@ -28,7 +28,7 @@ const DEFAULT_PERSISTED: PersistedOnboarding = {
   hints: {},
 };
 
-// Lazy lookup: tests replace window.localStorage, so don't capture a reference at module load.
+// Lazy lookup: tests replace window.localStorage; don't capture at load.
 function getStorage(): Pick<Storage, "getItem" | "setItem"> | undefined {
   try {
     return typeof window === "undefined" ? undefined : window.localStorage;
@@ -66,7 +66,7 @@ function persist(state: PersistedOnboarding) {
       }),
     );
   } catch {
-    // Storage unavailable (e.g. private mode): silently degrade to session-only state.
+    // Storage unavailable (private mode): degrade to session-only state.
   }
 }
 

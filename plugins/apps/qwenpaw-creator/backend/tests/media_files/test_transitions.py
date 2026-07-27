@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
 # pylint: disable=protected-access
-"""Element transitions: unit tests for filter-chain construction, pair
-collection, and runner validation."""
 
 from __future__ import annotations
 
@@ -234,7 +232,6 @@ def test_plan_rejects_non_adjacent_endpoints():
         timeline.elements_by_id["b"],
         timeline.elements_by_id["c"],
     ]
-    # Point the transition at non-adjacent a -> c.
     timeline.elements_by_id["fade"] = TimelineElement(
         element_id="fade",
         span=TimelineSpan(start_tick=4_600, duration_tick=400),

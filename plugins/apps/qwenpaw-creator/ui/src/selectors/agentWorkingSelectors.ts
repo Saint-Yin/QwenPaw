@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useCreatorSessionStore } from "@/store/creatorSessionStore";
 
-// Same "agent is working" criteria as AgentStatusBar's active check; additionally
+// Same "working" criteria as AgentStatusBar's active check; additionally
 // counts queuedUi messages not yet persisted, covering the window between
 // clicking send and the backend responding.
 const WORKING_SESSION_STATUSES = new Set([

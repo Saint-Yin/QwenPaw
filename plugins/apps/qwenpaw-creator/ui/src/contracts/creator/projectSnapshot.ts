@@ -1,4 +1,4 @@
-/** Canonical schema-v2 Project document returned by GET /projects/:id/project. */
+/** Canonical schema-v2 Project document from GET /projects/:id/project. */
 export type ProjectJsonRecord = Record<string, unknown>;
 
 export interface ProjectEntityCollection<T> {

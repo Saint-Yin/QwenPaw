@@ -1916,7 +1916,6 @@ class FileCreatorAgentRuntime:
                 status=SpecialistRunStatus.CANCELLED,
                 updates={"final_marker": "CANCELLED"},
             )
-            # Disk is now CANCELLED
             # Emit subagent.failed so the frontend can disarm.
             await self._event(
                 project_id,

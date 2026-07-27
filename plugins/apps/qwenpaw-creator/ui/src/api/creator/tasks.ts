@@ -67,7 +67,7 @@ export interface TimelineRenderResult {
   replayed: boolean;
 }
 
-/** User-initiated final-cut export: deterministic backend compositing, no Agent involved. */
+/** User-initiated final-cut export: deterministic compositing, no Agent. */
 export function renderTimeline(
   projectId: string,
   timelineId: string,

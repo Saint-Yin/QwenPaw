@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 
-// antd/rc-component depend on the following browser APIs under jsdom; polyfill them.
+// antd/rc-component need these browser APIs under jsdom; polyfill them.
 if (!("ResizeObserver" in globalThis)) {
   class ResizeObserver {
     observe() {}
@@ -42,7 +42,8 @@ if (!URL.createObjectURL) {
   URL.revokeObjectURL = () => {};
 }
 
-// jsdom doesn't implement HTMLMediaElement playback control; live-assembly preview tests need callable stubs.
+// jsdom lacks HTMLMediaElement playback control; live-assembly preview
+// tests need callable stubs.
 if (typeof HTMLMediaElement !== "undefined") {
   HTMLMediaElement.prototype.play = function play() {
     this.dispatchEvent(new Event("play"));

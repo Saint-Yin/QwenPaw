@@ -27,7 +27,6 @@ from models.image.base import (
 )
 
 
-# Map aspect ratio → OpenAI size string (WIDTHxHEIGHT)
 OPENAI_SIZE_MAP = {
     "16:9": "1536x1024",
     "9:16": "1024x1536",

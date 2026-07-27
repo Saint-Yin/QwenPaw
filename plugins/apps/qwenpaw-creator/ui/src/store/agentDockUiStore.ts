@@ -4,12 +4,12 @@ export interface SelectionAttachment {
   text: string;
   ref: string | null;
   field: string | null;
-  /** Exact RFC 6901 pointer to the canonical value in project.json, when available. */
+  /** Exact RFC 6901 pointer to the canonical project.json value, if any. */
   path?: string | null;
   start: number;
   end: number;
   label: string;
-  /** Timeline selections use ticks; text selections leave these fields absent. */
+  /** Timeline selections use ticks; text selections omit these fields. */
   kind?: "text" | "timeline_point" | "timeline_range";
   timelineId?: string;
   startTick?: number;
@@ -28,7 +28,10 @@ interface AgentDockUiState {
   draft: string;
   selection: SelectionAttachment | null;
   allowExpandDetails: boolean;
-  /** Collapse preference of the inline decision tray; a new blocking item (production confirmation) forces it open. */
+  /**
+   * Collapse preference of the inline decision tray; a new blocking item
+   * (production confirmation) forces it open.
+   */
   decisionTrayCollapsed: boolean;
   setOpen: (open: boolean) => void;
   setTab: (tab: AgentDockTab) => void;

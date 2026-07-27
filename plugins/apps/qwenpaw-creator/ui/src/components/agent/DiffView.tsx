@@ -31,7 +31,6 @@ function safeStringify(value: unknown): string {
 function diffLines(before: string[], after: string[]): DiffLine[] {
   const rows = before.length;
   const cols = after.length;
-  // LCS table.
   const lcs: number[][] = Array.from({ length: rows + 1 }, () =>
     new Array<number>(cols + 1).fill(0),
   );

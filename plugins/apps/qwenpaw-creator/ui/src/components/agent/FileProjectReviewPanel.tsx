@@ -105,7 +105,6 @@ function operationPreview(operation: FileProjectReviewOperation): string {
   return `${previewText(operation.before)} → ${previewText(operation.after)}`;
 }
 
-/** The media artifact locator for a media-generation review, if any. */
 export function reviewMediaLocator(
   review: FileProjectReviewRecord,
 ): Record<string, string> | null {
@@ -178,8 +177,6 @@ export default function FileProjectReviewPanel({
   })();
   const assetName = (assetId: string): string =>
     project?.visual.entities.items[assetId]?.name || assetId;
-  /** Ownership line for a media artifact, e.g. "「第一幕：发现」的分镜图" or
-   * "「狐狸」的形象图". */
   const mediaOwnerLine = (locator: Record<string, string>): string => {
     if (locator.elementId) {
       const name = elementNames[locator.elementId] ?? locator.elementId;

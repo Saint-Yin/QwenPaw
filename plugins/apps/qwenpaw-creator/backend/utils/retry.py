@@ -19,18 +19,6 @@ def retry(
     backoff: float = 2.0,
     exceptions: Tuple[Type[Exception], ...] = (Exception,),
 ):
-    """Retry decorator with exponential backoff.
-
-    Args:
-        max_retries: Maximum number of retry attempts.
-        delay: Initial delay between retries in seconds.
-        backoff: Multiplier applied to delay after each retry.
-        exceptions: Tuple of exception types to catch and retry on.
-
-    Returns:
-        Decorator function.
-    """
-
     def decorator(func):
         if asyncio.iscoroutinefunction(func):
 

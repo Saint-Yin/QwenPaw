@@ -327,8 +327,6 @@ export default function TimelineCanvas({
     return () => document.removeEventListener("mousedown", close);
   }, []);
 
-  // Keep the final-render preview aligned with the playhead; also seek once
-  // when the preview just opened or metadata hasn't loaded yet.
   const seekPreviewToPlayhead = (video: HTMLVideoElement) => {
     if (!Number.isFinite(video.duration)) return;
     const target = playheadTick / timeline.ticks_per_second;
@@ -723,7 +721,6 @@ export default function TimelineCanvas({
               }
               onClick={() => {
                 if (previewMode === "live") {
-                  // Playing again after reaching the end restarts from the beginning.
                   if (!playing && playheadTick >= timelineDuration)
                     onPlayheadChange(0);
                   setPlaying((value) => !value);
@@ -1028,8 +1025,6 @@ export default function TimelineCanvas({
                                 />
                               )}
                               {isTransition ? (
-                                // Crossed-triangle transition glyph familiar from editing
-                                // software; recognizable even inside very narrow blocks.
                                 <svg
                                   aria-hidden
                                   data-transition-glyph

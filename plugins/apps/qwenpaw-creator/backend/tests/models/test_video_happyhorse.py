@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
 # pylint: disable=protected-access
-"""HappyHorse r2v contract: Wan-protocol routing, body shape, validation."""
 
 from __future__ import annotations
 

@@ -76,8 +76,9 @@ export function creatorTargetLabel(
   }
   if (ref.startsWith("asset:")) {
     const logicalAssetId = ref.slice("asset:".length);
-    // For visual entities (scene/character/prop), resolve asset:xxx targets to the
-    // entity's real name first, so users never see codes like asset:char:fox.
+    // For visual entities (scene/character/prop), resolve asset:xxx targets
+    // to the entity's real name first, so users never see codes like
+    // asset:char:fox.
     const entity = project?.visual?.entities?.items?.[logicalAssetId];
     if (entity?.name) return entity.name;
     return (

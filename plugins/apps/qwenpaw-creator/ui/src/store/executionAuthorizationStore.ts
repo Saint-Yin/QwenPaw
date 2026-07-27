@@ -16,7 +16,7 @@ interface ExecutionAuthorizationState {
   projectId: string | null;
   items: ExecutionAuthorizationView[];
   loading: boolean;
-  /** Loaded successfully at least once; poll refreshes no longer drop the UI back to loading copy. */
+  /** Loaded at least once; poll refreshes never drop UI back to loading. */
   loaded: boolean;
   error: string | null;
   bindProject: (projectId: string) => void;

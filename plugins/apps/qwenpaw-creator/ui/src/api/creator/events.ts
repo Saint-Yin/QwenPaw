@@ -78,7 +78,7 @@ const CREATOR_EVENT_TYPES = [
   "session.error",
 ] as const;
 
-/** Durable project stream. `after` is the persisted seq cursor used after refresh/reconnect. */
+/** Durable project stream. `after`: persisted seq cursor for reconnect. */
 export function openCreatorEvents(
   projectId: string,
   after: number,
