@@ -1,7 +1,9 @@
 import { creatorAuthenticatedUrl } from "./client";
 
 export function getAssetVersionMediaUrl(versionId: string): string {
-  return creatorAuthenticatedUrl(`/media/assets/${encodeURIComponent(versionId)}`);
+  return creatorAuthenticatedUrl(
+    `/media/assets/${encodeURIComponent(versionId)}`,
+  );
 }
 
 export function getAssetVersionFrameUrl(
