@@ -192,6 +192,103 @@ def test_load_migrates_legacy_grounding_model_to_search_and_validation(
     assert loaded.grounding.search_api_key == "legacy-key"
 
 
+def test_persisted_only_load_ignores_grounding_env_overrides(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """``include_environment=False`` must not let env vars skew migration.
+
+    With a legacy ``reuse_llm=false`` file and the validation-source env
+    var set, the persisted-only view previously skipped the reuse_llm
+    migration (because the env var existed) without applying the env value
+    either — reporting validation_source=llm/reuse_llm=true to the UI.
+    """
+
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path.resolve()))
+    config_path = (tmp_path / "config" / "model_config.json").resolve()
+    monkeypatch.setenv("CREATOR_MODEL_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("WEB_GROUNDING_VALIDATION_SOURCE", "vlm")
+    monkeypatch.setenv("WEB_GROUNDING_SEARCH_REUSE_LLM", "0")
+    payload = _config()
+    payload["grounding"].update(
+        {
+            "reuse_llm": False,
+            "model_name": "legacy-qwen",
+            "api_key": "legacy-key",
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "protocol": "DashScope（百炼）",
+        },
+    )
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    persisted_only = model_routes.load_model_config(include_environment=False)
+    assert persisted_only.grounding.validation_source == "custom"
+    assert persisted_only.grounding.reuse_llm is False
+
+    # The runtime view still lets the environment win.
+    with_environment = model_routes.load_model_config()
+    assert with_environment.grounding.validation_source == "vlm"
+
+
+def test_host_legacy_reuse_llm_survives_merge_with_local_config(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A portal that only exposes reuse_llm must still beat local defaults.
+
+    The local config always carries validation_source, so without the
+    legacy migration in ``bind_creator_tool_config`` the merged runtime
+    config would keep validating with the LLM even though the portal
+    explicitly selected a custom verifier.
+    """
+
+    from models import config as creator_model_config
+
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path.resolve()))
+    config_path = (tmp_path / "config" / "model_config.json").resolve()
+    monkeypatch.setenv("CREATOR_MODEL_CONFIG_PATH", str(config_path))
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps(_config()), encoding="utf-8")
+
+    host_grounding = {
+        "reuse_llm": "false",
+        "api_key": "host-verifier-key",
+        "model": "host-verifier-model",
+        "base_url": "https://host.example.test/v1",
+    }
+    monkeypatch.setattr(
+        model_routes,
+        "_qwenpaw_tool_configs",
+        lambda _request: {
+            creator_model_config.CREATOR_GROUNDING_CONFIG_TOOL: dict(
+                host_grounding,
+            ),
+        },
+    )
+
+    async def scenario():
+        generator = model_routes.bind_creator_tool_config(object())
+        await generator.__anext__()
+        try:
+            source = creator_model_config.get_web_grounding_validation_source()
+            api_key = creator_model_config.get_web_grounding_model_api_key()
+            model_name = creator_model_config.get_web_grounding_model_name()
+        finally:
+            await generator.aclose()
+        return source, api_key, model_name
+
+    source, api_key, model_name = asyncio.run(scenario())
+
+    assert source == "custom"
+    assert api_key == "host-verifier-key"
+    assert model_name == "host-verifier-model"
+
+    # An explicit host validation_source is honored as-is.
+    host_grounding["validation_source"] = "vlm"
+    assert asyncio.run(scenario())[0] == "vlm"
+
+
 def test_model_config_is_single_file_native_and_idempotent(
     tmp_path,
     monkeypatch,

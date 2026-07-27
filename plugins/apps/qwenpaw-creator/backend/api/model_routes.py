@@ -250,8 +250,9 @@ def load_model_config(*, include_environment: bool = True) -> ModelConfigData:
     grounding_explicit = (
         grounding_section if isinstance(grounding_section, dict) else {}
     )
-    if "validation_source" not in grounding_explicit and not os.environ.get(
-        "WEB_GROUNDING_VALIDATION_SOURCE",
+    if "validation_source" not in grounding_explicit and not (
+        include_environment
+        and os.environ.get("WEB_GROUNDING_VALIDATION_SOURCE")
     ):
         base["grounding"][
             "validation_source"
@@ -261,8 +262,9 @@ def load_model_config(*, include_environment: bool = True) -> ModelConfigData:
     base["grounding"]["reuse_llm"] = reuse_llm_from_validation_source(
         base["grounding"].get("validation_source") or "",
     )
-    if "search_reuse_llm" not in grounding_explicit and not os.environ.get(
-        "WEB_GROUNDING_SEARCH_REUSE_LLM",
+    if "search_reuse_llm" not in grounding_explicit and not (
+        include_environment
+        and os.environ.get("WEB_GROUNDING_SEARCH_REUSE_LLM")
     ):
         # Before retrieval and verification were split, both reused the same
         # model selection. Preserve that behavior when loading an old file.
@@ -475,6 +477,20 @@ async def bind_creator_tool_config(request: Request):
     """Bind host config first, then fill only absent fields from external local config."""
 
     configs = _qwenpaw_tool_configs(request)
+    grounding_host = configs.get(model_config.CREATOR_GROUNDING_CONFIG_TOOL)
+    if (
+        isinstance(grounding_host, dict)
+        and "reuse_llm" in grounding_host
+        and not grounding_host.get("validation_source")
+    ):
+        # Older host portals only expose the legacy reuse_llm switch. The
+        # local config always carries validation_source, which the runtime
+        # getters prefer — without this migration the merge would silently
+        # override the portal's "don't reuse the LLM" choice.
+        grounding_host["validation_source"] = validation_source_from_reuse_llm(
+            str(grounding_host["reuse_llm"]).strip().casefold()
+            not in {"0", "false", "no", "off"},
+        )
     for tool_name, local in request_tool_configs().items():
         merged = dict(local)
         merged.update(configs.get(tool_name) or {})

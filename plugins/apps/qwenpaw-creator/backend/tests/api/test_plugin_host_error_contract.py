@@ -153,6 +153,7 @@ def test_plugin_manifest_declares_every_creator_config_tool(
         "search_api_key",
         "search_model",
         "search_base_url",
+        "validation_source",
         "reuse_llm",
         "api_key",
         "model",

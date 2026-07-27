@@ -239,17 +239,35 @@ class _JqProjectArgumentDiagnosis:
     strict_json_error: str | None
     fingerprint: str
 
+    @property
+    def schema_valid(self) -> bool:
+        return not (
+            self.missing_top_level
+            or self.invalid_top_level
+            or self.unexpected_top_level
+        )
+
+    @property
+    def safe_to_execute(self) -> bool:
+        """Whether jq may run on these arguments.
+
+        jq_project mutates the Project, so a payload that only became a
+        JSON object through ``json_repair`` (typically a truncated stream
+        closed by the repairer) is never executed: the top-level shape may
+        look complete while string/JSON argument values silently lost their
+        tails. Read-only tools keep accepting repaired payloads.
+        """
+
+        return self.schema_valid and not self.json_repair_applied
+
     def event_payload(self) -> dict[str, Any]:
         return {
             "rawArgumentsBytes": self.raw_arguments_bytes,
             "strictJsonParsed": self.strict_json_parsed,
             "jsonRepairApplied": self.json_repair_applied,
             "strictJsonError": self.strict_json_error,
-            "schemaValid": not (
-                self.missing_top_level
-                or self.invalid_top_level
-                or self.unexpected_top_level
-            ),
+            "schemaValid": self.schema_valid,
+            "safeToExecute": self.safe_to_execute,
             "missingTopLevel": list(self.missing_top_level),
             "invalidTopLevel": list(self.invalid_top_level),
             "unexpectedTopLevel": list(self.unexpected_top_level),
@@ -302,6 +320,15 @@ class MalformedJqProjectArguments(FileAgentRuntimeError):
             details.append(
                 "unexpected top-level "
                 + ", ".join(diagnosis.unexpected_top_level),
+            )
+        if diagnosis.json_repair_applied:
+            details.append(
+                "arguments only parsed after json_repair"
+                + (
+                    f" ({diagnosis.strict_json_error})"
+                    if diagnosis.strict_json_error
+                    else ""
+                ),
             )
         message = "jq_project arguments are structurally corrupted; jq was not executed"
         if details:
@@ -1204,13 +1231,10 @@ class FileCreatorAgentRuntime:
                         raise ToolArgumentsJSONError(call.parse_error)
                     if call.name == JQ_PROJECT_TOOL_NAME:
                         diagnosis = _jq_project_argument_diagnosis(call)
-                        schema_valid = not (
-                            diagnosis.missing_top_level
-                            or diagnosis.invalid_top_level
-                            or diagnosis.unexpected_top_level
-                        )
                         next_attempt = (
-                            0 if schema_valid else malformed_jq_attempts + 1
+                            0
+                            if diagnosis.safe_to_execute
+                            else malformed_jq_attempts + 1
                         )
                         await self._event(
                             project_id,
@@ -1228,7 +1252,7 @@ class FileCreatorAgentRuntime:
                                 **diagnosis.event_payload(),
                             },
                         )
-                        if not schema_valid:
+                        if not diagnosis.safe_to_execute:
                             malformed_jq_attempts = next_attempt
                             repeated_payload = (
                                 diagnosis.fingerprint
@@ -2086,13 +2110,10 @@ class FileCreatorAgentRuntime:
                         raise ToolArgumentsJSONError(call.parse_error)
                     if call.name == JQ_PROJECT_TOOL_NAME:
                         diagnosis = _jq_project_argument_diagnosis(call)
-                        schema_valid = not (
-                            diagnosis.missing_top_level
-                            or diagnosis.invalid_top_level
-                            or diagnosis.unexpected_top_level
-                        )
                         next_attempt = (
-                            0 if schema_valid else malformed_jq_attempts + 1
+                            0
+                            if diagnosis.safe_to_execute
+                            else malformed_jq_attempts + 1
                         )
                         await self._event(
                             project_id,
@@ -2109,7 +2130,7 @@ class FileCreatorAgentRuntime:
                                 **diagnosis.event_payload(),
                             },
                         )
-                        if not schema_valid:
+                        if not diagnosis.safe_to_execute:
                             malformed_jq_attempts = next_attempt
                             repeated_payload = (
                                 diagnosis.fingerprint

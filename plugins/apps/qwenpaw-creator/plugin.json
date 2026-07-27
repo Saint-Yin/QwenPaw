@@ -183,12 +183,22 @@
             "help": "Used only when search_reuse_llm is false."
           },
           {
+            "name": "validation_source",
+            "label": "Validation Model Source",
+            "type": "select",
+            "required": false,
+            "default": "llm",
+            "options": ["llm", "vlm", "custom"],
+            "help": "Which model verifies grounded images: the Creator LLM, the Creator VLM, or the custom model below. Overrides the legacy reuse_llm switch."
+          },
+          {
             "name": "reuse_llm",
             "label": "Reuse Creator LLM for Validation",
             "type": "select",
             "required": false,
             "default": "true",
-            "options": ["true", "false"]
+            "options": ["true", "false"],
+            "help": "Legacy switch; ignored when validation_source is set."
           },
           {
             "name": "api_key",

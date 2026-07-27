@@ -89,8 +89,8 @@ describe("ModelConfigModal configuration lifecycle", () => {
     const onClose = vi.fn();
     const { calls } = installMockFetch([
       {
-        match: "/models/config/llm",
-        method: "PATCH",
+        match: "/models/config",
+        method: "POST",
         response: { json: { ok: true } },
       },
       {
@@ -136,17 +136,18 @@ describe("ModelConfigModal configuration lifecycle", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /保存配置/ }));
-    // Sectioned save only PATCHes the section of the current tab and closes the
-    // modal automatically on success.
+    // Dirty sections are saved through one atomic POST of the full config and
+    // the modal closes automatically on success.
     await waitFor(() => {
       const save = calls.find(
-        (call) =>
-          call.method === "PATCH" && call.url.endsWith("/models/config/llm"),
+        (call) => call.method === "POST" && call.url.endsWith("/models/config"),
       );
       expect(save?.body).toMatchObject({
-        model_name: "saved-model",
-        api_key: "saved-secret",
-        base_url: "https://provider.test/v1",
+        llm: {
+          model_name: "saved-model",
+          api_key: "saved-secret",
+          base_url: "https://provider.test/v1",
+        },
       });
     });
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
@@ -156,8 +157,8 @@ describe("ModelConfigModal configuration lifecycle", () => {
     const onClose = vi.fn();
     const { calls } = installMockFetch([
       {
-        match: "/models/config/grounding",
-        method: "PATCH",
+        match: "/models/config",
+        method: "POST",
         response: { json: { ok: true } },
       },
       {
@@ -194,14 +195,14 @@ describe("ModelConfigModal configuration lifecycle", () => {
 
     await waitFor(() => {
       const save = calls.find(
-        (call) =>
-          call.method === "PATCH" &&
-          call.url.endsWith("/models/config/grounding"),
+        (call) => call.method === "POST" && call.url.endsWith("/models/config"),
       );
       expect(save?.body).toMatchObject({
-        enabled: false,
-        reuse_llm: true,
-        tavily_api_key: "tvly-saved-secret",
+        grounding: {
+          enabled: false,
+          reuse_llm: true,
+          tavily_api_key: "tvly-saved-secret",
+        },
       });
     });
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());

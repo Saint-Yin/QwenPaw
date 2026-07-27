@@ -384,6 +384,133 @@ def test_malformed_jq_project_arguments_recover_with_a_fresh_small_call(
     )
 
 
+def test_repaired_jq_project_arguments_never_execute_even_when_schema_valid(
+    tmp_path,
+) -> None:
+    """A truncated-then-repaired payload with intact top-level keys is not run.
+
+    json_repair can close a truncated stream so the object still carries
+    projectId/program; jq must not execute such a payload because argument
+    values may have silently lost their tails.
+    """
+
+    turn = 0
+
+    async def callback(messages, _tools):
+        nonlocal turn
+        turn += 1
+        if turn == 1:
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id="read-before-truncation",
+                        name="read_project",
+                        arguments={"projectId": PROJECT_ID},
+                    ),
+                ),
+            )
+        if turn == 2:
+            observed = json.loads(messages[-1]["content"])
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id="repaired-write",
+                        name="jq_project",
+                        arguments={
+                            "projectId": PROJECT_ID,
+                            "baseEtag": observed["etag"],
+                            "program": ".description = $description",
+                            "stringArgs": {
+                                "description": "truncated mid-sentence descri",
+                            },
+                        },
+                        raw_arguments_bytes=18_522,
+                        arguments_repaired=True,
+                        strict_json_error="Unterminated string at EOF",
+                    ),
+                ),
+            )
+        if turn == 3:
+            rejected = json.loads(messages[-1]["content"])
+            assert rejected["error"]["type"] == ("MalformedJqProjectArguments")
+            assert "json_repair" in rejected["error"]["message"]
+            assert rejected["error"]["details"]["schemaValid"] is True
+            assert rejected["error"]["details"]["safeToExecute"] is False
+            assert rejected["error"]["details"]["jsonRepairApplied"] is True
+            assert rejected["error"]["retry"]["attempt"] == 1
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id="reread-after-truncation",
+                        name="read_project",
+                        arguments={"projectId": PROJECT_ID},
+                    ),
+                ),
+            )
+        if turn == 4:
+            observed = json.loads(messages[-1]["content"])
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id="clean-replacement-write",
+                        name="jq_project",
+                        arguments={
+                            "projectId": PROJECT_ID,
+                            "baseEtag": observed["etag"],
+                            "program": ".description = $description",
+                            "stringArgs": {
+                                "description": "full description, resent",
+                            },
+                        },
+                    ),
+                ),
+            )
+        return AgentModelTurn(content="Resent the full commit.")
+
+    async def scenario():
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="Create the project plan",
+        )
+        driver = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(callback),
+            poll_interval_seconds=0.01,
+        )
+        await driver.start()
+        driver.notify(PROJECT_ID)
+        await _wait_for(
+            lambda: services.sessions.get_project_session(
+                PROJECT_ID,
+            ).last_consumed_message_seq
+            == 1,
+        )
+        await driver.wait_until_idle(PROJECT_ID)
+        project = services.projects.read(PROJECT_ID)
+        session = services.sessions.get_project_session(PROJECT_ID)
+        events = services.sessions.list_events(PROJECT_ID, SESSION_ID)
+        await driver.stop()
+        return project, session, events
+
+    project, session, events = asyncio.run(scenario())
+
+    # The repaired payload never reached jq: only the clean resend committed.
+    assert project.project.description == "full description, resent"
+    assert project.generation == 1
+    assert session.error is None
+    assert turn == 5
+    checks = [
+        event
+        for event in events
+        if event.event_type == "agent.tool_arguments_checked"
+    ]
+    assert len(checks) == 2
+    assert checks[0].payload["jsonRepairApplied"] is True
+    assert checks[0].payload["schemaValid"] is True
+    assert checks[0].payload["safeToExecute"] is False
+    assert checks[1].payload["safeToExecute"] is True
+
+
 def test_repeated_malformed_jq_project_arguments_stop_after_two_retries(
     tmp_path,
 ) -> None:

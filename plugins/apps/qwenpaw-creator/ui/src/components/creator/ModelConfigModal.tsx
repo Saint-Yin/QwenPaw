@@ -17,7 +17,6 @@ import {
 import {
   getModelConfig,
   saveModelConfig,
-  patchModelConfigSection,
   patchExecutionAuthorization,
   testModelConnection,
 } from "@/api/creator";
@@ -665,11 +664,15 @@ export default function ModelConfigModal({ open, onClose }: Props) {
           const ok = await handleTest(section);
           if (!ok) return;
         }
-        const res = await patchModelConfigSection(
-          section,
-          config[section] as unknown as Record<string, unknown>,
-        );
-        if (!res.ok) throw new Error(`保存 ${section} 失败：服务端未确认写入`);
+      }
+
+      if (dirtySections.length > 0) {
+        // Save everything in one POST: sequential per-section PATCHes each
+        // re-validate the full grounding config, so interdependent edits
+        // (e.g. a generic LLM plus a Tavily key) could fail mid-sequence
+        // and leave a partially saved configuration behind.
+        const res = await saveModelConfig(config);
+        if (!res.ok) throw new Error("保存失败：服务端未确认写入");
       }
 
       message.success("配置已保存");
