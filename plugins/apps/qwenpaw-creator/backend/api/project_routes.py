@@ -42,6 +42,7 @@ from services.project_files.store import (
 )
 from services.runtime_files.errors import RuntimeFileError
 from services.runtime_files.idempotency_store import IdempotencyRecordStore
+from services.runtime_files.locking import CrossProcessFileLock
 from services.runtime_files.session_store import ProjectRuntimeBootstrap
 
 from .dependencies import (
@@ -255,61 +256,67 @@ async def create_project(
     )
 
     def operation() -> ProjectCreateResponse:
-        existing = services.projects.list()
-        target_name = request.name.strip()
-        if any(item.name == target_name for item in existing):
-            raise ValidationError(f"项目名称「{target_name}」已存在，请使用其他名称")
+        # The name-uniqueness check and the create must share one
+        # cross-process lock; per-project lifecycle locks have different
+        # domains for different project ids.
+        with CrossProcessFileLock(
+            services.projects.root / ".project-names.lock",
+        ):
+            existing = services.projects.list()
+            target_name = request.name.strip()
+            if any(item.name == target_name for item in existing):
+                raise ValidationError(f"项目名称「{target_name}」已存在，请使用其他名称")
 
-        holder: list[ProjectRuntimeBootstrap] = []
+            holder: list[ProjectRuntimeBootstrap] = []
 
-        def initialize(staged_project_root) -> None:
-            holder.append(
-                services.sessions.initialize_staged_project(
-                    staged_project_root,
-                    project_id,
-                    session_id=session_id,
-                    conversation_id=conversation_id,
-                    session_metadata={
-                        "projectCreate": {
-                            "clientRequestId": client_request_id,
-                            "requestHash": request_hash,
-                            "projectSnapshotId": project_snapshot_id,
-                            "response": initial_response.model_dump(
-                                mode="json",
-                                by_alias=True,
-                            ),
+            def initialize(staged_project_root) -> None:
+                holder.append(
+                    services.sessions.initialize_staged_project(
+                        staged_project_root,
+                        project_id,
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        session_metadata={
+                            "projectCreate": {
+                                "clientRequestId": client_request_id,
+                                "requestHash": request_hash,
+                                "projectSnapshotId": project_snapshot_id,
+                                "response": initial_response.model_dump(
+                                    mode="json",
+                                    by_alias=True,
+                                ),
+                            },
                         },
-                    },
-                    initial_goal=request.initial_goal,
-                    goal_id=goal_id
-                    if request.initial_goal is not None
-                    else None,
-                    initial_message_id=(
-                        message_id
+                        initial_goal=request.initial_goal,
+                        goal_id=goal_id
                         if request.initial_goal is not None
-                        else None
+                        else None,
+                        initial_message_id=(
+                            message_id
+                            if request.initial_goal is not None
+                            else None
+                        ),
+                        initial_client_message_id=(
+                            f"initial-goal:{client_request_id}"
+                            if request.initial_goal is not None
+                            else None
+                        ),
                     ),
-                    initial_client_message_id=(
-                        f"initial-goal:{client_request_id}"
-                        if request.initial_goal is not None
-                        else None
-                    ),
-                ),
-            )
+                )
 
-        try:
-            snapshot = services.projects.create(
-                project,
-                initialize_staged_project=initialize,
-            )
-        except ProjectAlreadyExists:
-            return _existing_bootstrap(
-                services,
-                project_id=project_id,
-                expected_session_id=session_id,
-                expected_conversation_id=conversation_id,
-                request_hash=request_hash,
-            )
+            try:
+                snapshot = services.projects.create(
+                    project,
+                    initialize_staged_project=initialize,
+                )
+            except ProjectAlreadyExists:
+                return _existing_bootstrap(
+                    services,
+                    project_id=project_id,
+                    expected_session_id=session_id,
+                    expected_conversation_id=conversation_id,
+                    request_hash=request_hash,
+                )
         if len(holder) != 1:
             raise StorageIntegrityError("Project Runtime 未随 Project 原子创建")
         services.poller.note_commit(snapshot)

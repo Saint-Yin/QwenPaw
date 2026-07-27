@@ -13,13 +13,15 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
 import httpx
 
 from models import config
 from models.media_transport import upload_local_file_to_dashscope_temp
+from services.runtime_files.runtime_dependencies import resolve_ffmpeg
 from utils.logger import setup_logger
+from utils.paths import local_path_from_file_url
 from utils.remote_download import download_remote_file
 
 logger = setup_logger("models.asr")
@@ -88,8 +90,8 @@ async def _fun_asr_file_url(media_url: str, api_key: str, model: str) -> str:
     resolves via the ``X-DashScope-OssResourceResolve: enable`` header.
     """
     parsed = urlparse(media_url)
-    if parsed.scheme == "file" and not parsed.netloc:
-        local_path = Path(unquote(parsed.path))
+    if parsed.scheme == "file":
+        local_path = local_path_from_file_url(media_url)
         media_type = (
             mimetypes.guess_type(local_path.name)[0]
             or "application/octet-stream"
@@ -194,8 +196,8 @@ async def _fun_asr(media_url: str) -> ASRResult:
 
 def _local_media_path(media_url: str, directory: Path) -> Path:
     parsed = urlparse(media_url)
-    if parsed.scheme == "file" and not parsed.netloc:
-        return Path(unquote(parsed.path))
+    if parsed.scheme == "file":
+        return local_path_from_file_url(media_url)
     if parsed.scheme not in {"http", "https"}:
         raise ValueError(
             "Whisper input must be a local file or HTTP(S) media URL",
@@ -206,9 +208,15 @@ def _local_media_path(media_url: str, directory: Path) -> Path:
 
 
 def _extract_audio_chunks(source: Path, directory: Path) -> list[Path]:
+    ffmpeg = resolve_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError(
+            "ffmpeg is required for Whisper audio extraction; set "
+            "CREATOR_FFMPEG_PATH, install ffmpeg, or install imageio-ffmpeg",
+        )
     pattern = directory / "audio-%04d.mp3"
     command = [
-        "ffmpeg",
+        ffmpeg,
         "-hide_banner",
         "-loglevel",
         "error",

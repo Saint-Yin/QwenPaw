@@ -4,7 +4,12 @@ import type {
   AssetIngestAccepted,
   PostIngestAction,
 } from "@/contracts/creator";
-import { creatorApiUrl, creatorRequest, jsonBody, newClientId } from "./client";
+import {
+  creatorAuthenticatedUrl,
+  creatorRequest,
+  jsonBody,
+  newClientId,
+} from "./client";
 
 const assetsPath = (projectId: string) =>
   `/projects/${encodeURIComponent(projectId)}/assets`;
@@ -99,7 +104,7 @@ export function getAssetContentUrl(
   const query = assetVersionId
     ? `?versionId=${encodeURIComponent(assetVersionId)}`
     : "";
-  return creatorApiUrl(
+  return creatorAuthenticatedUrl(
     `/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(
       assetId,
     )}/content${query}`,

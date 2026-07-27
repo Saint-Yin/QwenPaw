@@ -100,7 +100,12 @@ router = APIRouter(
 _DEFAULT_MAX_REMOTE_ASSET_BYTES = 2 * 1024 * 1024 * 1024
 _DEFAULT_REMOTE_ASSET_TIMEOUT_SECONDS = 60 * 60
 _MAX_LOCAL_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024
+_DEFAULT_MAX_LOCAL_UPLOAD_BYTES = 100 * 1024 * 1024
+_DEFAULT_IMPORT_MAX_FILES = 200
+_DEFAULT_IMPORT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024
+_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
 _REMOTE_INGEST_TASKS: dict[tuple[str, str], asyncio.Task[None]] = {}
+_REMOTE_INGEST_SHUTTING_DOWN = False
 
 
 class AssetImportItemRecord(StrictModel):
@@ -246,6 +251,59 @@ def _validate_local_video_upload(
         and size_bytes > _MAX_LOCAL_VIDEO_UPLOAD_BYTES
     ):
         raise ValidationError("本地视频超过 100 MiB 上传限制")
+
+
+def _positive_int_env(variable: str, default: int) -> int:
+    raw = os.environ.get(variable)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise ValidationError(f"{variable} 必须是正整数") from error
+    if value <= 0:
+        raise ValidationError(f"{variable} 必须是正整数")
+    return value
+
+
+def _local_upload_max_bytes(*, name: str, media_type: str) -> int:
+    guessed_type = mimetypes.guess_type(name)[0] or ""
+    is_video = media_type.casefold().startswith(
+        "video/",
+    ) or guessed_type.casefold().startswith("video/")
+    if is_video:
+        return _MAX_LOCAL_VIDEO_UPLOAD_BYTES
+    return _positive_int_env(
+        "CREATOR_UPLOAD_MAX_BYTES",
+        _DEFAULT_MAX_LOCAL_UPLOAD_BYTES,
+    )
+
+
+async def _read_upload_bounded(
+    upload: UploadFile,
+    *,
+    name: str,
+    max_bytes: int,
+) -> bytes:
+    """Read one upload in chunks; abort as soon as the limit is exceeded."""
+
+    if upload.size is not None and upload.size > max_bytes:
+        raise ValidationError(
+            f"文件「{name}」超过 {_format_byte_limit(max_bytes)} 上传限制",
+        )
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(_UPLOAD_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValidationError(
+                f"文件「{name}」超过 {_format_byte_limit(max_bytes)} 上传限制",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _asset_checksum(item: _AssetInput | _StagedAssetInput) -> str:
@@ -913,6 +971,8 @@ def _run_remote_task_sync(
 
     def report_progress(downloaded: int, total: int | None) -> None:
         nonlocal last_progress
+        if _REMOTE_INGEST_SHUTTING_DOWN:
+            raise RuntimeError("Creator 正在关闭，远程素材入库中止")
         current = executions.get_task(project_id, task_id)
         if current.status is TaskStatus.CANCELLED:
             raise RuntimeError("远程素材入库已取消")
@@ -1008,6 +1068,8 @@ def _start_remote_task(
     attach_source: bool,
     scope: str,
 ) -> None:
+    if _REMOTE_INGEST_SHUTTING_DOWN:
+        return
     task_id = _stable_id("task", project_id, key, scope)
     identity = (project_id, task_id)
     running = _REMOTE_INGEST_TASKS.get(identity)
@@ -1035,6 +1097,24 @@ def _start_remote_task(
             task.exception()
 
     background.add_done_callback(completed)
+
+
+def reset_remote_ingest_admission() -> None:
+    global _REMOTE_INGEST_SHUTTING_DOWN
+    _REMOTE_INGEST_SHUTTING_DOWN = False
+
+
+async def drain_remote_ingest_tasks(timeout_seconds: float = 15.0) -> None:
+    """Stop admission, then cancel and await outstanding ingest tasks."""
+
+    global _REMOTE_INGEST_SHUTTING_DOWN
+    _REMOTE_INGEST_SHUTTING_DOWN = True
+    pending = [task for task in _REMOTE_INGEST_TASKS.values() if not task.done()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.wait(pending, timeout=timeout_seconds)
+    _REMOTE_INGEST_TASKS.clear()
 
 
 def _translate(error: BaseException) -> None:
@@ -1083,11 +1163,13 @@ async def ingest_asset(
             media_type=media_type,
             size_bytes=upload.size,
         )
-        payload = await upload.read()
-        _validate_local_video_upload(
+        payload = await _read_upload_bounded(
+            upload,
             name=name,
-            media_type=media_type,
-            size_bytes=len(payload),
+            max_bytes=_local_upload_max_bytes(
+                name=name,
+                media_type=media_type,
+            ),
         )
         input_item: _AssetInput | _StagedAssetInput = _AssetInput(
             name=name,
@@ -1208,6 +1290,17 @@ async def import_assets(
     ]
     if not uploads:
         raise ValidationError("文件夹导入至少包含一个文件")
+    max_files = _positive_int_env(
+        "CREATOR_IMPORT_MAX_FILES",
+        _DEFAULT_IMPORT_MAX_FILES,
+    )
+    if len(uploads) > max_files:
+        raise ValidationError(f"文件夹导入最多支持 {max_files} 个文件")
+    max_total_bytes = _positive_int_env(
+        "CREATOR_IMPORT_MAX_TOTAL_BYTES",
+        _DEFAULT_IMPORT_MAX_TOTAL_BYTES,
+    )
+    total_bytes = 0
     inputs: list[_AssetInput | _StagedAssetInput] = []
     for index, upload in enumerate(uploads):
         name = Path(upload.filename or f"item-{index + 1}").name
@@ -1221,12 +1314,19 @@ async def import_assets(
             media_type=media_type,
             size_bytes=upload.size,
         )
-        content = await upload.read()
-        _validate_local_video_upload(
+        content = await _read_upload_bounded(
+            upload,
             name=name,
-            media_type=media_type,
-            size_bytes=len(content),
+            max_bytes=_local_upload_max_bytes(
+                name=name,
+                media_type=media_type,
+            ),
         )
+        total_bytes += len(content)
+        if total_bytes > max_total_bytes:
+            raise ValidationError(
+                f"文件夹导入总量超过 {_format_byte_limit(max_total_bytes)} 限制",
+            )
         inputs.append(
             _AssetInput(
                 name=name,

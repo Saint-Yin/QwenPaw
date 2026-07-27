@@ -126,15 +126,16 @@ def test_model_config_is_single_file_native_and_idempotent(
     assert drift.status_code == 409
     assert loaded.status_code == 200
     assert loaded.json()["llm"]["model_name"] == "qwen-plus"
-    assert loaded.json()["llm"]["api_key"] == "secret"
+    # GET never returns persisted secrets; it returns the keep-placeholder.
+    assert loaded.json()["llm"]["api_key"] == model_routes.SECRET_MASK
     assert loaded.json()["oss"] == {
         "enabled": False,
         "access_key_id": "oss-access-id",
-        "access_key_secret": "oss-access-secret",
+        "access_key_secret": model_routes.SECRET_MASK,
         "endpoint": "oss-cn-hangzhou.aliyuncs.com",
         "bucket": "creator-media",
         "public_base_url": "https://media.example.test",
-        "policy_api_key": "oss-policy-secret",
+        "policy_api_key": model_routes.SECRET_MASK,
     }
 
     config_path = tmp_path / "config" / "model_config.json"

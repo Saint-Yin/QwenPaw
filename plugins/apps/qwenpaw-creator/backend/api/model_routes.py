@@ -8,11 +8,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -168,18 +169,56 @@ def _load_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def load_model_config(*, include_environment: bool = True) -> ModelConfigData:
-    """Load persisted configuration, optionally adding legacy environment fallback.
+# Fingerprint-keyed snapshot of the raw persisted config.  Cache hits avoid
+# the cross-process lock and disk read on every request dependency.
+_RAW_CONFIG_CACHE: dict[str, Any] | None = None
+_RAW_CONFIG_CACHE_PATH: Path | None = None
+_RAW_CONFIG_CACHE_FINGERPRINT: tuple[int, int, int] | None = None
 
-    Runtime callers keep supporting deployments configured through ``.env``.  The
-    settings API passes ``include_environment=False`` so the UI reports only what
-    the user has actually saved to ``model_config.json``.
-    """
 
-    config_path = _config_paths()
-    base = _defaults().model_dump()
+def _config_fingerprint(path: Path) -> tuple[int, int, int] | None:
+    try:
+        metadata = path.stat()
+    except OSError:
+        return None
+    return metadata.st_ino, metadata.st_mtime_ns, metadata.st_size
+
+
+def _invalidate_raw_config_cache() -> None:
+    global _RAW_CONFIG_CACHE, _RAW_CONFIG_CACHE_PATH
+    global _RAW_CONFIG_CACHE_FINGERPRINT
+    _RAW_CONFIG_CACHE = None
+    _RAW_CONFIG_CACHE_PATH = None
+    _RAW_CONFIG_CACHE_FINGERPRINT = None
+
+
+def _read_raw_config(config_path: Path) -> dict[str, Any]:
+    global _RAW_CONFIG_CACHE, _RAW_CONFIG_CACHE_PATH
+    global _RAW_CONFIG_CACHE_FINGERPRINT
+    fingerprint = _config_fingerprint(config_path)
+    if (
+        _RAW_CONFIG_CACHE is not None
+        and _RAW_CONFIG_CACHE_PATH == config_path
+        and _RAW_CONFIG_CACHE_FINGERPRINT == fingerprint
+    ):
+        return _RAW_CONFIG_CACHE
+    if fingerprint is None:
+        return {}
     with CrossProcessFileLock(config_path.parent / ".model-config.lock"):
         configs = _load_json(config_path)
+        fingerprint = _config_fingerprint(config_path)
+    _RAW_CONFIG_CACHE = configs
+    _RAW_CONFIG_CACHE_PATH = config_path
+    _RAW_CONFIG_CACHE_FINGERPRINT = fingerprint
+    return configs
+
+
+def _assemble_model_config(
+    configs: dict[str, Any],
+    *,
+    include_environment: bool,
+) -> ModelConfigData:
+    base = _defaults().model_dump()
     for section in _SECTIONS:
         config_section = configs.get(section)
         explicit: set[str] = set()
@@ -212,17 +251,78 @@ def load_model_config(*, include_environment: bool = True) -> ModelConfigData:
     return ModelConfigData.model_validate(base)
 
 
+def load_model_config(*, include_environment: bool = True) -> ModelConfigData:
+    """Load persisted configuration, optionally adding legacy environment fallback.
+
+    Runtime callers keep supporting deployments configured through ``.env``.  The
+    settings API passes ``include_environment=False`` so the UI reports only what
+    the user has actually saved to ``model_config.json``.
+    """
+
+    configs = _read_raw_config(_config_paths())
+    return _assemble_model_config(
+        configs,
+        include_environment=include_environment,
+    )
+
+
+# Placeholder returned instead of persisted secrets; a submitted placeholder
+# means "keep the stored value".
+SECRET_MASK = "__CREATOR_SECRET__"
+_SECRET_FIELDS = ("api_key", "access_key_secret", "policy_api_key")
+
+
+def _mask_secrets(data: ModelConfigData) -> ModelConfigData:
+    payload = data.model_dump()
+    for section in payload.values():
+        if not isinstance(section, dict):
+            continue
+        for field in _SECRET_FIELDS:
+            if section.get(field):
+                section[field] = SECRET_MASK
+    return ModelConfigData.model_validate(payload)
+
+
+def _resolve_secret_masks(
+    data: ModelConfigData,
+    persisted: ModelConfigData,
+) -> ModelConfigData:
+    payload = data.model_dump()
+    stored = persisted.model_dump()
+    for name, section in payload.items():
+        if not isinstance(section, dict):
+            continue
+        for field in _SECRET_FIELDS:
+            if section.get(field) == SECRET_MASK:
+                section[field] = stored.get(name, {}).get(field, "")
+    return ModelConfigData.model_validate(payload)
+
+
 def save_model_config(data: ModelConfigData) -> None:
+    mutate_model_config(lambda current: _resolve_secret_masks(data, current))
+
+
+def mutate_model_config(
+    mutator: Callable[[ModelConfigData], ModelConfigData],
+) -> ModelConfigData:
+    """Apply one read-modify-write transaction under the config lock."""
+
     config_path = _config_paths()
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = data.model_dump()
     with CrossProcessFileLock(config_path.parent / ".model-config.lock"):
+        persisted = _assemble_model_config(
+            _load_json(config_path),
+            include_environment=False,
+        )
+        updated = mutator(persisted)
         atomic_replace_bytes(
             config_path,
-            canonical_json_bytes(payload) + b"\n",
+            canonical_json_bytes(updated.model_dump()) + b"\n",
         )
         os.chmod(config_path, 0o600)
+    _invalidate_raw_config_cache()
     model_config._clear_user_config_cache()
+    return updated
 
 
 def request_tool_configs() -> dict[str, dict[str, Any]]:
@@ -336,9 +436,15 @@ async def _validate_section_connectivity(
         try:
             import oss2
 
-            auth = oss2.Auth(oss["access_key_id"], oss["access_key_secret"])
-            bucket = oss2.Bucket(auth, oss["endpoint"], oss["bucket"])
-            bucket.get_bucket_info()
+            def probe() -> None:
+                auth = oss2.Auth(
+                    oss["access_key_id"],
+                    oss["access_key_secret"],
+                )
+                bucket = oss2.Bucket(auth, oss["endpoint"], oss["bucket"])
+                bucket.get_bucket_info()
+
+            await asyncio.to_thread(probe)
         except Exception as exc:
             exc_str = str(exc)
             if "InvalidAccessKeyId" in exc_str or "AccessDenied" in exc_str:
@@ -406,7 +512,11 @@ async def _validate_section_connectivity(
 
 @router.get("/config", response_model=ModelConfigData)
 async def get_model_config() -> ModelConfigData:
-    return load_model_config(include_environment=False)
+    loaded = await asyncio.to_thread(
+        load_model_config,
+        include_environment=False,
+    )
+    return _mask_secrets(loaded)
 
 
 # Semantic diagnostic read: this performs no Creator/runtime/config mutation,
@@ -438,7 +548,8 @@ async def update_model_config(
     records = IdempotencyRecordStore(root)
     payload = data.model_dump(mode="json", by_alias=True)
     request_hash = records.request_hash(payload)
-    try:
+
+    def transaction() -> bool:
         with records.operation_lock(
             owner_id="creator-model-config",
             scope="HTTP:model-config-update",
@@ -451,9 +562,8 @@ async def update_model_config(
                 request_hash=request_hash,
             )
             if reservation.record.status is IdempotencyStatus.COMPLETED:
-                response.headers["X-Idempotent-Replay"] = "true"
                 _notify_agent_model_config_changed()
-                return {"ok": True}
+                return True
             if reservation.record.status is IdempotencyStatus.FAILED:
                 raise StorageIntegrityError(
                     "上一次模型配置写入失败，请使用新的 Idempotency-Key 重试",
@@ -469,11 +579,15 @@ async def update_model_config(
                 response={"ok": True},
                 response_status=status.HTTP_200_OK,
             )
+            return False
+
+    try:
+        replayed = await asyncio.to_thread(transaction)
     except IdempotencyConflictError as error:
         raise ConflictError("Idempotency-Key 已用于不同的模型配置") from error
     except IdempotencyStateConflictError as error:
         raise ConflictError("模型配置写入状态冲突") from error
-    response.headers["X-Idempotent-Replay"] = "false"
+    response.headers["X-Idempotent-Replay"] = "true" if replayed else "false"
     return {"ok": True}
 
 
@@ -485,13 +599,16 @@ async def patch_execution_authorization(
     if mode not in ("required", "allow_all"):
         raise ValidationError("mode 必须是 'required' 或 'allow_all'")
 
-    existing = load_model_config(include_environment=False)
-    merged = existing.model_dump()
-    merged["execution_authorization"] = {"mode": mode}
+    def mutate(current: ModelConfigData) -> ModelConfigData:
+        merged = current.model_dump()
+        merged["execution_authorization"] = {"mode": mode}
+        return ModelConfigData.model_validate(merged)
 
-    full_data = ModelConfigData.model_validate(merged)
-    save_model_config(full_data)
-    _notify_agent_model_config_changed()
+    def transaction() -> None:
+        mutate_model_config(mutate)
+        _notify_agent_model_config_changed()
+
+    await asyncio.to_thread(transaction)
     return {"ok": True}
 
 
@@ -510,7 +627,17 @@ async def patch_model_config_section(
     records = IdempotencyRecordStore(root)
     request_hash = records.request_hash({"section": section, **data})
 
-    try:
+    def mutate(current: ModelConfigData) -> ModelConfigData:
+        merged = current.model_dump()
+        merged[section] = {**merged.get(section, {}), **data}
+        if section == "llm":
+            merged["llm"]["enabled"] = True
+        return _resolve_secret_masks(
+            ModelConfigData.model_validate(merged),
+            current,
+        )
+
+    def transaction() -> None:
         with records.operation_lock(
             owner_id="creator-model-config",
             scope="HTTP:model-config-patch",
@@ -524,21 +651,12 @@ async def patch_model_config_section(
             )
             if reservation.record.status is IdempotencyStatus.COMPLETED:
                 _notify_agent_model_config_changed()
-                return {"ok": True}
+                return
             if reservation.record.status is IdempotencyStatus.FAILED:
                 raise StorageIntegrityError(
                     "上一次模型配置写入失败，请使用新的 Idempotency-Key 重试",
                 )
-
-            existing = load_model_config(include_environment=False)
-            merged = existing.model_dump()
-            merged[section] = {**merged.get(section, {}), **data}
-
-            if section == "llm":
-                merged["llm"]["enabled"] = True
-
-            full_data = ModelConfigData.model_validate(merged)
-            save_model_config(full_data)
+            mutate_model_config(mutate)
             _notify_agent_model_config_changed()
             records.complete(
                 owner_id="creator-model-config",
@@ -548,6 +666,9 @@ async def patch_model_config_section(
                 response={"ok": True},
                 response_status=status.HTTP_200_OK,
             )
+
+    try:
+        await asyncio.to_thread(transaction)
     except IdempotencyConflictError as error:
         raise ConflictError("Idempotency-Key 已用于不同的模型配置") from error
     except IdempotencyStateConflictError as error:
@@ -644,15 +765,16 @@ def _probe_payload(
 async def test_model_connection(
     body: ModelConnectionTestRequest = Body(...),
 ) -> ConnectionTestResponse:
-    loaded = load_model_config()
+    loaded = await asyncio.to_thread(load_model_config)
     item = getattr(loaded, body.type)
     fallback_api_key = item.api_key
     if body.type == "asr" and item.reuse_llm_key and not fallback_api_key:
         fallback_api_key = loaded.llm.api_key
+    request_api_key = "" if body.api_key == SECRET_MASK else body.api_key
     selected = body.model_copy(
         update={
             "base_url": body.base_url or item.base_url,
-            "api_key": body.api_key or fallback_api_key,
+            "api_key": request_api_key or fallback_api_key,
             "model_name": body.model_name or item.model_name,
             "protocol": body.protocol or item.protocol,
             "provider": body.provider or getattr(item, "provider", None),
@@ -742,6 +864,14 @@ async def test_model_connection(
 async def test_oss_connection(
     body: OssConfig = Body(...),
 ) -> ConnectionTestResponse:
+    if body.access_key_secret == SECRET_MASK:
+        persisted = await asyncio.to_thread(
+            load_model_config,
+            include_environment=False,
+        )
+        body = body.model_copy(
+            update={"access_key_secret": persisted.oss.access_key_secret},
+        )
     if (
         not body.endpoint
         or not body.access_key_id
@@ -756,9 +886,12 @@ async def test_oss_connection(
     try:
         import oss2
 
-        auth = oss2.Auth(body.access_key_id, body.access_key_secret)
-        bucket = oss2.Bucket(auth, body.endpoint, body.bucket)
-        bucket.get_bucket_info()
+        def probe() -> None:
+            auth = oss2.Auth(body.access_key_id, body.access_key_secret)
+            bucket = oss2.Bucket(auth, body.endpoint, body.bucket)
+            bucket.get_bucket_info()
+
+        await asyncio.to_thread(probe)
         return ConnectionTestResponse(
             ok=True,
             detail="OSS bucket is reachable",

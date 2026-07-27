@@ -400,7 +400,15 @@ class OpenAIProvider(Provider):
                 f"DashScope does not recognise model '{model_id}' "
                 f"(status={resp.status_code}): {detail}",
             )
-        # Auth passed but the model cannot be probed via the
+        if resp.status_code in (404, 408, 429) or resp.status_code >= 500:
+            # These statuses prove nothing about the key: wrong base URL,
+            # rate limiting or provider failure must surface as failures.
+            return (
+                False,
+                f"DashScope upload-policy probe failed "
+                f"(status={resp.status_code}): {detail}",
+            )
+        # Remaining 4xx: auth passed but the model cannot be probed via the
         # upload-policy API (e.g. TTS models without file input); the
         # endpoint and key are verified, which is the best zero-cost
         # signal available.

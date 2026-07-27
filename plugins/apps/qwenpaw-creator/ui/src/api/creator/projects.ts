@@ -57,6 +57,7 @@ export async function getProjectSnapshot(
   const response = await creatorFetch(
     `/projects/${encodeURIComponent(projectId)}/project`,
     { headers },
+    { timeoutMs: 30_000 },
   );
   const responseEtag = response.headers?.get("ETag") ?? null;
   const responseGeneration = optionalGeneration(

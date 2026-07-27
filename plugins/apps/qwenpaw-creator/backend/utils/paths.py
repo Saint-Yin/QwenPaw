@@ -12,7 +12,9 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+import os
 from pathlib import Path
+import re
 import stat
 from urllib.parse import quote, unquote, urlsplit
 from uuid import uuid4
@@ -192,6 +194,28 @@ def media_url_for(path: Path) -> str:
         )
     encoded = "/".join(quote(part, safe="") for part in url_parts)
     return f"/generated/{encoded}"
+
+
+def local_path_from_file_url(url: str) -> Path:
+    """Resolve a ``file://`` URL to a local path across platforms.
+
+    Percent-decodes the path, maps ``file:///C:/...`` to a Windows drive
+    path, accepts UNC hosts only on Windows, and rejects any other remote
+    authority.
+    """
+
+    parsed = urlsplit(str(url))
+    if parsed.scheme != "file":
+        raise ValueError(f"Not a file URL: {url}")
+    host = (parsed.netloc or "").strip()
+    path = unquote(parsed.path)
+    if host and host.casefold() != "localhost":
+        if os.name == "nt":
+            return Path(f"//{host}{path}")
+        raise ValueError(f"file URL names a remote authority: {url}")
+    if os.name == "nt" and re.match(r"^/[A-Za-z]:", path):
+        path = path[1:]
+    return Path(path)
 
 
 def media_path_from_url(url: str) -> Path:

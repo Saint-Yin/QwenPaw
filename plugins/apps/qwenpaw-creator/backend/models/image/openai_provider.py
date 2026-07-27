@@ -41,11 +41,16 @@ OPENAI_SIZE_MAP = {
 DEFAULT_BASE_URL = "https://routify.alibaba-inc.com/protocol/openai"
 DEFAULT_MODEL_NAME = "gpt-image-2"
 
+# Cap the aggregate reference payload so 16 near-limit images cannot pile
+# up hundreds of MiB in one request.
+REFERENCE_IMAGES_TOTAL_MAX_BYTES = 256 * 1024 * 1024
+
 
 async def build_reference_image_files(
     reference_image_urls: list[str],
 ) -> list[tuple[str, tuple[str, bytes, str]]]:
     files: list[tuple[str, tuple[str, bytes, str]]] = []
+    total_bytes = 0
     for index, raw_url in enumerate(
         dict.fromkeys(reference_image_urls[:16]),
         start=1,
@@ -54,6 +59,13 @@ async def build_reference_image_files(
         if not url:
             continue
         content, filename = await read_reference_media(url)
+        total_bytes += len(content)
+        if total_bytes > REFERENCE_IMAGES_TOTAL_MAX_BYTES:
+            raise ModelError(
+                "reference images exceed "
+                f"{REFERENCE_IMAGES_TOTAL_MAX_BYTES} bytes in total",
+                model_name=DEFAULT_MODEL_NAME,
+            )
         suffix = Path(filename).suffix.lower()
         if not suffix:
             suffix = Path(urlparse(url).path).suffix.lower()

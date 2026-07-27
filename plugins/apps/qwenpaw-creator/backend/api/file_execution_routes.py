@@ -55,6 +55,20 @@ _TIMELINE_RENDER_JOBS: dict[
 _TIMELINE_RENDER_LOCKS: dict[tuple[str, str, str], asyncio.Lock] = {}
 
 
+async def drain_timeline_render_jobs(timeout_seconds: float = 15.0) -> None:
+    """Cancel and await outstanding render tasks during plugin shutdown."""
+
+    pending = [
+        task for _, task in _TIMELINE_RENDER_JOBS.values() if not task.done()
+    ]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.wait(pending, timeout=timeout_seconds)
+    _TIMELINE_RENDER_JOBS.clear()
+    _TIMELINE_RENDER_LOCKS.clear()
+
+
 class TaskCancelRequest(StrictModel):
     reason: str = Field(default="用户取消", min_length=1, max_length=1000)
 
@@ -464,6 +478,9 @@ async def render_timeline(
         def completed(done: asyncio.Task[None]) -> None:
             if _TIMELINE_RENDER_JOBS.get(identity) == (task_id, done):
                 _TIMELINE_RENDER_JOBS.pop(identity, None)
+            lock = _TIMELINE_RENDER_LOCKS.get(identity)
+            if lock is not None and not lock.locked():
+                _TIMELINE_RENDER_LOCKS.pop(identity, None)
             if not done.cancelled():
                 done.exception()
 
