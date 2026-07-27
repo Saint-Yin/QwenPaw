@@ -1495,8 +1495,7 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
                           ...activity,
                           completed: true,
                           terminalKind: "CANCELLED" as const,
-                          summaryText:
-                            activity.summaryText ?? "用户中止",
+                          summaryText: activity.summaryText ?? "用户中止",
                           terminalEventSeq: event.seq,
                         },
                       };

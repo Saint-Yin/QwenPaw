@@ -978,7 +978,6 @@ function SubagentActivityBubble({ activity }: { activity: SubagentActivity }) {
   );
 }
 
-/** Tool-call card: one status line, expandable to inspect arguments/result. */
 function ToolCallCard({ data }: { data: ToolCallPresentation }) {
   const allowExpand = useAgentDockUiStore((state) => state.allowExpandDetails);
   const isReplaying = useCreatorSessionStore((state) => state.isReplaying);
@@ -1097,7 +1096,18 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
           ) : (
             <XCircle className="h-3.5 w-3.5" />
           )}
-          <span>{displayLabel}{isReplaying ? "" : active ? "中" : resolvedStatus === "succeeded" ? "完成" : resolvedStatus === "cancelled" ? "已中止" : "失败"}</span>
+          <span>
+            {displayLabel}
+            {isReplaying
+              ? ""
+              : active
+              ? "中"
+              : resolvedStatus === "succeeded"
+              ? "完成"
+              : resolvedStatus === "cancelled"
+              ? "已中止"
+              : "失败"}
+          </span>
           {subLabel && active && (
             <span className="text-[10px] text-[var(--color-text-tertiary)]">
               · {subLabel}
