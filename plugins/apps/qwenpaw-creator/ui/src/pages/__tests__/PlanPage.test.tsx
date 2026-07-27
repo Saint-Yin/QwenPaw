@@ -96,7 +96,7 @@ describe("PlanPage Timeline/Element frontend", () => {
     expect(screen.getAllByText("20s").length).toBeGreaterThan(0);
     expect(screen.getByText("16:9")).toBeInTheDocument();
     expect(screen.getByText("6 项内容")).toBeInTheDocument();
-    expect(screen.getByText(/5 轨/)).toHaveTextContent("可上下滚动");
+    expect(screen.getByText(/6 轨/)).toHaveTextContent("可上下滚动");
     expect(
       container.querySelector('[class~="max-h-[320px]"]'),
     ).toBeInTheDocument();
