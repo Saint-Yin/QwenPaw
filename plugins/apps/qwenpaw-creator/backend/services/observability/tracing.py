@@ -237,7 +237,8 @@ def _write(record: Mapping[str, Any]) -> None:
                 os.close(descriptor)
         except Exception:
             _TRACE_LOGGER.exception(
-                f"failed to write creator trace to {str(path)}", exc_info=True
+                f"failed to write creator trace to {str(path)}",
+                exc_info=True,
             )
     except Exception:
         # Bad diagnostic data (for example a NaN provider metric) must never

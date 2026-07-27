@@ -36,9 +36,7 @@ def test_v1_suffixed_base_url_is_not_duplicated(base_url: str) -> None:
     assert (
         model.generation_url == "https://api.openai.com/v1/images/generations"
     )
-    assert (
-        model._url(["ref.png"]) == "https://api.openai.com/v1/images/edits"
-    )
+    assert model._url(["ref.png"]) == "https://api.openai.com/v1/images/edits"
 
 
 def test_versionless_base_url_gains_v1_segment() -> None:

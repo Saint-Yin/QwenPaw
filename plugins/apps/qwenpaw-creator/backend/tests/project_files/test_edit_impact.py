@@ -149,7 +149,7 @@ def test_overlay_copy_edit_invalidates_only_timeline_render() -> None:
     assert impact.regeneration_required is False
     assert impact.render_timeline_ids == {"timeline:main"}
     assert versions["final-v1"]["metadata"]["pendingAffectedElementIds"] == [
-        "overlay-1"
+        "overlay-1",
     ]
 
 

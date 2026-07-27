@@ -10,9 +10,7 @@ import {
 } from "@ant-design/icons";
 import { getModelConfig } from "@/api/creator";
 import type { ModelConfigData, ModelConfigItem } from "@/contracts/creator";
-import ModelConfigModal, {
-  supportsQwenNativeSearch,
-} from "./ModelConfigModal";
+import ModelConfigModal, { supportsQwenNativeSearch } from "./ModelConfigModal";
 
 type ModelType = "llm" | "vlm" | "grounding" | "asr" | "image" | "video";
 
@@ -28,7 +26,11 @@ const BADGE_META: {
     label: "Grounding",
     icon: <GlobalOutlined style={{ fontSize: 12 }} />,
   },
-  { type: "asr", label: "ASR", icon: <AudioOutlined style={{ fontSize: 12 }} /> },
+  {
+    type: "asr",
+    label: "ASR",
+    icon: <AudioOutlined style={{ fontSize: 12 }} />,
+  },
   {
     type: "image",
     label: "图片生成",
@@ -70,10 +72,10 @@ export default function ModelBadges() {
         config.grounding.validation_source === "llm"
           ? config.llm
           : config.grounding.validation_source === "vlm"
-            ? config.vlm.use_llm
-              ? config.llm
-              : config.vlm
-            : config.grounding;
+          ? config.vlm.use_llm
+            ? config.llm
+            : config.vlm
+          : config.grounding;
       const searchModel = config.grounding.search_reuse_llm
         ? config.llm
         : {

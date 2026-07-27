@@ -420,7 +420,9 @@ def _final_tool_call_model(raw_input: str):
 
 
 def test_truncated_tool_arguments_are_repaired_into_an_object() -> None:
-    truncated = '{"projectId":"project-1","jsonArgs":{"elements":{"e1":{"name":"a'
+    truncated = (
+        '{"projectId":"project-1","jsonArgs":{"elements":{"e1":{"name":"a'
+    )
 
     async def scenario():
         client = AgentScopeAgentChatClient(

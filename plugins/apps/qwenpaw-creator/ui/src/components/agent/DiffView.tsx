@@ -16,8 +16,7 @@ interface DiffLine {
 
 function toLines(value: unknown): string[] {
   if (value === undefined || value === null) return [];
-  const text =
-    typeof value === "string" ? value : safeStringify(value);
+  const text = typeof value === "string" ? value : safeStringify(value);
   return text.split("\n");
 }
 
@@ -109,7 +108,9 @@ export default function DiffView({
         <div
           key={`${line.kind}-${index}`}
           data-diff-kind={line.kind}
-          className={`flex gap-1 whitespace-pre-wrap break-all px-1 ${LINE_STYLE[line.kind]}`}
+          className={`flex gap-1 whitespace-pre-wrap break-all px-1 ${
+            LINE_STYLE[line.kind]
+          }`}
         >
           <span aria-hidden className="select-none opacity-60">
             {LINE_PREFIX[line.kind]}

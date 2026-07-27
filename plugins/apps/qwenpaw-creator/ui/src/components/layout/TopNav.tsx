@@ -80,7 +80,9 @@ export default function TopNav() {
             <Link
               key={tab.key}
               href={`/project/${id}/${tab.key}`}
-              data-onboarding-id={tab.key === "assets" ? "assets-tab" : undefined}
+              data-onboarding-id={
+                tab.key === "assets" ? "assets-tab" : undefined
+              }
               className={`inline-flex h-[31px] items-center gap-1.5 rounded-full px-3 text-xs font-bold transition-colors md:px-4 ${
                 isActive
                   ? "bg-[var(--color-accent-soft)] text-[var(--color-text-primary)] shadow-[inset_0_0_0_1px_rgba(255,127,22,0.18)]"

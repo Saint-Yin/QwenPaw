@@ -74,9 +74,7 @@ export function renderTimeline(
   clientRequestId = newClientId("timeline-render"),
 ): Promise<TimelineRenderResult> {
   return creatorRequest(
-    `${project(projectId)}/timelines/${encodeURIComponent(
-      timelineId,
-    )}/render`,
+    `${project(projectId)}/timelines/${encodeURIComponent(timelineId)}/render`,
     {
       method: "POST",
       headers: { "Idempotency-Key": clientRequestId },

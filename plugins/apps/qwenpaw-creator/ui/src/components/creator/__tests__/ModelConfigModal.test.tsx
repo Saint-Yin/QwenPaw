@@ -172,23 +172,19 @@ describe("ModelConfigModal configuration lifecycle", () => {
         name: /Grounding.*tavily\/qwen3\.7-plus/,
       }),
     ).toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("button", { name: /Grounding/ }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /Grounding/ }));
     expect(screen.getByText("1. 搜索")).toBeInTheDocument();
     expect(screen.getByText("2. 验证")).toBeInTheDocument();
     expect(
       screen.getByRole("checkbox", { name: "复用 LLM 配置" }),
     ).toBeInTheDocument();
-    expect(
-      screen.getAllByText("复用 LLM 配置").length,
-    ).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("复用 LLM 配置").length).toBeGreaterThanOrEqual(
+      2,
+    );
     expect(screen.getByText("优先")).toBeInTheDocument();
     expect(screen.getByText("回退")).toBeInTheDocument();
     expect(screen.getByText("Tavily 搜索")).toBeInTheDocument();
-    expect(
-      screen.getByText("Qwen/DashScope 原生搜索"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Qwen/DashScope 原生搜索")).toBeInTheDocument();
     expect(screen.queryByText("复用 qwen3.7-plus")).not.toBeInTheDocument();
     expect(screen.queryByText("超时、重试与来源上限")).not.toBeInTheDocument();
 

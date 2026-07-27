@@ -760,7 +760,7 @@ def test_user_edit_supersedes_pending_operation_in_inactive_review(
     ).read()
     assert first_review.status is ReviewStatus.RESOLVED
     assert [operation.decision for operation in first_review.operations] == [
-        ReviewOperationDecision.SUPERSEDED_BY_USER_EDIT
+        ReviewOperationDecision.SUPERSEDED_BY_USER_EDIT,
     ]
     second_review = AtomicJsonRecordStore(
         tmp_path

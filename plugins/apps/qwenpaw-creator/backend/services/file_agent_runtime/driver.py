@@ -2167,7 +2167,7 @@ class FileCreatorAgentRuntime:
                                 "type": type(exc).__name__,
                                 "message": str(exc),
                                 "recovery": _specialist_tool_recovery(
-                                    call.name
+                                    call.name,
                                 ),
                             },
                         }

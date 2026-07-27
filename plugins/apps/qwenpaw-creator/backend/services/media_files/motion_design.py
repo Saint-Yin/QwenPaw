@@ -371,7 +371,9 @@ def _validated_design(
     if re.search(r"\son[a-z0-9_-]+\s*=", html, re.IGNORECASE):
         raise ValidationError("design html 不允许包含事件处理属性")
     if re.search(
-        r"(?:javascript|file|data\s*:\s*text/html)\s*:", html, re.IGNORECASE
+        r"(?:javascript|file|data\s*:\s*text/html)\s*:",
+        html,
+        re.IGNORECASE,
     ):
         raise ValidationError("design html 不允许包含脚本、本机文件或嵌入网页 URL")
     if re.search(
@@ -1103,7 +1105,7 @@ async def design_motion_overlays(
             return fallback_text_style(
                 overlay,
                 reason=str(
-                    frames.get("error") or frames.get("skipReason") or "抽帧失败"
+                    frames.get("error") or frames.get("skipReason") or "抽帧失败",
                 ),
             )
         duration_seconds = (

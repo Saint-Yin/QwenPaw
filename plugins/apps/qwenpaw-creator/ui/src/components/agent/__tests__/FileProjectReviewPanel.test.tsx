@@ -40,10 +40,7 @@ function review(operationCount = 1): FileProjectReviewRecord {
       before_hash: `before-${index}`,
       after_hash: `after-${index}`,
       before: index === 0 ? "Old title" : { index, enabled: false },
-      after:
-        index === 0
-          ? "New title"
-          : { index, enabled: true },
+      after: index === 0 ? "New title" : { index, enabled: true },
       operation_id: `operation-${index + 1}`,
       ui_locator: {
         page: "plan",
@@ -126,9 +123,7 @@ describe("FileProjectReviewPanel", () => {
     const reviewData = review();
     render(<FileProjectReviewPanel projectId="p1" review={reviewData} />);
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "保留 /description" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "保留 /description" }));
     await waitFor(() =>
       expect(decide).toHaveBeenCalledWith("p1", "review-1", [
         {

@@ -839,9 +839,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     );
   };
 
-  const renderGroundingCard = (
-    meta: (typeof CARD_META)[number],
-  ) => {
+  const renderGroundingCard = (meta: (typeof CARD_META)[number]) => {
     const { type, label, icon } = meta;
     const isExpanded = expanded.grounding;
     const verifier = groundingValidationModel(config);
@@ -885,24 +883,26 @@ export default function ModelConfigModal({ open, onClose }: Props) {
             >
               搜索 / 验证解耦
             </span>
-            {config.grounding.enabled && (searchLabel || verifier.model_name) && (
-              <span
-                className="text-ellipsis"
-                style={{
-                  fontSize: 10,
-                  color: verifierReady && searchReady
-                    ? "var(--color-success)"
-                    : "var(--color-text-tertiary)",
-                  background: "var(--color-success-soft)",
-                  padding: "1px 7px",
-                  borderRadius: 4,
-                  maxWidth: 140,
-                }}
-              >
-                {searchLabel || "未配置搜索"}
-                {verifier.model_name ? ` · ${verifier.model_name}` : ""}
-              </span>
-            )}
+            {config.grounding.enabled &&
+              (searchLabel || verifier.model_name) && (
+                <span
+                  className="text-ellipsis"
+                  style={{
+                    fontSize: 10,
+                    color:
+                      verifierReady && searchReady
+                        ? "var(--color-success)"
+                        : "var(--color-text-tertiary)",
+                    background: "var(--color-success-soft)",
+                    padding: "1px 7px",
+                    borderRadius: 4,
+                    maxWidth: 140,
+                  }}
+                >
+                  {searchLabel || "未配置搜索"}
+                  {verifier.model_name ? ` · ${verifier.model_name}` : ""}
+                </span>
+              )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span
@@ -1110,7 +1110,9 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                       }}
                     >
                       {searchModel.model_name
-                        ? `当前：${searchModel.model_name}${nativeSearchReady ? "" : "（不支持原生搜索）"}`
+                        ? `当前：${searchModel.model_name}${
+                            nativeSearchReady ? "" : "（不支持原生搜索）"
+                          }`
                         : "未配置"}
                     </span>
                   </div>
@@ -1136,9 +1138,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                         />
                       </div>
                       <div>
-                        <label className="field-label">
-                          Qwen 搜索 API Key
-                        </label>
+                        <label className="field-label">Qwen 搜索 API Key</label>
                         <Input.Password
                           placeholder="sk-search-..."
                           value={config.grounding.search_api_key}
@@ -1172,7 +1172,12 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                           onChange={(value) =>
                             updateGrounding("search_protocol", value)
                           }
-                          options={[{ value: "DashScope（百炼）", label: "Qwen / DashScope（百炼）" }]}
+                          options={[
+                            {
+                              value: "DashScope（百炼）",
+                              label: "Qwen / DashScope（百炼）",
+                            },
+                          ]}
                         />
                       </div>
                     </div>
@@ -1215,7 +1220,9 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                       : "var(--color-text-tertiary)",
                   }}
                 >
-                  {verifier.model_name ? `当前：${verifier.model_name}` : "未配置"}
+                  {verifier.model_name
+                    ? `当前：${verifier.model_name}`
+                    : "未配置"}
                 </div>
               )}
             </div>
@@ -1262,9 +1269,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                   <label className="field-label">API 协议</label>
                   <Select
                     value={config.grounding.protocol}
-                    onChange={(value) =>
-                      updateGrounding("protocol", value)
-                    }
+                    onChange={(value) => updateGrounding("protocol", value)}
                     options={VLM_PROTOCOLS.map((protocol) => ({
                       value: protocol,
                       label: protocol,
@@ -1297,12 +1302,11 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     const item = config[type] as ModelConfigItem;
     const usingLlm =
       type === "vlm" && config.vlm.use_llm && config.llm.model_name;
-    const configured =
-      !item.enabled
-        ? false
-        : usingLlm
-        ? true
-        : !!item.model_name;
+    const configured = !item.enabled
+      ? false
+      : usingLlm
+      ? true
+      : !!item.model_name;
     const isTested = tested[type] === true;
 
     const statusColor = !configured
@@ -1625,8 +1629,12 @@ export default function ModelConfigModal({ open, onClose }: Props) {
               config.vlm.use_llm &&
               config.llm.model_name
             ) {
-              subText = tested.vlm ? config.llm.model_name : `${config.llm.model_name}（未测试）`;
-              subColor = tested.vlm ? "var(--color-success)" : "var(--color-text-tertiary)";
+              subText = tested.vlm
+                ? config.llm.model_name
+                : `${config.llm.model_name}（未测试）`;
+              subColor = tested.vlm
+                ? "var(--color-success)"
+                : "var(--color-text-tertiary)";
             } else if (!item.enabled && hasModel) {
               subText = `${item.model_name}（已关闭）`;
               subColor = "var(--color-text-tertiary)";

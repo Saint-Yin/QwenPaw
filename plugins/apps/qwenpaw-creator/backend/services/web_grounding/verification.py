@@ -379,7 +379,8 @@ async def verify_visual_grounding_with_vlm(
                 break
             backoff_cap = min(retry_cap, retry_base * (2 ** (attempt - 1)))
             delay = min(
-                random.uniform(0.0, backoff_cap), remaining_after_attempt
+                random.uniform(0.0, backoff_cap),
+                remaining_after_attempt,
             )
             attempts[-1]["backoff_seconds"] = round(delay, 3)
             if delay > 0:

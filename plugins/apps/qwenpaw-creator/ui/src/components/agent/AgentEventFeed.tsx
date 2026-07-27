@@ -2,7 +2,11 @@ import { useMemo, useState } from "react";
 import { Button, message } from "antd";
 import { CircleCheck, CircleX, PlayCircle } from "lucide-react";
 import { interruptCreator } from "@/api/creator";
-import type { CreatorEvent, ProjectDocument, SpecialistRunView } from "@/contracts/creator";
+import type {
+  CreatorEvent,
+  ProjectDocument,
+  SpecialistRunView,
+} from "@/contracts/creator";
 import { useCreatorSessionStore } from "@/store/creatorSessionStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
@@ -147,7 +151,13 @@ function eventText(event: CreatorEvent): string {
   return "";
 }
 
-function EventCard({ event, project }: { event: CreatorEvent; project: ProjectDocument | null }) {
+function EventCard({
+  event,
+  project,
+}: {
+  event: CreatorEvent;
+  project: ProjectDocument | null;
+}) {
   const data = event.data;
   const summary = eventText(event);
   if (event.type === "agent.plan") {

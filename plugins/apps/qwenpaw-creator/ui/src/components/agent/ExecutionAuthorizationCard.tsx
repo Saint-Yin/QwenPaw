@@ -103,10 +103,11 @@ export function authorizationDetail(
   const messageText = authorization.scope.message;
   if (typeof messageText === "string" && messageText.trim())
     return humanizeRefTokens(messageText, project);
-  const detail = `${authorizationOperation(authorization)} · ${creatorTargetLabel(
-    authorization.targetRef,
-    project,
-  )} · ${authorization.provider}/${authorization.model}`;
+  const detail = `${authorizationOperation(
+    authorization,
+  )} · ${creatorTargetLabel(authorization.targetRef, project)} · ${
+    authorization.provider
+  }/${authorization.model}`;
   const billing = authorizationBilling(authorization);
   return billing?.displayText
     ? `${detail} · 预计费用 ${billing.displayText}`
@@ -221,7 +222,8 @@ export default function ExecutionAuthorizationCard({
       className="rounded-xl border border-[var(--color-warning)]/50 bg-[var(--color-warning-soft)]/40 p-2.5"
     >
       <OnboardingHint hintKey="executionAuthorization" className="mb-2">
-        首次说明：Agent 即将调用付费生成模型，下方已给出预估费用。点击「继续」才会真正执行，「取消」则终止本次制作；可在模型配置中关闭此确认。
+        首次说明：Agent
+        即将调用付费生成模型，下方已给出预估费用。点击「继续」才会真正执行，「取消」则终止本次制作；可在模型配置中关闭此确认。
       </OnboardingHint>
       <div className="flex items-start gap-2.5">
         <div className="min-w-0 flex-1">
@@ -283,7 +285,9 @@ export default function ExecutionAuthorizationCard({
               {billing.formula && (
                 <p className="mt-0.5 text-[10px] leading-4 text-[var(--color-text-secondary)]">
                   计算：{billing.formula}
-                  {billing.pricingModel ? `（按 ${billing.pricingModel} 计价）` : ""}
+                  {billing.pricingModel
+                    ? `（按 ${billing.pricingModel} 计价）`
+                    : ""}
                 </p>
               )}
               {(billing.notes ?? []).map((note) => (

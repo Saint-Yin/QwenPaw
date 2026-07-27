@@ -256,7 +256,8 @@ export default function HomePage() {
               还未配置 LLM 模型
             </span>
             <span className="min-w-0 flex-1 text-[11px] text-[var(--color-text-secondary)]">
-              LLM 是所有创作场景的必选模型，配置并通过连通性测试后才能启动 Agent。
+              LLM 是所有创作场景的必选模型，配置并通过连通性测试后才能启动
+              Agent。
             </span>
             <span className="shrink-0 text-[11px] font-semibold text-[var(--color-accent)]">
               立即配置 →

@@ -249,7 +249,7 @@ def load_model_config(*, include_environment: bool = True) -> ModelConfigData:
         grounding_section if isinstance(grounding_section, dict) else {}
     )
     if "validation_source" not in grounding_explicit and not os.environ.get(
-        "WEB_GROUNDING_VALIDATION_SOURCE"
+        "WEB_GROUNDING_VALIDATION_SOURCE",
     ):
         base["grounding"]["validation_source"] = (
             "llm" if base["grounding"].get("reuse_llm", True) else "custom"
@@ -258,7 +258,7 @@ def load_model_config(*, include_environment: bool = True) -> ModelConfigData:
         base["grounding"].get("validation_source") == "llm"
     )
     if "search_reuse_llm" not in grounding_explicit and not os.environ.get(
-        "WEB_GROUNDING_SEARCH_REUSE_LLM"
+        "WEB_GROUNDING_SEARCH_REUSE_LLM",
     ):
         # Before retrieval and verification were split, both reused the same
         # model selection. Preserve that behavior when loading an old file.

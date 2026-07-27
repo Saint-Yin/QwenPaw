@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { message } from "antd";
-import { Check, Eye, FileDiff, Image as ImageIcon, Undo2, Video } from "lucide-react";
+import {
+  Check,
+  Eye,
+  FileDiff,
+  Image as ImageIcon,
+  Undo2,
+  Video,
+} from "lucide-react";
 import type {
   FileProjectReviewDecision,
   FileProjectReviewOperation,
@@ -80,8 +87,7 @@ function operationSummary(
 
 function previewText(value: unknown, limit = 26): string {
   if (value === null || value === undefined) return "—";
-  const text =
-    typeof value === "string" ? value : JSON.stringify(value) ?? "—";
+  const text = typeof value === "string" ? value : JSON.stringify(value) ?? "—";
   const normalized = text.replace(/\s+/g, " ").trim();
   return normalized.length > limit
     ? `${normalized.slice(0, limit)}…`
@@ -90,8 +96,10 @@ function previewText(value: unknown, limit = 26): string {
 
 /** 一行变更预览，让用户不跳转也能知道改了什么；完整 diff 在原文处展示。 */
 function operationPreview(operation: FileProjectReviewOperation): string {
-  if (operation.kind === "create") return `新增：${previewText(operation.after)}`;
-  if (operation.kind === "delete") return `删除：${previewText(operation.before)}`;
+  if (operation.kind === "create")
+    return `新增：${previewText(operation.after)}`;
+  if (operation.kind === "delete")
+    return `删除：${previewText(operation.before)}`;
   return `${previewText(operation.before)} → ${previewText(operation.after)}`;
 }
 
@@ -101,7 +109,10 @@ export function reviewMediaLocator(
 ): Record<string, string> | null {
   for (const operation of review.operations) {
     const locator = operation.ui_locator;
-    if (locator && (locator.mediaType === "image" || locator.mediaType === "video")) {
+    if (
+      locator &&
+      (locator.mediaType === "image" || locator.mediaType === "video")
+    ) {
       return locator;
     }
   }
@@ -182,7 +193,9 @@ export default function FileProjectReviewPanel({
   );
   const busy = decisionInFlight || localBusy;
   const mediaLocator = reviewMediaLocator(review);
-  const pendingUnits = mediaLocator ? Math.min(pending.length, 1) : pending.length;
+  const pendingUnits = mediaLocator
+    ? Math.min(pending.length, 1)
+    : pending.length;
 
   const submit = async (
     operations: FileProjectReviewOperation[],
@@ -229,7 +242,8 @@ export default function FileProjectReviewPanel({
       className="mb-3 rounded-xl border border-[var(--color-accent)]/35 bg-[var(--color-bg-primary)]/70 p-2.5"
     >
       <OnboardingHint hintKey="review" className="mb-2">
-        首次说明：Agent 对项目的每处修改都会在这里待你审阅：「保留」采纳修改，「撤销」回退到修改前；也可逐条处理。
+        首次说明：Agent
+        对项目的每处修改都会在这里待你审阅：「保留」采纳修改，「撤销」回退到修改前；也可逐条处理。
       </OnboardingHint>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">

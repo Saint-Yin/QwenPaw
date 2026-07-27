@@ -213,7 +213,8 @@ class TestMotionDesignSafety:
 class TestMotionTemplates:
     @pytest.mark.parametrize("motif", sorted(SUPPORTED_MOTIFS))
     def test_every_template_is_text_free_and_animated(
-        self, motif: str
+        self,
+        motif: str,
     ) -> None:
         html = render_decoration_template(motif)
         assert f'data-motion-motif="{motif}"' in html

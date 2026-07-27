@@ -680,7 +680,8 @@ class MotionGraphic(StrictModel):
         """Keep generated template metadata when loading older project JSON."""
 
         if not isinstance(value, dict) or not isinstance(
-            value.get("html"), str
+            value.get("html"),
+            str,
         ):
             return value
         result = dict(value)

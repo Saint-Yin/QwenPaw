@@ -223,12 +223,8 @@ describe("R2V Workbench page", () => {
     fireEvent.change(prompt, { target: { value: "镜头快速拉远" } });
     fireEvent.blur(prompt);
     expect(calls.some((call) => call.method === "PATCH")).toBe(false);
-    expect(
-      screen.getByRole("button", { name: "生成视频" }),
-    ).toBeDisabled();
-    fireEvent.click(
-      screen.getByRole("button", { name: "应用修改（1）" }),
-    );
+    expect(screen.getByRole("button", { name: "生成视频" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "应用修改（1）" }));
     await waitFor(() =>
       expect(calls.some((call) => call.method === "PATCH")).toBe(true),
     );
@@ -273,9 +269,7 @@ describe("R2V Workbench page", () => {
     fireEvent.change(description, { target: { value: "橘猫扒着窗台" } });
     fireEvent.blur(description);
     expect(calls.some((call) => call.method === "PATCH")).toBe(false);
-    fireEvent.click(
-      screen.getByRole("button", { name: "应用修改（1）" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "应用修改（1）" }));
     await waitFor(() =>
       expect(calls.some((call) => call.method === "PATCH")).toBe(true),
     );

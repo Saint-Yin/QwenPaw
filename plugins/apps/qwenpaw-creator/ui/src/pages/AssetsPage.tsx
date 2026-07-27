@@ -283,10 +283,11 @@ function visualEntityPromptTarget(
 ): PromptTarget | null {
   const variantId =
     (versionId &&
-      entity.variants.order.find((candidate) =>
-        entity.variants.items[
-          candidate
-        ]?.generated_artifact_version_ids.includes(versionId),
+      entity.variants.order.find(
+        (candidate) =>
+          entity.variants.items[
+            candidate
+          ]?.generated_artifact_version_ids.includes(versionId),
       )) ||
     entity.variants.order[0];
   const variant = variantId ? entity.variants.items[variantId] : null;
@@ -326,8 +327,7 @@ function generationPromptTarget(
     if (element.creation.type === "r2v") {
       const artifact = selected.raw as ArtifactVersionDocument;
       const isVideo =
-        selected.mediaKind === "video" ||
-        `${artifact.kind}`.includes("video");
+        selected.mediaKind === "video" || `${artifact.kind}`.includes("video");
       return isVideo
         ? {
             pointer: `${base}/video_prompt`,

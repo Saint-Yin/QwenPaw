@@ -199,8 +199,8 @@ export function resolveElementPlayback(
       taskStatus === "generating" || taskStatus === "queued"
         ? taskStatus
         : artifactStatus === "ready"
-          ? "ready"
-          : taskStatus ?? artifactStatus;
+        ? "ready"
+        : taskStatus ?? artifactStatus;
     return {
       element,
       status,

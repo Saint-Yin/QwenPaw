@@ -172,7 +172,11 @@ export function MockAgentChat() {
 export function MockAssetCards() {
   const cards = [
     { label: "角色", name: "主角小狐", tone: "bg-orange-100 text-orange-500" },
-    { label: "场景", name: "晨雾山谷", tone: "bg-emerald-100 text-emerald-500" },
+    {
+      label: "场景",
+      name: "晨雾山谷",
+      tone: "bg-emerald-100 text-emerald-500",
+    },
     { label: "产物", name: "镜头一分镜图", tone: "bg-sky-100 text-sky-500" },
   ];
   return (

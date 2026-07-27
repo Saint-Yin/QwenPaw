@@ -8,11 +8,7 @@ import {
   Video,
   Wand2,
 } from "lucide-react";
-import {
-  navigate,
-  useParams,
-  useSearchParams,
-} from "@/routing/navigation";
+import { navigate, useParams, useSearchParams } from "@/routing/navigation";
 import {
   useReviewFieldFocus,
   useReviewMediaFocus,
@@ -25,7 +21,11 @@ import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { selectPrimaryTimeline } from "@/selectors/timelineElementSelectors";
-import { getArtifactVersionMediaUrl, getAssetVersionMediaUrl, getResolvedModels } from "@/api/creator";
+import {
+  getArtifactVersionMediaUrl,
+  getAssetVersionMediaUrl,
+  getResolvedModels,
+} from "@/api/creator";
 import { projectJsonPointer } from "@/lib/projectJsonPointer";
 import { useProjectDraft } from "@/lib/useProjectDraft";
 import PageSkeleton from "@/components/PageSkeleton";
@@ -180,9 +180,7 @@ export default function R2VWorkbenchPage() {
   const refreshTasks = useCreatorTaskViewStore((state) => state.refresh);
   const timeline = useMemo(() => selectPrimaryTimeline(project), [project]);
   const authorityElement = timeline?.elements_by_id[elementId] ?? null;
-  const elementDraft = useProjectDraft<
-    TimelineElementDocument | null
-  >(
+  const elementDraft = useProjectDraft<TimelineElementDocument | null>(
     authorityElement,
     `${id}:${timeline?.timeline_id ?? "missing"}:${elementId}:r2v`,
     [
@@ -329,9 +327,7 @@ export default function R2VWorkbenchPage() {
       message.error((error as Error).message);
       throw error;
     });
-  const updateElement = (
-    mutator: (draft: TimelineElementDocument) => void,
-  ) =>
+  const updateElement = (mutator: (draft: TimelineElementDocument) => void) =>
     elementDraft.update((draft) => {
       if (draft) mutator(draft);
     });
@@ -638,12 +634,10 @@ export default function R2VWorkbenchPage() {
   );
   const materialOptions = withValueFallback(
     [
-      ...Object.values(project.assets.source_versions_by_id).map(
-        (version) => ({
-          value: version.version_id,
-          label: version.name || version.version_id,
-        }),
-      ),
+      ...Object.values(project.assets.source_versions_by_id).map((version) => ({
+        value: version.version_id,
+        label: version.name || version.version_id,
+      })),
       ...Object.values(project.assets.artifact_versions_by_id)
         .filter((version) => version.owner_ref !== elementRef)
         .map((version) => ({

@@ -70,7 +70,7 @@ def _find_element(
         "items",
     ).items():
         element = _items(_record(raw_timeline), "elements_by_id").get(
-            element_id
+            element_id,
         )
         if isinstance(element, dict):
             return timeline_id, element

@@ -93,8 +93,9 @@ describe("ModelBadges", () => {
 
     render(<ModelBadges />);
 
-    expect(
-      await screen.findByLabelText("Grounding：已配置"),
-    ).toHaveAttribute("data-status", "on");
+    expect(await screen.findByLabelText("Grounding：已配置")).toHaveAttribute(
+      "data-status",
+      "on",
+    );
   });
 });

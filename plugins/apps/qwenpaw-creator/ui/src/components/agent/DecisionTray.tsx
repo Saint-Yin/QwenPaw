@@ -37,7 +37,12 @@ type TrayItem =
       label: string;
       authorization: ExecutionAuthorizationView;
     }
-  | { key: string; kind: "review"; label: string; review: FileProjectReviewRecord };
+  | {
+      key: string;
+      kind: "review";
+      label: string;
+      review: FileProjectReviewRecord;
+    };
 
 function trayItemsOf(
   pendingAuths: ExecutionAuthorizationView[],
@@ -49,7 +54,10 @@ function trayItemsOf(
     ...pendingAuths.map<TrayItem>((authorization) => ({
       key: `auth:${authorization.id}`,
       kind: "auth",
-      label: `生产确认 · ${creatorTargetLabel(authorization.targetRef, project)}`,
+      label: `生产确认 · ${creatorTargetLabel(
+        authorization.targetRef,
+        project,
+      )}`,
       authorization,
     })),
     ...pendingReviews.map<TrayItem>((review) => ({
@@ -67,9 +75,10 @@ export default function DecisionTray({ projectId }: { projectId: string }) {
     (state) => state.projectId,
   );
   const authError = useExecutionAuthorizationStore((state) => state.error);
-  const fileReviews = useFileProjectReviewStore((state) =>
-    state.projectId === projectId ? state.reviews : null,
-  ) ?? [];
+  const fileReviews =
+    useFileProjectReviewStore((state) =>
+      state.projectId === projectId ? state.reviews : null,
+    ) ?? [];
   const decide = useFileProjectReviewStore((state) => state.decide);
   const project = useProjectSnapshotStore((state) =>
     state.projectId === projectId ? state.project : null,

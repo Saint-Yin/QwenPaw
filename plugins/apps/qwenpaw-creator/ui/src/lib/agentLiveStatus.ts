@@ -177,9 +177,7 @@ function activeMainToolLabel(
       // brief "正在安排" until the specialist reports in.
       const args = isRecord(call.arguments) ? call.arguments : undefined;
       const role = typeof args?.role === "string" ? args.role : "";
-      return role
-        ? `正在安排「${creatorRoleLabel(role)}」…`
-        : "正在分配任务…";
+      return role ? `正在安排「${creatorRoleLabel(role)}」…` : "正在分配任务…";
     }
     const label = runningToolLabel(call.tool, call.arguments, [], project);
     if (label) return label;

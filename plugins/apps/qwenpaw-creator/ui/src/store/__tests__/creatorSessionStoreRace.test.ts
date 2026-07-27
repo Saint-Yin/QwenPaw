@@ -1,8 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  CreatorMessage,
-  CreatorSessionView,
-} from "@/contracts/creator";
+import type { CreatorMessage, CreatorSessionView } from "@/contracts/creator";
 import { useCreatorSessionStore } from "@/store/creatorSessionStore";
 
 function deferred<T>() {
@@ -64,7 +61,10 @@ describe("Creator Session async project/conversation isolation", () => {
 
   it("drops an old send acceptance after switching projects", async () => {
     const pendingResponse = deferred<Response>();
-    vi.stubGlobal("fetch", vi.fn(() => pendingResponse.promise));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => pendingResponse.promise),
+    );
     bind("p1", "conversation-p1");
 
     const send = useCreatorSessionStore
@@ -100,7 +100,10 @@ describe("Creator Session async project/conversation isolation", () => {
 
   it("drops an old send failure after switching conversations", async () => {
     const pendingResponse = deferred<Response>();
-    vi.stubGlobal("fetch", vi.fn(() => pendingResponse.promise));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => pendingResponse.promise),
+    );
     bind("p1", "conversation-old");
 
     const send = useCreatorSessionStore
@@ -129,7 +132,10 @@ describe("Creator Session async project/conversation isolation", () => {
 
   it("does not merge an old pagination response into a new project", async () => {
     const pendingResponse = deferred<Response>();
-    vi.stubGlobal("fetch", vi.fn(() => pendingResponse.promise));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => pendingResponse.promise),
+    );
     bind("p1", "conversation-p1");
 
     const load = useCreatorSessionStore.getState().loadOlderMessages();
@@ -150,7 +156,10 @@ describe("Creator Session async project/conversation isolation", () => {
 
   it("does not activate a conversation created for a previous project", async () => {
     const pendingResponse = deferred<Response>();
-    vi.stubGlobal("fetch", vi.fn(() => pendingResponse.promise));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => pendingResponse.promise),
+    );
     bind("p1", "conversation-p1");
 
     const create = useCreatorSessionStore.getState().newConversation();

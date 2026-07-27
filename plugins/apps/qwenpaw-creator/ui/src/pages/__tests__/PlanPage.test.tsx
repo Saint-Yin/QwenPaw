@@ -104,7 +104,9 @@ describe("PlanPage Timeline/Element frontend", () => {
     expect(screen.getByText("分镜描述")).toBeInTheDocument();
     expect(screen.getByDisplayValue("暖色餐厅窗外的橘猫")).toBeInTheDocument();
 
-    const chart = container.querySelector("[data-timeline-chart]") as HTMLElement;
+    const chart = container.querySelector(
+      "[data-timeline-chart]",
+    ) as HTMLElement;
     vi.spyOn(chart, "getBoundingClientRect").mockReturnValue({
       x: 0,
       y: 0,
@@ -345,9 +347,7 @@ describe("PlanPage Timeline/Element frontend", () => {
       ) as HTMLButtonElement,
     );
     await waitFor(() =>
-      expect(playhead.style.left).toBe(
-        "calc(80px + 0.05 * (100% - 92px))",
-      ),
+      expect(playhead.style.left).toBe("calc(80px + 0.05 * (100% - 92px))"),
     );
   });
 
@@ -501,9 +501,7 @@ describe("PlanPage Timeline/Element frontend", () => {
     fireEvent.click(downloadButton);
     await waitFor(() => expect(clickSpy).toHaveBeenCalledTimes(1));
     clickSpy.mockRestore();
-    expect(
-      calls.some((call) => call.url.includes("/render")),
-    ).toBe(false);
+    expect(calls.some((call) => call.url.includes("/render"))).toBe(false);
     expect(calls.some((call) => call.url.includes("/commands"))).toBe(false);
   });
 
@@ -572,9 +570,7 @@ describe("PlanPage Timeline/Element frontend", () => {
 
   it("adopts an existing compose task and shows verified Element counts", async () => {
     const project = cloneProject();
-    delete project.assets.artifact_slots_by_id[
-      "timeline:timeline:main:render"
-    ];
+    delete project.assets.artifact_slots_by_id["timeline:timeline:main:render"];
     delete project.assets.artifact_versions_by_id["final-v1"];
     seedProject(project);
     const task = composeTask(0.4, "RUNNING", {
@@ -611,9 +607,9 @@ describe("PlanPage Timeline/Element frontend", () => {
     expect(
       screen.getByRole("button", { name: "合成中 · 4/10" }),
     ).toBeDisabled();
-    expect(
-      container.querySelector("[data-compose-progress]"),
-    ).toHaveStyle({ width: "40%" });
+    expect(container.querySelector("[data-compose-progress]")).toHaveStyle({
+      width: "40%",
+    });
     expect(screen.queryByText(/40%/)).not.toBeInTheDocument();
     expect(
       calls.some(
@@ -637,18 +633,16 @@ describe("PlanPage Timeline/Element frontend", () => {
     expect(
       screen.getByRole("button", { name: "合成中 · 7/10" }),
     ).toBeDisabled();
-    expect(
-      container.querySelector("[data-compose-progress]"),
-    ).toHaveStyle({ width: "70%" });
+    expect(container.querySelector("[data-compose-progress]")).toHaveStyle({
+      width: "70%",
+    });
     expect(screen.queryByText(/70%/)).not.toBeInTheDocument();
     unmount();
   });
 
   it("shows zero completed Elements without inventing a percentage", () => {
     const project = cloneProject();
-    delete project.assets.artifact_slots_by_id[
-      "timeline:timeline:main:render"
-    ];
+    delete project.assets.artifact_slots_by_id["timeline:timeline:main:render"];
     delete project.assets.artifact_versions_by_id["final-v1"];
     seedProject(project);
     const task = composeTask(0, "RUNNING", {
@@ -665,9 +659,9 @@ describe("PlanPage Timeline/Element frontend", () => {
     expect(
       screen.getByRole("button", { name: "合成中 · 0/10" }),
     ).toBeDisabled();
-    expect(
-      container.querySelector("[data-compose-progress]"),
-    ).toHaveStyle({ width: "0%" });
+    expect(container.querySelector("[data-compose-progress]")).toHaveStyle({
+      width: "0%",
+    });
     expect(screen.queryByText(/%/)).not.toBeInTheDocument();
     unmount();
   });
@@ -677,9 +671,7 @@ describe("PlanPage Timeline/Element frontend", () => {
     project.assets.artifact_slots_by_id[
       "element:r2v-window:video"
     ].selected_version_id = null;
-    delete project.assets.artifact_slots_by_id[
-      "timeline:timeline:main:render"
-    ];
+    delete project.assets.artifact_slots_by_id["timeline:timeline:main:render"];
     delete project.assets.artifact_versions_by_id["final-v1"];
     seedProject(project);
     const { calls } = installMockFetch([]);
@@ -714,8 +706,7 @@ describe("PlanPage Timeline/Element frontend", () => {
     expect(discard).toBeDisabled();
     expect(apply).toBeDisabled();
     expect(
-      apply.compareDocumentPosition(status) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      apply.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(container.querySelector("[data-element-detail] footer")).toBeNull();
   });
@@ -731,19 +722,13 @@ describe("PlanPage Timeline/Element frontend", () => {
         "timeline:main"
       ].elements_by_id["overlay-os"];
     expect(
-      authority?.creation.type === "overlay"
-        ? authority.creation.text
-        : null,
+      authority?.creation.type === "overlay" ? authority.creation.text : null,
     ).toBe("午饭在哪里？");
-    expect(
-      screen.getByRole("button", { name: "应用修改（1）" }),
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "应用修改（1）" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "放弃修改" }));
     expect(screen.getByDisplayValue("午饭在哪里？")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "应用修改" }),
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "应用修改" })).toBeDisabled();
   });
 
   it("commits detail edits through the schema-v2 Project CAS Patch endpoint", async () => {
@@ -775,9 +760,7 @@ describe("PlanPage Timeline/Element frontend", () => {
     fireEvent.change(name, { target: { value: "新的午饭名场面" } });
     fireEvent.blur(name);
     expect(calls.some((call) => call.method === "PATCH")).toBe(false);
-    fireEvent.click(
-      screen.getByRole("button", { name: "应用修改（1）" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "应用修改（1）" }));
     await waitFor(() =>
       expect(calls.some((call) => call.method === "PATCH")).toBe(true),
     );

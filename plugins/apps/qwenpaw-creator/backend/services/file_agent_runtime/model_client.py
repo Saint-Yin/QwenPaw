@@ -155,9 +155,7 @@ def _parse_tool_arguments(
     else:
         preview = raw
     parse_error = (
-        "工具调用参数不是合法的 JSON 对象且无法自动修复（"
-        + strict_error
-        + "）。常见原因：花括号遗漏/错位或输出被截断。"
+        "工具调用参数不是合法的 JSON 对象且无法自动修复（" + strict_error + "）。常见原因：花括号遗漏/错位或输出被截断。"
         "请重新生成本次工具调用；若参数体量巨大，可拆分为少量几次较小的调用。"
         f"参数原文预览：{preview!r}"
     )
@@ -618,9 +616,12 @@ class AgentScopeAgentChatClient:
                         f"Creator AgentScope returned a tool not offered this turn: {name}",
                     )
                 raw_arguments = block.input or ""
-                arguments, parse_error, repaired, strict_error = (
-                    _parse_tool_arguments(raw_arguments)
-                )
+                (
+                    arguments,
+                    parse_error,
+                    repaired,
+                    strict_error,
+                ) = _parse_tool_arguments(raw_arguments)
                 calls.append(
                     AgentToolCall(
                         call_id=call_id,

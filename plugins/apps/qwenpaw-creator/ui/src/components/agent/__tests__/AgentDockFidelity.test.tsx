@@ -535,7 +535,9 @@ describe("AgentDock origin/main visible fidelity", () => {
     expect(
       within(waiting).queryByRole("button", { name: "详情" }),
     ).not.toBeInTheDocument();
-    expect(within(waiting).queryByText(/"run-video-1"/)).not.toBeInTheDocument();
+    expect(
+      within(waiting).queryByText(/"run-video-1"/),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps the focused modification editor writable and submits at a live SSE boundary", async () => {
@@ -920,9 +922,7 @@ describe("AgentDock origin/main visible fidelity", () => {
     ).not.toBeInTheDocument();
 
     const toolStatus = screen.getByText("读取素材分析完成");
-    expect(toolStatus.parentElement).toHaveClass(
-      "text-[var(--color-success)]",
-    );
+    expect(toolStatus.parentElement).toHaveClass("text-[var(--color-success)]");
     expect(toolStatus.closest("[data-agent-tool]")?.parentElement).toBe(
       responseFlow,
     );
@@ -1131,9 +1131,7 @@ describe("AgentDock origin/main visible fidelity", () => {
     )!;
     expect(delegateTool).toHaveTextContent("视觉开发中");
     expect(delegateTool).toHaveAttribute("data-expanded", "false");
-    fireEvent.click(
-      within(delegateTool).getByRole("button", { name: "详情" }),
-    );
+    fireEvent.click(within(delegateTool).getByRole("button", { name: "详情" }));
     expect(delegateTool).toHaveAttribute("data-expanded", "true");
     expect(
       screen.getByText("请完善开场视觉，并说明改动结果。"),
@@ -1282,9 +1280,7 @@ describe("AgentDock origin/main visible fidelity", () => {
     const delegateTool = document.querySelector<HTMLElement>(
       '[data-agent-tool="delegate-native-tool"]',
     )!;
-    fireEvent.click(
-      within(delegateTool).getByRole("button", { name: "详情" }),
-    );
+    fireEvent.click(within(delegateTool).getByRole("button", { name: "详情" }));
     const tool = document.querySelector<HTMLElement>(
       '[data-subagent-tool="call-native-tool"]',
     )!;
@@ -1449,9 +1445,7 @@ describe("AgentDock origin/main visible fidelity", () => {
     const delegateTool = document.querySelector<HTMLElement>(
       '[data-agent-tool="delegate-function"]',
     )!;
-    fireEvent.click(
-      within(delegateTool).getByRole("button", { name: "详情" }),
-    );
+    fireEvent.click(within(delegateTool).getByRole("button", { name: "详情" }));
     const subagentMessage = document.querySelector<HTMLElement>(
       '[data-subagent-message="message-function"]',
     )!;
@@ -1547,9 +1541,7 @@ describe("AgentDock origin/main visible fidelity", () => {
       expect(nestedTool).toHaveAttribute("data-expanded", "false");
     });
     expect(nestedTool).not.toBeNull();
-    fireEvent.click(
-      within(nestedTool!).getByRole("button", { name: "详情" }),
-    );
+    fireEvent.click(within(nestedTool!).getByRole("button", { name: "详情" }));
     expect(nestedTool).toHaveAttribute("data-expanded", "true");
     expect(
       subagentMessage.querySelector('[data-agent-action="tool_call"]'),
@@ -1712,9 +1704,7 @@ describe("AgentDock origin/main visible fidelity", () => {
       '[data-agent-tool="delegate-service-action"]',
     )!;
     expect(delegateTool).toHaveAttribute("data-expanded", "false");
-    fireEvent.click(
-      within(delegateTool).getByRole("button", { name: "详情" }),
-    );
+    fireEvent.click(within(delegateTool).getByRole("button", { name: "详情" }));
     expect(delegateTool).toHaveAttribute("data-expanded", "true");
     expect(screen.getByText("等待输出中")).toBeInTheDocument();
     expect(screen.getByText("运行中")).toBeInTheDocument();

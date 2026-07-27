@@ -527,9 +527,20 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
         state.stream?.close();
         invalidateMessageRefresh();
         if (sameProject) {
-          set({ stream: null, connected: false, loading: true, isReplaying: true, error: null });
+          set({
+            stream: null,
+            connected: false,
+            loading: true,
+            isReplaying: true,
+            error: null,
+          });
         } else {
-          set({ ...defaultState(), projectId, loading: true, isReplaying: true });
+          set({
+            ...defaultState(),
+            projectId,
+            loading: true,
+            isReplaying: true,
+          });
         }
         try {
           const [sessionResponse, conversationPage] = await Promise.all([
@@ -543,11 +554,19 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
             return;
           // 终态项目跳过SSE重放
           const TERMINAL_STATUSES = new Set(["IDLE", "CANCELLED", "ERROR"]);
-          const resumeAfter = TERMINAL_STATUSES.has(sessionResponse.session.status)
+          const resumeAfter = TERMINAL_STATUSES.has(
+            sessionResponse.session.status,
+          )
             ? sessionResponse.session.lastEventSeq
             : initialResumeAfter;
-          console.log("[bootstrap] session status:", sessionResponse.session.status);
-          console.log("[bootstrap] lastEventSeq:", sessionResponse.session.lastEventSeq);
+          console.log(
+            "[bootstrap] session status:",
+            sessionResponse.session.status,
+          );
+          console.log(
+            "[bootstrap] lastEventSeq:",
+            sessionResponse.session.lastEventSeq,
+          );
           console.log("[bootstrap] initialResumeAfter:", initialResumeAfter);
           console.log("[bootstrap] final resumeAfter:", resumeAfter);
           let conversations = conversationPage.items;
@@ -640,7 +659,10 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
           // 无事件需要重放时，延迟设置isReplaying: false
           if (resumeAfter >= (sessionResponse.session.lastEventSeq ?? 0)) {
             window.setTimeout(() => {
-              if (bootstrapGeneration === lifecycleGeneration && get().projectId === projectId) {
+              if (
+                bootstrapGeneration === lifecycleGeneration &&
+                get().projectId === projectId
+              ) {
                 set({ isReplaying: false });
               }
             }, 100);

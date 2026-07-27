@@ -26,14 +26,10 @@ function TypeIcon({ element }: { element: TimelineElementDocument }) {
   const track = classifyElementTrack(element);
   if (element.creation.type === "audio" || track === null)
     return <Music2 className="h-3.5 w-3.5" />;
-  if (track === "subtitle")
-    return <Layers3 className="h-3.5 w-3.5" />;
-  if (track === "motion")
-    return <Sparkles className="h-3.5 w-3.5" />;
-  if (track === "transition")
-    return <WandSparkles className="h-3.5 w-3.5" />;
-  if (track === "ai")
-    return <Sparkles className="h-3.5 w-3.5" />;
+  if (track === "subtitle") return <Layers3 className="h-3.5 w-3.5" />;
+  if (track === "motion") return <Sparkles className="h-3.5 w-3.5" />;
+  if (track === "transition") return <WandSparkles className="h-3.5 w-3.5" />;
+  if (track === "ai") return <Sparkles className="h-3.5 w-3.5" />;
   return <Film className="h-3.5 w-3.5" />;
 }
 
@@ -88,7 +84,10 @@ export default function ElementList({
   const listRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef(new Map<string, HTMLButtonElement>());
   const agentWorking = useAgentWorkingState();
-  const elements = useMemo(() => trackOrderedTimelineElements(timeline), [timeline]);
+  const elements = useMemo(
+    () => trackOrderedTimelineElements(timeline),
+    [timeline],
+  );
 
   useEffect(() => {
     if (!selectedElementId) return;
@@ -214,7 +213,9 @@ export default function ElementList({
                       >
                         {meta.label}
                       </span>
-                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-semibold text-[var(--color-text-tertiary)]`}>
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-semibold text-[var(--color-text-tertiary)]`}
+                      >
                         {sec(start, timeline.ticks_per_second)}s –{" "}
                         {sec(end, timeline.ticks_per_second)}s
                       </span>
