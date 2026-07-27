@@ -392,10 +392,15 @@ def _qwenpaw_tool_configs(request: Request) -> dict[str, dict[str, Any]]:
 
 
 async def bind_creator_tool_config(request: Request):
-    """Bind host config first, then fill only absent fields from external local config."""
+    """Bind host config first, then fill only absent fields from external local config.
+
+    ``request_tool_configs()`` stats and, on cache miss, lock-reads the config
+    file, so the complete resolution runs off the event loop.
+    """
 
     configs = _qwenpaw_tool_configs(request)
-    for tool_name, local in request_tool_configs().items():
+    local_configs = await asyncio.to_thread(request_tool_configs)
+    for tool_name, local in local_configs.items():
         merged = dict(local)
         merged.update(configs.get(tool_name) or {})
         configs[tool_name] = merged
