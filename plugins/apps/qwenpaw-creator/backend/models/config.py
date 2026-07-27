@@ -316,44 +316,20 @@ VLM_MAX_INLINE_BYTES = _positive_int_env(
 )
 
 # ── Web grounding ────────────────────────────────────────────────────────────
-WEB_GROUNDING_TIMEOUT_SECONDS = _positive_int_env(
-    "WEB_GROUNDING_TIMEOUT_SECONDS",
-    60,
-)
-WEB_GROUNDING_MAX_SOURCES = _positive_int_env("WEB_GROUNDING_MAX_SOURCES", 6)
-WEB_GROUNDING_MAX_ENTITIES = _positive_int_env("WEB_GROUNDING_MAX_ENTITIES", 3)
-WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS = _positive_int_env(
-    "WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS",
-    20,
-)
-WEB_GROUNDING_VISUAL_SEARCH_TIMEOUT_SECONDS = _positive_int_env(
-    "WEB_GROUNDING_VISUAL_SEARCH_TIMEOUT_SECONDS",
-    120,
-)
-WEB_GROUNDING_IMAGE_DOWNLOAD_TIMEOUT_SECONDS = _positive_int_env(
-    "WEB_GROUNDING_IMAGE_DOWNLOAD_TIMEOUT_SECONDS",
-    30,
-)
-WEB_GROUNDING_VERIFICATION_TIMEOUT_SECONDS = _positive_int_env(
-    "WEB_GROUNDING_VERIFICATION_TIMEOUT_SECONDS",
-    120,
-)
-WEB_GROUNDING_VERIFICATION_MAX_ATTEMPTS = _positive_int_env(
-    "WEB_GROUNDING_VERIFICATION_MAX_ATTEMPTS",
-    3,
-)
-WEB_GROUNDING_VERIFICATION_TOTAL_BUDGET_SECONDS = _positive_int_env(
-    "WEB_GROUNDING_VERIFICATION_TOTAL_BUDGET_SECONDS",
-    300,
-)
-WEB_GROUNDING_RETRY_BASE_SECONDS = _positive_int_env(
-    "WEB_GROUNDING_RETRY_BASE_SECONDS",
-    1,
-)
-WEB_GROUNDING_RETRY_MAX_SECONDS = _positive_int_env(
-    "WEB_GROUNDING_RETRY_MAX_SECONDS",
-    8,
-)
+# These are Creator product policy, not deployment configuration. Keep them
+# fixed until there is a demonstrated need to expose a supported tuning
+# surface through model_config.json / the Portal.
+WEB_GROUNDING_TIMEOUT_SECONDS = 60
+WEB_GROUNDING_MAX_SOURCES = 6
+WEB_GROUNDING_MAX_ENTITIES = 3
+WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS = 20
+WEB_GROUNDING_VISUAL_SEARCH_TIMEOUT_SECONDS = 120
+WEB_GROUNDING_IMAGE_DOWNLOAD_TIMEOUT_SECONDS = 30
+WEB_GROUNDING_VERIFICATION_TIMEOUT_SECONDS = 120
+WEB_GROUNDING_VERIFICATION_MAX_ATTEMPTS = 3
+WEB_GROUNDING_VERIFICATION_TOTAL_BUDGET_SECONDS = 300
+WEB_GROUNDING_RETRY_BASE_SECONDS = 1
+WEB_GROUNDING_RETRY_MAX_SECONDS = 8
 
 # ── ASR Model (OpenAI Whisper / DashScope Fun-ASR) ───────────────────────────
 ASR_BASE_URL = os.environ.get(
@@ -522,80 +498,47 @@ def get_web_grounding_enabled() -> bool:
 
 
 def get_web_grounding_timeout_seconds() -> int:
-    return _positive_int_env(
-        "WEB_GROUNDING_TIMEOUT_SECONDS",
-        WEB_GROUNDING_TIMEOUT_SECONDS,
-    )
+    return WEB_GROUNDING_TIMEOUT_SECONDS
 
 
 def get_web_grounding_max_sources() -> int:
-    return _positive_int_env(
-        "WEB_GROUNDING_MAX_SOURCES",
-        WEB_GROUNDING_MAX_SOURCES,
-    )
+    return WEB_GROUNDING_MAX_SOURCES
 
 
 def get_web_grounding_max_entities() -> int:
-    return _positive_int_env(
-        "WEB_GROUNDING_MAX_ENTITIES",
-        WEB_GROUNDING_MAX_ENTITIES,
-    )
+    return WEB_GROUNDING_MAX_ENTITIES
 
 
 def get_web_grounding_entity_timeout_seconds() -> int:
-    return _positive_int_env(
-        "WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS",
-        WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS,
-    )
+    return WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS
 
 
 def get_web_grounding_visual_search_timeout_seconds() -> int:
-    return _positive_int_env(
-        "WEB_GROUNDING_VISUAL_SEARCH_TIMEOUT_SECONDS",
-        WEB_GROUNDING_VISUAL_SEARCH_TIMEOUT_SECONDS,
-    )
+    return WEB_GROUNDING_VISUAL_SEARCH_TIMEOUT_SECONDS
 
 
 def get_web_grounding_image_download_timeout_seconds() -> int:
-    return _positive_int_env(
-        "WEB_GROUNDING_IMAGE_DOWNLOAD_TIMEOUT_SECONDS",
-        WEB_GROUNDING_IMAGE_DOWNLOAD_TIMEOUT_SECONDS,
-    )
+    return WEB_GROUNDING_IMAGE_DOWNLOAD_TIMEOUT_SECONDS
 
 
 def get_web_grounding_verification_timeout_seconds() -> int:
-    return _positive_int_env(
-        "WEB_GROUNDING_VERIFICATION_TIMEOUT_SECONDS",
-        WEB_GROUNDING_VERIFICATION_TIMEOUT_SECONDS,
-    )
+    return WEB_GROUNDING_VERIFICATION_TIMEOUT_SECONDS
 
 
 def get_web_grounding_verification_max_attempts() -> int:
-    return _positive_int_env(
-        "WEB_GROUNDING_VERIFICATION_MAX_ATTEMPTS",
-        WEB_GROUNDING_VERIFICATION_MAX_ATTEMPTS,
-    )
+    return WEB_GROUNDING_VERIFICATION_MAX_ATTEMPTS
 
 
 def get_web_grounding_verification_total_budget_seconds() -> int:
-    return _positive_int_env(
-        "WEB_GROUNDING_VERIFICATION_TOTAL_BUDGET_SECONDS",
-        WEB_GROUNDING_VERIFICATION_TOTAL_BUDGET_SECONDS,
-    )
+    return WEB_GROUNDING_VERIFICATION_TOTAL_BUDGET_SECONDS
 
 
 def get_web_grounding_retry_base_seconds() -> int:
-    return _positive_int_env(
-        "WEB_GROUNDING_RETRY_BASE_SECONDS",
-        WEB_GROUNDING_RETRY_BASE_SECONDS,
-    )
+    return WEB_GROUNDING_RETRY_BASE_SECONDS
 
 
 def get_web_grounding_retry_max_seconds() -> int:
-    return _positive_int_env(
-        "WEB_GROUNDING_RETRY_MAX_SECONDS",
-        WEB_GROUNDING_RETRY_MAX_SECONDS,
-    )
+    return WEB_GROUNDING_RETRY_MAX_SECONDS
 
 
 def get_web_grounding_tavily_api_key() -> str:

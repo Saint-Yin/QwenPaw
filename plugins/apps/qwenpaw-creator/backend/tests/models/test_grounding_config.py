@@ -118,3 +118,69 @@ def test_grounding_search_and_validation_models_are_independent(monkeypatch):
         assert config.get_web_grounding_search_model_name() == "qwen3.7-plus"
     finally:
         config.reset_request_tool_configs(token)
+
+
+def test_grounding_runtime_policy_does_not_read_environment(monkeypatch):
+    policy = (
+        (
+            "WEB_GROUNDING_TIMEOUT_SECONDS",
+            config.get_web_grounding_timeout_seconds,
+            60,
+        ),
+        (
+            "WEB_GROUNDING_MAX_SOURCES",
+            config.get_web_grounding_max_sources,
+            6,
+        ),
+        (
+            "WEB_GROUNDING_MAX_ENTITIES",
+            config.get_web_grounding_max_entities,
+            3,
+        ),
+        (
+            "WEB_GROUNDING_ENTITY_TIMEOUT_SECONDS",
+            config.get_web_grounding_entity_timeout_seconds,
+            20,
+        ),
+        (
+            "WEB_GROUNDING_VISUAL_SEARCH_TIMEOUT_SECONDS",
+            config.get_web_grounding_visual_search_timeout_seconds,
+            120,
+        ),
+        (
+            "WEB_GROUNDING_IMAGE_DOWNLOAD_TIMEOUT_SECONDS",
+            config.get_web_grounding_image_download_timeout_seconds,
+            30,
+        ),
+        (
+            "WEB_GROUNDING_VERIFICATION_TIMEOUT_SECONDS",
+            config.get_web_grounding_verification_timeout_seconds,
+            120,
+        ),
+        (
+            "WEB_GROUNDING_VERIFICATION_MAX_ATTEMPTS",
+            config.get_web_grounding_verification_max_attempts,
+            3,
+        ),
+        (
+            "WEB_GROUNDING_VERIFICATION_TOTAL_BUDGET_SECONDS",
+            config.get_web_grounding_verification_total_budget_seconds,
+            300,
+        ),
+        (
+            "WEB_GROUNDING_RETRY_BASE_SECONDS",
+            config.get_web_grounding_retry_base_seconds,
+            1,
+        ),
+        (
+            "WEB_GROUNDING_RETRY_MAX_SECONDS",
+            config.get_web_grounding_retry_max_seconds,
+            8,
+        ),
+    )
+    for env_name, _getter, _expected in policy:
+        monkeypatch.setenv(env_name, "999")
+
+    assert [
+        (env_name, getter()) for env_name, getter, _expected in policy
+    ] == [(env_name, expected) for env_name, _getter, expected in policy]
