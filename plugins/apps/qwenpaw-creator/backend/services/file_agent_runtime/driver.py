@@ -257,6 +257,19 @@ class _JqProjectArgumentDiagnosis:
         }
 
 
+# Shared call-shape guidance for jq_project argument failures. Composed by
+# both ``MalformedJqProjectArguments.tool_result`` and
+# ``_specialist_tool_recovery`` so the two recovery texts cannot drift when
+# the tool surface changes.
+_JQ_PROJECT_CALL_SHAPE_RECOVERY = (
+    "Issue a new jq_project call with projectId and program at the top "
+    "level; the Runtime selects the base snapshot itself. Keep program "
+    "small and put structured values in jsonArgs. Split bulk work into "
+    "separate commits for strategy/settings, visual entities, and "
+    "timeline elements, re-reading project.json between commits."
+)
+
+
 class MalformedJqProjectArguments(FileAgentRuntimeError):
     """A jq_project call whose decoded object is unsafe to execute."""
 
@@ -295,13 +308,9 @@ class MalformedJqProjectArguments(FileAgentRuntimeError):
 
     def tool_result(self) -> dict[str, Any]:
         recovery = (
-            "Do not reuse or auto-hoist any nested field from this corrupted payload. "
-            "Call read_project to refresh your snapshot, then issue a new jq_project "
-            "call with projectId and program at the top level; the Runtime selects "
-            "the base snapshot itself. Keep program small and put structured values "
-            "in jsonArgs. Split bulk work into separate commits for strategy/settings, "
-            "visual entities, and timeline elements, re-reading project.json between "
-            "commits."
+            "Do not reuse or auto-hoist any nested field from this "
+            "corrupted payload. Call read_project to refresh your "
+            "snapshot. " + _JQ_PROJECT_CALL_SHAPE_RECOVERY
         )
         if self.repeated_payload:
             recovery = (
@@ -3394,19 +3403,22 @@ def _specialist_terminal(content: str) -> tuple[str, str]:
 def _specialist_tool_recovery(name: str) -> str:
     if name == "jq_project":
         return (
-            "Re-read project.json and retry jq_project with a transform that returns the "
-            "complete Project root and preserves all Runtime-protected root fields. "
-            "Never assign schema_version, project_id, generation, created_at, or updated_at; "
-            "the Runtime maintains them. Start from the input Project `.`, not `$jsonArgs`. "
-            "Put bulk objects in jsonArgs. If the failure was malformed or misnested argument "
-            "JSON, regenerate the call with program as a top-level field and split an "
-            "oversized jsonArgs into a few smaller jq_project calls. For every Edit item, "
-            "set duration_tick to round((source_out_tick - source_in_tick) / playback_rate). "
-            "Remove nonexistent references; not-yet-produced artifacts stay null. "
-            "Parenthesize computed jq values before binding them, for example "
-            '("source:" + $logicalId) as $sourceKey, and parenthesize expressions used as '
-            "object values. Never finish with a saved pre-edit root such as $project "
-            "because that discards mutations."
+            "Re-read project.json and retry jq_project with a transform "
+            "that returns the complete Project root and preserves all "
+            "Runtime-protected root fields. Never assign schema_version, "
+            "project_id, generation, created_at, or updated_at; the "
+            "Runtime maintains them. Start from the input Project `.`, "
+            "not `$jsonArgs`. If the failure was malformed or misnested "
+            "argument JSON: " + _JQ_PROJECT_CALL_SHAPE_RECOVERY + " For "
+            "every Edit item, set duration_tick to "
+            "round((source_out_tick - source_in_tick) / playback_rate). "
+            "Remove nonexistent references; not-yet-produced artifacts "
+            "stay null. Parenthesize computed jq values before binding "
+            "them, for example "
+            '("source:" + $logicalId) as $sourceKey, and parenthesize '
+            "expressions used as object values. Never finish with a saved "
+            "pre-edit root such as $project because that discards "
+            "mutations."
         )
     if name == "ai_edit":
         return (
