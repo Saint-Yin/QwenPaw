@@ -85,7 +85,7 @@ describe("AssetsPage schema-v2 Project projection", () => {
     expect(screen.getByText("橘猫原始视频")).toBeInTheDocument();
     expect(screen.getByText("测试项目最终成片")).toBeInTheDocument();
     expect(screen.getByText("4 项")).toBeInTheDocument();
-    // 同一份底层内容只保留一张卡片：任意两张卡片不会渲染同一个媒体地址。
+    // Only one card per underlying content: no two cards render the same media URL.
     const previewSrcs = Array.from(
       container.querySelectorAll('[data-creator-module="asset-card"] [src]'),
     ).map((element) => element.getAttribute("src"));

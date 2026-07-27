@@ -703,7 +703,11 @@ class ProjectCommitBoundary:
                             earliest_created = pending_review.created_at
                 active_review_round = earliest_round_id
             else:
-                active_review_round = existing_review_round_id if existing_review_pending else None
+                active_review_round = (
+                    existing_review_round_id
+                    if existing_review_pending
+                    else None
+                )
             self._update_runtime_state(
                 runtime_root=runtime_root,
                 snapshot=snapshot,
@@ -1212,10 +1216,6 @@ class ProjectCommitBoundary:
         ``active_round_id`` happens to point at.
         """
 
-        state = AtomicJsonRecordStore(
-            runtime_root / "state.json",
-            RuntimeProjectState,
-        ).read_or_none()
         reviews_root = runtime_root / "reviews"
         if not reviews_root.is_dir():
             return False, False, None

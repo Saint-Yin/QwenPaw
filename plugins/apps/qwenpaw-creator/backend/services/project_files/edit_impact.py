@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=too-many-branches,too-many-statements
 """Typed side effects for explicit frontend Element draft commits.
 
 User operations remain ordinary schema-v2 JSON Pointer edits.  Before the
@@ -69,7 +70,9 @@ def _find_element(
         "timelines",
         "items",
     ).items():
-        element = _items(_record(raw_timeline), "elements_by_id").get(element_id)
+        element = _items(_record(raw_timeline), "elements_by_id").get(
+            element_id,
+        )
         if isinstance(element, dict):
             return timeline_id, element
     return None
@@ -308,7 +311,13 @@ def _rebind_motion_copy(
     total_weight = sum(item[4] for item in affected)
     consumed_weight = 0
     consumed_copy = 0
-    for position, (index, normalized, local_start, local_end, weight) in enumerate(
+    for position, (
+        index,
+        normalized,
+        local_start,
+        local_end,
+        weight,
+    ) in enumerate(
         affected,
     ):
         consumed_weight += weight
@@ -429,12 +438,9 @@ def _apply_element_path(
                     # deterministic fallback rather than rendering stale text.
                     creation["motion"] = None
         elif (
-            (
-                field_name in _OVERLAY_GENERATION_INPUT_FIELDS
-                or (field_name == "text" and overlay_kind == "motion")
-            )
-            and creation.get("motion") is not None
-        ):
+            field_name in _OVERLAY_GENERATION_INPUT_FIELDS
+            or (field_name == "text" and overlay_kind == "motion")
+        ) and creation.get("motion") is not None:
             # Styling/prompt changes intentionally request a new projection.
             creation["motion"] = None
         if generation_input_changed:
@@ -494,7 +500,7 @@ def _pointer_value(
     document: Mapping[str, Any] | None,
     tokens: tuple[str, ...],
 ) -> tuple[bool, Any]:
-    """按 JSON Pointer token 链取值，返回 (是否存在, 值)。"""
+    """Walk the JSON Pointer token chain; return (exists, value)."""
 
     node: Any = document
     for token in tokens:
@@ -520,7 +526,7 @@ def _pointer_unchanged(
     candidate: Mapping[str, Any],
     tokens: tuple[str, ...],
 ) -> bool:
-    """提交的 pointer 在 base 与 candidate 中值完全相同时为 True。"""
+    """True when the submitted pointer value matches in base and candidate."""
 
     base_found, base_value = _pointer_value(base, tokens)
     candidate_found, candidate_value = _pointer_value(candidate, tokens)
@@ -540,8 +546,9 @@ def apply_frontend_edit_impacts(
     for pointer in dict.fromkeys(submitted_pointers):
         tokens = split_pointer(pointer)
         if base is not None and _pointer_unchanged(base, document, tokens):
-            # 提交了 pointer 但值与基线完全一致（no-op 编辑）：
-            # 不得作废任何已生成产物或成片。
+            # The pointer was submitted but its value equals the baseline
+            # (no-op edit): must not invalidate any generated artifact or
+            # final video.
             continue
         _apply_element_path(
             document,
@@ -560,8 +567,9 @@ def summarize_committed_edit_impact(
     """Reconstruct the response contract from a finalized transaction."""
 
     impact = EditImpact()
-    # Re-running the classifier on a copy is deterministic and also covers the
-    # no-selected-artifact case where the commit contains no induced stale path.
+    # Re-running the classifier on a copy is deterministic and also covers
+    # the no-selected-artifact case where the commit contains no induced
+    # stale path.
     _, classified = apply_frontend_edit_impacts(project, changed_pointers)
     impact.affected_element_ids.update(classified.affected_element_ids)
     impact.affected_timeline_ids.update(classified.affected_timeline_ids)

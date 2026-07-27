@@ -105,8 +105,7 @@ async def _resolve_reference_media_url(
         kind = _reference_media_kind(filename)
         if backend == "wan":
             media_type = (
-                mimetypes.guess_type(filename)[0]
-                or "application/octet-stream"
+                mimetypes.guess_type(filename)[0] or "application/octet-stream"
             )
             if url.startswith(("http://", "https://")):
                 with tempfile.TemporaryDirectory(
@@ -441,8 +440,10 @@ async def submit_video_task(
         logger.error(
             f"Video task submission HTTP error: {e.response.status_code} - {e.response.text[:500]}",
         )
-        # 保留足够长的响应体：敏感审核等错误码出现在 ~200 字符之后，
-        # 截得太短会让上层无法识别错误类型（端到端 Run 自愈依赖该标记）
+        # Keep a long enough response body: error codes such as content
+        # moderation appear after ~200 characters, and truncating too short
+        # prevents callers from recognising the error type (end-to-end Run
+        # self-healing relies on that marker).
         raise ModelError(
             f"Video task submission failed with status {e.response.status_code}: {e.response.text[:600]}",
             model_name=model_name,
@@ -458,12 +459,15 @@ async def submit_video_task(
 
 
 def _extract_failed_task(data: object) -> dict | None:
-    """从（可能是错误响应的）body 中挖出「任务已失败」的真实状态与错误。
+    """Dig the real "task failed" status and error out of a (possibly error)
+    response body.
 
-    部分供应商（如 Seedance / routify）会把一次生成任务的失败包在 HTTP 4xx 响应体里，
-    真实的 status=failed 与审核错误藏在嵌套字段（甚至是一段 JSON 字符串）中。
-    这里递归扫描，找到含 status=="failed" 的节点并提取错误码/信息，
-    以便调用方按 FAILED 精确上报，而不是当作可重试的传输错误反复轮询。
+    Some providers (e.g. Seedance / routify) wrap a generation task failure
+    inside an HTTP 4xx body, with the real status=failed and moderation error
+    hidden in nested fields (sometimes a JSON string). Recursively scan for a
+    node with status=="failed" and extract its error code/message so the
+    caller can report FAILED precisely instead of polling a supposedly
+    retryable transport error until timeout.
     """
     found: dict[str, str] = {}
 
@@ -582,8 +586,10 @@ async def check_task_status(task_id: str) -> dict:
         raise ModelError("Task status check timed out", model_name=model_name)
     except httpx.HTTPStatusError as e:
         status_code = e.response.status_code
-        # 供应商可能把「任务已失败」包在 4xx 响应体里（真实 status=failed 藏在 body），
-        # 先尝试解析出来，按 FAILED 精确上报，避免上层把它当可重试错误空等到超时。
+        # A provider may wrap "task failed" inside a 4xx body (the real
+        # status=failed hides there); try to parse it first and report FAILED
+        # precisely, so callers don't treat it as retryable and wait until
+        # timeout.
         try:
             body = e.response.json()
         except (ValueError, TypeError):
@@ -603,7 +609,8 @@ async def check_task_status(task_id: str) -> dict:
             f"Task status check HTTP error | task_id={task_id}: {status_code} - "
             f"{e.response.text[:500]}",
         )
-        # 4xx 属客户端/永久错误 → 不可重试；5xx 与 429 视为瞬时错误可重试。
+        # 4xx are client/permanent errors → not retryable; 5xx and 429 are
+        # transient and retryable.
         raise ModelError(
             f"Task status check failed with status {status_code}",
             model_name=model_name,

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
-# pylint: disable=too-many-return-statements,consider-using-with
+# pylint: disable=too-many-return-statements,consider-using-with,line-too-long
 """Deterministic HTML/CSS motion-graphic rendering for overlay Elements.
 
 A ``MotionGraphic`` document is a self-contained HTML page whose visuals move
@@ -25,6 +25,7 @@ import math
 import os
 import re
 import signal
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,7 +34,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-from collections import OrderedDict
 from typing import Any
 
 from services.media_files.overlay import OverlayRenderResult
@@ -49,7 +49,10 @@ _CAPTURE_BASE_TIMEOUT_SECONDS = 120
 _CAPTURE_PER_FRAME_SECONDS = 3.0
 _PROBE_CACHE_MAX_ITEMS = 128
 _FRAME_CACHE_MAX_ITEMS = 32
-_probe_cache: OrderedDict[tuple[str, int, int, str], MotionDocumentProbe] = OrderedDict()
+_probe_cache: OrderedDict[
+    tuple[str, int, int, str],
+    MotionDocumentProbe,
+] = OrderedDict()
 _probe_cache_lock = threading.Lock()
 
 # Self-contained capture worker: it imports nothing from this backend, reads

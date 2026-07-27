@@ -6,9 +6,9 @@ Price tables are transcribed from the providers' official pricing pages so a
 pending execution authorization can show the user an estimated spend and the
 calculation behind it *before* any billable request is sent:
 
-- 阿里云百炼模型价格: https://help.aliyun.com/zh/model-studio/model-pricing
+- Alibaba Cloud Model Studio pricing: https://help.aliyun.com/zh/model-studio/model-pricing
 - OpenAI API pricing:  https://developers.openai.com/api/docs/pricing
-- 火山方舟模型价格:     https://www.volcengine.com/docs/82379/1544106
+- Volcengine Ark pricing: https://www.volcengine.com/docs/82379/1544106
 
 The estimate is best-effort and computed entirely locally: unknown models fall
 back to their family's typical price and are flagged ``approximate`` so the UI
@@ -64,12 +64,12 @@ class CostEstimate:
 
 _DISCLAIMER = "本地估算，实际费用以服务商账单为准"
 
-# ── Image: DashScope 百炼（元/张，仅按成功输出计费） ─────────────────────────
-# help.aliyun.com/zh/model-studio/model-pricing · 华北2（北京）· 2026-07 抄录
+# ── Image: DashScope Model Studio (CNY/image, billed on successful output only)
+# Copied 2026-07 from help.aliyun.com/zh/model-studio/model-pricing (cn-beijing).
 _DASHSCOPE_IMAGE_SOURCE = "阿里云百炼官网价（元/张）"
 _DASHSCOPE_IMAGE_PRICES: tuple[tuple[str, float], ...] = (
     # Longest prefix first: matching walks this list in order.
-    ("qwen-image-3.0-pro", 0.0),  # 限时免费
+    ("qwen-image-3.0-pro", 0.0),  # free for a limited time
     ("qwen-image-2.0-pro", 0.5),
     ("qwen-image-2.0", 0.2),
     ("qwen-image-max", 0.5),
@@ -92,9 +92,10 @@ _DASHSCOPE_IMAGE_PRICES: tuple[tuple[str, float], ...] = (
 )
 _DASHSCOPE_IMAGE_FALLBACK = 0.25
 
-# ── Image: OpenAI Images API（美元/张，按质量 × 尺寸） ────────────────────────
-# developers.openai.com/api/docs/pricing · gpt-image-1 官方每张价格；
-# 其余 gpt-image 家族（含 gpt-image-2）按同表近似。
+# ── Image: OpenAI Images API (USD/image, by quality × size) ──────────────────
+# developers.openai.com/api/docs/pricing · official per-image prices for
+# gpt-image-1; the rest of the gpt-image family (incl. gpt-image-2)
+# approximates with the same table.
 _OPENAI_IMAGE_SOURCE = "OpenAI 官网价（美元/张，按质量×尺寸）"
 _OPENAI_IMAGE_PRICES: dict[str, dict[str, float]] = {
     # quality -> {size: USD}
@@ -120,11 +121,11 @@ _OPENAI_SIZE_ALIAS = {
     "2560x1080": "1536x1024",
 }
 
-# ── Video: DashScope 百炼 万相 / HappyHorse（元/秒，按输出分辨率） ───────────
-# help.aliyun.com/zh/model-studio/model-pricing · 华北2（北京）· 2026-07 抄录
+# ── Video: DashScope Wan / HappyHorse (CNY/second, by output resolution) ──────
+# Copied 2026-07 from help.aliyun.com/zh/model-studio/model-pricing (cn-beijing).
 _WAN_VIDEO_SOURCE = "阿里云百炼官网价（元/秒，按输出分辨率）"
 _WAN_VIDEO_PRICES: tuple[tuple[str, dict[str, float]], ...] = (
-    # audio=false 的 flash 档更便宜，见 _WAN_VIDEO_MUTED_PRICES。
+    # The audio=false flash tier is cheaper, see _WAN_VIDEO_MUTED_PRICES.
     ("wan2.7-t2v", {"720P": 0.6, "1080P": 1.0}),
     ("wan2.7-i2v", {"720P": 0.6, "1080P": 1.0}),
     ("wan2.7-r2v", {"720P": 0.6, "1080P": 1.0}),
@@ -138,8 +139,10 @@ _WAN_VIDEO_PRICES: tuple[tuple[str, dict[str, float]], ...] = (
     ("wan2.2-i2v-flash", {"480P": 0.1, "720P": 0.1, "1080P": 0.1}),
     ("wanx2.1-t2v-turbo", {"480P": 0.24, "720P": 0.24}),
     ("wanx2.1-t2v-plus", {"720P": 0.7}),
-    # HappyHorse 参考生视频：按官网原价抄录（官网当前标注限时 6 折/8 折，
-    # 折扣期估算偏高属安全侧，实际以账单为准）。无静音折扣档位。
+    # HappyHorse reference-to-video: copied at the official list price (the
+    # site currently advertises limited-time 60%/80% discounts; estimating
+    # high during the discount window is the safe side — the bill is
+    # authoritative). No muted-discount tier.
     ("happyhorse-1.1-r2v", {"720P": 0.9, "1080P": 1.2}),
     ("happyhorse-1.0-r2v", {"720P": 0.9, "1080P": 1.6}),
 )
@@ -148,9 +151,11 @@ _WAN_VIDEO_MUTED_PRICES: dict[str, dict[str, float]] = {
 }
 _WAN_VIDEO_FALLBACK = {"480P": 0.3, "720P": 0.6, "1080P": 1.0}
 
-# ── Video: 火山方舟 Seedance（元/百万 tokens，token 按像素×帧率×时长折算） ──
-# volcengine.com/docs/82379/1544106 · tokens = 宽×高×帧率×时长 ÷ 1024
-# 当前仅接入 Seedance 2.0 家族；单价为不含视频输入的档位。
+# ── Video: Volcengine Ark Seedance (CNY/million tokens; tokens derived from ───
+# pixels × fps × duration) · volcengine.com/docs/82379/1544106
+# tokens = width × height × fps × duration ÷ 1024
+# Only the Seedance 2.0 family is integrated; prices are the tiers without
+# video input.
 _SEEDANCE_VIDEO_SOURCE = "火山方舟官网价（元/百万tokens）"
 _SEEDANCE_TOKEN_PRICES: tuple[tuple[str, float], ...] = (
     ("doubao-seedance-2.0-mini", 23.0),
@@ -169,8 +174,10 @@ _VIDEO_PIXELS_BY_RESOLUTION = {
 }
 
 
-# 官方快照命名：同一模型的日期版本（如 qwen-image-2.0-pro-2026-06-22）与主模型
-# 同价；除此之外的版本后缀均视为不同版本，单价可能不同，只能标记为近似。
+# Official snapshot naming: a dated version of a model (e.g.
+# qwen-image-2.0-pro-2026-06-22) shares the base model's price; any other
+# version suffix is a distinct version whose price may differ, so it can only
+# be flagged as approximate.
 _DATED_VERSION_SUFFIX = re.compile(r"^-\d{4}-\d{2}-\d{2}$")
 
 
@@ -183,17 +190,19 @@ def _match_prefix_price(
     lowered = model.casefold()
     best: tuple[str, Any] | None = None
     for prefix, value in table:
-        if lowered.startswith(prefix) and (
-            best is None or len(prefix) > len(best[0])
-        ):
-            best = (prefix, value)
+        if not lowered.startswith(prefix):
+            continue
+        # pylint: disable-next=unsubscriptable-object
+        if best is not None and len(prefix) <= len(best[0]):
+            continue
+        best = (prefix, value)
     return best
 
 
 def _is_same_priced_version(model: str, prefix: str) -> bool:
     """True only for the exact catalog model or its dated official snapshot."""
 
-    remainder = model.casefold()[len(prefix):]
+    remainder = model.casefold()[len(prefix) :]
     return remainder == "" or bool(_DATED_VERSION_SUFFIX.match(remainder))
 
 
@@ -241,8 +250,12 @@ def estimate_image_cost(
             notes=tuple(notes),
         )
 
-    # OpenAI Images API：按质量 × 尺寸对应的每张价格。
-    quality_key = quality.casefold() if quality.casefold() in _OPENAI_IMAGE_PRICES else "low"
+    # OpenAI Images API: per-image price keyed by quality × size.
+    quality_key = (
+        quality.casefold()
+        if quality.casefold() in _OPENAI_IMAGE_PRICES
+        else "low"
+    )
     size = _OPENAI_SIZE_BY_RATIO.get(aspect_ratio, "1536x1024")
     billed_size = _OPENAI_SIZE_ALIAS.get(size, size)
     unit = _OPENAI_IMAGE_PRICES[quality_key].get(

@@ -218,8 +218,9 @@ export default function SelectionToolbar() {
     const height = bar?.offsetHeight || 32;
     const gap = 6;
     const { anchor } = state;
-    // 默认落在选区末尾的右上角，避免盖住刚选中的内容；
-    // 右侧空间不够时向左收拢，上方空间不够时翻转到选区下方。
+    // Default to the top-right of the selection end so it doesn't cover what
+    // was just selected; shift left when short on right-side space, flip below
+    // the selection when short on space above.
     let left = anchor.right + gap;
     if (left + width > window.innerWidth - 8) left = anchor.right - width;
     left = Math.min(
@@ -253,7 +254,8 @@ export default function SelectionToolbar() {
         top: pos?.top ?? -9999,
         left: pos?.left ?? -9999,
         visibility: pos ? "visible" : "hidden",
-        // 高于导览遮罩与气泡（antd Tour 默认 1001），新手引导的真实选区演示也能看到浮条。
+        // Above the tour mask and popover (antd Tour defaults to 1001) so the bar
+        // is visible during the onboarding tour's real-selection demo.
         zIndex: 1100,
       }}
       className="agent-dock-enter flex flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] p-0.5 shadow-lg"

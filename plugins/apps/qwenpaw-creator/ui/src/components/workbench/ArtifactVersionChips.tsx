@@ -1,8 +1,10 @@
 import type { ArtifactVersionDocument } from "@/contracts/creator";
 
 /**
- * 与 origin/main Workbench 的 VersionChips 保持同一 DOM 与样式。
- * 点击 chip 只切换本地查看版本；当前版本切换由相邻的「设为当前」按钮显式提交。
+ * Keeps the same DOM and styling as the origin/main Workbench VersionChips.
+ * Clicking a chip only switches the locally viewed version; switching the
+ * current version is committed explicitly via the adjacent "设为当前"
+ * (set as current) button.
  */
 export default function ArtifactVersionChips({
   versions,

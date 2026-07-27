@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
-# pylint: disable=wrong-import-order,wrong-import-position
+# pylint: disable=wrong-import-order,wrong-import-position,ungrouped-imports
 """QwenPaw Creator — PawApp backend entry point.
 
 Exports a :class:`PawApp` instance named ``app`` (also aliased as

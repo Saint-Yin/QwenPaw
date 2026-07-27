@@ -66,8 +66,8 @@ from .path_safety import require_safe_runtime_segment
 # running Session yields an interrupt boundary; an idle/settled Session yields
 # an idle-goal boundary so user feedback after a run still gates its related
 # changes behind a review.  CANCELLED is included: a user who stopped the
-# Agent and later sends 修改意见 is still commenting on already-produced
-# work (the frontend presents that Session as 待命).  Hard-stop transitions
+# Agent and later sends revision feedback is still commenting on already-produced
+# work (the frontend presents that Session as standing by).  Hard-stop transitions
 # (INTERRUPT_REQUESTED) and terminal failures (ERROR) stay out: their next
 # request is a restart, not feedback.
 _REVIEW_ACTIVE_STATUSES = frozenset(
@@ -1746,7 +1746,7 @@ class ProjectRuntimeSessionStore:
         if session.active_run_id:
             return bool(session.active_goal_id)
         # An idle Session requires review only when a Goal already exists:
-        # the request is then feedback (修改意见) on previously produced
+        # the request is then feedback (revision comments) on previously produced
         # mainline work.  A Session that has never owned a Goal is receiving
         # its mainline kick-off request (e.g. the first instruction after an
         # attachment-driven Project creation), and every change on that

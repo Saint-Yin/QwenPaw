@@ -95,7 +95,10 @@ describe("creator task view refresh ordering", () => {
 
   it("drops a cancel response after switching projects", async () => {
     const cancelled = deferred<Response>();
-    vi.stubGlobal("fetch", vi.fn(() => cancelled.promise));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => cancelled.promise),
+    );
     const task = (projectId: string, status: TaskView["status"]): TaskView => ({
       id: "reused-task-id",
       projectId,
@@ -112,9 +115,7 @@ describe("creator task view refresh ordering", () => {
       tasks: [task("p1", "RUNNING")],
     });
 
-    const cancel = useCreatorTaskViewStore
-      .getState()
-      .cancel("reused-task-id");
+    const cancel = useCreatorTaskViewStore.getState().cancel("reused-task-id");
     useCreatorTaskViewStore.setState({
       projectId: "p2",
       tasks: [task("p2", "RUNNING")],

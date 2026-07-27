@@ -108,7 +108,13 @@ export function packDisplayLanes(
   }));
 }
 
-export type TimelineTrackType = "subtitle" | "motion" | "clip" | "ai" | "transition" | "audio";
+export type TimelineTrackType =
+  | "subtitle"
+  | "motion"
+  | "clip"
+  | "ai"
+  | "transition"
+  | "audio";
 
 export const TRACK_ORDER: TimelineTrackType[] = [
   "ai",
@@ -145,10 +151,16 @@ export function classifyElementTrack(
     case "audio":
       return "audio";
     case "overlay":
-      if (creation.overlay_kind === "pet_os" || creation.overlay_kind === "interview_summary") {
+      if (
+        creation.overlay_kind === "pet_os" ||
+        creation.overlay_kind === "interview_summary"
+      ) {
         return "subtitle";
       }
-      if (creation.overlay_kind === "motion" || creation.overlay_kind === "media") {
+      if (
+        creation.overlay_kind === "motion" ||
+        creation.overlay_kind === "media"
+      ) {
         return "motion";
       }
       return null;
@@ -157,9 +169,7 @@ export function classifyElementTrack(
   }
 }
 
-const trackRank = new Map(
-  TRACK_ORDER.map((type, index) => [type, index]),
-);
+const trackRank = new Map(TRACK_ORDER.map((type, index) => [type, index]));
 
 export function trackOrderedTimelineElements(
   timeline: TimelineDocument | null | undefined,
@@ -168,8 +178,14 @@ export function trackOrderedTimelineElements(
   return Object.values(timeline.elements_by_id).sort((left, right) => {
     const leftTrack = classifyElementTrack(left);
     const rightTrack = classifyElementTrack(right);
-    const leftRank = leftTrack !== null ? trackRank.get(leftTrack) ?? TRACK_ORDER.length : TRACK_ORDER.length;
-    const rightRank = rightTrack !== null ? trackRank.get(rightTrack) ?? TRACK_ORDER.length : TRACK_ORDER.length;
+    const leftRank =
+      leftTrack !== null
+        ? trackRank.get(leftTrack) ?? TRACK_ORDER.length
+        : TRACK_ORDER.length;
+    const rightRank =
+      rightTrack !== null
+        ? trackRank.get(rightTrack) ?? TRACK_ORDER.length
+        : TRACK_ORDER.length;
     return (
       leftRank - rightRank ||
       left.span.start_tick - right.span.start_tick ||
@@ -209,35 +225,36 @@ export function groupElementsByTracks(
     if (list) list.push(element);
     else grouped.set(trackType, [element]);
   }
-  return TRACK_ORDER
-    .filter((type) => grouped.has(type))
-    .map((type) => {
-      const elements = grouped.get(type)!;
-      const meta = TRACK_TYPE_META[type];
-      const laneMap: Array<{ endTick: number; elements: TimelineElementDocument[] }> = [];
-      for (const element of elements) {
-        const lane = laneMap.find(
-          (candidate) => candidate.endTick <= element.span.start_tick,
-        );
-        const endTick = element.span.start_tick + element.span.duration_tick;
-        if (lane) {
-          lane.elements.push(element);
-          lane.endTick = endTick;
-        } else {
-          laneMap.push({ endTick, elements: [element] });
-        }
+  return TRACK_ORDER.filter((type) => grouped.has(type)).map((type) => {
+    const elements = grouped.get(type)!;
+    const meta = TRACK_TYPE_META[type];
+    const laneMap: Array<{
+      endTick: number;
+      elements: TimelineElementDocument[];
+    }> = [];
+    for (const element of elements) {
+      const lane = laneMap.find(
+        (candidate) => candidate.endTick <= element.span.start_tick,
+      );
+      const endTick = element.span.start_tick + element.span.duration_tick;
+      if (lane) {
+        lane.elements.push(element);
+        lane.endTick = endTick;
+      } else {
+        laneMap.push({ endTick, elements: [element] });
       }
-      return {
-        type,
-        label: meta.label,
-        color: meta.color,
-        soft: meta.soft,
-        lanes: laneMap.map((lane, index) => ({
-          id: `${type}-${index + 1}`,
-          elements: lane.elements,
-        })),
-      };
-    });
+    }
+    return {
+      type,
+      label: meta.label,
+      color: meta.color,
+      soft: meta.soft,
+      lanes: laneMap.map((lane, index) => ({
+        id: `${type}-${index + 1}`,
+        elements: lane.elements,
+      })),
+    };
+  });
 }
 
 export function selectedSlotVersion(
@@ -288,7 +305,7 @@ export function resolveTimelineRender(
   );
 }
 
-/** 本地合成器支持的转场类型与展示文案；fade 是 crossfade 的同义写法。 */
+/** Transition kinds supported by the local compositor with display copy; "fade" is a synonym of crossfade. */
 export const TRANSITION_KIND_LABEL: Record<string, string> = {
   crossfade: "交叉溶解",
   fade: "交叉溶解",

@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Tour, type TourProps } from "antd";
 
 /**
- * 通用 Spotlight 导览执行器：按蓝图轮询等待锚点挂载后弹出 antd Tour，
- * 锚点缺失的步骤自动跳过。首页与项目工作区共用。
+ * Generic spotlight tour runner: polls until the blueprint's anchors mount,
+ * then opens an antd Tour; steps whose anchors are missing are skipped.
+ * Shared by the home page and the project workspace.
  */
 
 export interface TourStepBlueprint {
@@ -22,9 +23,9 @@ export function resolveTarget(selectors: string[]): HTMLElement | null {
 
 interface TourRunnerProps {
   steps: TourStepBlueprint[];
-  /** 触发条件（首次进入或手动重看）；为 false 时不做任何事。 */
+  /** Trigger condition (first visit or manual replay); does nothing when false. */
   shouldRun: boolean;
-  /** 结束（完成或关闭）时回调，负责持久化完成标记。 */
+  /** Called on finish (completed or dismissed); persists the completion flag. */
   onFinish: () => void;
 }
 
@@ -37,7 +38,8 @@ export default function TourRunner({
   const [anchorsReady, setAnchorsReady] = useState(false);
   const active = shouldRun && !open;
 
-  // 锚点可能异步渲染（快照轮询 + 懒加载），轮询等待首个锚点挂载。
+  // Anchors may render asynchronously (snapshot polling + lazy loading), so
+  // poll until the first anchor mounts.
   useEffect(() => {
     if (!active) return;
     setAnchorsReady(false);
@@ -49,7 +51,8 @@ export default function TourRunner({
         setAnchorsReady(true);
         return;
       }
-      // 最多等 30 秒；Agent 首次规划期间页面可能长时间处于骨架态。
+      // Wait at most 30s; the page can stay in a skeleton state for a long time
+      // during the Agent's initial planning.
       if (tries > 100) window.clearInterval(timer);
     }, 300);
     return () => window.clearInterval(timer);

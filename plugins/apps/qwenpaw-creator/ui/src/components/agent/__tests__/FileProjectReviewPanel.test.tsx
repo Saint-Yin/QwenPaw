@@ -40,10 +40,7 @@ function review(operationCount = 1): FileProjectReviewRecord {
       before_hash: `before-${index}`,
       after_hash: `after-${index}`,
       before: index === 0 ? "Old title" : { index, enabled: false },
-      after:
-        index === 0
-          ? "New title"
-          : { index, enabled: true },
+      after: index === 0 ? "New title" : { index, enabled: true },
       operation_id: `operation-${index + 1}`,
       ui_locator: {
         page: "plan",
@@ -112,8 +109,9 @@ describe("FileProjectReviewPanel", () => {
     const reviewData = review();
     render(<FileProjectReviewPanel projectId="p1" review={reviewData} />);
     expect(screen.getByText("文件项目修改")).toBeInTheDocument();
-    // 文本修改不再在审阅面板内展示 diff；只展示可读摘要，
-    // 完整 diff 通过“查看”跳转到原文位置展示。
+    // Text changes no longer render a diff inside the review panel; only a
+    // readable summary is shown, and the full diff appears at the original
+    // location via the "查看" (view) jump.
     expect(screen.getByText("描述")).toBeInTheDocument();
     expect(screen.getByTitle("/description")).toBeInTheDocument();
     expect(document.querySelector("[data-review-diff]")).toBeNull();
@@ -126,9 +124,7 @@ describe("FileProjectReviewPanel", () => {
     const reviewData = review();
     render(<FileProjectReviewPanel projectId="p1" review={reviewData} />);
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "保留 /description" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "保留 /description" }));
     await waitFor(() =>
       expect(decide).toHaveBeenCalledWith("p1", "review-1", [
         {

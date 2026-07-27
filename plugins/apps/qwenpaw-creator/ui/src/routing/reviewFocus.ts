@@ -9,13 +9,13 @@ type ReviewFocusRuntime = Window & {
 };
 
 interface UseReviewFieldFocusOptions {
-  /** 当前页面路径（不含 query），用于忽略发往其它页面的审阅定位请求。 */
+  /** Current page path (without query); requests targeting other pages are ignored. */
   path: string;
-  /** URL 中的 field 参数；支持刷新后直接恢复定位。 */
+  /** The `field` URL param; lets the focus restore directly after a refresh. */
   field: string | null;
-  /** URL 中 review=1 时为 true。 */
+  /** True when the URL has review=1. */
   enabled: boolean;
-  /** 同一路由、同一字段重复查看时用于重放动画。 */
+  /** Replays the animation when the same route/field is viewed repeatedly. */
   pulse: string | null;
 }
 
@@ -24,8 +24,9 @@ const MAX_RETRIES = 40;
 const FLASH_DURATION_MS = 2400;
 const fallbackFlashTokens = new WeakMap<HTMLElement, number>();
 let fallbackFlashSequence = 0;
-// 每次点击“查看”都会生成唯一的 reviewPulse。定位/强调动画只在首次消费
-// 某个 pulse 时触发；URL 参数残留、组件重挂载、快照轮询都不会重放。
+// Every "View" click generates a unique reviewPulse. The focus/flash animation
+// only fires the first time a pulse is consumed; leftover URL params, component
+// remounts, and snapshot polling never replay it.
 const consumedFocusPulses = new Set<string>();
 
 function consumePulse(pulse: string | null | undefined): boolean {
@@ -35,7 +36,7 @@ function consumePulse(pulse: string | null | undefined): boolean {
   return true;
 }
 
-/** 精确寻找字段节点，避免把 `:`、`/` 等字段路径直接拼进 CSS selector。 */
+/** Find the field node exactly, avoiding splicing field paths containing `:`, `/` etc. straight into a CSS selector. */
 export function findCreatorFieldElement(
   field: string,
   root: ParentNode = document,
@@ -58,7 +59,7 @@ export function findCreatorFieldElement(
   );
 }
 
-/** textarea/input 不能可靠承载 ::after，定位时改为闪烁其所在内容块。 */
+/** textarea/input can't reliably host ::after; flash the enclosing content block instead. */
 export function reviewFlashElementForField(
   field: string,
   root: ParentNode = document,
@@ -75,7 +76,7 @@ export function reviewFlashElementForField(
   return fieldElement;
 }
 
-/** Immediate same-page fallback used after AgentDock closes on “查看”. */
+/** Immediate same-page fallback used after AgentDock closes on "View". */
 export function flashCreatorReviewField(
   field: string,
   root: ParentNode = document,
@@ -96,7 +97,7 @@ export function flashCreatorReviewField(
   return target;
 }
 
-/** 媒体审阅「查看生成详情」的落点锚点：按 artifact version 匹配预览块。 */
+/** Landing anchor for a media review's "View generation detail": match the preview block by artifact version. */
 export function findReviewMediaAnchor(
   versionId: string,
   root: ParentNode = document,
@@ -112,19 +113,21 @@ export function findReviewMediaAnchor(
 }
 
 /**
- * 媒体审阅定位强调：没有字段指针的图片/视频「查看」按 version 锚点闪烁。
+ * Media-review focus emphasis: image/video "View" without a field pointer
+ * flashes the block anchored by version.
  *
- * 与 useReviewFieldFocus 共用 pulse 消费集，因此同一次点击只会触发一种强调；
- * 目标预览可能在快照/媒体加载后才挂载，同样用短轮询等待锚点出现。
+ * Shares the pulse consumption set with useReviewFieldFocus, so a single click
+ * triggers only one kind of emphasis; the target preview may mount only after
+ * the snapshot/media loads, so a short poll waits for the anchor as well.
  */
 export function useReviewMediaFocus({
   versionId,
   enabled,
   pulse,
 }: {
-  /** URL 中的 version 参数；媒体审阅跳转时指向待审产物版本。 */
+  /** The `version` URL param; media-review jumps point it at the artifact version awaiting review. */
   versionId: string | null;
-  /** URL 中 review=1 且没有 field（有 field 时由字段定位接管）。 */
+  /** True when the URL has review=1 and no field (with a field, field focus takes over). */
   enabled: boolean;
   pulse: string | null;
 }): void {
@@ -177,10 +180,12 @@ export function useReviewMediaFocus({
 }
 
 /**
- * 方案页字段级审阅定位。
+ * Field-level review focus for the plan page.
  *
- * 同时消费 URL 与 navigationStore 请求，并注册 refNavigation 的即时重放入口。
- * 目标详情可能在路由切换/项目加载后才挂载，因此用短轮询代替固定延时。
+ * Consumes both URL and navigationStore requests, and registers the current
+ * page's handler for refNavigation's immediate replay. The target detail may
+ * mount only after a route switch/project load, so a short poll replaces a
+ * fixed delay.
  */
 export function useReviewFieldFocus({
   path,
@@ -240,7 +245,7 @@ export function useReviewFieldFocus({
       // Closing AgentDock and opening a Plan detail can replace the matching DOM
       // node after the first successful lookup. Re-check through the transition
       // window and replay only when React mounted a new target (or stripped the
-      // class), so a same-route repeated “查看” remains visible.
+      // class), so a same-route repeated "View" remains visible.
       const verifyMountedTarget = () => {
         if (sequence !== requestSequenceRef.current) return;
         const workspaceRoot = document.querySelector<HTMLElement>(
@@ -299,13 +304,15 @@ export function useReviewFieldFocus({
     [clearTimers],
   );
 
-  // 仅当本次点击产生的 pulse 尚未被消费时才定位/强调；没有 pulse（非点击
-  // 进入）或 pulse 已消费（重挂载/轮询重渲染）时保持页面安静。
+  // Focus/flash only when this click's pulse has not been consumed yet; with no
+  // pulse (non-click entry) or an already-consumed pulse (remount/poll
+  // re-render), keep the page quiet.
   useEffect(() => {
     if (enabled && field && consumePulse(pulse)) trigger(field);
   }, [enabled, field, pulse, trigger]);
 
-  // 跨页跳转的定位请求同样按 pulse 消费，避免 store 残留请求在重挂载时重放。
+  // Cross-page focus requests are consumed per pulse too, so stale store
+  // requests never replay on remount.
   useEffect(() => {
     if (!enabled) return;
     if (!reviewFocusRequest || reviewFocusRequest.path !== path) return;
@@ -318,7 +325,8 @@ export function useReviewFieldFocus({
     trigger(reviewFocusRequest.query.field);
   }, [enabled, path, reviewFocusRequest, trigger]);
 
-  // 与资产页/工作台保持一致，为 navigateToRef 的即时重放提供当前页面处理器。
+  // Consistent with the assets page/workbench: provide the current-page handler
+  // for navigateToRef's immediate replay.
   useEffect(() => {
     const runtime = window as ReviewFocusRuntime;
     const handler = (request: {

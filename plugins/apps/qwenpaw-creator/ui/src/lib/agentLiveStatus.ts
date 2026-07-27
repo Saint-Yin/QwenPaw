@@ -15,7 +15,7 @@ import {
 } from "./creatorPresentation";
 import { taskProgressPercent } from "./taskPresentation";
 
-// 与 AgentStatusBar/agentWorkingSelectors 一致的"Agent 正在工作"会话口径。
+// Same "agent is working" session criteria as AgentStatusBar/agentWorkingSelectors.
 const WORKING_SESSION_STATUSES = new Set([
   "RUNNING",
   "RESUMING",
@@ -30,7 +30,7 @@ export type AgentLiveState = "working" | "stopping" | "waiting" | "idle";
 export interface AgentLiveStatus {
   state: AgentLiveState;
   label: string;
-  /** 仅当存在可量化进度（如素材入库）时给出 0-100；否则为 null 不展示进度。 */
+  /** 0-100 only when quantifiable progress exists (e.g. asset ingestion); null hides the bar. */
   progressPercent: number | null;
 }
 
@@ -59,7 +59,7 @@ function toolTargetRef(
   return fallbackRefs[0] ?? "";
 }
 
-/** 目标名过长时在名字内部截断，保留句尾的“分镜图/画面”等关键词。 */
+/** Truncate over-long target names within the name itself, so sentence-final keywords like "storyboard"/"frame" (appended after the name) stay visible. */
 const MAX_TARGET_NAME_LENGTH = 10;
 
 function clampTargetName(name: string): string {
@@ -68,7 +68,7 @@ function clampTargetName(name: string): string {
     : name;
 }
 
-/** 把 creatorTargetLabel 的兜底文案视为"未解析"，避免出现「时间线内容」分镜图。 */
+/** Treat creatorTargetLabel's generic fallback copy as "unresolved", so we never render labels like a "timeline content" storyboard. */
 function resolvedTargetName(
   ref: string,
   project: ProjectDocument | null,
@@ -123,14 +123,14 @@ function subagentRoleName(activity: SubagentActivity): string {
   return activity.roleDisplayName || creatorRoleLabel(activity.role);
 }
 
-/** 角色级子状态：优先用预设文案，未知角色降级为「角色」工作中。 */
+/** Role-level sub-status: prefer preset copy; unknown roles degrade to a generic "role working" label. */
 function roleWorkingLabel(activity: SubagentActivity): string {
   const runningLabel = getRoleRunningLabel(activity.role);
   if (runningLabel) return runningLabel;
   return `「${subagentRoleName(activity)}」工作中…`;
 }
 
-/** 未完成子 Agent 里最新一个仍在执行的工具（含所属活动的 targetRefs 兜底）。 */
+/** Latest still-running tool among incomplete subagents (falls back to the owning activity's targetRefs). */
 function activeSubagentToolLabel(
   activities: Record<string, SubagentActivity>,
   project: ProjectDocument | null,
@@ -155,7 +155,7 @@ function activeSubagentToolLabel(
   return latestLabel;
 }
 
-/** 主 Agent 最新一个仍在执行的工具；delegate 交由角色文案表达。 */
+/** Latest still-running tool of the main agent; delegations are expressed via role copy instead. */
 function activeMainToolLabel(
   toolCalls: ToolCallPresentation[],
   activities: Record<string, SubagentActivity>,
@@ -177,9 +177,7 @@ function activeMainToolLabel(
       // brief "正在安排" until the specialist reports in.
       const args = isRecord(call.arguments) ? call.arguments : undefined;
       const role = typeof args?.role === "string" ? args.role : "";
-      return role
-        ? `正在安排「${creatorRoleLabel(role)}」…`
-        : "正在分配任务…";
+      return role ? `正在安排「${creatorRoleLabel(role)}」…` : "正在分配任务…";
     }
     const label = runningToolLabel(call.tool, call.arguments, [], project);
     if (label) return label;
@@ -187,7 +185,7 @@ function activeMainToolLabel(
   return null;
 }
 
-/** 运行中的 Runtime 任务（素材入库/视频生成等长任务）。 */
+/** Currently running Runtime task (long jobs such as asset ingestion / video generation). */
 function activeTask(tasks: TaskView[]): TaskView | null {
   const running = tasks.filter((task) => ACTIVE_TASK_STATUSES.has(task.status));
   if (running.length === 0) return null;
@@ -214,7 +212,7 @@ function firstIncompleteActivity(
   return pending[0] ?? null;
 }
 
-/** 仅认可可量化进度：数值型任务进度（如素材入库），否则用后端 completed/total。 */
+/** Only accept quantifiable progress: numeric task progress (e.g. asset ingestion), otherwise the backend's completed/total. */
 function quantifiedProgressPercent(
   tasks: TaskView[],
   agentStatusBar: AgentStatusBarView | null,
@@ -259,7 +257,7 @@ export function deriveAgentLiveStatus(
       progressPercent: null,
     };
 
-  // 重放期间显示"加载中…"，抑制"工作中"动画
+  // While replaying, show the loading label and suppress the "working" animation.
   if (isReplaying)
     return {
       state: "idle",

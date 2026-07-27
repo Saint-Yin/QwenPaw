@@ -16,11 +16,7 @@ interface ShotListProps {
   elementId: string;
   shotPointer: (shotId: string, field: ShotField) => string;
   disabled?: boolean;
-  onChangeField: (
-    shotId: string,
-    field: ShotField,
-    value: unknown,
-  ) => void;
+  onChangeField: (shotId: string, field: ShotField, value: unknown) => void;
   onAdd: () => void;
   onDelete: (shot: ShotDocument) => void;
 }
@@ -79,7 +75,9 @@ export default function ShotList({
                   placeholder="镜头描述…"
                   className="!rounded-md !border-transparent !bg-transparent !p-1 !text-xs hover:!border-[var(--color-border)] focus:!border-[var(--color-accent)]"
                 />
-                <InlineReviewDiff pointer={shotPointer(shotId, "description")} />
+                <InlineReviewDiff
+                  pointer={shotPointer(shotId, "description")}
+                />
               </div>
               <div className="flex items-center gap-2">
                 <span
@@ -131,11 +129,7 @@ export default function ShotList({
                     value={shot.duration_seconds}
                     disabled={disabled}
                     onChange={(value) =>
-                      onChangeField(
-                        shotId,
-                        "duration_seconds",
-                        value ?? 1,
-                      )
+                      onChangeField(shotId, "duration_seconds", value ?? 1)
                     }
                     onFocus={() => trackShotFocus(shotId, "duration_seconds")}
                     onBlur={releaseShotFocus}

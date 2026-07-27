@@ -19,9 +19,7 @@ describe("pathForLocator", () => {
   });
 
   it("maps asset locators to the assets page", () => {
-    expect(pathForLocator("p1", { page: "assets" })).toBe(
-      "/project/p1/assets",
-    );
+    expect(pathForLocator("p1", { page: "assets" })).toBe("/project/p1/assets");
   });
 
   it("defaults unknown pages to plan", () => {

@@ -102,7 +102,8 @@ describe("DecisionTray", () => {
     seed({ reviews: [textReview("review-1", "/description")] });
     render(<DecisionTray projectId="p1" />);
 
-    // 阻塞级聚焦在最前：生产确认卡完整可见，审阅卡只露出叠纸存根。
+    // Blocking item focused first: the production-confirmation card is fully
+    // visible, review cards only show their stacked-paper stubs.
     expect(screen.getByText("生成开场分镜图")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "文本审阅 · 1 处" }),
@@ -116,7 +117,7 @@ describe("DecisionTray", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "下一条决策" }));
     expect(screen.getByText(/旧文案/)).toBeInTheDocument();
-    // 到达队尾后前进箭头禁用，后退箭头可用。
+    // At the end of the queue the next arrow is disabled, the back arrow enabled.
     expect(screen.getByRole("button", { name: "下一条决策" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "上一条决策" })).toBeEnabled();
   });
@@ -131,10 +132,10 @@ describe("DecisionTray", () => {
     render(<DecisionTray projectId="p1" />);
 
     fireEvent.click(screen.getByRole("button", { name: /列表/ }));
-    // 列表模式：授权卡与两张审阅卡同时可见。
+    // List mode: the authorization card and both review cards are visible at once.
     expect(screen.getByText("生成开场分镜图")).toBeInTheDocument();
     expect(screen.getAllByText(/旧文案/)).toHaveLength(2);
-    // 可切换回堆叠。
+    // Can switch back to stacked mode.
     expect(screen.getByRole("button", { name: /堆叠/ })).toBeInTheDocument();
   });
 

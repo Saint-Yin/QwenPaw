@@ -37,8 +37,9 @@ class ModelError(AppError):
     ):
         super().__init__(message, code="MODEL_ERROR", status_code=502)
         self.model_name = model_name
-        # 永久性错误（如上游 4xx 客户端错误）应标记为不可重试，
-        # 供轮询等调用方快速失败，避免空等到超时。
+        # Permanent errors (e.g. upstream 4xx client errors) should be
+        # marked non-retryable so pollers and other callers can fail fast
+        # instead of waiting until timeout.
         self.retryable = retryable
 
 

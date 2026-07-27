@@ -14,7 +14,11 @@ import {
   Rocket,
   X,
 } from "lucide-react";
-import type { CreatorContentPart, CreatorScenario, ModelConfigData } from "@/contracts/creator";
+import type {
+  CreatorContentPart,
+  CreatorScenario,
+  ModelConfigData,
+} from "@/contracts/creator";
 import {
   createAssetImport,
   createProject,
@@ -175,8 +179,8 @@ export function ProjectComposer({ open, onClose }: ProjectComposerProps) {
       scenario === "short_drama"
         ? ["vlm", "image", "video"]
         : scenario === "video_edit" || hasAttachments
-          ? ["vlm"]
-          : [];
+        ? ["vlm"]
+        : [];
     const missing: string[] = [];
     for (const type of required) {
       const item = config[type];
@@ -556,7 +560,8 @@ export function ProjectComposer({ open, onClose }: ProjectComposerProps) {
           </div>
         </div>
 
-        {/* 标杆场景选择（5.5）：驱动结构模板、默认风格与全程 UI 术语。 */}
+        {/* Benchmark scenario picker (5.5): drives the structure template, default
+            style and the UI terminology throughout. */}
         <div className="mt-4 flex flex-wrap items-center gap-1.5">
           <span className="text-[11px] font-medium text-[var(--color-text-tertiary)]">
             视频场景
@@ -700,9 +705,18 @@ export function ProjectComposer({ open, onClose }: ProjectComposerProps) {
               </span>
               {missingRequiredModels!.map((type) => {
                 const meta = {
-                  vlm: { label: "VLM", icon: <EyeOutlined style={{ fontSize: 10 }} /> },
-                  image: { label: "Image", icon: <PictureOutlined style={{ fontSize: 10 }} /> },
-                  video: { label: "Video", icon: <VideoCameraOutlined style={{ fontSize: 10 }} /> },
+                  vlm: {
+                    label: "VLM",
+                    icon: <EyeOutlined style={{ fontSize: 10 }} />,
+                  },
+                  image: {
+                    label: "Image",
+                    icon: <PictureOutlined style={{ fontSize: 10 }} />,
+                  },
+                  video: {
+                    label: "Video",
+                    icon: <VideoCameraOutlined style={{ fontSize: 10 }} />,
+                  },
                 }[type] ?? { label: type, icon: null };
                 return (
                   <span

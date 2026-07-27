@@ -12,7 +12,7 @@ export function pathForLocator(
       return `/project/${projectId}/assets`;
     case "element":
       // Generated storyboard/video is produced in the Element workbench; jump
-      // straight to it so the review "查看" lands on the generation detail.
+      // straight to it so the review "View" lands on the generation detail.
       return locator.elementId
         ? `/project/${projectId}/plan/element/${encodeURIComponent(
             locator.elementId,

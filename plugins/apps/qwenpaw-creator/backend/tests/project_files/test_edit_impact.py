@@ -148,12 +148,14 @@ def test_overlay_copy_edit_invalidates_only_timeline_render() -> None:
     assert "brand new copy" in re.sub(r"<[^>]+>", "", html)
     assert impact.regeneration_required is False
     assert impact.render_timeline_ids == {"timeline:main"}
-    assert versions["final-v1"]["metadata"][
-        "pendingAffectedElementIds"
-    ] == ["overlay-1"]
+    assert versions["final-v1"]["metadata"]["pendingAffectedElementIds"] == [
+        "overlay-1",
+    ]
 
 
-def test_overlay_prompt_edit_drops_inline_motion_and_requires_generation() -> None:
+def test_overlay_prompt_edit_drops_inline_motion_and_requires_generation() -> (
+    None
+):
     project, impact = apply_frontend_edit_impacts(
         _project(),
         [_element_pointer("overlay-1", "creation", "prompt")],
@@ -167,7 +169,9 @@ def test_overlay_prompt_edit_drops_inline_motion_and_requires_generation() -> No
     assert impact.render_timeline_ids == {"timeline:main"}
 
 
-def test_r2v_video_prompt_invalidates_video_and_final_but_not_storyboard() -> None:
+def test_r2v_video_prompt_invalidates_video_and_final_but_not_storyboard() -> (
+    None
+):
     project, impact = apply_frontend_edit_impacts(
         _project(),
         [_element_pointer("r2v-1", "creation", "video_prompt")],

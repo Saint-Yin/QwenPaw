@@ -37,7 +37,7 @@ interface TimelineLivePreviewProps {
   onPlayingChange: (playing: boolean) => void;
 }
 
-/** 视频层与播放头允许的最大偏差（秒），超过则回拉。 */
+/** Max allowed drift (seconds) between a video layer and the playhead before pulling it back. */
 const DRIFT_TOLERANCE_SECONDS = 0.3;
 const RETIRED_MOTION_MOTIFS = new Set([
   "speed_lines",
@@ -54,7 +54,8 @@ function aspectRatioStyle(aspectRatio: string): string {
   return `${match[1]} / ${match[2]}`;
 }
 
-/** 归一化画布坐标 → 舞台内百分比定位（与 ElementDetail 的位置框同口径）。 */
+/** Normalized canvas coordinates → percentage positioning within the stage
+ * (same convention as ElementDetail's location box). */
 function locationBoxStyle(
   location: ElementLocationDocument | null,
 ): React.CSSProperties {
@@ -162,7 +163,8 @@ function TextOverlayLayer({
 }) {
   const { element } = layer;
   if (element.creation.type !== "overlay") return null;
-  // 与成片合成器同款的确定性文案渲染，保证预览即成片效果。
+  // Deterministic copy rendering identical to the final compositor, so the
+  // preview matches the final render.
   return (
     <div
       data-live-text-overlay={element.element_id}
@@ -295,7 +297,8 @@ function MotionOverlayLayer({
       data-live-motion-overlay={element.element_id}
       srcDoc={motionPreviewDocument(motion.html, isTextOverlay)}
       title={element.label || "动态动效"}
-      // 不开放脚本；allow-same-origin 仅用于父页面同步 CSS 动画时间轴。
+      // No scripts allowed; allow-same-origin exists only so the parent page
+      // can sync the CSS animation timeline.
       sandbox="allow-same-origin"
       onLoad={() => {
         syncAnimations();
@@ -313,9 +316,11 @@ function MotionOverlayLayer({
 }
 
 /**
- * 实时拼装预览：无需等待成片合成，按 element 的 span/z_index/location
- * 把已就绪的媒体直接分层播放。任何可见图层尚未生成、加载或完成寻帧时，
- * 用不透明的整帧提示遮住后台预挂载层，避免把缺层的半成品暴露给用户。
+ * Live-assembly preview: plays ready media directly in layers by each
+ * element's span/z_index/location without waiting for final composition.
+ * Whenever any visible layer is still generating, loading or seeking, an
+ * opaque full-frame notice covers the pre-mounted background layers so users
+ * never see a half-assembled frame with missing layers.
  */
 export default function TimelineLivePreview({
   project,
@@ -373,8 +378,9 @@ export default function TimelineLivePreview({
     return () => observer.disconnect();
   }, []);
 
-  // 与成片合成口径一致：audio 元素不参与合成（仅保留主轨原声），
-  // 因此实时预览也不渲染/不发声。
+  // Same convention as final composition: audio elements don't participate
+  // (only the main track's original sound is kept), so the live preview
+  // neither renders nor plays them.
   const layers = useMemo(
     () =>
       playbackLayersInWindow(project, timeline, playheadTick, tasks).filter(
@@ -398,7 +404,8 @@ export default function TimelineLivePreview({
     [visibleLayers],
   );
 
-  // rAF 主时钟：播放中按真实时间推进播放头；video 层只做跟随与纠偏。
+  // rAF master clock: while playing, advance the playhead by real elapsed
+  // time; video layers only follow and correct drift.
   useEffect(() => {
     if (!playing) {
       clock.current = null;
@@ -428,14 +435,16 @@ export default function TimelineLivePreview({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, durationTick, ticksPerSecond]);
 
-  // 外部 scrub（点击时间轴/进度条）时给时钟重定基准。
+  // Re-base the clock when an external scrub happens (clicking the timeline or
+  // progress bar).
   useEffect(() => {
     if (Math.abs(playheadTick - lastEmittedTick.current) <= 1) return;
     lastEmittedTick.current = playheadTick;
     clock.current = null;
   }, [playheadTick]);
 
-  // 让每个已挂载的媒体层跟随播放头：可见即播、越界即停、漂移即纠。
+  // Keep every mounted media layer following the playhead: play when visible,
+  // pause when out of range, correct when drifting.
   useEffect(() => {
     layers.forEach((layer) => {
       if (!layer.media || layer.media.mediaKind === "image") return;
@@ -466,7 +475,7 @@ export default function TimelineLivePreview({
     });
   }, [layers, playheadTick, playing, ticksPerSecond, visibleIds]);
 
-  // 卸载即停：组件销毁时避免残留声音。
+  // Stop on unmount: avoid leftover audio after the component is destroyed.
   useEffect(() => {
     const refs = mediaRefs.current;
     return () => refs.forEach((media) => media.pause());
@@ -586,14 +595,16 @@ export default function TimelineLivePreview({
           const { element, media, status } = layer;
           const elementId = element.element_id;
           const visible = visibleIds.has(elementId);
-          // 转场窗口内 to 端图层淡入，与后端 xfade 合成同口径。
+          // Within a transition window the "to" layer fades in, matching the
+          // backend xfade composition.
           const transitionOpacity = transitionOpacityAtTick(
             timeline,
             element,
             playheadTick,
           );
           if (media && media.mediaKind === "video") {
-            // 声音策略与成片一致：仅主轨视频保留原声，overlay 媒体静音。
+            // Audio policy identical to the final render: only main-track video
+            // keeps its original sound, overlay media is muted.
             const silent = muted || element.creation.type === "overlay";
             const boxStyle = locationBoxStyle(element.location);
             const baseOpacity =

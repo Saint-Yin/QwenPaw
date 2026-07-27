@@ -124,7 +124,7 @@ def test_happyhorse_submit_body_omits_prompt_extend(monkeypatch) -> None:
     assert "prompt_extend" not in body["parameters"]
     assert body["parameters"]["resolution"] == "720P"
     assert body["parameters"]["duration"] == 5
-    # 未显式传 watermark 时默认不加提供商水印。
+    # Without an explicit watermark argument, no provider watermark is added.
     assert body["parameters"]["watermark"] is False
     assert [item["type"] for item in body["input"]["media"]] == [
         "reference_image",
@@ -159,7 +159,7 @@ def test_happyhorse_rejects_video_reference(monkeypatch) -> None:
     _bind_happyhorse(monkeypatch)
 
     async def fake_resolve(url: str, backend: str):
-        del backend
+        del url, backend
         return "oss://dashscope-instant/clip.mp4", "video"
 
     monkeypatch.setattr(

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=too-many-return-statements
 """Map a committed JSON pointer to a frontend navigation locator.
 
 Every review operation carries a ``ui_locator`` so the AgentDock review panel

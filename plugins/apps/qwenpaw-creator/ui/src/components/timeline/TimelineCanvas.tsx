@@ -158,14 +158,17 @@ export default function TimelineCanvas({
     active.every(
       (element) => !pendingAffectedElementIds.has(element.element_id),
     );
-  // 新鲜成片始终优先。成片仅因局部 Element 修改而过期时，未落入该
-  // Element 时间段的旧成片帧仍是完整且正确的；受影响时间段则切换到
-  // 实时拼装，绝不拿修改前的旧画面冒充新结果。
+  // A fresh final render always wins. When the final render is only stale
+  // because of a local Element edit, old final-render frames outside that
+  // Element's time range are still complete and correct; the affected range
+  // switches to live assembly instead — never pass off pre-edit footage as the
+  // new result.
   const previewMode =
     renderUrl && (!renderedVersion?.stale || staleFrameIsUnaffected)
       ? "final"
       : "live";
-  // 实时拼装预览里的就绪态，同时驱动轨道块的生成中/失败样式。
+  // Readiness states for the live-assembly preview; also drive the
+  // generating/failed styling of track blocks.
   const playbackStates = useMemo(() => {
     const states = new Map<string, ElementPlaybackStatus>();
     Object.values(timeline.elements_by_id).forEach((element) => {
@@ -324,7 +327,8 @@ export default function TimelineCanvas({
     return () => document.removeEventListener("mousedown", close);
   }, []);
 
-  // 让成片预览始终对齐播放头；预览刚打开或元数据尚未加载时也要补齐一次定位
+  // Keep the final-render preview aligned with the playhead; also seek once
+  // when the preview just opened or metadata hasn't loaded yet.
   const seekPreviewToPlayhead = (video: HTMLVideoElement) => {
     if (!Number.isFinite(video.duration)) return;
     const target = playheadTick / timeline.ticks_per_second;
@@ -719,7 +723,7 @@ export default function TimelineCanvas({
               }
               onClick={() => {
                 if (previewMode === "live") {
-                  // 播到尾部后再次播放从头开始。
+                  // Playing again after reaching the end restarts from the beginning.
                   if (!playing && playheadTick >= timelineDuration)
                     onPlayheadChange(0);
                   setPlaying((value) => !value);
@@ -941,128 +945,140 @@ export default function TimelineCanvas({
                         {track.label}-{laneIndex + 1}
                       </div>
                       <div className="relative min-w-0 flex-1">
-                    {lane.elements.map((element) => {
-                      const meta = resolveElementVisualMeta(element);
-                      const playbackState =
-                        playbackStates.get(element.element_id) ?? "pending";
-                      const left = percent(
-                        element.span.start_tick,
-                        timelineDuration,
-                      );
-                      const width = Math.max(
-                        0.7,
-                        (element.span.duration_tick / timelineDuration) * 100,
-                      );
-                      const selected = element.element_id === selectedElementId;
-                      // 转场块通常只有不到 2% 宽，两行文本会被裁剪成纯色块；
-                      // 改用居中的交叉三角转场符号，悬停仍有完整 title 提示。
-                      const isTransition =
-                        element.creation.type === "transition";
-                      return (
-                        <button
-                          key={element.element_id}
-                          type="button"
-                          data-element-block={element.element_id}
-                          data-element-block-state={playbackState}
-                          title={`${element.label || "时间线内容"} · ${seconds(
+                        {lane.elements.map((element) => {
+                          const meta = resolveElementVisualMeta(element);
+                          const playbackState =
+                            playbackStates.get(element.element_id) ?? "pending";
+                          const left = percent(
                             element.span.start_tick,
-                            timeline.ticks_per_second,
-                          )}s – ${seconds(
-                            element.span.start_tick +
-                              element.span.duration_tick,
-                            timeline.ticks_per_second,
-                          )}s${
-                            playbackState === "ready"
-                              ? ""
-                              : ` · ${ELEMENT_PLAYBACK_STATUS_LABEL[playbackState]}`
-                          }`}
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            // Element 选中复用唯一的播放头；旧的点/区间选择不再
-                            // 留下一根独立标记线。
-                            clearSelection();
-                            onSelectElement(element.element_id);
-                            onActiveElementIdsChange([element.element_id]);
-                          }}
-                          className={`absolute top-0.5 flex h-[30px] min-w-3 overflow-hidden rounded-[7px] border text-[10px] font-semibold shadow-sm transition ${
-                            isTransition
-                              ? "items-center justify-center px-0"
-                              : "flex-col justify-center px-2 text-left"
-                          } ${
-                            selected
-                              ? "z-20 border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/20"
-                              : "z-10"
-                          } ${element.enabled ? "" : "opacity-45"} ${
-                            playbackState === "queued" ? "border-dashed" : ""
-                          }`}
-                          style={{
-                            left: `${left}%`,
-                            width: `${Math.min(100 - left, width)}%`,
-                            color: meta.color,
-                            borderColor: selected
-                              ? undefined
-                              : playbackState === "failed"
-                              ? "var(--color-danger)"
-                              : `${meta.color}80`,
-                            background: meta.soft,
-                          }}
-                        >
-                          {playbackState === "generating" && (
-                            <i
-                              aria-hidden
-                              className="element-generating-stripes pointer-events-none absolute inset-0"
-                              style={{ color: meta.color }}
-                            />
-                          )}
-                          {isTransition ? (
-                            // 剪辑软件惯用的交叉三角转场符号，窄块内也始终可识别。
-                            <svg
-                              aria-hidden
-                              data-transition-glyph
-                              viewBox="0 0 20 12"
-                              className="h-3 w-5 shrink-0"
-                              fill="currentColor"
+                            timelineDuration,
+                          );
+                          const width = Math.max(
+                            0.7,
+                            (element.span.duration_tick / timelineDuration) *
+                              100,
+                          );
+                          const selected =
+                            element.element_id === selectedElementId;
+                          // Transition blocks are usually under 2% wide, so two lines
+                          // of text get clipped into a solid color block; use a centered
+                          // crossed-triangle transition glyph instead — hover still shows
+                          // the full title tooltip.
+                          const isTransition =
+                            element.creation.type === "transition";
+                          return (
+                            <button
+                              key={element.element_id}
+                              type="button"
+                              data-element-block={element.element_id}
+                              data-element-block-state={playbackState}
+                              title={`${
+                                element.label || "时间线内容"
+                              } · ${seconds(
+                                element.span.start_tick,
+                                timeline.ticks_per_second,
+                              )}s – ${seconds(
+                                element.span.start_tick +
+                                  element.span.duration_tick,
+                                timeline.ticks_per_second,
+                              )}s${
+                                playbackState === "ready"
+                                  ? ""
+                                  : ` · ${ELEMENT_PLAYBACK_STATUS_LABEL[playbackState]}`
+                              }`}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                // Element selection reuses the single playhead; the old
+                                // point/range selection no longer leaves a separate marker line.
+                                clearSelection();
+                                onSelectElement(element.element_id);
+                                onActiveElementIdsChange([element.element_id]);
+                              }}
+                              className={`absolute top-0.5 flex h-[30px] min-w-3 overflow-hidden rounded-[7px] border text-[10px] font-semibold shadow-sm transition ${
+                                isTransition
+                                  ? "items-center justify-center px-0"
+                                  : "flex-col justify-center px-2 text-left"
+                              } ${
+                                selected
+                                  ? "z-20 border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/20"
+                                  : "z-10"
+                              } ${element.enabled ? "" : "opacity-45"} ${
+                                playbackState === "queued"
+                                  ? "border-dashed"
+                                  : ""
+                              }`}
+                              style={{
+                                left: `${left}%`,
+                                width: `${Math.min(100 - left, width)}%`,
+                                color: meta.color,
+                                borderColor: selected
+                                  ? undefined
+                                  : playbackState === "failed"
+                                  ? "var(--color-danger)"
+                                  : `${meta.color}80`,
+                                background: meta.soft,
+                              }}
                             >
-                              <path d="M1 1 L9 6 L1 11 Z" opacity="0.9" />
-                              <path d="M19 1 L11 6 L19 11 Z" opacity="0.45" />
-                            </svg>
-                          ) : (
-                            <>
-                              <span className="min-w-0 truncate">
-                                {(playbackState === "generating" ||
-                                  playbackState === "queued") && (
-                                  <span
-                                    aria-hidden
-                                    className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-warning)] align-middle"
+                              {playbackState === "generating" && (
+                                <i
+                                  aria-hidden
+                                  className="element-generating-stripes pointer-events-none absolute inset-0"
+                                  style={{ color: meta.color }}
+                                />
+                              )}
+                              {isTransition ? (
+                                // Crossed-triangle transition glyph familiar from editing
+                                // software; recognizable even inside very narrow blocks.
+                                <svg
+                                  aria-hidden
+                                  data-transition-glyph
+                                  viewBox="0 0 20 12"
+                                  className="h-3 w-5 shrink-0"
+                                  fill="currentColor"
+                                >
+                                  <path d="M1 1 L9 6 L1 11 Z" opacity="0.9" />
+                                  <path
+                                    d="M19 1 L11 6 L19 11 Z"
+                                    opacity="0.45"
                                   />
-                                )}
-                                {playbackState === "failed" && (
-                                  <span
-                                    aria-hidden
-                                    className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-danger)] align-middle"
-                                  />
-                                )}
-                                {element.label || "时间线内容"}
-                              </span>
-                              <span className="truncate whitespace-nowrap text-[9px] font-medium opacity-75">
-                                {seconds(
-                                  element.span.start_tick,
-                                  timeline.ticks_per_second,
-                                )}
-                                s –{" "}
-                                {seconds(
-                                  element.span.start_tick +
-                                    element.span.duration_tick,
-                                  timeline.ticks_per_second,
-                                )}
-                                s
-                              </span>
-                            </>
-                          )}
-                        </button>
-                      );
-                    })}
+                                </svg>
+                              ) : (
+                                <>
+                                  <span className="min-w-0 truncate">
+                                    {(playbackState === "generating" ||
+                                      playbackState === "queued") && (
+                                      <span
+                                        aria-hidden
+                                        className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-warning)] align-middle"
+                                      />
+                                    )}
+                                    {playbackState === "failed" && (
+                                      <span
+                                        aria-hidden
+                                        className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-danger)] align-middle"
+                                      />
+                                    )}
+                                    {element.label || "时间线内容"}
+                                  </span>
+                                  <span className="truncate whitespace-nowrap text-[9px] font-medium opacity-75">
+                                    {seconds(
+                                      element.span.start_tick,
+                                      timeline.ticks_per_second,
+                                    )}
+                                    s –{" "}
+                                    {seconds(
+                                      element.span.start_tick +
+                                        element.span.duration_tick,
+                                      timeline.ticks_per_second,
+                                    )}
+                                    s
+                                  </span>
+                                </>
+                              )}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   ))}
@@ -1112,7 +1128,8 @@ export default function TimelineCanvas({
                   top: toolbarPos?.top ?? -9999,
                   left: toolbarPos?.left ?? -9999,
                   visibility: toolbarPos ? "visible" : "hidden",
-                  // 高于导览遮罩（antd Tour 默认 1001），导览中框选时间段也能看到浮条。
+                  // Above the tour mask (antd Tour defaults to 1001) so the bar is
+                  // visible when box-selecting a time range during the tour.
                   zIndex: 1100,
                 }}
               >

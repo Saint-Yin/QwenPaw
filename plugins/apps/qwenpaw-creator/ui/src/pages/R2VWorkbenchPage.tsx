@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Button, Input, Modal, Select, Tooltip, message } from "antd";
 import { AlertTriangle, ArrowLeft } from "lucide-react";
-import {
-  navigate,
-  useParams,
-  useSearchParams,
-} from "@/routing/navigation";
+import { navigate, useParams, useSearchParams } from "@/routing/navigation";
 import {
   useReviewFieldFocus,
   useReviewMediaFocus,
@@ -17,7 +13,11 @@ import {
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
 import { selectPrimaryTimeline } from "@/selectors/timelineElementSelectors";
-import { getArtifactVersionMediaUrl, getAssetVersionMediaUrl, getResolvedModels } from "@/api/creator";
+import {
+  getArtifactVersionMediaUrl,
+  getAssetVersionMediaUrl,
+  getResolvedModels,
+} from "@/api/creator";
 import { projectJsonPointer } from "@/lib/projectJsonPointer";
 import { useProjectDraft } from "@/lib/useProjectDraft";
 import PageSkeleton from "@/components/PageSkeleton";
@@ -154,7 +154,8 @@ export default function R2VWorkbenchPage() {
     enabled: reviewMode,
     pulse: reviewPulse,
   });
-  // 媒体审阅的「查看生成详情」没有字段指针，按待审版本锚点闪烁预览块。
+  // "View generation detail" for media reviews has no field pointer; flash the
+  // preview block anchored by the version awaiting review.
   useReviewMediaFocus({
     versionId: versionFromUrl,
     enabled: reviewMode && !reviewField,
@@ -172,9 +173,7 @@ export default function R2VWorkbenchPage() {
   const refreshTasks = useCreatorTaskViewStore((state) => state.refresh);
   const timeline = useMemo(() => selectPrimaryTimeline(project), [project]);
   const authorityElement = timeline?.elements_by_id[elementId] ?? null;
-  const elementDraft = useProjectDraft<
-    TimelineElementDocument | null
-  >(
+  const elementDraft = useProjectDraft<TimelineElementDocument | null>(
     authorityElement,
     `${id}:${timeline?.timeline_id ?? "missing"}:${elementId}:r2v`,
     [
@@ -312,9 +311,7 @@ export default function R2VWorkbenchPage() {
       message.error((error as Error).message);
       throw error;
     });
-  const updateElement = (
-    mutator: (draft: TimelineElementDocument) => void,
-  ) =>
+  const updateElement = (mutator: (draft: TimelineElementDocument) => void) =>
     elementDraft.update((draft) => {
       if (draft) mutator(draft);
     });
@@ -435,9 +432,11 @@ export default function R2VWorkbenchPage() {
     : spanSeconds;
   const overLimit = totalDuration > spanSeconds;
 
-  // 输入引用：从 R2V creation 的引用字段汇总，与 origin/main 的 resolvedRefs 对应。
-  // 若某素材版本本身就是已引用视觉实体（场景/角色/道具）的生成图，
-  // 则不在“素材”中重复展示一次，避免“场景”与“场景视觉图”语义重复。
+  // Input references: aggregated from the R2V creation's reference fields,
+  // matching origin/main's resolvedRefs. If a material version is itself the
+  // generated image of an already-referenced visual entity (scene/character/
+  // prop), don't show it again under "materials" — avoids the semantic
+  // duplication of "scene" vs "scene visual image".
   const referencedEntityIds = new Set(
     [creation.scene_ref, ...creation.character_refs, ...creation.prop_refs]
       .filter((ref): ref is string => Boolean(ref))
@@ -449,8 +448,9 @@ export default function R2VWorkbenchPage() {
       ...creation.video_reference_version_ids,
     ]),
   ];
-  // 实体归属在历史数据中有多种前缀（visual-entity: / asset: / 无前缀）；
-  // 只要归一化后能命中视觉实体，就视为该实体的产出。
+  // Historical data carries entity ownership under several prefixes
+  // (visual-entity: / asset: / bare); if the normalized ID hits a visual
+  // entity, treat the artifact as that entity's output.
   const ownerEntityId = (ownerRef: string): string | null => {
     const entityId = ownerRef.replace(/^(?:visual-entity|asset):/, "");
     return project.visual.entities.items[entityId] ? entityId : null;
@@ -461,9 +461,10 @@ export default function R2VWorkbenchPage() {
     const entityId = ownerEntityId(owner);
     return entityId !== null && referencedEntityIds.has(entityId);
   };
-  // 历史数据里实体引用存在两种格式（scene:night_room 与
-  // visual-entity:scene:night_room）。统一归一化到带前缀格式，让
-  // Select 已选值命中选项（显示真实名称且不产生重复 fallback 项）。
+  // Historical data has entity refs in two formats (scene:night_room vs
+  // visual-entity:scene:night_room). Normalize to the prefixed form so the
+  // Select's current value matches an option (shows the real name and avoids
+  // duplicate fallback entries).
   const normalizeEntityRef = (ref: string | null | undefined) => {
     if (!ref) return undefined;
     const entityId = ref.replace(/^visual-entity:/, "");
@@ -502,7 +503,7 @@ export default function R2VWorkbenchPage() {
     }
     return null;
   };
-  /** 同一 element 产出的分镜图；视频缩略优先用它代替关键帧。 */
+  /** Storyboard image produced by the same element; video thumbnails prefer it over keyframes. */
   const storyboardOfOwner = (ownerRef: string): string | null => {
     if (!ownerRef.startsWith("element:")) return null;
     const candidates = Object.values(
@@ -519,7 +520,7 @@ export default function R2VWorkbenchPage() {
     kind: "image" | "video";
     url: string;
   }
-  /** 引用的悬浮预览：图片直接显示；视频用同属分镜图或关键帧；无产出时返回 null。 */
+  /** Hover preview for a reference: images render directly; videos use the sibling storyboard image or a keyframe; null when nothing was produced. */
   const refThumbInfo = (ref: string): RefThumb | null => {
     const entityId = ref.replace(/^visual-entity:/, "");
     if (project.visual.entities.items[entityId]) {
@@ -578,9 +579,10 @@ export default function R2VWorkbenchPage() {
         })),
     ];
 
-  // Select 选项与已选值都用真实名称；若已选值不在选项里（历史数据/
-  // 不同前缀格式），补一个带真实名称的 fallback 选项，避免直接显示
-  // scene:night_room 这样的原始 ID。
+  // Both Select options and the current value use real names; if the current
+  // value is missing from the options (historical data / different prefix
+  // format), add a fallback option with the real name to avoid showing raw IDs
+  // like scene:night_room.
   const withValueFallback = (
     options: Array<{ value: string; label: string }>,
     refs: Array<string | null | undefined>,
@@ -621,12 +623,10 @@ export default function R2VWorkbenchPage() {
   );
   const materialOptions = withValueFallback(
     [
-      ...Object.values(project.assets.source_versions_by_id).map(
-        (version) => ({
-          value: version.version_id,
-          label: version.name || version.version_id,
-        }),
-      ),
+      ...Object.values(project.assets.source_versions_by_id).map((version) => ({
+        value: version.version_id,
+        label: version.name || version.version_id,
+      })),
       ...Object.values(project.assets.artifact_versions_by_id)
         .filter((version) => version.owner_ref !== elementRef)
         .map((version) => ({
@@ -815,7 +815,7 @@ export default function R2VWorkbenchPage() {
                 }
               />
               {storyboardUrl ? (
-                // img 不支持 ::after，审阅闪烁锚点打在包裹容器上。
+                // <img> can't host ::after; put the review flash anchor on the wrapper.
                 <div
                   data-review-media-anchor={viewedStoryboard?.version_id}
                   className="rounded-lg"
@@ -867,7 +867,7 @@ export default function R2VWorkbenchPage() {
           >
             <div className="space-y-2">
               {videoUrl && viewedVideo ? (
-                // video 不支持 ::after，审阅闪烁锚点打在包裹容器上。
+                // <video> can't host ::after; put the review flash anchor on the wrapper.
                 <div
                   data-review-media-anchor={viewedVideo.version_id}
                   className="rounded-lg"

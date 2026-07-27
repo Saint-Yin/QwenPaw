@@ -309,9 +309,7 @@ def test_invoke_translates_project_schema_errors_with_paths(tmp_path):
             "jq_project",
             {
                 "projectId": "project-1",
-                "program": (
-                    '.visual.variants = {"items": {}, "order": []}'
-                ),
+                "program": ('.visual.variants = {"items": {}, "order": []}'),
             },
         )
     message = str(caught.value)

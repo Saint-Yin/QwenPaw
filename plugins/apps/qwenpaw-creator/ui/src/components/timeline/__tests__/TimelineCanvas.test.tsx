@@ -29,10 +29,7 @@ describe("TimelineCanvas preview scrubber", () => {
     ) as HTMLDivElement;
     const initialLeft = playhead.style.left;
 
-    expect(playhead).toHaveClass(
-      "border-l-2",
-      "border-[var(--color-accent)]",
-    );
+    expect(playhead).toHaveClass("border-l-2", "border-[var(--color-accent)]");
 
     rerender(<TimelineCanvas {...props} playheadTick={12000} />);
 
@@ -93,9 +90,9 @@ describe("TimelineCanvas preview scrubber", () => {
     expect(
       container.querySelector("[data-timeline-selection-range]"),
     ).not.toBeInTheDocument();
-    expect(
-      container.querySelectorAll("[data-timeline-playhead]"),
-    ).toHaveLength(1);
+    expect(container.querySelectorAll("[data-timeline-playhead]")).toHaveLength(
+      1,
+    );
   });
 
   it("renders adaptive major and minor scale ticks with aligned track guides", () => {
@@ -129,9 +126,7 @@ describe("TimelineCanvas preview scrubber", () => {
     expect(scale).toBeInTheDocument();
     expect(majorTicks?.length).toBeGreaterThanOrEqual(5);
     expect(minorTicks?.length).toBeGreaterThan(0);
-    expect(
-      container.querySelector("[data-timeline-grid]"),
-    ).toBeInTheDocument();
+    expect(container.querySelector("[data-timeline-grid]")).toBeInTheDocument();
   });
 
   it("moves the shared playhead throughout a real pointer drag", () => {
@@ -310,8 +305,7 @@ describe("TimelineCanvas preview scrubber", () => {
   it("uses completed stale frames outside the Element changed by the latest edit", () => {
     const project = structuredClone(projectDocument);
     const timeline = project.timelines.items["timeline:main"];
-    const finalRender =
-      project.assets.artifact_versions_by_id["final-v1"];
+    const finalRender = project.assets.artifact_versions_by_id["final-v1"];
     finalRender.stale = true;
     finalRender.stale_reason = "时间线内容已修改，需要重新合成";
     finalRender.metadata.pendingAffectedElementIds = ["overlay-os"];

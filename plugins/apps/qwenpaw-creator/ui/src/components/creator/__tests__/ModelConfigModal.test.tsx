@@ -95,7 +95,8 @@ describe("ModelConfigModal configuration lifecycle", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /保存配置/ }));
-    // 分段保存只 PATCH 当前标签页的 section，保存成功后自动关闭窗口
+    // Sectioned save only PATCHes the section of the current tab and closes the
+    // modal automatically on success.
     await waitFor(() => {
       const save = calls.find(
         (call) =>

@@ -76,7 +76,8 @@ const DOCK_MIN_HEIGHT = 420;
 const DOCK_DEFAULT_SIZE: DockSize = { width: 440, height: 620 };
 const DOCK_SIZE_STORAGE_KEY = "agentDock.size.v1";
 
-// 与全局硬停止一致的"可停止"判定（原 AgentStatusBar 停止按钮迁移至此）。
+// "Stoppable" check consistent with the global hard-stop (the stop button
+// migrated here from the former AgentStatusBar).
 const ACTIVE_RUN_STATUSES = new Set([
   "QUEUED",
   "QUEUED_CAPACITY",
@@ -323,7 +324,12 @@ function MessageParts({
             key={index}
             className="mt-1 block rounded bg-[var(--color-bg-secondary)] px-2 py-1 text-[10px] text-[var(--color-text-secondary)]"
           >
-            {part.type === "audio" ? "音频附件" : part.type === "document" ? "文档附件" : part.type} ·{" "}
+            {part.type === "audio"
+              ? "音频附件"
+              : part.type === "document"
+              ? "文档附件"
+              : part.type}{" "}
+            ·{" "}
             {String(part.attachment.name || part.attachment.filename || "附件")}
           </span>
         );
@@ -363,7 +369,13 @@ function ThinkingDisclosure({
       className="border-l-2 border-[var(--color-border-strong)] pl-2 text-[10px]"
     >
       <div className="flex items-center gap-2">
-        <span className={`flex items-center gap-1.5 ${active ? "text-[var(--color-text-secondary)]" : "text-[var(--color-text-tertiary)]"}`}>
+        <span
+          className={`flex items-center gap-1.5 ${
+            active
+              ? "text-[var(--color-text-secondary)]"
+              : "text-[var(--color-text-tertiary)]"
+          }`}
+        >
           {isReplaying ? (
             <CircleCheck className="h-3 w-3 opacity-50" />
           ) : active ? (
@@ -397,13 +409,13 @@ function ThinkingDisclosure({
 }
 
 function extractErrorMessage(error: string): string {
-  if (!error) return '';
+  if (!error) return "";
   try {
     const parsed = JSON.parse(error);
-    const type = parsed.error?.type || '';
+    const type = parsed.error?.type || "";
     const message = parsed.error?.message || parsed.message || error;
     const errorMap: Record<string, string> = {
-      'AgentProjectBaseRequired': '项目状态已过期，请重试',
+      AgentProjectBaseRequired: "项目状态已过期，请重试",
     };
     if (errorMap[type]) return errorMap[type];
     return message;
@@ -413,20 +425,20 @@ function extractErrorMessage(error: string): string {
 }
 
 const ERROR_MESSAGE_MAP: Record<string, string> = {
-  'AgentProjectBaseRequired': '项目状态已过期，请重试',
-  'R2V ArtifactSlot 归属冲突': '视频生成失败，请重试',
-  'exceeded 16 model turns': 'Agent 执行超时，请重试',
-  'retryable: false': '执行失败，无法自动重试',
+  AgentProjectBaseRequired: "项目状态已过期，请重试",
+  "R2V ArtifactSlot 归属冲突": "视频生成失败，请重试",
+  "exceeded 16 model turns": "Agent 执行超时，请重试",
+  "retryable: false": "执行失败，无法自动重试",
 };
 
 function simplifyErrorMessage(text: string): string {
-  if (!text) return '';
+  if (!text) return "";
   for (const [key, value] of Object.entries(ERROR_MESSAGE_MAP)) {
     if (text.includes(key)) return value;
   }
-  const firstLine = text.split('\n')[0].trim();
-  const firstSentence = firstLine.split('。')[0].split('. ')[0];
-  return firstSentence || '执行失败，请重试';
+  const firstLine = text.split("\n")[0].trim();
+  const firstSentence = firstLine.split("。")[0].split(". ")[0];
+  return firstSentence || "执行失败，请重试";
 }
 
 function actionReason(envelope: CreatorActionEnvelope): string {
@@ -484,7 +496,13 @@ function ActionDisclosure({
       className="border-l-2 border-[var(--color-accent)]/25 pl-2 text-[10px]"
     >
       <div className="flex items-center gap-2">
-        <span className={`flex items-center gap-1.5 ${active || waiting ? "text-[var(--color-text-secondary)]" : "text-[var(--color-success)]"}`}>
+        <span
+          className={`flex items-center gap-1.5 ${
+            active || waiting
+              ? "text-[var(--color-text-secondary)]"
+              : "text-[var(--color-success)]"
+          }`}
+        >
           {isReplaying ? (
             <CircleCheck className="h-3 w-3 opacity-50" />
           ) : active ? (
@@ -551,8 +569,17 @@ function ConversationMessage({ item }: { item: CreatorMessage }) {
       </div>
     );
   }
-  if (typeof window !== "undefined" && window.location.hostname === "localhost") {
-    console.log("[ConversationMessage]", { streaming, thinking: !!thinking, thinkingLen: thinking.length, contentLen: content.length, completed: item.metadata?.completed });
+  if (
+    typeof window !== "undefined" &&
+    window.location.hostname === "localhost"
+  ) {
+    console.log("[ConversationMessage]", {
+      streaming,
+      thinking: !!thinking,
+      thinkingLen: thinking.length,
+      contentLen: content.length,
+      completed: item.metadata?.completed,
+    });
   }
   return (
     <div
@@ -565,8 +592,12 @@ function ConversationMessage({ item }: { item: CreatorMessage }) {
           <span>处理中</span>
         </div>
       )}
-      {thinking && <ThinkingDisclosure active={streaming}>{thinking}</ThinkingDisclosure>}
-      {content.length > 0 && !streaming && <MessageParts parts={content} richText />}
+      {thinking && (
+        <ThinkingDisclosure active={streaming}>{thinking}</ThinkingDisclosure>
+      )}
+      {content.length > 0 && !streaming && (
+        <MessageParts parts={content} richText />
+      )}
       {envelope &&
         !(envelope.syntax === "native" && envelope.action === "tool_call") &&
         (streaming ||
@@ -696,8 +727,18 @@ function SubagentMessageBubble({
   const thinking = subagentThinkingText(item);
   const envelope = actionEnvelopeFromStreamText(body);
   const visibleBody = envelope?.narration ?? body;
-  if (typeof window !== "undefined" && window.location.hostname === "localhost") {
-    console.log("[SubagentMessageBubble]", { completed: item.completed, thinking: !!thinking, thinkingLen: thinking.length, bodyLen: body.length, visibleBodyLen: visibleBody.length, messageId: item.messageId });
+  if (
+    typeof window !== "undefined" &&
+    window.location.hostname === "localhost"
+  ) {
+    console.log("[SubagentMessageBubble]", {
+      completed: item.completed,
+      thinking: !!thinking,
+      thinkingLen: thinking.length,
+      bodyLen: body.length,
+      visibleBodyLen: visibleBody.length,
+      messageId: item.messageId,
+    });
   }
   if (!body && !thinking && item.completed) return null;
   return (
@@ -713,17 +754,18 @@ function SubagentMessageBubble({
           </span>
         </div>
       )}
-      {thinking && <ThinkingDisclosure active={!item.completed}>{thinking}</ThinkingDisclosure>}
+      {thinking && (
+        <ThinkingDisclosure active={!item.completed}>
+          {thinking}
+        </ThinkingDisclosure>
+      )}
       {visibleBody && item.completed && (
         <pre className="mt-1 whitespace-pre-wrap break-words font-sans text-[11px] leading-5 text-[var(--color-text-secondary)]">
           {visibleBody}
         </pre>
       )}
       {envelope && !materializedTool && (
-        <ActionDisclosure
-          envelope={envelope}
-          active={!item.completed}
-        />
+        <ActionDisclosure envelope={envelope} active={!item.completed} />
       )}
     </div>
   );
@@ -733,13 +775,18 @@ function NestedSubagentToolCard({ item }: { item: SubagentStreamTool }) {
   const allowExpand = useAgentDockUiStore((state) => state.allowExpandDetails);
   const isReplaying = useCreatorSessionStore((state) => state.isReplaying);
   const session = useCreatorSessionStore((state) => state.session);
-  const isProjectDone = session?.status === "IDLE"
-    || session?.status === "CANCELLED"
-    || session?.status === "ERROR";
-  const isProjectFailed = session?.status === "CANCELLED"
-    || session?.status === "ERROR";
-  const resolvedStatus = isProjectDone && item.status === "started"
-    ? (isProjectFailed ? "failed" : "succeeded") : item.status;
+  const isProjectDone =
+    session?.status === "IDLE" ||
+    session?.status === "CANCELLED" ||
+    session?.status === "ERROR";
+  const isProjectFailed =
+    session?.status === "CANCELLED" || session?.status === "ERROR";
+  const resolvedStatus =
+    isProjectDone && item.status === "started"
+      ? isProjectFailed
+        ? "failed"
+        : "succeeded"
+      : item.status;
   const active = resolvedStatus === "started";
   const { expanded, setExpanded } = useLiveDisclosure(active);
   const rawArguments = Object.entries(item.argumentDeltas ?? {})
@@ -777,7 +824,16 @@ function NestedSubagentToolCard({ item }: { item: SubagentStreamTool }) {
           ) : (
             <XCircle className="h-3 w-3" />
           )}
-          <span>{displayLabel}{isReplaying ? "" : active ? "中" : resolvedStatus === "succeeded" ? "完成" : "失败"}</span>
+          <span>
+            {displayLabel}
+            {isReplaying
+              ? ""
+              : active
+              ? "中"
+              : resolvedStatus === "succeeded"
+              ? "完成"
+              : "失败"}
+          </span>
         </span>
         {hasDetails && allowExpand && (
           <button
@@ -853,7 +909,9 @@ function SubagentActivityBubble({ activity }: { activity: SubagentActivity }) {
       <div className="mb-1.5 flex items-center justify-between gap-2 text-[10px]">
         <div className="flex min-w-0 items-center gap-1.5">
           <b className="truncate text-[var(--color-accent)]">
-            {activity.role ? creatorRoleLabel(activity.role) : roleDisplayName(activity, undefined)}
+            {activity.role
+              ? creatorRoleLabel(activity.role)
+              : roleDisplayName(activity, undefined)}
           </b>
           <span
             className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold ${activityStatus.tone}`}
@@ -900,7 +958,9 @@ function SubagentActivityBubble({ activity }: { activity: SubagentActivity }) {
           )
         ) : activity.summaryText ? (
           <div className="text-[11px] leading-5 text-[var(--color-text-secondary)]">
-            <MarkdownContent compact>{simplifyErrorMessage(activity.summaryText)}</MarkdownContent>
+            <MarkdownContent compact>
+              {simplifyErrorMessage(activity.summaryText)}
+            </MarkdownContent>
           </div>
         ) : (
           <p
@@ -916,16 +976,17 @@ function SubagentActivityBubble({ activity }: { activity: SubagentActivity }) {
   );
 }
 
-/** 工具调用卡片：一行状态 + 可展开查看参数/结果。 */
+/** Tool-call card: one status line, expandable to inspect arguments/result. */
 function ToolCallCard({ data }: { data: ToolCallPresentation }) {
   const allowExpand = useAgentDockUiStore((state) => state.allowExpandDetails);
   const isReplaying = useCreatorSessionStore((state) => state.isReplaying);
   const session = useCreatorSessionStore((state) => state.session);
-  const isProjectDone = session?.status === "IDLE"
-    || session?.status === "CANCELLED"
-    || session?.status === "ERROR";
-  const isProjectFailed = session?.status === "CANCELLED"
-    || session?.status === "ERROR";
+  const isProjectDone =
+    session?.status === "IDLE" ||
+    session?.status === "CANCELLED" ||
+    session?.status === "ERROR";
+  const isProjectFailed =
+    session?.status === "CANCELLED" || session?.status === "ERROR";
   const activity = useCreatorSessionStore(
     (state) => state.subagentActivities[data.actionId],
   );
@@ -945,12 +1006,26 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
         : JSON.stringify(result, null, 2)
       : "";
 
-  const fileTools = ["read_file", "write_file", "edit_file", "append_file", "read_project", "read_project_file", "jq_project", "grep_search", "glob_search", "ast_search"];
+  const fileTools = [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "append_file",
+    "read_project",
+    "read_project_file",
+    "jq_project",
+    "grep_search",
+    "glob_search",
+    "ast_search",
+  ];
   const isFileTool = fileTools.includes(tool);
 
   const hasArgs =
-    !delegated && !isFileTool && Boolean((args && Object.keys(args).length > 0) || rawArgs);
-  const hasResult = !delegated && !isFileTool && result !== undefined && result !== null;
+    !delegated &&
+    !isFileTool &&
+    Boolean((args && Object.keys(args).length > 0) || rawArgs);
+  const hasResult =
+    !delegated && !isFileTool && result !== undefined && result !== null;
   const hasDetails = delegated || hasArgs || hasResult;
 
   const effectiveStatus =
@@ -962,9 +1037,13 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
           : "succeeded"
         : "started"
       : status;
-  // 项目终态，started 工具强制为终态
-  const resolvedStatus = isProjectDone && effectiveStatus === "started"
-    ? (isProjectFailed ? "failed" : "succeeded") : effectiveStatus;
+  // When the project reached a terminal state, force "started" tools terminal too.
+  const resolvedStatus =
+    isProjectDone && effectiveStatus === "started"
+      ? isProjectFailed
+        ? "failed"
+        : "succeeded"
+      : effectiveStatus;
   const active = resolvedStatus === "started";
   const { expanded, setExpanded } = useLiveDisclosure(active);
   const tone =
@@ -986,7 +1065,7 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
   }
 
   const estimatedDuration = active ? getEstimatedDuration(tool) : null;
-  const rawError = delegated ? (activity?.summaryText || '') : (data.error || '');
+  const rawError = delegated ? activity?.summaryText || "" : data.error || "";
   const errorMessage = simplifyErrorMessage(rawError);
 
   return (
@@ -1006,9 +1085,20 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
           ) : (
             <XCircle className="h-3.5 w-3.5" />
           )}
-          <span>{displayLabel}{isReplaying ? "" : active ? "中" : resolvedStatus === "succeeded" ? "完成" : "失败"}</span>
+          <span>
+            {displayLabel}
+            {isReplaying
+              ? ""
+              : active
+              ? "中"
+              : resolvedStatus === "succeeded"
+              ? "完成"
+              : "失败"}
+          </span>
           {estimatedDuration && (
-            <span className="text-[10px] text-[var(--color-text-tertiary)]">{estimatedDuration}</span>
+            <span className="text-[10px] text-[var(--color-text-tertiary)]">
+              {estimatedDuration}
+            </span>
           )}
         </span>
         {hasDetails && allowExpand && (
@@ -1170,8 +1260,9 @@ function projectRefItems(
       }),
     );
   }
-  // 视觉设定（场景/角色/道具）以实体身份参与引用；它们名下的生成图
-  // 不再作为独立“生成产物”重复出现，避免“场景”与“场景视觉图”两条。
+  // Visual settings (scenes/characters/props) join references as entities;
+  // generated images they own no longer appear again as standalone artifacts,
+  // avoiding duplicate entries like "scene" plus "scene visual image".
   Object.values(project.visual.entities.items).forEach((entity) =>
     items.push({
       ref: `visual-entity:${entity.entity_id}`,
@@ -1198,8 +1289,9 @@ function projectRefItems(
   );
   Object.values(project.assets.artifact_versions_by_id)
     .filter((version) => {
-      // 实体归属在历史数据中有多种前缀（visual-entity: / asset:）；
-      // 归一化后命中视觉实体的产出不再重复出现。
+      // Entity ownership uses multiple prefixes in historical data
+      // (visual-entity: / asset:); after normalization, outputs owned by a
+      // visual entity are not listed again.
       const entityId = (version.owner_ref ?? "").replace(
         /^(?:visual-entity|asset):/,
         "",
@@ -1417,9 +1509,10 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   const runs = useCreatorTaskViewStore((state) => state.runs);
   const tasks = useCreatorTaskViewStore((state) => state.tasks);
   const authorizations = useExecutionAuthorizationStore((state) => state.items);
-  const fileReviews = useFileProjectReviewStore((state) =>
-    state.projectId === projectId ? state.reviews : null,
-  ) ?? [];
+  const fileReviews =
+    useFileProjectReviewStore((state) =>
+      state.projectId === projectId ? state.reviews : null,
+    ) ?? [];
   const selectedRef = useCreatorInteractionStore((state) => state.selectedRef);
   const editingField = useCreatorInteractionStore(
     (state) => state.editingField,
@@ -1542,7 +1635,8 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
     [toolCalls],
   );
 
-  // 输入框上方实时状态行：纯前端派生，不修改任何数据结构。
+  // Live status row above the input: derived purely on the frontend, no data
+  // structures are mutated.
   const liveStatus = useMemo(
     () =>
       deriveAgentLiveStatus({
@@ -1674,9 +1768,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
 
   useEffect(() => {
     if (fileReviews.length === 0 || pendingFileReviewCount === 0) return;
-    const compositeToken = fileReviews
-      .map((r) => r.decision_token)
-      .join("|");
+    const compositeToken = fileReviews.map((r) => r.decision_token).join("|");
     if (lastOpenedFileReviewToken.current === compositeToken) return;
     lastOpenedFileReviewToken.current = compositeToken;
     // New review content lands in the inline tray; surface the dock so the
@@ -1746,8 +1838,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   }, [open, selectionAttachment, setSelectionAttachment]);
 
   useEffect(() => {
-    if (!open || !draft || inputRef.current?.getContent().text)
-      return;
+    if (!open || !draft || inputRef.current?.getContent().text) return;
     inputRef.current?.setText(draft);
     setCanSend(Boolean(draft.trim()));
   }, [draft, open]);
@@ -2070,310 +2161,310 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
 
           <>
             <div className="relative flex min-h-0 flex-1 flex-col">
-                <div
-                  ref={scrollRef}
-                  onScroll={handleScroll}
-                  className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3"
-                  aria-live="polite"
-                >
-                  {(runs.length > 0 || tasks.length > 0) && <AgentEventFeed />}
-                  {hasMoreMessages && (
-                    <button
-                      type="button"
-                      onClick={() => void loadOlderMessages()}
-                      className="w-full text-center text-[10px] text-[var(--color-text-tertiary)]"
-                    >
-                      加载更多消息
-                    </button>
-                  )}
-                  {orderedMessages.length === 0 &&
-                  queued.length === 0 &&
-                  runs.length === 0 &&
-                  tasks.length === 0 &&
-                  toolCalls.length === 0 ? (
-                    <p className="py-6 text-center text-[11px] leading-5 text-[var(--color-text-tertiary)]">
-                      描述你的修改意图，Agent 会给出执行计划并调度生成工具。
-                      <br />
-                      当前选中的对象会自动带入上下文。
-                    </p>
-                  ) : (
-                    conversationFlow.orphanMessages.map((item) => (
-                      <Fragment key={item.messageId}>
-                        <ConversationMessage item={item} />
-                        {planPresentation(item) && (
-                          <PlanCard data={planPresentation(item)!} />
-                        )}
-                        {(toolCallsByMessage.get(item.messageId) ?? []).map(
-                          (call) => (
-                            <ToolCallCard key={call.actionId} data={call} />
-                          ),
-                        )}
-                      </Fragment>
-                    ))
-                  )}
-                  {conversationFlow.turns.map((turn, turnIndex) => {
-                    const latest =
-                      turnIndex === conversationFlow.turns.length - 1;
-                    return (
-                      <div
-                        key={turn.user.messageId}
-                        data-agent-turn
-                        className="space-y-2"
-                      >
-                        <div
-                          data-agent-message
-                          className="ml-auto w-fit max-w-[85%] rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-[11px] leading-[1.5] text-white"
-                        >
-                          <MessageParts
-                            parts={conversationContent(turn.user)}
-                          />
-                        </div>
-                        <div data-agent-response-flow className="space-y-2">
-                          {turn.responses.map((item) => (
-                            <Fragment key={item.messageId}>
-                              <ConversationMessage item={item} />
-                              {planPresentation(item) && (
-                                <PlanCard data={planPresentation(item)!} />
-                              )}
-                              {(
-                                toolCallsByMessage.get(item.messageId) ?? []
-                              ).map((call) => (
-                                <ToolCallCard key={call.actionId} data={call} />
-                              ))}
-                            </Fragment>
-                          ))}
-                          {latest &&
-                            unanchoredToolCalls.map((call) => (
-                              <ToolCallCard key={call.actionId} data={call} />
-                            ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {conversationFlow.turns.length === 0 &&
-                    unanchoredToolCalls.map((call) => (
-                      <ToolCallCard key={call.actionId} data={call} />
-                    ))}
-                  {queued.map((item) => (
-                    <div key={item.clientMessageId} className="space-y-2">
-                      <div className="ml-auto w-fit max-w-[85%] rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-[11px] leading-[1.5] text-white">
-                        {item.text}
-                      </div>
-                      {item.state === "failed" && (
-                        <p className="text-right text-[10px] text-[var(--color-danger)]">
-                          {simplifyErrorMessage(item.error || "")}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-                {showJump && (
+              <div
+                ref={scrollRef}
+                onScroll={handleScroll}
+                className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3"
+                aria-live="polite"
+              >
+                {(runs.length > 0 || tasks.length > 0) && <AgentEventFeed />}
+                {hasMoreMessages && (
                   <button
                     type="button"
-                    onClick={jumpToBottom}
-                    className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-1 text-[11px] text-[var(--color-text-secondary)] shadow-md transition-colors hover:text-[var(--color-accent)]"
+                    onClick={() => void loadOlderMessages()}
+                    className="w-full text-center text-[10px] text-[var(--color-text-tertiary)]"
                   >
-                    回到底部 ↓
+                    加载更多消息
                   </button>
                 )}
-              </div>
-
-              {/* 内联决策托盘：钉在聊天流与实时状态栏之间，审阅与生产确认就地处理。 */}
-              <DecisionTray projectId={projectId} />
-
-              <div
-                data-agent-composer
-                className="relative border-t border-[var(--color-border)] p-3"
-              >
-                <div
-                  data-agent-live-status
-                  data-state={liveStatus.state}
-                  className="mb-2 flex items-center gap-2 text-[10px] leading-4"
-                >
-                  <span
-                    className="agent-live-dot"
-                    data-state={liveStatus.state}
-                  />
-                  <span
-                    className={`min-w-0 flex-1 truncate ${
-                      liveStatus.state === "working"
-                        ? "agent-live-shimmer font-medium"
-                        : liveStatus.state === "stopping"
-                        ? "font-medium text-[var(--color-danger)]"
-                        : "text-[var(--color-text-tertiary)]"
-                    }`}
-                  >
-                    {liveStatus.label}
-                  </span>
-                  {liveStatus.progressPercent != null && (
-                    <span
-                      data-agent-live-progress
-                      className="flex shrink-0 items-center gap-1.5"
-                    >
-                      <span className="h-1 w-16 overflow-hidden rounded-full bg-[var(--color-bg-secondary)]">
-                        <span
-                          className="block h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-500"
-                          style={{ width: `${liveStatus.progressPercent}%` }}
-                        />
-                      </span>
-                      <span className="tabular-nums text-[10px] text-[var(--color-text-secondary)]">
-                        {liveStatus.progressPercent}%
-                      </span>
-                    </span>
-                  )}
-                </div>
-                {visibleChips.length > 0 && (
-                  <div className="mb-2 flex flex-wrap items-center gap-1">
-                    {visibleChips.map((chip) => {
-                      const manual = extraRefs.some(
-                        (item) => item.ref === chip.ref,
-                      );
-                      const chipNode = (
-                        <span
-                          key={chip.ref}
-                          className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] ${
-                            manual
-                              ? "border border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                              : "bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)]"
-                          }`}
-                          title={
-                            chip.thumbnailUrl
-                              ? undefined
-                              : manual
-                              ? "手动引用"
-                              : "自动带入的上下文"
-                          }
-                        >
-                          @{chip.name}
-                          <button
-                            type="button"
-                            onClick={() => removeChip(chip)}
-                            className="text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)]"
-                            aria-label={`移除 ${chip.name}`}
-                          >
-                            ×
-                          </button>
-                        </span>
-                      );
-                      if (!chip.thumbnailUrl) return chipNode;
-                      return (
-                        <Tooltip
-                          key={chip.ref}
-                          title={
-                            <img
-                              src={chip.thumbnailUrl}
-                              alt={chip.name}
-                              className="max-h-40 max-w-[220px] rounded object-contain"
-                            />
-                          }
-                        >
-                          {chipNode}
-                        </Tooltip>
-                      );
-                    })}
-                    <button
-                      type="button"
-                      onClick={clearContext}
-                      className="flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[10px] text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-danger)]"
-                      title="清空全部引用、划选文本与输入框内的 @ 引用"
-                    >
-                      <Eraser className="h-3 w-3" />
-                      清空
-                    </button>
-                  </div>
+                {orderedMessages.length === 0 &&
+                queued.length === 0 &&
+                runs.length === 0 &&
+                tasks.length === 0 &&
+                toolCalls.length === 0 ? (
+                  <p className="py-6 text-center text-[11px] leading-5 text-[var(--color-text-tertiary)]">
+                    描述你的修改意图，Agent 会给出执行计划并调度生成工具。
+                    <br />
+                    当前选中的对象会自动带入上下文。
+                  </p>
+                ) : (
+                  conversationFlow.orphanMessages.map((item) => (
+                    <Fragment key={item.messageId}>
+                      <ConversationMessage item={item} />
+                      {planPresentation(item) && (
+                        <PlanCard data={planPresentation(item)!} />
+                      )}
+                      {(toolCallsByMessage.get(item.messageId) ?? []).map(
+                        (call) => (
+                          <ToolCallCard key={call.actionId} data={call} />
+                        ),
+                      )}
+                    </Fragment>
+                  ))
                 )}
-
-                {mentionOptions.length > 0 && (
-                  <div
-                    role="listbox"
-                    aria-label="引用对象补全"
-                    className="absolute bottom-full left-3 right-3 mb-1 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] shadow-lg"
-                  >
-                    {mentionOptions.map((item, index) => (
-                      <button
-                        key={item.ref}
-                        type="button"
-                        role="option"
-                        aria-selected={index === mentionIndex}
-                        onMouseEnter={() => setMentionIndex(index)}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => pickMention(item)}
-                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] ${
-                          index === mentionIndex
-                            ? "bg-[var(--color-accent-soft)]"
-                            : "hover:bg-[var(--color-accent-soft)]"
-                        }`}
+                {conversationFlow.turns.map((turn, turnIndex) => {
+                  const latest =
+                    turnIndex === conversationFlow.turns.length - 1;
+                  return (
+                    <div
+                      key={turn.user.messageId}
+                      data-agent-turn
+                      className="space-y-2"
+                    >
+                      <div
+                        data-agent-message
+                        className="ml-auto w-fit max-w-[85%] rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-[11px] leading-[1.5] text-white"
                       >
-                        {item.thumbnailUrl && (
-                          <img
-                            src={item.thumbnailUrl}
-                            alt=""
-                            className="h-6 w-6 shrink-0 rounded object-cover"
-                            loading="lazy"
-                          />
-                        )}
-                        {refTypeLabel(item.type) &&
-                          refTypeLabel(item.type) !== item.name && (
-                            <span className="rounded bg-[var(--color-bg-secondary)] px-1 text-[10px] text-[var(--color-text-tertiary)]">
-                              {refTypeLabel(item.type)}
-                            </span>
-                          )}
-                        <span className="truncate text-[var(--color-text-primary)]">
-                          {item.name}
-                        </span>
-                      </button>
-                    ))}
+                        <MessageParts parts={conversationContent(turn.user)} />
+                      </div>
+                      <div data-agent-response-flow className="space-y-2">
+                        {turn.responses.map((item) => (
+                          <Fragment key={item.messageId}>
+                            <ConversationMessage item={item} />
+                            {planPresentation(item) && (
+                              <PlanCard data={planPresentation(item)!} />
+                            )}
+                            {(toolCallsByMessage.get(item.messageId) ?? []).map(
+                              (call) => (
+                                <ToolCallCard key={call.actionId} data={call} />
+                              ),
+                            )}
+                          </Fragment>
+                        ))}
+                        {latest &&
+                          unanchoredToolCalls.map((call) => (
+                            <ToolCallCard key={call.actionId} data={call} />
+                          ))}
+                      </div>
+                    </div>
+                  );
+                })}
+                {conversationFlow.turns.length === 0 &&
+                  unanchoredToolCalls.map((call) => (
+                    <ToolCallCard key={call.actionId} data={call} />
+                  ))}
+                {queued.map((item) => (
+                  <div key={item.clientMessageId} className="space-y-2">
+                    <div className="ml-auto w-fit max-w-[85%] rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-[11px] leading-[1.5] text-white">
+                      {item.text}
+                    </div>
+                    {item.state === "failed" && (
+                      <p className="text-right text-[10px] text-[var(--color-danger)]">
+                        {simplifyErrorMessage(item.error || "")}
+                      </p>
+                    )}
                   </div>
-                )}
-
-                <OnboardingHint hintKey="mention" className="mb-2">
-                  输入 @ 可引用分镜、素材等对象作为上下文；当前选中的对象也会自动带入对话。
-                </OnboardingHint>
-                <div className="flex items-end gap-2">
-                  <MentionInput
-                    ref={inputRef}
-                    placeholder="输入修改意图，@ 可引用对象…"
-                    onQueryChange={setMentionQuery}
-                    onChange={handleInputChange}
-                    onSubmit={() => void submit()}
-                    mentionOpen={mentionOptions.length > 0}
-                    onMentionNavigate={navigateMention}
-                    onMentionConfirm={confirmMention}
-                    onMentionClose={() => setMentionQuery(null)}
-                  />
-                  {(stoppable || stopping) && !canSend ? (
-                    <Button
-                      type="primary"
-                      danger
-                      aria-label="停止所有 Agent"
-                      icon={<Square className="h-3 w-3 fill-current" />}
-                      disabled={stopping}
-                      onClick={() =>
-                        void stopAllAgents()
-                          .then(() => message.success("已停止所有 Agent 活动"))
-                          .catch((error) =>
-                            message.error((error as Error).message),
-                          )
-                      }
-                      className="agent-dock-stop-glow !flex !h-8 !w-8 !items-center !justify-center !p-0"
-                      title={
-                        session?.status === "INTERRUPT_REQUESTED"
-                          ? "停止请求已发送，点击再次停止"
-                          : "立即停止当前项目的主 Agent、子 Agent 与未完成任务"
-                      }
-                    />
-                  ) : (
-                    <Button
-                      type="primary"
-                      aria-label="发送"
-                      icon={<ArrowUpOutlined />}
-                      disabled={!canSend}
-                      onClick={() => void submit()}
-                      className="!flex !h-8 !w-8 !items-center !justify-center !p-0"
-                    />
-                  )}
-                </div>
+                ))}
               </div>
+              {showJump && (
+                <button
+                  type="button"
+                  onClick={jumpToBottom}
+                  className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-1 text-[11px] text-[var(--color-text-secondary)] shadow-md transition-colors hover:text-[var(--color-accent)]"
+                >
+                  回到底部 ↓
+                </button>
+              )}
+            </div>
+
+            {/* Inline decision tray: pinned between the chat stream and the live
+                status bar so reviews and production confirmations are handled in place. */}
+            <DecisionTray projectId={projectId} />
+
+            <div
+              data-agent-composer
+              className="relative border-t border-[var(--color-border)] p-3"
+            >
+              <div
+                data-agent-live-status
+                data-state={liveStatus.state}
+                className="mb-2 flex items-center gap-2 text-[10px] leading-4"
+              >
+                <span
+                  className="agent-live-dot"
+                  data-state={liveStatus.state}
+                />
+                <span
+                  className={`min-w-0 flex-1 truncate ${
+                    liveStatus.state === "working"
+                      ? "agent-live-shimmer font-medium"
+                      : liveStatus.state === "stopping"
+                      ? "font-medium text-[var(--color-danger)]"
+                      : "text-[var(--color-text-tertiary)]"
+                  }`}
+                >
+                  {liveStatus.label}
+                </span>
+                {liveStatus.progressPercent != null && (
+                  <span
+                    data-agent-live-progress
+                    className="flex shrink-0 items-center gap-1.5"
+                  >
+                    <span className="h-1 w-16 overflow-hidden rounded-full bg-[var(--color-bg-secondary)]">
+                      <span
+                        className="block h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-500"
+                        style={{ width: `${liveStatus.progressPercent}%` }}
+                      />
+                    </span>
+                    <span className="tabular-nums text-[10px] text-[var(--color-text-secondary)]">
+                      {liveStatus.progressPercent}%
+                    </span>
+                  </span>
+                )}
+              </div>
+              {visibleChips.length > 0 && (
+                <div className="mb-2 flex flex-wrap items-center gap-1">
+                  {visibleChips.map((chip) => {
+                    const manual = extraRefs.some(
+                      (item) => item.ref === chip.ref,
+                    );
+                    const chipNode = (
+                      <span
+                        key={chip.ref}
+                        className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] ${
+                          manual
+                            ? "border border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
+                            : "bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)]"
+                        }`}
+                        title={
+                          chip.thumbnailUrl
+                            ? undefined
+                            : manual
+                            ? "手动引用"
+                            : "自动带入的上下文"
+                        }
+                      >
+                        @{chip.name}
+                        <button
+                          type="button"
+                          onClick={() => removeChip(chip)}
+                          className="text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)]"
+                          aria-label={`移除 ${chip.name}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    );
+                    if (!chip.thumbnailUrl) return chipNode;
+                    return (
+                      <Tooltip
+                        key={chip.ref}
+                        title={
+                          <img
+                            src={chip.thumbnailUrl}
+                            alt={chip.name}
+                            className="max-h-40 max-w-[220px] rounded object-contain"
+                          />
+                        }
+                      >
+                        {chipNode}
+                      </Tooltip>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    onClick={clearContext}
+                    className="flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[10px] text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-danger)]"
+                    title="清空全部引用、划选文本与输入框内的 @ 引用"
+                  >
+                    <Eraser className="h-3 w-3" />
+                    清空
+                  </button>
+                </div>
+              )}
+
+              {mentionOptions.length > 0 && (
+                <div
+                  role="listbox"
+                  aria-label="引用对象补全"
+                  className="absolute bottom-full left-3 right-3 mb-1 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] shadow-lg"
+                >
+                  {mentionOptions.map((item, index) => (
+                    <button
+                      key={item.ref}
+                      type="button"
+                      role="option"
+                      aria-selected={index === mentionIndex}
+                      onMouseEnter={() => setMentionIndex(index)}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => pickMention(item)}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] ${
+                        index === mentionIndex
+                          ? "bg-[var(--color-accent-soft)]"
+                          : "hover:bg-[var(--color-accent-soft)]"
+                      }`}
+                    >
+                      {item.thumbnailUrl && (
+                        <img
+                          src={item.thumbnailUrl}
+                          alt=""
+                          className="h-6 w-6 shrink-0 rounded object-cover"
+                          loading="lazy"
+                        />
+                      )}
+                      {refTypeLabel(item.type) &&
+                        refTypeLabel(item.type) !== item.name && (
+                          <span className="rounded bg-[var(--color-bg-secondary)] px-1 text-[10px] text-[var(--color-text-tertiary)]">
+                            {refTypeLabel(item.type)}
+                          </span>
+                        )}
+                      <span className="truncate text-[var(--color-text-primary)]">
+                        {item.name}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <OnboardingHint hintKey="mention" className="mb-2">
+                输入 @
+                可引用分镜、素材等对象作为上下文；当前选中的对象也会自动带入对话。
+              </OnboardingHint>
+              <div className="flex items-end gap-2">
+                <MentionInput
+                  ref={inputRef}
+                  placeholder="输入修改意图，@ 可引用对象…"
+                  onQueryChange={setMentionQuery}
+                  onChange={handleInputChange}
+                  onSubmit={() => void submit()}
+                  mentionOpen={mentionOptions.length > 0}
+                  onMentionNavigate={navigateMention}
+                  onMentionConfirm={confirmMention}
+                  onMentionClose={() => setMentionQuery(null)}
+                />
+                {(stoppable || stopping) && !canSend ? (
+                  <Button
+                    type="primary"
+                    danger
+                    aria-label="停止所有 Agent"
+                    icon={<Square className="h-3 w-3 fill-current" />}
+                    disabled={stopping}
+                    onClick={() =>
+                      void stopAllAgents()
+                        .then(() => message.success("已停止所有 Agent 活动"))
+                        .catch((error) =>
+                          message.error((error as Error).message),
+                        )
+                    }
+                    className="agent-dock-stop-glow !flex !h-8 !w-8 !items-center !justify-center !p-0"
+                    title={
+                      session?.status === "INTERRUPT_REQUESTED"
+                        ? "停止请求已发送，点击再次停止"
+                        : "立即停止当前项目的主 Agent、子 Agent 与未完成任务"
+                    }
+                  />
+                ) : (
+                  <Button
+                    type="primary"
+                    aria-label="发送"
+                    icon={<ArrowUpOutlined />}
+                    disabled={!canSend}
+                    onClick={() => void submit()}
+                    className="!flex !h-8 !w-8 !items-center !justify-center !p-0"
+                  />
+                )}
+              </div>
+            </div>
           </>
         </div>
       )}

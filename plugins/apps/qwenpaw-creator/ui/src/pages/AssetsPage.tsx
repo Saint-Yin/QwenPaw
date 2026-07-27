@@ -136,8 +136,9 @@ function artifactMedia(
   return file;
 }
 
-// 同一份底层内容（checksum 相同）只保留一张卡片，排在前面的语义卡片
-// （如视觉实体）优先；不依赖任何归属命名约定。
+// Keep only one card per underlying content (same checksum); semantic cards
+// listed earlier (e.g. visual entities) win. No ownership naming convention is
+// relied upon.
 function dedupeByChecksum(items: AssetItem[]): AssetItem[] {
   const seen = new Set<string>();
   return items.filter((item) => {
@@ -283,10 +284,11 @@ function visualEntityPromptTarget(
 ): PromptTarget | null {
   const variantId =
     (versionId &&
-      entity.variants.order.find((candidate) =>
-        entity.variants.items[
-          candidate
-        ]?.generated_artifact_version_ids.includes(versionId),
+      entity.variants.order.find(
+        (candidate) =>
+          entity.variants.items[
+            candidate
+          ]?.generated_artifact_version_ids.includes(versionId),
       )) ||
     entity.variants.order[0];
   const variant = variantId ? entity.variants.items[variantId] : null;
@@ -298,7 +300,7 @@ function visualEntityPromptTarget(
   };
 }
 
-/** AI 生成产物的原始生成 Prompt 与其在 Project 中的可编辑位置。 */
+/** Original generation prompt of an AI-generated artifact plus its editable location in the Project. */
 function generationPromptTarget(
   project: ProjectDocument,
   selected: AssetItem,
@@ -326,8 +328,7 @@ function generationPromptTarget(
     if (element.creation.type === "r2v") {
       const artifact = selected.raw as ArtifactVersionDocument;
       const isVideo =
-        selected.mediaKind === "video" ||
-        `${artifact.kind}`.includes("video");
+        selected.mediaKind === "video" || `${artifact.kind}`.includes("video");
       return isVideo
         ? {
             pointer: `${base}/video_prompt`,
@@ -351,7 +352,7 @@ function generationPromptTarget(
   return null;
 }
 
-/** 可编辑的生成 Prompt 区块；key 绑定 pointer，切换选中项时自动重置草稿。 */
+/** Editable generation-prompt block; key is bound to the pointer so drafts reset when the selection changes. */
 function GenerationPromptEditor({
   target,
   onSave,
@@ -436,7 +437,8 @@ export default function AssetsPage() {
     enabled: reviewMode,
     pulse: reviewPulse,
   });
-  // 形象图审阅的「查看生成详情」没有字段指针，按待审版本锚点闪烁详情预览。
+  // "View generation detail" for portrait-image reviews has no field pointer;
+  // flash the detail preview anchored by the version awaiting review.
   useReviewMediaFocus({
     versionId: versionFromUrl,
     enabled: reviewMode && !reviewField,

@@ -711,7 +711,9 @@ def test_outer_vlm_commit_resolves_remote_cache_media_metadata(
     assert resolved[6].duration_ms == 3_502_567
 
 
-def test_video_coverage_error_reports_actual_duration_and_required_coverage() -> None:
+def test_video_coverage_error_reports_actual_duration_and_required_coverage() -> (
+    None
+):
     media = SourceMediaMetadata(
         mediaKind="video",
         mediaType="video/mp4",

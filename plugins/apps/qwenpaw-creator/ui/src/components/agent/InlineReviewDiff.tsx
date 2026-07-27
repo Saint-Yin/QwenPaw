@@ -4,7 +4,8 @@
  * The review panel intentionally does NOT render text diffs anymore: clicking
  * "查看" navigates to the field (matched by data-creator-path == the review
  * operation's JSON pointer) and this component shows the red/green diff right
- * below the original content, together with 保留/撤销 decision buttons.
+ * below the original content, together with "保留"/"撤销" (keep/undo) decision
+ * buttons.
  */
 
 import { useState } from "react";
@@ -57,9 +58,10 @@ export interface MatchedReviewOperation {
   before: unknown;
   after: unknown;
   /**
-   * exact: 修改指针与字段完全一致；
-   * ancestor: 修改覆盖了比该字段更大的范围（决策作用于整个修改）；
-   * descendant: 修改发生在该字段内部的子路径上。
+   * exact: the change pointer matches the field exactly;
+   * ancestor: the change covers a wider range than this field (the decision
+   * applies to the whole change);
+   * descendant: the change happens on a sub-path inside this field.
    */
   relation: "exact" | "ancestor" | "descendant";
   subPath: string | null;

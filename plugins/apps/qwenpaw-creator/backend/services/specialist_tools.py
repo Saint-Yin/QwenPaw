@@ -306,9 +306,7 @@ _MOTION_DESIGN_ARGUMENTS = _arguments_schema(
         "theme": {
             "type": "string",
             "enum": ["comic_patrol", "soft_journal", "neon_night"],
-            "description": (
-                "全片统一视觉主题；默认 comic_patrol。所有 OS 与装饰沿用同一主题。"
-            ),
+            "description": ("全片统一视觉主题；默认 comic_patrol。所有 OS 与装饰沿用同一主题。"),
         },
         "elementIds": {
             "type": "array",

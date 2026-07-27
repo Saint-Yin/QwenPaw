@@ -32,7 +32,8 @@ export default function TopNav() {
   const routeSection = pathname.split("/").filter(Boolean)[2] || "plan";
   const activeKey = activeTabKey(routeSection);
   const replayTour = () => {
-    // 按当前所在页唤起对应导览；工作区导览的锚点在视频方案页。
+    // Launch the tour matching the current page; the workspace tour's anchors
+    // live on the video plan page.
     if (activeKey === "assets") {
       requestAssetsTour();
       return;
@@ -80,7 +81,9 @@ export default function TopNav() {
             <Link
               key={tab.key}
               href={`/project/${id}/${tab.key}`}
-              data-onboarding-id={tab.key === "assets" ? "assets-tab" : undefined}
+              data-onboarding-id={
+                tab.key === "assets" ? "assets-tab" : undefined
+              }
               className={`inline-flex h-[31px] items-center gap-1.5 rounded-full px-3 text-xs font-bold transition-colors md:px-4 ${
                 isActive
                   ? "bg-[var(--color-accent-soft)] text-[var(--color-text-primary)] shadow-[inset_0_0_0_1px_rgba(255,127,22,0.18)]"

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
 # pylint: disable=protected-access
-"""Element 转场：滤镜链构造、配对收集与 runner 校验的单元测试。"""
+"""Element transitions: unit tests for filter-chain construction, pair
+collection, and runner validation."""
 
 from __future__ import annotations
 
@@ -126,7 +127,8 @@ def test_filter_chain_emits_xfade_and_acrossfade_with_running_offsets():
         canvas_size=(1280, 720),
     )
     assert "xfade=transition=fade:duration=0.400000:offset=4.600000" in chain
-    # 第二对的 offset 基于已消耗 blend 的累计链时长：4.6 + 4 - 0.5 = 8.1。
+    # The second pair's offset builds on the chain duration with the blend
+    # already consumed: 4.6 + 4 - 0.5 = 8.1.
     assert (
         "xfade=transition=fadeblack:duration=0.500000:offset=8.100000" in chain
     )
@@ -185,14 +187,16 @@ def test_plan_projects_overlap_into_blend_without_tail_trim():
     assert len(plans) == 1
     plan = plans[0]
     assert plan["kind"] == "fade"
-    # 转场 span 即两端交集：blend 吃掉全部 400ms 重叠，无尾部裁剪。
+    # The transition span equals the intersection: the blend consumes the
+    # whole 400ms overlap, no tail trim.
     assert plan["duration_ms"] == 400
     assert plan["tail_trim_ms"] == 0
 
 
 def test_plan_splits_extra_overlap_into_tail_trim():
     timeline = _timeline_with_transition()
-    # 转场只覆盖交集的一部分：剩余重叠成为 from 端尾部裁剪。
+    # The transition covers only part of the intersection: the remaining
+    # overlap becomes tail trim on the `from` side.
     timeline.elements_by_id["fade"].span = TimelineSpan(
         start_tick=4_700,
         duration_tick=300,
@@ -230,7 +234,7 @@ def test_plan_rejects_non_adjacent_endpoints():
         timeline.elements_by_id["b"],
         timeline.elements_by_id["c"],
     ]
-    # 让转场指向不相邻的 a -> c。
+    # Point the transition at non-adjacent a -> c.
     timeline.elements_by_id["fade"] = TimelineElement(
         element_id="fade",
         span=TimelineSpan(start_tick=4_600, duration_tick=400),

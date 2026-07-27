@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# flake8: noqa: E501
 # pylint: disable=unused-argument,protected-access
 """Unit tests for motion design and text-overlay styled rendering."""
 
@@ -212,7 +213,10 @@ class TestMotionDesignSafety:
 
 class TestMotionTemplates:
     @pytest.mark.parametrize("motif", sorted(SUPPORTED_MOTIFS))
-    def test_every_template_is_text_free_and_animated(self, motif: str) -> None:
+    def test_every_template_is_text_free_and_animated(
+        self,
+        motif: str,
+    ) -> None:
         html = render_decoration_template(motif)
         assert f'data-motion-motif="{motif}"' in html
         assert "@keyframes" in html
@@ -234,7 +238,9 @@ class TestMotionTemplates:
 
         assert ".dot{left:45%;top:62%;width:10%" in html
 
-    def test_template_metadata_survives_loading_older_project_json(self) -> None:
+    def test_template_metadata_survives_loading_older_project_json(
+        self,
+    ) -> None:
         html = render_decoration_template(
             "alert_mark",
             theme="neon_night",
@@ -255,7 +261,9 @@ class TestMotionTemplates:
         assert motion.exit == "shrink"
         assert motion.intensity == pytest.approx(0.85)
 
-    def test_caption_fallback_keeps_exact_text_and_escapes_markup(self) -> None:
+    def test_caption_fallback_keeps_exact_text_and_escapes_markup(
+        self,
+    ) -> None:
         html = render_caption_template("飞！<安全>", emotion="action")
 
         assert "飞！&lt;安全&gt;" in html
@@ -278,7 +286,9 @@ class TestMotionTemplates:
         )
         assert not isinstance(design, str)
 
-    def test_caption_fallback_shrinks_long_copy_to_stay_inside_card(self) -> None:
+    def test_caption_fallback_shrinks_long_copy_to_stay_inside_card(
+        self,
+    ) -> None:
         html = render_caption_template("大家快看它挺淡定，还有点意思")
 
         assert "font-size:8.5vh" in html
@@ -318,19 +328,22 @@ class TestMotionStoryArc:
         assert arc["ending"] == beats[2]
 
     def test_story_plan_rejects_unknown_visual_vocabulary(self) -> None:
-        assert _validated_story_beats(
-            [
-                {
-                    "role": "开场",
-                    "motif": "invented_shape",
-                    "emotion": "chill",
-                    "entrance": "pop",
-                    "exit": "soft_fade",
-                    "intensity": 0.5,
-                }
-            ]
-            * 3,
-        ) is None
+        assert (
+            _validated_story_beats(
+                [
+                    {
+                        "role": "开场",
+                        "motif": "invented_shape",
+                        "emotion": "chill",
+                        "entrance": "pop",
+                        "exit": "soft_fade",
+                        "intensity": 0.5,
+                    },
+                ]
+                * 3,
+            )
+            is None
+        )
 
 
 class TestAlphaPlaneStats:

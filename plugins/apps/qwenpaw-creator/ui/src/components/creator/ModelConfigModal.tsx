@@ -445,7 +445,13 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       if (!prev) throw new Error("快照丢失，请重新打开配置");
 
       const dirtySections: TabType[] = [];
-      for (const section of ["llm", "vlm", "asr", "image", "video"] as TabType[]) {
+      for (const section of [
+        "llm",
+        "vlm",
+        "asr",
+        "image",
+        "video",
+      ] as TabType[]) {
         if (JSON.stringify(config[section]) !== JSON.stringify(prev[section])) {
           dirtySections.push(section);
         }
@@ -636,12 +642,11 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     const item = config[type] as ModelConfigItem;
     const usingLlm =
       type === "vlm" && config.vlm.use_llm && config.llm.model_name;
-    const configured =
-      !item.enabled
-        ? false
-        : usingLlm
-        ? true
-        : !!item.model_name;
+    const configured = !item.enabled
+      ? false
+      : usingLlm
+      ? true
+      : !!item.model_name;
     const isTested = tested[type] === true;
 
     const statusColor = !configured
@@ -951,8 +956,12 @@ export default function ModelConfigModal({ open, onClose }: Props) {
               config.vlm.use_llm &&
               config.llm.model_name
             ) {
-              subText = tested.vlm ? config.llm.model_name : `${config.llm.model_name}（未测试）`;
-              subColor = tested.vlm ? "var(--color-success)" : "var(--color-text-tertiary)";
+              subText = tested.vlm
+                ? config.llm.model_name
+                : `${config.llm.model_name}（未测试）`;
+              subColor = tested.vlm
+                ? "var(--color-success)"
+                : "var(--color-text-tertiary)";
             } else if (!item.enabled && hasModel) {
               subText = `${item.model_name}（已关闭）`;
               subColor = "var(--color-text-tertiary)";

@@ -209,7 +209,8 @@ def materialize_keyframe(
         try:
             result = subprocess.run(
                 command,
-                # 断开 stdin，避免 ffmpeg 在后台进程组里读 tty 被 SIGTTIN 挂起。
+                # Detach stdin so ffmpeg is not suspended by SIGTTIN when it
+                # reads the tty from a background process group.
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,

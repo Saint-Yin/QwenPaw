@@ -378,9 +378,7 @@ def _translate_jq_input_error(
             "program 必须是顶层字段；若 jsonArgs 体量巨大，"
             "请拆分为少量几次较小的 jq_project 调用。项目未被修改。"
         )
-    return (
-        "jq_project 参数缺少顶层 program 字段，请补全后重试；项目未被修改。"
-    )
+    return "jq_project 参数缺少顶层 program 字段，请补全后重试；项目未被修改。"
 
 
 _PROJECT_SCHEMA_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (

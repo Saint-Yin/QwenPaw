@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { message } from "antd";
-import { Check, Eye, FileDiff, Image as ImageIcon, Undo2, Video } from "lucide-react";
+import {
+  Check,
+  Eye,
+  FileDiff,
+  Image as ImageIcon,
+  Undo2,
+  Video,
+} from "lucide-react";
 import type {
   FileProjectReviewDecision,
   FileProjectReviewOperation,
@@ -61,7 +68,8 @@ function operationLocation(operation: FileProjectReviewOperation): string {
   );
 }
 
-/** 可读的修改位置摘要：用 element/asset 真实名称与字段名代替裸 JSON pointer。 */
+/** Readable change-location summary: real element/asset names and field labels
+ * instead of a bare JSON pointer. */
 function operationSummary(
   operation: FileProjectReviewOperation,
   elementNames: Record<string, string>,
@@ -80,18 +88,20 @@ function operationSummary(
 
 function previewText(value: unknown, limit = 26): string {
   if (value === null || value === undefined) return "—";
-  const text =
-    typeof value === "string" ? value : JSON.stringify(value) ?? "—";
+  const text = typeof value === "string" ? value : JSON.stringify(value) ?? "—";
   const normalized = text.replace(/\s+/g, " ").trim();
   return normalized.length > limit
     ? `${normalized.slice(0, limit)}…`
     : normalized || "—";
 }
 
-/** 一行变更预览，让用户不跳转也能知道改了什么；完整 diff 在原文处展示。 */
+/** One-line change preview so users know what changed without navigating;
+ * the full diff is shown in place at the original content. */
 function operationPreview(operation: FileProjectReviewOperation): string {
-  if (operation.kind === "create") return `新增：${previewText(operation.after)}`;
-  if (operation.kind === "delete") return `删除：${previewText(operation.before)}`;
+  if (operation.kind === "create")
+    return `新增：${previewText(operation.after)}`;
+  if (operation.kind === "delete")
+    return `删除：${previewText(operation.before)}`;
   return `${previewText(operation.before)} → ${previewText(operation.after)}`;
 }
 
@@ -101,7 +111,10 @@ export function reviewMediaLocator(
 ): Record<string, string> | null {
   for (const operation of review.operations) {
     const locator = operation.ui_locator;
-    if (locator && (locator.mediaType === "image" || locator.mediaType === "video")) {
+    if (
+      locator &&
+      (locator.mediaType === "image" || locator.mediaType === "video")
+    ) {
       return locator;
     }
   }
@@ -109,8 +122,9 @@ export function reviewMediaLocator(
 }
 
 /**
- * 待审“单元”数：媒体生成审阅的若干内部 operations（文件/版本/槽位/记账字段）
- * 对用户而言是同一件产物，计为 1；文本审阅按待决策的 operation 计数。
+ * Number of pending "units": the internal operations of a media-generation
+ * review (file/version/slot/bookkeeping fields) are one artifact to the user,
+ * so they count as 1; text reviews count pending operations individually.
  */
 export function reviewPendingUnits(review: FileProjectReviewRecord): number {
   const pending = review.operations.filter(
@@ -127,7 +141,7 @@ function mediaLabel(locator: Record<string, string>): string {
   return locator.mediaType === "video" ? "视频" : "图片";
 }
 
-/** 决策托盘堆叠存根/指示点用的紧凑标题。 */
+/** Compact title used by the decision tray's stacked stubs / indicator dots. */
 export function reviewTrayLabel(review: FileProjectReviewRecord): string {
   const locator = reviewMediaLocator(review);
   if (locator) return `${mediaLabel(locator)}审阅`;
@@ -164,7 +178,8 @@ export default function FileProjectReviewPanel({
   })();
   const assetName = (assetId: string): string =>
     project?.visual.entities.items[assetId]?.name || assetId;
-  /** 媒体产物的归属描述：「第一幕：发现」的分镜图 / 角色「狐狸」的形象图。 */
+  /** Ownership line for a media artifact, e.g. "「第一幕：发现」的分镜图" or
+   * "「狐狸」的形象图". */
   const mediaOwnerLine = (locator: Record<string, string>): string => {
     if (locator.elementId) {
       const name = elementNames[locator.elementId] ?? locator.elementId;
@@ -182,7 +197,9 @@ export default function FileProjectReviewPanel({
   );
   const busy = decisionInFlight || localBusy;
   const mediaLocator = reviewMediaLocator(review);
-  const pendingUnits = mediaLocator ? Math.min(pending.length, 1) : pending.length;
+  const pendingUnits = mediaLocator
+    ? Math.min(pending.length, 1)
+    : pending.length;
 
   const submit = async (
     operations: FileProjectReviewOperation[],
@@ -229,7 +246,8 @@ export default function FileProjectReviewPanel({
       className="mb-3 rounded-xl border border-[var(--color-accent)]/35 bg-[var(--color-bg-primary)]/70 p-2.5"
     >
       <OnboardingHint hintKey="review" className="mb-2">
-        首次说明：Agent 对项目的每处修改都会在这里待你审阅：「保留」采纳修改，「撤销」回退到修改前；也可逐条处理。
+        首次说明：Agent
+        对项目的每处修改都会在这里待你审阅：「保留」采纳修改，「撤销」回退到修改前；也可逐条处理。
       </OnboardingHint>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -369,7 +387,8 @@ export default function FileProjectReviewPanel({
                 </div>
                 {operation.kind === "delete" && (
                   <div className="mt-2">
-                    {/* 已删除的内容在工作区没有可跳转的原文位置，就地展示被删内容。 */}
+                    {/* Deleted content has no original location left in the workspace
+                        to jump to, so show what was removed right here. */}
                     <DiffView
                       before={operation.before}
                       after={operation.after}

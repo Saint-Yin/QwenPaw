@@ -237,12 +237,16 @@ export const useFileProjectReviewStore = create<FileProjectReviewState>(
 
             const incomingReviews = result.reviews;
             const currentReviews = state.reviews;
-            const currentMaxGeneration = currentReviews.length > 0
-              ? Math.max(...currentReviews.map((r) => r.candidate_generation))
-              : -1;
-            const incomingMaxGeneration = incomingReviews.length > 0
-              ? Math.max(...incomingReviews.map((r) => r.candidate_generation))
-              : -1;
+            const currentMaxGeneration =
+              currentReviews.length > 0
+                ? Math.max(...currentReviews.map((r) => r.candidate_generation))
+                : -1;
+            const incomingMaxGeneration =
+              incomingReviews.length > 0
+                ? Math.max(
+                    ...incomingReviews.map((r) => r.candidate_generation),
+                  )
+                : -1;
             if (
               currentReviews.length > 0 &&
               incomingMaxGeneration < currentMaxGeneration

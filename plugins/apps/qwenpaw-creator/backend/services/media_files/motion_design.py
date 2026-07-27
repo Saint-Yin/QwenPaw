@@ -370,7 +370,11 @@ def _validated_design(
         raise ValidationError("design html 不允许使用 meta refresh 导航")
     if re.search(r"\son[a-z0-9_-]+\s*=", html, re.IGNORECASE):
         raise ValidationError("design html 不允许包含事件处理属性")
-    if re.search(r"(?:javascript|file|data\s*:\s*text/html)\s*:", html, re.IGNORECASE):
+    if re.search(
+        r"(?:javascript|file|data\s*:\s*text/html)\s*:",
+        html,
+        re.IGNORECASE,
+    ):
         raise ValidationError("design html 不允许包含脚本、本机文件或嵌入网页 URL")
     if re.search(
         r"""(?:src|href)\s*=\s*["']?\s*(?:https?:)?//""",
@@ -478,13 +482,13 @@ def _design_task_text(
         lines.append(
             f"本段在全片动效叙事中的角色是「{story_role}」，"
             f"故事规划建议 {story_motif} 造型，但这只是建议。必须先判断同一时段 OS 台词的语用意图；"
-            "若建议造型与台词不吻合，请从允许的 motif 中换成更直接的视觉表达。"
+            "若建议造型与台词不吻合，请从允许的 motif 中换成更直接的视觉表达。",
         )
     if used_motifs:
         lines.append(
             "全片前面已使用这些装饰造型: "
             + "、".join(sorted(used_motifs))
-            + "。若剧情语义允许，请换一种造型，形成有变化但统一的视觉节奏。"
+            + "。若剧情语义允许，请换一种造型，形成有变化但统一的视觉节奏。",
         )
     if os_context:
         lines.append("同一时段的猫咪 OS 语义如下；装饰造型必须呼应这些台词/情绪，但不得重复显示文字：")
@@ -741,17 +745,32 @@ def _story_arc_motifs(
         (
             "开场引导：建立故事起点",
             "focus_target",
-            {"emotion": "curious", "entrance": "draw_in", "exit": "soft_fade", "intensity": 0.5},
+            {
+                "emotion": "curious",
+                "entrance": "draw_in",
+                "exit": "soft_fade",
+                "intensity": 0.5,
+            },
         ),
         (
             "中段变化：提示重要转折",
             "sparkles",
-            {"emotion": "surprise", "entrance": "pop", "exit": "shrink", "intensity": 0.6},
+            {
+                "emotion": "surprise",
+                "entrance": "pop",
+                "exit": "shrink",
+                "intensity": 0.6,
+            },
         ),
         (
             "结尾收束：完成视觉句点",
             "approval_checks",
-            {"emotion": "chill", "entrance": "pop", "exit": "soft_fade", "intensity": 0.5},
+            {
+                "emotion": "chill",
+                "entrance": "pop",
+                "exit": "soft_fade",
+                "intensity": 0.5,
+            },
         ),
     ]
     opening, turn, ending = beats
@@ -821,7 +840,7 @@ async def _plan_story_beats(
         assert isinstance(creation, EditCreation)
         lines.append(
             f"- 片段：{element.label or '（无标签）'}；"
-            f"意图：{creation.intent or '（无）'}；理由：{creation.reason or '（无）'}"
+            f"意图：{creation.intent or '（无）'}；理由：{creation.reason or '（无）'}",
         )
     for overlay in text_overlays:
         creation = overlay.creation
@@ -939,9 +958,7 @@ async def design_motion_overlays(
         creation = overlay.creation
         assert isinstance(creation, OverlayCreation)
         emotion = (
-            creation.vibe
-            if creation.vibe in SUPPORTED_EMOTIONS
-            else "chill"
+            creation.vibe if creation.vibe in SUPPORTED_EMOTIONS else "chill"
         )
         concept = f"可靠动态 OS 字幕卡（生成样式回退：{reason}）"
         motion = MotionGraphic(
@@ -1087,7 +1104,9 @@ async def design_motion_overlays(
         if isinstance(frames, dict):
             return fallback_text_style(
                 overlay,
-                reason=str(frames.get("error") or frames.get("skipReason") or "抽帧失败"),
+                reason=str(
+                    frames.get("error") or frames.get("skipReason") or "抽帧失败",
+                ),
             )
         duration_seconds = (
             overlay.span.duration_tick / timeline.ticks_per_second

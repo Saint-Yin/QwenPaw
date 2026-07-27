@@ -67,16 +67,14 @@ export interface TimelineRenderResult {
   replayed: boolean;
 }
 
-/** 用户主动导出成片：确定性后端合成，不经过 Agent 链路。 */
+/** User-initiated final-cut export: deterministic backend compositing, no Agent involved. */
 export function renderTimeline(
   projectId: string,
   timelineId: string,
   clientRequestId = newClientId("timeline-render"),
 ): Promise<TimelineRenderResult> {
   return creatorRequest(
-    `${project(projectId)}/timelines/${encodeURIComponent(
-      timelineId,
-    )}/render`,
+    `${project(projectId)}/timelines/${encodeURIComponent(timelineId)}/render`,
     {
       method: "POST",
       headers: { "Idempotency-Key": clientRequestId },

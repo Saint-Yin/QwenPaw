@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import { useCreatorSessionStore } from "@/store/creatorSessionStore";
 
-// 与 AgentStatusBar 的 active 判定保持一致的"Agent 正在工作"口径；
-// 额外纳入 queuedUi 中尚未落库的消息，覆盖"刚点发送、后端还没响应"的窗口期。
+// Same "agent is working" criteria as AgentStatusBar's active check; additionally
+// counts queuedUi messages not yet persisted, covering the window between
+// clicking send and the backend responding.
 const WORKING_SESSION_STATUSES = new Set([
   "RUNNING",
   "RESUMING",

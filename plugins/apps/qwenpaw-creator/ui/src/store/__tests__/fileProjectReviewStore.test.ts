@@ -197,9 +197,7 @@ describe("file-native Project Review store", () => {
     ];
 
     await expect(
-      useFileProjectReviewStore
-        .getState()
-        .decide("p1", "review-1", decisions),
+      useFileProjectReviewStore.getState().decide("p1", "review-1", decisions),
     ).rejects.toThrow("response lost");
     await expect(
       useFileProjectReviewStore

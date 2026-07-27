@@ -88,9 +88,7 @@ describe("useReviewFieldFocus", () => {
   });
 
   it("同名字段同时存在时只定位工作区，不会闪烁 AgentDock", () => {
-    const { container } = render(
-      <DockCollisionHarness pulse="pulse-dock" />,
-    );
+    const { container } = render(<DockCollisionHarness pulse="pulse-dock" />);
     const dockTarget = container.querySelector<HTMLElement>(
       "[data-agent-dock] [data-creator-field]",
     )!;
