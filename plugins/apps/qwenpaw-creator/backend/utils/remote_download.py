@@ -13,9 +13,10 @@ logger = __import__("utils.logger", fromlist=["setup_logger"]).setup_logger(
     "utils.remote_download",
 )
 
-# 上限/超时均可经环境变量覆盖：默认 2 GiB，足够下载一场完整比赛视频。
-# 原先硬编码 500 MiB，会把近 1 GiB 的高光素材卡在 curl 错误 63
-# (Maximum file size exceeded)，导致剪辑拿不到本地文件而失败。
+# Limits/timeouts are overridable via environment variables. The default is
+# 2 GiB, enough to download a full match recording; the previous hard-coded
+# 500 MiB blocked ~1 GiB highlight footage with curl error 63 (Maximum file
+# size exceeded), so editing never got a local file and failed.
 MAX_BYTES = int(
     os.environ.get("CREATOR_DOWNLOAD_MAX_BYTES", 2 * 1024 * 1024 * 1024),
 )
@@ -83,7 +84,8 @@ def download_remote_file(url: str, local_path: str) -> None:
             detail = (
                 result.stderr or result.stdout or "curl download failed"
             ).strip()
-            # curl 退出码 63 = --max-filesize 超限，单独提示更直观
+            # curl exit code 63 = --max-filesize exceeded; a dedicated hint
+            # is clearer here.
             hint = ""
             if result.returncode == 63:
                 hint = (

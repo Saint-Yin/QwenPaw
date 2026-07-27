@@ -32,7 +32,8 @@ export default function TopNav() {
   const routeSection = pathname.split("/").filter(Boolean)[2] || "plan";
   const activeKey = activeTabKey(routeSection);
   const replayTour = () => {
-    // 按当前所在页唤起对应导览；工作区导览的锚点在视频方案页。
+    // Launch the tour matching the current page; the workspace tour's anchors
+    // live on the video plan page.
     if (activeKey === "assets") {
       requestAssetsTour();
       return;

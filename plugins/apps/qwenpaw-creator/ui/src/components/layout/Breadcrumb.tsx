@@ -27,7 +27,7 @@ export function useBreadcrumbs(): Crumb[] {
   if (routeSection === "plan") {
     const crumbs: Crumb[] = [{ label: "视频方案", path: `${base}/plan` }];
     if (parts[3] === "element" && parts[4]) {
-      // R2V 工作台：/project/:id/plan/element/:elementId
+      // R2V workbench: /project/:id/plan/element/:elementId
       const elementId = decodeURIComponent(parts[4]);
       const element = timeline?.elements_by_id[elementId];
       crumbs.push({

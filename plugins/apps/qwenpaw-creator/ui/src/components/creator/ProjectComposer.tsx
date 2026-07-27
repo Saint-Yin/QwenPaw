@@ -560,7 +560,8 @@ export function ProjectComposer({ open, onClose }: ProjectComposerProps) {
           </div>
         </div>
 
-        {/* 标杆场景选择（5.5）：驱动结构模板、默认风格与全程 UI 术语。 */}
+        {/* Benchmark scenario picker (5.5): drives the structure template, default
+            style and the UI terminology throughout. */}
         <div className="mt-4 flex flex-wrap items-center gap-1.5">
           <span className="text-[11px] font-medium text-[var(--color-text-tertiary)]">
             视频场景

@@ -552,7 +552,7 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
             get().projectId !== projectId
           )
             return;
-          // 终态项目跳过SSE重放
+          // Sessions in a terminal state skip SSE replay.
           const TERMINAL_STATUSES = new Set(["IDLE", "CANCELLED", "ERROR"]);
           const resumeAfter = TERMINAL_STATUSES.has(
             sessionResponse.session.status,
@@ -656,7 +656,7 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
             },
             () => set({ connected: false }),
           );
-          // 无事件需要重放时，延迟设置isReplaying: false
+          // When there are no events to replay, defer setting isReplaying: false.
           if (resumeAfter >= (sessionResponse.session.lastEventSeq ?? 0)) {
             window.setTimeout(() => {
               if (

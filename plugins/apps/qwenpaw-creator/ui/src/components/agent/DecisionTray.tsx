@@ -25,9 +25,11 @@ import FileProjectReviewPanel, {
 } from "./FileProjectReviewPanel";
 
 /**
- * 内联决策托盘：把审阅与生产确认钉在聊天流与状态栏之间。
- * 分级提醒——生产确认是阻塞级（永远排最前、到达时强制展开并闪烁），
- * 审阅是普通级（允许折叠成摘要栏，不打扰对话）。
+ * Inline decision tray: pins reviews and production confirmations between the
+ * chat stream and the status bar. Tiered alerting — production confirmations
+ * are blocking (always sorted first, force-expand and flash on arrival) while
+ * reviews are ordinary (may collapse into a summary bar without interrupting
+ * the conversation).
  */
 
 type TrayItem =
@@ -50,7 +52,7 @@ function trayItemsOf(
   project: ProjectDocument | null,
 ): TrayItem[] {
   return [
-    // 阻塞级永远排最前，随后是审阅项（保持后端给定顺序）。
+    // Blocking items always come first, then reviews (keeping backend order).
     ...pendingAuths.map<TrayItem>((authorization) => ({
       key: `auth:${authorization.id}`,
       kind: "auth",
@@ -117,7 +119,8 @@ export default function DecisionTray({ projectId }: { projectId: string }) {
   const previousAuthCount = useRef(0);
   const firstAuthKey = items.find((item) => item.kind === "auth")?.key ?? null;
 
-  // 阻塞级到达：强制展开托盘、聚焦最新生产确认并闪烁提醒。
+  // Blocking item arrived: force-expand the tray, focus the newest production
+  // confirmation and flash to draw attention.
   useEffect(() => {
     const previous = previousAuthCount.current;
     previousAuthCount.current = pendingAuths.length;
@@ -140,7 +143,8 @@ export default function DecisionTray({ projectId }: { projectId: string }) {
     [filter, items],
   );
 
-  // 当前筛选被清空（如最后一条生产确认已处理）时回到“全部”。
+  // Fall back to "all" when the current filter empties out (e.g. the last
+  // production confirmation was just handled).
   useEffect(() => {
     if (filter !== "all" && visible.length === 0 && items.length > 0) {
       setFilter("all");
@@ -323,7 +327,8 @@ export default function DecisionTray({ projectId }: { projectId: string }) {
             </div>
           ) : (
             <>
-              {/* 后续卡片以“叠纸”顶边示意队列深度，点击可直接聚焦。 */}
+              {/* Later cards show a stacked-paper top edge hinting at queue depth;
+                  clicking one focuses it directly. */}
               {nextItems.length > 1 && (
                 <div className="mx-5 h-1.5 rounded-t-lg border border-b-0 border-[var(--color-border)] bg-[var(--color-bg-card)]/70" />
               )}

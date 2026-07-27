@@ -169,7 +169,7 @@ describe("PlanPage Timeline/Element frontend", () => {
     expect(screen.queryByText("时间轴还是空的")).not.toBeInTheDocument();
     expect(screen.queryByText("时间轴中还没有内容")).not.toBeInTheDocument();
 
-    // Agent 停止后回落到静态引导，避免"假装在工作"。
+    // After the agent stops, fall back to the static guide instead of "pretending to work".
     act(() => {
       useCreatorSessionStore.setState((state) => ({
         session: state.session ? { ...state.session, status: "IDLE" } : null,
@@ -400,7 +400,7 @@ describe("PlanPage Timeline/Element frontend", () => {
     const { container } = renderPage();
     fireEvent.click(screen.getByRole("button", { name: "视频预览" }));
 
-    // 有新鲜成片 → 自动播成片，状态签只读、无切换按钮
+    // Fresh final render exists → auto-play it; the source chip is read-only with no toggle button.
     expect(
       container.querySelector("[data-timeline-live-preview]"),
     ).not.toBeInTheDocument();
@@ -484,7 +484,7 @@ describe("PlanPage Timeline/Element frontend", () => {
     const { calls } = installMockFetch([]);
     renderPage("/project/p1/plan?element=r2v-window");
 
-    // 规划/继续制作类快捷按钮已移除，Agent 入口统一在 AgentDock。
+    // Plan/continue-production shortcut buttons were removed; the Agent entry lives solely in AgentDock.
     expect(
       screen.queryByRole("button", { name: "Agent 规划" }),
     ).not.toBeInTheDocument();
@@ -492,7 +492,7 @@ describe("PlanPage Timeline/Element frontend", () => {
       screen.queryByRole("button", { name: "继续制作" }),
     ).not.toBeInTheDocument();
 
-    // fixture 已有新鲜成片 → 不重新合成，按钮直接下载成片文件。
+    // Fixture already has a fresh final render → no re-compose; the button downloads the file directly.
     const downloadButton = screen.getByRole("button", { name: "下载成片" });
     expect(downloadButton).toBeEnabled();
     const clickSpy = vi
@@ -551,7 +551,7 @@ describe("PlanPage Timeline/Element frontend", () => {
       ]);
       renderPage();
 
-      // 全部主轨元素就绪且无成片 → 短防抖后自动触发确定性合成。
+      // All main-track elements ready and no final render → deterministic compose auto-triggers after a short debounce.
       expect(screen.getByRole("button", { name: "下载成片" })).toBeDisabled();
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1600);

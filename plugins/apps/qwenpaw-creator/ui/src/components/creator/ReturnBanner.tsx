@@ -5,9 +5,10 @@ import { useNavigationStore } from "@/store/navigationStore";
 import { returnToSavedLocation } from "@/routing/locators";
 
 /**
- * 跨上下文跳转返回条（设计文档 3.2，迭代计划 1.5）。
- * 经 navigateToRef 跳转后出现在主工作区顶部；用户主动导航（路由变化
- * 与受控跳转目标不一致）时自动清栈消失。
+ * Return banner for cross-context jumps (design doc 3.2, iteration plan 1.5).
+ * Appears at the top of the main workspace after a navigateToRef jump; when the
+ * user navigates on their own (route change that doesn't match the controlled
+ * jump target) the stack is cleared and the banner disappears.
  */
 export default function ReturnBanner() {
   const pathname = usePathname();
@@ -21,7 +22,8 @@ export default function ReturnBanner() {
     lastPathRef.current = pathname;
     const state = useNavigationStore.getState();
     if (state.stack.length === 0) return;
-    // 路由变化但不是 navigateToRef / 返回条触发的 → 用户主动导航，清栈
+    // Route changed but not via navigateToRef / the return banner → the user
+    // navigated on their own, so clear the stack.
     if (state.expectedPath !== pathname) {
       state.clear();
     } else {
@@ -30,7 +32,8 @@ export default function ReturnBanner() {
   }, [pathname]);
 
   if (stack.length === 0) return null;
-  // 刚触发受控跳转但路由尚未生效时也渲染（避免闪烁）
+  // A controlled jump was just triggered but the route hasn't taken effect yet;
+  // hold off rendering until it does (avoids a flicker).
   if (expectedPath && expectedPath !== pathname) return null;
 
   const top = stack[stack.length - 1];

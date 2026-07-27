@@ -76,7 +76,8 @@ const DOCK_MIN_HEIGHT = 420;
 const DOCK_DEFAULT_SIZE: DockSize = { width: 440, height: 620 };
 const DOCK_SIZE_STORAGE_KEY = "agentDock.size.v1";
 
-// 与全局硬停止一致的"可停止"判定（原 AgentStatusBar 停止按钮迁移至此）。
+// "Stoppable" check consistent with the global hard-stop (the stop button
+// migrated here from the former AgentStatusBar).
 const ACTIVE_RUN_STATUSES = new Set([
   "QUEUED",
   "QUEUED_CAPACITY",
@@ -975,7 +976,7 @@ function SubagentActivityBubble({ activity }: { activity: SubagentActivity }) {
   );
 }
 
-/** 工具调用卡片：一行状态 + 可展开查看参数/结果。 */
+/** Tool-call card: one status line, expandable to inspect arguments/result. */
 function ToolCallCard({ data }: { data: ToolCallPresentation }) {
   const allowExpand = useAgentDockUiStore((state) => state.allowExpandDetails);
   const isReplaying = useCreatorSessionStore((state) => state.isReplaying);
@@ -1036,7 +1037,7 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
           : "succeeded"
         : "started"
       : status;
-  // 项目终态，started 工具强制为终态
+  // When the project reached a terminal state, force "started" tools terminal too.
   const resolvedStatus =
     isProjectDone && effectiveStatus === "started"
       ? isProjectFailed
@@ -1259,8 +1260,9 @@ function projectRefItems(
       }),
     );
   }
-  // 视觉设定（场景/角色/道具）以实体身份参与引用；它们名下的生成图
-  // 不再作为独立“生成产物”重复出现，避免“场景”与“场景视觉图”两条。
+  // Visual settings (scenes/characters/props) join references as entities;
+  // generated images they own no longer appear again as standalone artifacts,
+  // avoiding duplicate entries like "scene" plus "scene visual image".
   Object.values(project.visual.entities.items).forEach((entity) =>
     items.push({
       ref: `visual-entity:${entity.entity_id}`,
@@ -1287,8 +1289,9 @@ function projectRefItems(
   );
   Object.values(project.assets.artifact_versions_by_id)
     .filter((version) => {
-      // 实体归属在历史数据中有多种前缀（visual-entity: / asset:）；
-      // 归一化后命中视觉实体的产出不再重复出现。
+      // Entity ownership uses multiple prefixes in historical data
+      // (visual-entity: / asset:); after normalization, outputs owned by a
+      // visual entity are not listed again.
       const entityId = (version.owner_ref ?? "").replace(
         /^(?:visual-entity|asset):/,
         "",
@@ -1632,7 +1635,8 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
     [toolCalls],
   );
 
-  // 输入框上方实时状态行：纯前端派生，不修改任何数据结构。
+  // Live status row above the input: derived purely on the frontend, no data
+  // structures are mutated.
   const liveStatus = useMemo(
     () =>
       deriveAgentLiveStatus({
@@ -2263,7 +2267,8 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
               )}
             </div>
 
-            {/* 内联决策托盘：钉在聊天流与实时状态栏之间，审阅与生产确认就地处理。 */}
+            {/* Inline decision tray: pinned between the chat stream and the live
+                status bar so reviews and production confirmations are handled in place. */}
             <DecisionTray projectId={projectId} />
 
             <div

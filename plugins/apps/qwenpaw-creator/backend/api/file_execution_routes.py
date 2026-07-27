@@ -357,10 +357,13 @@ async def render_timeline(
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     services: CreatorFileServices = Depends(project_file_services),
 ) -> dict[str, Any]:
-    """用户主动导出成片：确定性本地合成，不经过 Agent 链路。
+    """User-initiated final video export: deterministic local composition,
+    bypassing the Agent pipeline.
 
-    读取目标 Timeline 全部已就绪的 R2V/Edit 元素按 span 顺序合成，
-    结果写入 timeline render ArtifactSlot，前端快照轮询后自动切成片预览。
+    Reads all ready R2V/Edit elements of the target Timeline and composes
+    them in span order; the result is written to the timeline render
+    ArtifactSlot, and the frontend switches to the final-video preview after
+    the next snapshot poll.
     """
 
     key = resolve_idempotency_key(idempotency_key)
@@ -408,8 +411,10 @@ async def render_timeline(
             target_ref=target_ref,
         )
         if reusable is not None:
-            # 渲染内容自上次成功合成后未变化且成片未过期：直接重放
-            # 已成功的 Task，前端观察到终态后继续使用现有成片。
+            # Render content is unchanged since the last successful
+            # composition and the artifact is still fresh: replay the
+            # succeeded Task; the frontend keeps using the existing video
+            # once it observes the terminal state.
             return await asyncio.to_thread(
                 _render_dispatch_view,
                 services,
@@ -420,9 +425,11 @@ async def render_timeline(
 
         task_id = file_local_media_task_id(project_id, key)
 
-        # 后台 drive() 在建 Task 前失败时无处持久化错误，前端会等待一个
-        # 永不存在的 Task。先同步预检执行计划，结构性问题（如本地
-        # runner 不支持的 Overlay 叠加）直接以 400 返回给调用方。
+        # When the background drive() fails before the Task is created there
+        # is nowhere to persist the error, and the frontend would wait for a
+        # Task that never exists. Pre-validate the execution plan
+        # synchronously so structural problems (e.g. Overlay stacking the
+        # local runner cannot handle) return 400 to the caller directly.
         await asyncio.to_thread(
             validate_local_media_execution,
             services,

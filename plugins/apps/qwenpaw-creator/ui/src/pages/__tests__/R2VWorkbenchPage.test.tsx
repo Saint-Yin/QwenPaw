@@ -108,8 +108,9 @@ describe("R2V Workbench page", () => {
       "/api/qwenpaw-creator/media/artifacts/r2v-window-v1",
     );
     expect(screen.getByText("@圆润大橘猫")).toBeInTheDocument();
-    // 已引用视觉实体名下的生成图不再作为“素材”重复展示，
-    // 避免“角色”与“角色锚点图”语义重复。
+    // Generated images owned by an already-referenced visual entity are no
+    // longer duplicated as "materials", avoiding the semantic overlap between
+    // "character" and "character anchor image".
     expect(screen.queryByText("@橘猫角色锚点")).toBeNull();
     expect(screen.getByText("资产绑定")).toBeInTheDocument();
     expect(useCreatorInteractionStore.getState().selectedRef).toBe(

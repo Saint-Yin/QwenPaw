@@ -1,18 +1,24 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
-"""Element 转场的 xfade/acrossfade 滤镜链构造。
+"""xfade/acrossfade filter-chain construction for Element transitions.
 
-Timeline 中 ``creation.type=transition`` 的 Element 显式引用相邻两个主轨
-Element，其 span 落在两端点 span 的时间交集内。本模块把这一模型语义翻译成
-一条确定性的 ffmpeg ``filter_complex``：
+A Timeline Element with ``creation.type=transition`` explicitly references
+two adjacent main-track Elements, and its span sits inside the time
+intersection of both endpoint spans. This module translates that model
+semantics into one deterministic ffmpeg ``filter_complex``:
 
-- 相邻片段之间存在非硬切转场时使用 ``xfade``（视频）+ ``acrossfade``（音频）；
-- 硬切（cut）或没有转场的相邻对使用 ``concat``；
-- 无声片段用 ``anullsrc`` 补齐，保证 acrossfade/concat 的流对齐。
+- adjacent segments joined by a non-cut transition use ``xfade`` (video) +
+  ``acrossfade`` (audio);
+- cut joins, or adjacent pairs without a transition, use ``concat``;
+- silent segments are padded with ``anullsrc`` so acrossfade/concat stream
+  alignment holds.
 
-时间约定：blend 时长 d 表示相邻片段在链上的重叠消耗。第 k 对转场的
-``offset = 已累计链时长 - d``，链总时长 = Σ片段时长 - Σd，与 Timeline
-上"两端 Element 重叠 d、转场 span 即交集"的 authoring 约定一致。
+Timing convention: blend duration d is the overlap consumed between adjacent
+segments on the chain. For the k-th transition pair,
+``offset = accumulated chain duration - d``, and the total chain duration is
+Σ segment durations - Σ d, matching the Timeline authoring convention of
+"endpoint Elements overlap by d and the transition span is the
+intersection".
 """
 
 from __future__ import annotations
@@ -21,7 +27,8 @@ from dataclasses import dataclass
 
 
 DEFAULT_TRANSITION_DURATION_SECONDS = 0.4
-# xfade 官方滤镜名白名单；crossfade 是模型侧常用别名，规整为 fade。
+# Whitelist of official xfade filter names; crossfade is a common
+# model-side alias and is normalised to fade.
 SUPPORTED_XFADE_KINDS = {
     "fade",
     "fadeblack",
@@ -36,7 +43,8 @@ _KIND_ALIASES = {
 
 
 def normalize_transition_kind(value: object) -> str:
-    """归一 transition_kind：cut 保持硬切，未知类型回退 fade。"""
+    """Normalise transition_kind: cut stays a hard cut, unknown kinds fall
+    back to fade."""
 
     name = str(value or "").strip().casefold()
     if name == "cut":
@@ -49,7 +57,8 @@ def normalize_transition_kind(value: object) -> str:
 
 @dataclass(frozen=True, slots=True)
 class TransitionClip:
-    """一个已规整片段：链上时长（秒）与是否携带音频流。"""
+    """One normalised segment: on-chain duration (seconds) and whether it
+    carries an audio stream."""
 
     duration_seconds: float
     has_audio: bool
@@ -57,7 +66,7 @@ class TransitionClip:
 
 @dataclass(frozen=True, slots=True)
 class TransitionJoin:
-    """片段 i-1 → i 的衔接方式。``blend_seconds<=0`` 即硬切 concat。"""
+    """How segments i-1 → i join. ``blend_seconds<=0`` means hard-cut concat."""
 
     kind: str = "cut"
     blend_seconds: float = 0.0
@@ -72,7 +81,7 @@ def compute_chain_duration(
     clips: list[TransitionClip],
     joins: list[TransitionJoin],
 ) -> float:
-    """链总时长 = Σ片段时长 - Σ有效 blend。"""
+    """Total chain duration = Σ segment durations - Σ effective blends."""
 
     _validate_shapes(clips, joins)
     total = sum(clip.duration_seconds for clip in clips)
@@ -100,7 +109,8 @@ def _validate_shapes(
         blend = join.effective_blend()
         if blend <= 0:
             continue
-        # blend 消耗前后两个片段的时间，超过任一片段都会让 offset 倒退。
+        # The blend consumes time from both neighbouring clips; exceeding
+        # either clip would make the xfade offset go backwards.
         limit = min(
             clips[index].duration_seconds,
             clips[index + 1].duration_seconds,
@@ -119,10 +129,11 @@ def build_transition_filter_chain(
     canvas_size: tuple[int, int],
     fps: float = 30.0,
 ) -> str:
-    """构造 N 片段的 filter_complex，输出 ``[vout]``/``[aout]``。
+    """Build the N-segment filter_complex emitting ``[vout]``/``[aout]``.
 
-    片段先统一到 canvas 尺寸、帧率与 yuv420p，避免 xfade 因规格不一致
-    失败；音频统一到 44100Hz 立体声 fltp，缺失音轨用 anullsrc 补齐。
+    Segments are first normalised to the canvas size, frame rate, and
+    yuv420p so xfade does not fail on mismatched specs; audio is normalised
+    to 44100Hz stereo fltp, with missing tracks padded via anullsrc.
     """
 
     _validate_shapes(clips, joins)

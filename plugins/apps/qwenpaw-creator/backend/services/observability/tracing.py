@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
-# pylint: disable=no-else-raise,too-many-return-statements
+# pylint: disable=no-else-raise,too-many-return-statements,too-many-branches
 """Small, dependency-free tracing layer for the complete Creator runtime.
 
 The runtime persists business authority in ``project.json`` and scoped Runtime

@@ -4,7 +4,7 @@ import {
   useOnboardingStore,
 } from "@/store/onboardingStore";
 
-// jsdom 环境的 localStorage 不完整，用内存实现替换。
+// jsdom's localStorage is incomplete; replace it with an in-memory implementation.
 const memory = new Map<string, string>();
 
 function readStored(): Record<string, unknown> {
@@ -51,7 +51,7 @@ describe("useOnboardingStore", () => {
     expect(state.homeTourDone).toBe(true);
     expect(state.homeTourRequested).toBe(false);
     expect(readStored().homeTourDone).toBe(true);
-    // 运行时请求状态不应被持久化。
+    // Runtime request state must not be persisted.
     expect(readStored()).not.toHaveProperty("homeTourRequested");
   });
 
@@ -91,7 +91,7 @@ describe("useOnboardingStore", () => {
 
   it("ignores corrupted persisted payloads gracefully", () => {
     memory.set(ONBOARDING_STORAGE_KEY, "not-json{");
-    // markHintSeen 内部会重新 persist，覆盖损坏数据且不抛错。
+    // markHintSeen re-persists internally, overwriting the corrupted data without throwing.
     expect(() =>
       useOnboardingStore.getState().markHintSeen("addToConversation"),
     ).not.toThrow();

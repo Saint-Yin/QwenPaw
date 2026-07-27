@@ -28,7 +28,7 @@ interface AgentDockUiState {
   draft: string;
   selection: SelectionAttachment | null;
   allowExpandDetails: boolean;
-  /** 内联决策托盘的折叠偏好；新阻塞项（生产确认）到达时会被强制展开。 */
+  /** Collapse preference of the inline decision tray; a new blocking item (production confirmation) forces it open. */
   decisionTrayCollapsed: boolean;
   setOpen: (open: boolean) => void;
   setTab: (tab: AgentDockTab) => void;

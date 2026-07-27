@@ -10,7 +10,7 @@ export interface MentionRef {
   ref: string;
   name: string;
   type?: string;
-  /** 可预览引用（图片/视频帧）的缩略图；悬浮在 @pill 上时展示。 */
+  /** Thumbnail for previewable refs (images/video frames); shown when hovering the @pill. */
   thumbnailUrl?: string;
 }
 

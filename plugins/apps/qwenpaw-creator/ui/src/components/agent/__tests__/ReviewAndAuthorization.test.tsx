@@ -39,7 +39,8 @@ describe("file-native execution authorization decisions", () => {
     ]);
 
     render(<DecisionTray projectId="p1" />);
-    // 阻塞级：托盘展开且摘要栏标注需确认后才能继续。
+    // Blocking level: tray is expanded and the summary bar says execution is
+    // blocked until confirmed.
     const tray = document.querySelector("[data-decision-tray]");
     expect(tray).toHaveAttribute("data-decision-tray-urgent", "true");
     expect(
@@ -71,7 +72,8 @@ describe("file-native execution authorization decisions", () => {
     render(<DecisionTray projectId="p1" />);
     fireEvent.click(screen.getByText("取消"));
 
-    // 全部处理完后托盘整体消失，不再占据聊天面板空间。
+    // Once everything is handled the tray disappears entirely and stops taking
+    // up chat panel space.
     await waitFor(() =>
       expect(
         document.querySelector("[data-decision-tray]"),
@@ -87,7 +89,7 @@ describe("file-native execution authorization decisions", () => {
     const tray = document.querySelector("[data-decision-tray]");
     expect(tray).toHaveAttribute("data-decision-tray-collapsed", "true");
     expect(tray).toHaveAttribute("data-decision-tray-urgent", "true");
-    // 折叠后卡片隐藏，但摘要栏仍保留阻塞提示文案。
+    // Collapsing hides the cards, but the summary bar keeps the blocking notice.
     expect(screen.queryByText("生成 Element 视频")).not.toBeInTheDocument();
     expect(screen.getByText(/生产确认 1 项阻塞执行中/)).toBeInTheDocument();
   });

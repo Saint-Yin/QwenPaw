@@ -235,8 +235,8 @@ describe("playbackLayersInWindow", () => {
 });
 
 describe("transitionOpacityAtTick", () => {
-  // 固定事实：转场窗口 [7000, 8000)，edit-opening → r2v-window，
-  // easing 为 ease-in-out。
+  // Fixture facts: transition window [7000, 8000), edit-opening → r2v-window,
+  // easing is ease-in-out.
   it("fades the incoming element across the transition window", () => {
     const timeline = timelineOf(cloneProject());
     const incoming = timeline.elements_by_id["r2v-window"];
@@ -248,7 +248,7 @@ describe("transitionOpacityAtTick", () => {
   it("hides the incoming element during the pre-blend overlap", () => {
     const timeline = timelineOf(cloneProject());
     const incoming = timeline.elements_by_id["r2v-window"];
-    // r2v-window 从 5000 开始重叠，但 blend 7000 才开始：保持隐藏。
+    // r2v-window overlaps from 5000 but the blend starts at 7000: stays hidden.
     expect(transitionOpacityAtTick(timeline, incoming, 6000)).toBe(0);
   });
 
@@ -288,7 +288,7 @@ describe("transitionOpacityAtTick", () => {
     if (timeline.elements_by_id.transition.creation.type === "transition") {
       timeline.elements_by_id.transition.creation.easing = "ease-in";
     }
-    // ease-in 在 25% 进度处为 0.0625。
+    // ease-in yields 0.0625 at 25% progress.
     expect(transitionOpacityAtTick(timeline, incoming, 7250)).toBeCloseTo(
       0.0625,
     );

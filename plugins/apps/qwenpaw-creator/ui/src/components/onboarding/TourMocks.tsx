@@ -4,9 +4,10 @@ import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
 
 /**
- * 导览气泡内的迷你 mock 界面：用纯展示元素模拟各区域"有内容时"的样子，
- * 让空项目（新建项目 Agent 还在规划）状态下的用户也能看懂该点哪里。
- * 全部为静态演示，不读取任何真实项目数据。
+ * Mini mock UIs inside tour popovers: purely presentational elements that
+ * imitate what each area looks like "with content", so users of an empty
+ * project (the Agent is still planning a freshly created one) can still tell
+ * where to click. All static demos — no real project data is read.
  */
 
 function MockCaption({ children }: { children: string }) {
@@ -36,7 +37,7 @@ function ClickCursor({ label }: { label: string }) {
   );
 }
 
-/** 迷你时间轴：多类型内容块叠加，其中一块带点击指引。 */
+/** Mini timeline: overlapping blocks of several content types, one carrying a click hint. */
 export function MockTimeline() {
   return (
     <MockFrame>
@@ -72,7 +73,7 @@ export function MockTimeline() {
   );
 }
 
-/** 迷你内容详情：类型徽标、可编辑字段与「应用修改」。 */
+/** Mini element detail: type badge, editable fields and an "apply changes" button. */
 export function MockElementDetail() {
   return (
     <MockFrame>
@@ -115,7 +116,8 @@ export function MockElementDetail() {
   );
 }
 
-/** 迷你选区演示：文字划选 + 时间段框选，均浮出「添加到对话」。 */
+/** Mini selection demo: text drag-select + time-range box-select, both surfacing
+ * an "add to conversation" chip. */
 export function MockSelectionDemo() {
   const chip = (
     <span className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-white px-1.5 py-0.5 text-[9px] font-semibold text-[var(--color-text-primary)] shadow-sm">
@@ -148,7 +150,7 @@ export function MockSelectionDemo() {
   );
 }
 
-/** 迷你对话演示：修改意图 → Agent 响应并调度生成。 */
+/** Mini chat demo: a change request → Agent responds and schedules generation. */
 export function MockAgentChat() {
   return (
     <MockFrame>
@@ -168,7 +170,7 @@ export function MockAgentChat() {
   );
 }
 
-/** 迷你资产卡片：角色 / 场景 / 产物三类示例。 */
+/** Mini asset cards: character / scene / artifact sample trio. */
 export function MockAssetCards() {
   const cards = [
     { label: "角色", name: "主角小狐", tone: "bg-orange-100 text-orange-500" },
@@ -206,9 +208,10 @@ export function MockAssetCards() {
 const DEMO_FIELD = "project:onboarding-demo";
 
 /**
- * 真实选区演示：在气泡内程序化选中一段示例文字，让真实的
- * 「添加到对话」浮条出现；点击后内容会真正进入 AgentDock 输入框
- * （AgentDock 若处于收起状态也会被真实唤起）。
+ * Live selection demo: programmatically selects a sample sentence inside the
+ * popover so the real "添加到对话" (add to conversation) toolbar appears;
+ * clicking it really puts the content into the AgentDock input (and if the
+ * AgentDock is collapsed, it genuinely gets opened).
  */
 export function LiveSelectionDemo() {
   const demoRef = useRef<HTMLSpanElement>(null);
@@ -217,7 +220,8 @@ export function LiveSelectionDemo() {
     const node = demoRef.current;
     const selection = window.getSelection();
     if (!node || !selection) return;
-    // AgentDock 输入框持有焦点时 SelectionToolbar 会忽略选区变化，先让它失焦。
+    // SelectionToolbar ignores selection changes while the AgentDock input holds
+    // focus, so blur it first.
     const active = document.activeElement as HTMLElement | null;
     if (active && active.closest?.("[data-agent-dock]")) active.blur();
     const range = document.createRange();
@@ -226,7 +230,8 @@ export function LiveSelectionDemo() {
     selection.addRange(range);
   };
 
-  // 进入步骤后自动演示一次；离开步骤时清理演示残留的选区与引用。
+  // Auto-run the demo once when the step is entered; on leaving, clean up the
+  // selection and reference the demo left behind.
   useEffect(() => {
     const timer = window.setTimeout(runDemo, 600);
     return () => {
@@ -269,8 +274,9 @@ export function LiveSelectionDemo() {
 }
 
 /**
- * 真实收起/展开演示：按钮直接驱动 AgentDock 的真实开关；
- * 收起后屏幕右缘会出现真实的贴边把手，点击把手也能真正展开。
+ * Live collapse/expand demo: the button drives the real AgentDock toggle;
+ * after collapsing, the real edge handle appears at the right screen edge and
+ * clicking it genuinely expands the dock again.
  */
 export function LiveDockToggleDemo() {
   const open = useAgentDockUiStore((state) => state.open);

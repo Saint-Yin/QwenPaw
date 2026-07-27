@@ -76,8 +76,8 @@ export function creatorTargetLabel(
   }
   if (ref.startsWith("asset:")) {
     const logicalAssetId = ref.slice("asset:".length);
-    // 视觉实体（场景/角色/道具）的 asset:xxx 目标优先解析为实体真实名称，
-    // 避免向用户展示 asset:char:fox 这样的代号。
+    // For visual entities (scene/character/prop), resolve asset:xxx targets to the
+    // entity's real name first, so users never see codes like asset:char:fox.
     const entity = project?.visual?.entities?.items?.[logicalAssetId];
     if (entity?.name) return entity.name;
     return (

@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# flake8: noqa: E501
+# pylint: disable=line-too-long,redefined-builtin
 """Trusted deterministic templates for common decorative motion motifs."""
 
 from __future__ import annotations

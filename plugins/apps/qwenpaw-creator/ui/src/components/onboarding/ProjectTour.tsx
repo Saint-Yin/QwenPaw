@@ -10,8 +10,9 @@ import {
 } from "./TourMocks";
 
 /**
- * 项目工作区导览：首次进入视频方案页时自动触发。
- * 模型配置的引导在首页 HomeTour 中前置完成，这里聚焦创作工作区本身。
+ * Project workspace tour: auto-triggered on first visit to the video plan page.
+ * Model-configuration guidance already happened up front in the home page
+ * HomeTour, so this one focuses on the creation workspace itself.
  */
 
 const STEPS: TourStepBlueprint[] = [

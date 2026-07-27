@@ -50,7 +50,7 @@ class TestImageCost:
         assert estimate.notes == ("本地估算，实际费用以服务商账单为准",)
 
     def test_longest_prefix_wins_over_shorter_family(self):
-        # qwen-image-edit 不能被更短的 qwen-image 档位拦截。
+        # qwen-image-edit must not be captured by the shorter qwen-image tier.
         estimate = estimate_image_cost(
             backend="dashscope",
             model="qwen-image-edit",
@@ -187,7 +187,7 @@ class TestVideoCost:
             duration_seconds=5,
             resolution="1080P",
         )
-        # 1920×1080×24fps×5s ÷ 1024 = 243,000 tokens × 46元/百万 ≈ ¥11.18
+        # 1920×1080×24fps×5s ÷ 1024 = 243,000 tokens × CNY 46/million ≈ ¥11.18
         assert estimate.estimated_cost == pytest.approx(11.178, abs=0.01)
         assert "tokens" in estimate.formula
         assert estimate.notes == ("本地估算，实际费用以服务商账单为准",)
@@ -206,7 +206,7 @@ class TestVideoCost:
             duration_seconds=5,
             resolution="720P",
         )
-        # 官网示例：2.0 不含视频输入 720P/5s ≈ 4.97元
+        # Official site example: 2.0 without video input, 720P/5s ≈ CNY 4.97.
         assert full.estimated_cost == pytest.approx(4.97, abs=0.01)
         assert mini.estimated_cost == pytest.approx(
             full.estimated_cost * 23 / 46,

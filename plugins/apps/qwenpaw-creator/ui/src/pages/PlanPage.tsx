@@ -103,9 +103,11 @@ export default function PlanPage() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [elementDraft.dirty]);
 
-  // 只在选中对象的身份变化时把播放头对齐到元素开头（URL 直达兜底）。
-  // 快照轮询会刷新 selectedElement 的对象引用；若依赖引用，播放中
-  // 每次轮询都会把播放头拽回选中元素起点，表现为“播几秒就停/回跳”。
+  // Align the playhead to the element start only when the selected object's
+  // identity changes (fallback for direct URL entry). Snapshot polling refreshes
+  // selectedElement's object reference; depending on the reference would drag
+  // the playhead back to the element start on every poll during playback,
+  // showing up as "plays a few seconds then stops/jumps back".
   const lastAlignedElementId = useRef<string | null>(null);
   useEffect(() => {
     const elementId = selectedElement?.element_id ?? null;
@@ -166,8 +168,10 @@ export default function PlanPage() {
     [base, leaveDraft, selectedElementId, timeline],
   );
 
-  // 就绪口径：主轨画面与依赖生成结果的 motion/media overlay 必须就绪；
-  // 文案 overlay 由合成器确定性绘制，transition/audio 不需要独立生成。
+  // Readiness criteria: main-track visuals and motion/media overlays that depend
+  // on generation results must be ready; copy overlays are drawn
+  // deterministically by the compositor, and transition/audio need no
+  // independent generation.
   const readiness = useMemo(() => {
     if (!project || !timeline) return { total: 0, notReady: 0 };
     const items = Object.values(timeline.elements_by_id).filter(
@@ -253,10 +257,12 @@ export default function PlanPage() {
     setComposing(true);
     setComposeFailed(false);
     try {
-      // 接口只负责派发持久化 Task；进度与最终产物通过轮询恢复，
-      // 页面切换、刷新或另一个标签页接管都不会丢失合成状态。
-      // 派发请求自身也可能因后端忙碌而长时间不返回；超时后转入
-      // 统一的恢复分支，避免「合成准备中」悬挂到手动刷新。
+      // The endpoint only dispatches a persistent Task; progress and the final
+      // artifact are recovered via polling, so switching pages, refreshing, or a
+      // takeover by another tab never loses compositing state.
+      // The dispatch request itself may hang while the backend is busy; on
+      // timeout, fall into the unified recovery branch so "preparing to
+      // compose" doesn't hang until a manual refresh.
       const dispatch = await Promise.race([
         renderTimeline(id, timeline.timeline_id),
         new Promise<never>((_, reject) =>
@@ -306,15 +312,17 @@ export default function PlanPage() {
 
   useEffect(() => {
     if (requestedComposeTaskId || !activeComposeTask) return;
-    // 接管其他标签页或刷新前已经发起的任务，使它的终态也走统一处理。
+    // Adopt tasks started by other tabs or before a refresh, so their terminal
+    // state also goes through the unified handling.
     composeAttemptedGeneration.current = generation;
     setRequestedComposeTaskId(activeComposeTask.id);
   }, [activeComposeTask, generation, requestedComposeTaskId]);
 
   useEffect(() => {
     if (!composePendingAdmission) return;
-    // 派发返回的 taskId 迟迟没有出现在任务列表（后台派发失败、被替换
-    // 或被其他写者拦截）时自愈，避免「合成准备中」永久悬挂到刷新。
+    // Self-heal when the dispatched taskId never shows up in the task list
+    // (background dispatch failed, replaced, or intercepted by another writer),
+    // so "preparing to compose" doesn't hang forever until a refresh.
     const pendingTaskId = requestedComposeTaskId;
     const timer = window.setTimeout(() => {
       void (async () => {
@@ -345,8 +353,9 @@ export default function PlanPage() {
     handledComposeTask.current = requestedComposeTask.id;
     composeAttemptedGeneration.current = generation;
     setRequestedComposeTaskId(null);
-    // 当前轮询中的 Project 请求可能早于 Task 终态返回旧快照；串行再拉
-    // 一次，确保成功任务已经发布的成片会进入页面，而不是只停在 100%。
+    // The Project request already in-flight when the Task reached its terminal
+    // state may return a stale snapshot; poll again serially so the final cut
+    // published by a successful task lands on the page instead of stalling at 100%.
     void pollOnce(id).then(() => pollOnce(id));
     if (requestedComposeTask.status === "SUCCEEDED") {
       setComposeFailed(false);
@@ -363,8 +372,9 @@ export default function PlanPage() {
     message.error(`成片合成失败：${detail}`);
   }, [id, pollOnce, requestedComposeTask]);
 
-  // 全部主轨元素就绪且没有新鲜成片时自动合成；同一 generation 只尝试
-  // 一次（失败不自动重试，留手动重试入口）；短防抖吸收连续编辑。
+  // Auto-compose once all main-track elements are ready and there is no fresh
+  // final cut; only one attempt per generation (no auto-retry on failure — a
+  // manual retry entry remains); a short debounce absorbs successive edits.
   useEffect(() => {
     if (!allReady || freshRender || isComposing) return;
     if (

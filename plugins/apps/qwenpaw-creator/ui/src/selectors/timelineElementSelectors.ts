@@ -305,7 +305,7 @@ export function resolveTimelineRender(
   );
 }
 
-/** 本地合成器支持的转场类型与展示文案；fade 是 crossfade 的同义写法。 */
+/** Transition kinds supported by the local compositor with display copy; "fade" is a synonym of crossfade. */
 export const TRANSITION_KIND_LABEL: Record<string, string> = {
   crossfade: "交叉溶解",
   fade: "交叉溶解",

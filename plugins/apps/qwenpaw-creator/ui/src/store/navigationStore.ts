@@ -1,19 +1,20 @@
 import { create } from "zustand";
 
 /**
- * 跨上下文跳转位置栈（设计文档 3.2，迭代计划 1.5）。
+ * Cross-context navigation location stack (design doc 3.2, iteration plan 1.5).
  *
- * 跳转前保存来源位置的完整状态（路由、选中对象、滚动位置），
- * 跳转后顶部渲染返回条；用户主动导航时清栈。
+ * Before a jump, the source location's full state (route, selected object,
+ * scroll position) is saved; after the jump a return banner renders at the top;
+ * user-initiated navigation clears the stack.
  */
 export interface SavedLocation {
-  /** hash 路由路径，如 /project/xxx/assets */
+  /** Hash route path, e.g. /project/xxx/assets */
   path: string;
-  /** 来源描述，如 "资产库 / 产品主视觉" */
+  /** Source description, e.g. "Assets / product key visual" */
   description: string;
-  /** 选中对象标识（element:xxx / timeline:xxx / asset-version:xxx） */
+  /** Selected object identifier (element:xxx / timeline:xxx / asset-version:xxx) */
   selectedRef?: string;
-  /** 主滚动容器 scrollTop */
+  /** scrollTop of the main scroll container */
   scrollTop?: number;
   savedAt: number;
 }
@@ -27,13 +28,14 @@ export interface ReviewFocusRequest {
 
 interface NavigationStore {
   stack: SavedLocation[];
-  /** 恢复位置后待应用的选中/滚动状态（由目标页面消费） */
+  /** Selection/scroll state to apply after restoring a location (consumed by the target page) */
   pendingRestore: SavedLocation | null;
-  /** 最近一次审阅定位请求；同一路由重复点击也会递增 nonce 触发目标页重放闪烁。 */
+  /** Latest review-focus request; repeated clicks on the same route still bump the nonce so the target page replays the flash. */
   reviewFocus: ReviewFocusRequest | null;
   /**
-   * 最近一次经 navigateToRef / returnToSavedLocation 跳转的目标路径（不含 query）。
-   * 用于区分"受控跳转"与"用户主动导航"——后者应清空位置栈。
+   * Target path (without query) of the last navigateToRef / returnToSavedLocation
+   * jump. Distinguishes "controlled jumps" from "user-initiated navigation" —
+   * the latter should clear the location stack.
    */
   expectedPath: string | null;
   pushLocation: (location: Omit<SavedLocation, "savedAt">) => void;

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
-# pylint: disable=too-many-return-statements,consider-using-with
+# pylint: disable=too-many-return-statements,consider-using-with,line-too-long
 """Deterministic HTML/CSS motion-graphic rendering for overlay Elements.
 
 A ``MotionGraphic`` document is a self-contained HTML page whose visuals move

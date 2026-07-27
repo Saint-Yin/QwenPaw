@@ -683,8 +683,9 @@ def test_idle_agentdock_mutation_without_run_captures_feedback_boundary(
 
 
 def test_cancelled_session_feedback_still_captures_review_boundary(tmp_path):
-    """用户停止 Agent 后（CANCELLED，前端展示为待命）发出的修改意见
-    仍是针对已产出内容的反馈，必须捕获 idle-goal 审阅边界。"""
+    """Feedback sent after the user stopped the Agent (CANCELLED, shown as
+    standing by in the frontend) still targets already-produced work, so an
+    idle-goal review boundary must be captured."""
 
     root, snapshot, store, _bootstrap = _runtime(tmp_path)
     _activate_runtime(root, snapshot, store)

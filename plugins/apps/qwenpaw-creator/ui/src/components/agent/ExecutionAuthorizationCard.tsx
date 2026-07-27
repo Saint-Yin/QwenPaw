@@ -82,7 +82,7 @@ function authorizationParameterSummary(
   return parts.join(" · ");
 }
 
-/** 把后端文案中的 ref 代号（asset:char:fox / element:xxx 等）替换为真实名称。 */
+/** Replace ref tokens in backend copy (asset:char:fox / element:xxx etc.) with real names. */
 function humanizeRefTokens(
   text: string,
   project?: ProjectDocument | null,
@@ -115,8 +115,9 @@ export function authorizationDetail(
 }
 
 /**
- * 生产确认的“查看”跳转目标：定位到即将用于生成的 prompt 编辑位置，
- * 让用户在确认消费前能真正检查生成输入。
+ * Jump target for a production confirmation's "查看" (view) button: locate the
+ * prompt-editing spot that is about to feed generation, so users can actually
+ * inspect the generation input before confirming the spend.
  */
 export function authorizationJumpTarget(
   authorization: ExecutionAuthorizationView,

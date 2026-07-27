@@ -59,15 +59,18 @@ def _find_balanced_json(text: str) -> str:
 def extract_json_payload(response_text: str) -> Any:
     """Parse JSON from a plain, fenced, or lightly narrated model response.
 
-    健壮性：围栏块内容非法时，回退到「平衡括号扫描」在整段文本里找第一个合法 JSON，
-    避免因代码块里有轻微瑕疵而整轮解析失败（模型正文里其实常带合法 JSON）。
+    Robustness: when the fenced block is invalid, fall back to a balanced
+    bracket scan for the first valid JSON in the whole text, so a slightly
+    malformed code block does not fail the entire round (the model body
+    often contains valid JSON anyway).
     """
     fenced = _strip_fenced_block(response_text)
     if fenced is not None:
         try:
             return json.loads(fenced)
         except json.JSONDecodeError:
-            # 围栏内非法：先在围栏片段内做平衡扫描，再退回整段扫描
+            # Invalid inside the fence: balanced-scan the fenced fragment
+            # first, then fall back to scanning the whole text.
             try:
                 return json.loads(_find_balanced_json(fenced))
             except json.JSONDecodeError:

@@ -15,8 +15,9 @@ export interface MockRoute {
 }
 
 /**
- * 安装一个可断言的 fetch mock。routes 以「路径包含子串」匹配，返回对应响应。
- * 记录每次调用的 url/method/body，供断言「按钮触发了哪个请求」。
+ * Install an assertable fetch mock. Routes match by "path contains substring"
+ * and return the corresponding response. Every call's url/method/body is
+ * recorded so tests can assert "which request did the button fire".
  */
 export function installMockFetch(
   routes: Array<{ match: string; method?: string; response: MockRoute }>,

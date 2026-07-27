@@ -4,8 +4,9 @@ import TourRunner, { type TourStepBlueprint } from "./TourRunner";
 import { MockAssetCards } from "./TourMocks";
 
 /**
- * 资产库导览：首次进入资产页时自动触发。
- * 重点解释短剧等场景下 Agent 生成的角色/场景等视觉设定会沉淀在这里。
+ * Asset library tour: auto-triggered on first visit to the assets page.
+ * Emphasizes that visual settings the Agent generates (characters/scenes etc.,
+ * e.g. in short-drama scenarios) accumulate here.
  */
 
 const STEPS: TourStepBlueprint[] = [

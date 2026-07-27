@@ -143,5 +143,5 @@ def test_top_level_prose_pointer_is_plan_text() -> None:
 
 
 def test_unknown_pointer_returns_empty() -> None:
-    assert derive_ui_locator(None, _project()) == {}
-    assert derive_ui_locator("", _project()) == {}
+    assert not derive_ui_locator(None, _project())
+    assert not derive_ui_locator("", _project())

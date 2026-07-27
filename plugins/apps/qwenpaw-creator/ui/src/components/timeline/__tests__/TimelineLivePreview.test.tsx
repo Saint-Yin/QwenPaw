@@ -17,7 +17,8 @@ const originalClientHeight = Object.getOwnPropertyDescriptor(
 );
 
 beforeAll(() => {
-  // jsdom 不做布局；给盒子一个可预测尺寸，让成片同款气泡 SVG 可断言。
+  // jsdom does no layout; give boxes a predictable size so the
+  // final-render-style bubble SVG can be asserted.
   Object.defineProperty(HTMLElement.prototype, "clientWidth", {
     configurable: true,
     get() {
@@ -33,7 +34,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  // 恢复原型，避免污染其他测试文件的布局断言。
+  // Restore the prototype to avoid polluting layout assertions in other test files.
   if (originalClientWidth) {
     Object.defineProperty(
       HTMLElement.prototype,
@@ -159,12 +160,14 @@ describe("TimelineLivePreview", () => {
     );
     expect(editLayer).not.toHaveClass("invisible");
 
-    // 与成片合成口径一致：audio 元素不参与预览。
+    // Same convention as final composition: audio elements don't take part in
+    // the preview.
     expect(
       container.querySelector('[data-live-layer="audio-bgm"]'),
     ).not.toBeInTheDocument();
 
-    // pet_os 气泡按成片同款规格绘制：白底黑边气泡 + 尾巴 + vibe emoji。
+    // pet_os bubble drawn to the final-render spec: white bubble with black
+    // border + tail + vibe emoji.
     const bubble = container.querySelector(
       '[data-live-text-overlay="overlay-os"] [data-overlay-copy="pet_os"]',
     ) as HTMLElement;
@@ -179,7 +182,7 @@ describe("TimelineLivePreview", () => {
   });
 
   it("cross-fades the incoming main-track layer inside the transition window", () => {
-    // 转场窗口 [7000, 8000)：edit-opening → r2v-window，ease-in-out。
+    // Transition window [7000, 8000): edit-opening → r2v-window, ease-in-out.
     const { container } = renderPreview(cloneProject(), 7500);
 
     const incoming = container.querySelector(
@@ -193,7 +196,8 @@ describe("TimelineLivePreview", () => {
   });
 
   it("keeps the incoming layer hidden before its transition starts", () => {
-    // 6000 已在两端重叠区间，但 blend 尚未开始：画面仍属于 from 端。
+    // 6000 is already inside the overlap of both ends, but blending hasn't
+    // started: the frame still belongs to the "from" side.
     const { container } = renderPreview(cloneProject(), 6000);
 
     const incoming = container.querySelector(
@@ -395,7 +399,8 @@ describe("TimelineLivePreview", () => {
     );
     expect(placeholder).toHaveTextContent("画面生成中");
     expect(placeholder.style.width).toBe("100%");
-    // 图层仍在后台挂载，但整帧提示会遮住半成品组合。
+    // Layers stay mounted in the background, but the full-frame notice covers
+    // the half-assembled composition.
     expect(
       container.querySelector('[data-live-text-overlay="overlay-os"]'),
     ).toBeInTheDocument();
@@ -422,7 +427,8 @@ describe("TimelineLivePreview", () => {
     expect(placeholder.className).toContain("border-dashed");
     expect(placeholder.style.left).toBe("51%");
     expect(placeholder.style.width).toBe("42%");
-    // 底下的已就绪视频层保留预挂载，视觉上由整帧提示完全遮住。
+    // The ready video layer underneath stays pre-mounted; visually it is fully
+    // covered by the full-frame notice.
     expect(
       container.querySelector('[data-live-layer="edit-opening"]'),
     ).not.toHaveClass("invisible");

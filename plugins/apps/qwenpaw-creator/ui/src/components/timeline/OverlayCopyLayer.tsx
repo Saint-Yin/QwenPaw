@@ -1,11 +1,13 @@
 import { useLayoutEffect, useRef, useState } from "react";
 
 /**
- * 成片同款的文案 overlay 渲染层。
+ * Copy-overlay rendering layer identical to the final render.
  *
- * 与后端 `services/media_files/overlay.py` 的确定性渲染器保持同一套
- * 几何公式（边框/圆角/尾巴/emoji/字号收缩/逐字换行），使实时预览里的
- * pet_os 气泡与 interview_summary 字幕和最终成片视觉一致。
+ * Shares the exact geometry formulas (border/corner radius/tail/emoji/font-size
+ * shrinking/per-character wrapping) with the backend deterministic renderer in
+ * `services/media_files/overlay.py`, so the pet_os bubbles and
+ * interview_summary captions in the live preview look the same as in the final
+ * composed video.
  */
 
 const VIBE_EMOJI: Record<string, string> = {
@@ -15,7 +17,8 @@ const VIBE_EMOJI: Record<string, string> = {
   chill: "😺",
 };
 
-// 与后端 _find_cjk_font 的 PingFang 首选保持一致；非 macOS 退化到同族黑体。
+// Matches the backend _find_cjk_font's PingFang preference; non-macOS falls
+// back to same-family CJK sans fonts.
 const CJK_FONT_STACK =
   '"PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif';
 
@@ -30,7 +33,7 @@ function measureWidth(text: string, fontSize: number): number {
   return sharedMeasureContext.measureText(text).width;
 }
 
-/** 与 PIL 渲染器一致的逐字贪心换行。 */
+/** Per-character greedy wrapping, identical to the PIL renderer. */
 function wrapGreedy(
   text: string,
   fontSize: number,
@@ -71,7 +74,8 @@ function useBoxSize(ref: React.RefObject<HTMLDivElement>) {
 
 const lineHeightOf = (fontSize: number) => Math.round(fontSize * 1.15) + 2;
 
-/** 对应后端 _render_placed_pet_os_box：白底黑边气泡 + 尾巴 + vibe emoji。 */
+/** Mirrors backend _render_placed_pet_os_box: white bubble with black border +
+ * tail + vibe emoji. */
 export function PetOsBubble({
   text,
   vibe,
@@ -207,7 +211,8 @@ export function PetOsBubble({
   );
 }
 
-/** 对应后端 _render_placed_text_box(bubble=False)：白字黑描边，两行截断居中。 */
+/** Mirrors backend _render_placed_text_box(bubble=False): white text with black
+ * outline, truncated to two centered lines. */
 export function InterviewSummaryBox({ text }: { text: string }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const size = useBoxSize(boxRef);

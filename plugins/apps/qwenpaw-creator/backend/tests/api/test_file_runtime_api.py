@@ -284,7 +284,9 @@ def test_timeline_render_dispatches_once_and_returns_before_completion(
             "services.media_files.local_execution.file_local_media_task_id",
             lambda _project_id, _key: "task-compose-1",
         )
-        # 本用例只验证派发语义；同步预检对夹具项目的结构校验单独覆盖。
+        # This case only verifies dispatch semantics; the synchronous
+        # precheck's structural validation of the fixture project is covered
+        # separately.
         monkeypatch.setattr(
             "services.media_files.local_execution.validate_local_media_execution",
             lambda *_args, **_kwargs: None,

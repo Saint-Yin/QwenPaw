@@ -194,7 +194,8 @@ describe("ProjectLayout schema-v2 visible shell", () => {
 
     const shell = document.querySelector("[data-project-shell]")!;
     expect(shell).toHaveAttribute("data-top-nav-height", "58");
-    // Agent 状态栏已整体移除，壳层不再保留 42px 行。
+    // The Agent status bar was removed entirely; the shell no longer reserves
+    // the 42px row.
     expect(shell).not.toHaveAttribute("data-agent-status-bar-height");
     expect(
       document.querySelector("[data-agent-status-bar]"),

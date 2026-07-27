@@ -281,8 +281,9 @@ class FfmpegLocalMediaRunner:
                             "Edit Element 缺少可执行 source range",
                         )
                     end_seconds = start_seconds + item.duration_seconds
-                # 转场对的 from 片段尾部被 to 片段覆盖的部分直接不渲染，
-                # 剩下的重叠由 xfade blend 消耗。
+                # For a transition pair, the tail of the `from` segment that
+                # the `to` segment covers is simply not rendered; the rest of
+                # the overlap is consumed by the xfade blend.
                 tail_trim = tail_trims.get(item.source_ref, 0.0)
                 segment_duration = max(
                     1 / 30,
@@ -371,7 +372,8 @@ class FfmpegLocalMediaRunner:
     def _transition_directives(
         spec: LocalMediaExecutionSpec,
     ) -> tuple[dict[str, float], dict[tuple[str, str], TransitionJoin]]:
-        """把 spec.transitions 投影为每个输入的尾部裁剪与相邻对衔接方式。"""
+        """Project spec.transitions into per-input tail trims and adjacent
+        pair join modes."""
 
         tail_trims: dict[str, float] = {}
         joins: dict[tuple[str, str], TransitionJoin] = {}
@@ -428,7 +430,8 @@ class FfmpegLocalMediaRunner:
                 ).has_audio,
             )
         except MediaProbeError:
-            # 探测失败时用 anullsrc 兑底，避免引用不存在的音轨。
+            # Fall back to anullsrc when probing fails, so we never
+            # reference an audio track that does not exist.
             return False
 
     def _compose_with_transitions(
@@ -441,7 +444,8 @@ class FfmpegLocalMediaRunner:
         work_dir: Path,
         canvas_size: tuple[int, int],
     ) -> None:
-        """用一条 xfade/acrossfade 滤镜链合成带转场的成片。"""
+        """Compose the transition-bearing final video with one
+        xfade/acrossfade filter chain."""
 
         clips = [
             TransitionClip(
@@ -593,8 +597,9 @@ class FfmpegLocalMediaRunner:
                 str(overlay.get("text") or ""),
             )
         ):
-            # 文案已更新但动效文档还是旧版：跳过过期文档，用回退模板
-            # 把当前文案烧进成片，绝不把旧文案交付给用户。
+            # The copy changed but the motion document is stale: skip the
+            # outdated document and burn the current copy in via the fallback
+            # template. Never ship stale copy to the user.
             motion = None
             styled_error = f"{overlay['kind']} 动效文档与当前文案不一致，" "已用回退样式渲染最新文案"
         if (
@@ -862,7 +867,7 @@ class FfmpegLocalMediaRunner:
                 )
         elif str(spec.audio_plan or "").strip():
             # Planning agents record free-text audio ideas on the
-            # composition (e.g. "轻快节奏背景音乐").  The string form carries no
+            # composition (e.g. "upbeat background music").  The string form carries no
             # structured directive the local pipeline could execute, and
             # neither the UI nor any command lets users clear the field, so
             # failing here would dead-end COMPOSE_FINAL_VIDEO for every
@@ -908,8 +913,9 @@ class FfmpegLocalMediaRunner:
             process = subprocess.Popen(
                 [self.executable, *arguments],
                 cwd=cwd,
-                # ffmpeg 默认读 stdin；继承服务进程的 tty 会在后台运行时
-                # 触发 SIGTTIN 把进程组挂起，必须显式断开。
+                # ffmpeg reads stdin by default; inheriting the service
+                # process tty triggers SIGTTIN and suspends the process group
+                # when running in the background, so detach explicitly.
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -1181,11 +1187,13 @@ def _resolved_element_input(
 
 
 def _motion_document_matches_text(html: str, text: str) -> bool:
-    """判断动效文档是否仍承载当前文案。
+    """Check whether a motion document still carries the current copy.
 
-    气泡的视觉文本烧在生成的 motion HTML 里；文案事后被修改（审阅保留、
-    手动编辑）时 HTML 不会自动同步，直接渲染会把旧文案烧进成片。
-    去标签、去空白后做包含判断，容忍设计时插入的换行与分段。
+    The bubble's visible text is burnt into the generated motion HTML; when
+    the copy is edited afterwards (review keep, manual edit) the HTML is not
+    resynchronised, and rendering it as-is would burn stale copy into the
+    final video. Compare after stripping tags and whitespace so line breaks
+    and segmentation added at design time are tolerated.
     """
 
     needle = re.sub(r"\s+", "", text)
@@ -1207,9 +1215,11 @@ def _edit_overlay(
     """
 
     def _owned(candidate: TimelineElement) -> bool:
-        # 转场设计要求相邻 Edit 的 span 有少量重叠；随 Edit 对齐的 Overlay
-        # 会在重叠区擦边覆盖邻居 Edit。按主要覆盖时长归属，擦边不算，
-        # 避免每个转场边界都被判为多 Overlay 叠加而无法合成。
+        # Transition design requires adjacent Edit spans to overlap slightly;
+        # an Overlay aligned with one Edit grazes the neighbour inside that
+        # overlap. Attribute by majority coverage so grazing does not count,
+        # otherwise every transition boundary would be rejected as stacked
+        # Overlays and composition would fail.
         start = max(element.span.start_tick, candidate.span.start_tick)
         end = min(element.span.end_tick, candidate.span.end_tick)
         overlap = max(0, end - start)
@@ -1266,10 +1276,12 @@ def _plan_timeline_transitions(
 ) -> tuple[dict[str, Any], ...]:
     """Project transition Elements onto adjacent main-track segment pairs.
 
-    每个转场必须连接主轨中相邻的两个可视 Element。模型层已保证两端 span
-    重叠且转场 span 落在交集内；这里把重叠拆成 blend（xfade 时长）与
-    tail trim（from 片段尾部被 to 片段直接覆盖的部分），两者之和恰为
-    重叠量，保证成片总时长回到 Timeline 末端。
+    Each transition must connect two adjacent visible Elements on the main
+    track. The model layer already guarantees the two spans overlap and the
+    transition span sits inside the intersection; here the overlap is split
+    into blend (xfade duration) and tail trim (the part of the `from`
+    segment directly covered by the `to` segment). Their sum equals the
+    overlap exactly, so the final duration lands back on the Timeline end.
     """
 
     order_by_id = {
@@ -1315,7 +1327,8 @@ def _plan_timeline_transitions(
             - to_element.span.start_tick
         )
         kind = normalize_transition_kind(creation.transition_kind)
-        # blend 不得吞掉任一端片段，否则 xfade offset 会倒退。
+        # The blend must not swallow either segment, or the xfade offset
+        # would go backwards.
         blend_tick = (
             0
             if kind == "cut"
@@ -1353,8 +1366,9 @@ def _validate_contiguous_edit_elements(
     The runner emits selected source ranges back-to-back; it does not render
     leading or interstitial blank media. Reject a Timeline that claims gaps or
     overlaps instead of publishing an artifact whose duration disagrees with
-    the Timeline and preview playhead.  相邻对之间存在转场 Element 时，
-    两端按模型约定重叠，属于合法布局。
+    the Timeline and preview playhead.  When adjacent pairs are joined by a
+    transition Element, the model-mandated overlap between them is a legal
+    layout.
     """
 
     transitioned_pairs = {
@@ -1554,8 +1568,9 @@ def _timeline_execution(
         durations.append(
             element.span.duration_tick / timeline.ticks_per_second,
         )
-    # 转场在链上消耗两端 Element 的重叠（blend + tail trim），成片总时长
-    # 回到 Timeline 末端，与预览播放头保持一致。
+    # Transitions consume the overlap of both Elements on the chain
+    # (blend + tail trim), so the final duration lands back on the Timeline
+    # end and stays consistent with the preview playhead.
     consumed_seconds = sum(
         (item["duration_ms"] + item["tail_trim_ms"]) / 1000
         for item in transitions
@@ -1626,18 +1641,20 @@ def _resolve_execution(
 
 
 def _resolved_fingerprint(resolved: _ResolvedExecution) -> str:
-    """渲染内容指纹：只覆盖会影响合成结果的输入。
+    """Fingerprint of render content: covers only inputs that affect output.
 
-    刻意不包含 Project 的 generation/etag——无关提交（Agent 会话、
-    素材分析等）不应改变指纹，否则内容完全一致的成片会被判为新
-    内容而反复重新合成。
+    Deliberately excludes the Project's generation/etag — unrelated commits
+    (Agent sessions, source analysis, ...) must not change the fingerprint,
+    otherwise an identical final video would be treated as new content and
+    recomposed over and over.
     """
 
     return _fingerprint(
         {
             "command": resolved.command.value,
-            # 渲染器行为版本：渲染逻辑的语义性修复（如过期动效文档
-            # 回退）需要使旧成片失效重新合成时，递增此版本号。
+            # Renderer behaviour version: bump it when a semantic fix in the
+            # rendering logic (e.g. the stale motion-document fallback) must
+            # invalidate old renders and force recomposition.
             "rendererVersion": 2,
             "targetRef": resolved.target_ref,
             "inputs": [
@@ -1671,7 +1688,7 @@ def _fresh_slot_version(
     project: Project,
     slot_id: str,
 ) -> ArtifactVersion | None:
-    """返回槽位当前选中且未过期的产物版本，找不到时为 None。"""
+    """Return the slot's currently selected fresh version, or None."""
 
     slot = project.assets.artifact_slots_by_id.get(slot_id)
     if slot is None or not slot.selected_version_id:
@@ -1691,7 +1708,8 @@ def _reusable_succeeded_task(
     slot_id: str,
     fingerprint: str,
 ) -> TaskRecord | None:
-    """内容指纹与已选新鲜成片一致时返回其成功 Task，避免重复合成。"""
+    """Return the succeeded Task whose fingerprint matches the selected fresh
+    artifact, avoiding a duplicate composition."""
 
     version = _fresh_slot_version(project, slot_id)
     if version is None or version.input_fingerprint != fingerprint:
@@ -1831,8 +1849,9 @@ class FileLocalMediaExecutionService:
             fingerprint=request_fingerprint,
         )
         if reuse is not None:
-            # 渲染内容与上次成功合成完全一致且成片未过期：直接重放
-            # 既有结果，不再派发新的合成任务。
+            # Render content is identical to the last successful composition
+            # and the artifact is still fresh: replay the existing result
+            # instead of dispatching a new composition task.
             try:
                 return self._result_from_task(reuse, replayed=True)
             except StorageIntegrityError:
@@ -2506,15 +2525,17 @@ class FileLocalMediaExecutionService:
                     current.etag != latest.input_etag
                     or current.generation != latest.input_generation
                 ) and not self._content_fingerprint_matches(current, latest):
-                    # Project 在合成期间被其他写者提交过；只有当渲染内容
-                    # 本身（元素/转场/画布等）确实变化时才丢弃结果，
-                    # 无关提交不作废刚合成好的成片。
+                    # Another writer committed the Project during composition;
+                    # discard the result only when the render content itself
+                    # (elements/transitions/canvas, ...) actually changed.
+                    # Unrelated commits must not void a freshly composed video.
                     return "STALE", latest, current
                 else:
                     candidate = current.project.model_dump(mode="json")
                     self._apply_result(candidate, result)
-                    # 成片合成是确定性组装（所有素材均已单独审阅过），
-                    # 不再进入审阅流程；其余本地媒体产物保持审阅。
+                    # Final composition is deterministic assembly (every input
+                    # was reviewed individually), so it skips the review flow;
+                    # all other local media artifacts stay reviewed.
                     is_final_compose = (
                         result.get("commandType")
                         == CreatorCommandType.COMPOSE_FINAL_VIDEO.value
@@ -2615,7 +2636,8 @@ class FileLocalMediaExecutionService:
         current: ProjectSnapshot,
         task: TaskRecord,
     ) -> bool:
-        """当前快照下重新解析的渲染内容指纹是否仍与任务受理时一致。"""
+        """Whether the fingerprint re-resolved from the current snapshot still
+        matches the one captured when the task was admitted."""
 
         raw_command = task.metadata.get("commandType")
         raw_target = task.metadata.get("targetRef")
@@ -2969,11 +2991,13 @@ def validate_local_media_execution(
     target_ref: str,
     arguments: Mapping[str, Any] | None = None,
 ) -> None:
-    """在后台派发前同步预检执行计划。
+    """Synchronously pre-validate the execution plan before dispatching.
 
-    后台 runner 在创建持久化 Task 之前就可能因结构不满足本地合成条件
-    而失败；那时失败只能被静默吞掉，前端会等待一个永不存在的 Task。
-    路由层先调用本预检，把同样的 ValidationError 显式抛给调用方。
+    The background runner can fail before it even creates a durable Task when
+    the structure does not satisfy local composition requirements; such
+    failures would be silently swallowed and the frontend would wait for a
+    Task that never exists. The route layer calls this precheck first so the
+    same ValidationError is raised to the caller explicitly.
     """
 
     snapshot = services.projects.read(project_id)
@@ -2992,10 +3016,12 @@ def find_reusable_local_media_task(
     command: CreatorCommandType | str,
     target_ref: str,
 ) -> TaskRecord | None:
-    """当前渲染内容与已选新鲜成片指纹一致时，返回其成功 Task。
+    """Return the succeeded Task when the current render content fingerprint
+    matches the selected fresh artifact.
 
-    供路由层在派发前短路：内容未变化就复用上次成功合成的结果，
-    不再重复渲染。任何解析失败都返回 None 走正常派发。
+    Lets the route layer short-circuit before dispatch: unchanged content
+    reuses the last successful composition instead of re-rendering. Any
+    resolution failure returns None and normal dispatch proceeds.
     """
 
     try:

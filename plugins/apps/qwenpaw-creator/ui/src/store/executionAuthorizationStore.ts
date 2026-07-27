@@ -16,7 +16,7 @@ interface ExecutionAuthorizationState {
   projectId: string | null;
   items: ExecutionAuthorizationView[];
   loading: boolean;
-  /** 至少成功加载过一次；轮询刷新时 UI 不再回退到 loading 文案。 */
+  /** Loaded successfully at least once; poll refreshes no longer drop the UI back to loading copy. */
   loaded: boolean;
   error: string | null;
   bindProject: (projectId: string) => void;

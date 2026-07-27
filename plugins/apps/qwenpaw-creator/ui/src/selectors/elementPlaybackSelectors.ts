@@ -12,7 +12,7 @@ import {
 } from "@/api/creator";
 import { elementsAtTick } from "@/selectors/timelineElementSelectors";
 
-/** 实时拼装预览里单个 Element 的可播放性状态。 */
+/** Playability status of a single Element in the live-assembly preview. */
 export type ElementPlaybackStatus =
   | "ready"
   | "generating"
@@ -26,7 +26,7 @@ export type ElementPlaybackMediaKind = "video" | "image" | "audio" | "other";
 export interface ElementPlaybackMedia {
   url: string;
   mediaKind: ElementPlaybackMediaKind;
-  /** artifact 或 source asset 的版本 ID，作层的稳定 key 用。 */
+  /** Version ID of the artifact or source asset; used as the layer's stable key. */
   versionId: string;
   sourceInSeconds: number;
   sourceOutSeconds: number | null;
@@ -109,7 +109,7 @@ function resolveSourceVersionRef(
   };
 }
 
-/** element.outputs 兜底：优先 video 产物，其次任一已有选中版本的产物槽。 */
+/** element.outputs fallback: prefer the video output, else any output slot with a selected version. */
 function resolveSelectedOutputRef(
   project: ProjectDocument,
   element: TimelineElementDocument,
@@ -163,9 +163,10 @@ function elementTaskStatus(
 }
 
 /**
- * 解析 Element 在实时拼装预览中的播放信息。与后端本地合成一致，
- * 优先按 render_source 解析媒体，找不到时回退到 outputs 的选中产物。
- * 无媒体时按关联 Task 状态给出 生成中/排队中/失败，兜底为 待生成。
+ * Resolve an Element's playback info for the live-assembly preview. Matches the
+ * backend local compositor: resolve media via render_source first, falling back
+ * to the selected output in outputs. With no media, derive generating/queued/
+ * failed from the associated Task status, defaulting to pending.
  */
 export function resolveElementPlayback(
   project: ProjectDocument,
@@ -173,8 +174,8 @@ export function resolveElementPlayback(
   element: TimelineElementDocument,
   tasks: TaskView[] = [],
 ): ElementPlayback {
-  // 转场在实时拼装中由 to 端图层透明度渐变实现，不作为独立媒体层，
-  // 视为已就绪。
+  // Transitions are realized in live assembly as an opacity fade on the "to"
+  // layer, not as an independent media layer, so they count as ready.
   if (element.creation.type === "transition") {
     return { element, status: "ready", media: null };
   }
@@ -185,16 +186,17 @@ export function resolveElementPlayback(
     : null;
   const resolved = fromRender ?? resolveSelectedOutputRef(project, element);
   if (resolved) {
-    // render_source 解析成功时沿用其入出点/速率；outputs 兜底则从头整段播放。
+    // When render_source resolves, keep its in/out points and rate; the outputs
+    // fallback plays the whole clip from the start.
     const timing = fromRender && renderSource ? renderSource : null;
     const taskStatus = elementTaskStatus(element, tasks);
     const artifactStatus: ElementPlaybackStatus = resolved.stale
       ? "stale"
       : "ready";
-    // 只有仍在排队/执行中的重新生成任务才覆盖已就绪画面；
-    // 历史终态任务（失败/隔离）不得把新鲜可播的已选产物
-    // 误报为“生成失败”，否则切换时间点时会看到已渲染片段
-    // 被当作待重渲。
+    // Only regeneration tasks still queued/running may override a ready frame;
+    // historical terminal tasks (failed/quarantined) must not misreport a fresh,
+    // playable selected artifact as "failed" — otherwise scrubbing to that point
+    // would show an already-rendered segment as awaiting re-render.
     const status: ElementPlaybackStatus =
       taskStatus === "generating" || taskStatus === "queued"
         ? taskStatus
@@ -216,13 +218,16 @@ export function resolveElementPlayback(
       },
     };
   }
-  // 动态 overlay 的 HTML/CSS 文档本身就是可预览内容，不需要等待独立媒体产物。
-  // 成片阶段仍由后端逐帧渲染并合成；这里只负责浏览器内的实时预览。
+  // A motion overlay's HTML/CSS document is itself previewable content; no
+  // separate media artifact is needed. The final cut is still rendered
+  // frame-by-frame and composited by the backend; this only covers the
+  // in-browser live preview.
   if (element.creation.type === "overlay" && element.creation.motion?.html) {
     return { element, status: "ready", media: null };
   }
-  // 文案类 overlay（pet_os/interview_summary）没有独立产物，成片在合成时
-  // 用确定性渲染器画气泡；实时预览用同款规格直接绘制，视为已就绪。
+  // Copy overlays (pet_os/interview_summary) have no standalone artifact: the
+  // final cut draws the bubble with a deterministic renderer at composite time,
+  // and the live preview draws the same spec directly, so they count as ready.
   if (
     element.creation.type === "overlay" &&
     (element.creation.overlay_kind === "pet_os" ||
@@ -238,7 +243,7 @@ export function resolveElementPlayback(
   };
 }
 
-/** 转场缓动：模型 easing 字段的浏览器端近似实现，默认线性。 */
+/** Transition easing: browser-side approximation of the model's easing field; defaults to linear. */
 function easeProgress(progress: number, easing: string): number {
   const clamped = Math.min(1, Math.max(0, progress));
   switch (easing) {
@@ -259,10 +264,12 @@ function easeProgress(progress: number, easing: string): number {
 }
 
 /**
- * 某 Element 在实时预览中由转场决定的透明度乘数。
- * 与后端合成同口径：转场窗口内 to 端图层按进度淡入盖住 from 端；
- * 窗口前的重叠段 to 端保持隐藏。非 fade 类 transition_kind 在浏览器
- * 预览中统一降级为 crossfade，成片仍按真实类型合成。
+ * Opacity multiplier for an Element in the live preview as dictated by
+ * transitions. Same semantics as backend compositing: inside the transition
+ * window the "to" layer fades in over the "from" layer by progress; during the
+ * overlap before the window, the "to" layer stays hidden. Non-fade
+ * transition_kind values degrade to crossfade in the browser preview, while
+ * the final cut still composites the real type.
  */
 export function transitionOpacityAtTick(
   timeline: TimelineDocument,
@@ -279,7 +286,7 @@ export function transitionOpacityAtTick(
     const end = start + candidate.span.duration_tick;
     if (tick >= end) continue;
     if (tick < start) {
-      // 重叠已开始但 blend 未开始：画面仍属于 from 端。
+      // Overlap has started but the blend has not: the frame still belongs to the "from" side.
       if (tick >= element.span.start_tick) return 0;
       continue;
     }
@@ -290,8 +297,9 @@ export function transitionOpacityAtTick(
 }
 
 /**
- * 某时刻参与实时拼装的全部层，按 z_index 升序（低层在前）排列。
- * 转场元素不产生媒体层，直接剔除。
+ * All layers participating in live assembly at a given tick, sorted by z_index
+ * ascending (lower layers first). Transition elements produce no media layer
+ * and are dropped.
  */
 export function playbackLayersAtTick(
   project: ProjectDocument,
@@ -313,8 +321,9 @@ export function playbackLayersAtTick(
 }
 
 /**
- * 挂载窗口内的层（当前时刻前 behindSeconds、后 aheadSeconds），用于
- * 预挂载 media 元素减少切换黑帧；同样剔除转场。
+ * Layers inside the mount window (behindSeconds before / aheadSeconds after the
+ * current tick), used to pre-mount media elements and reduce black frames on
+ * switches; transitions are dropped as well.
  */
 export function playbackLayersInWindow(
   project: ProjectDocument,

@@ -137,19 +137,20 @@ describe("AgentDock origin/main visible fidelity", () => {
       "backdrop-blur-xl",
     );
     expect(screen.getByText("创作助手")).toBeInTheDocument();
-    // 未绑定上下文时不再展示提示文案。
+    // No hint copy is shown anymore when no context is bound.
     expect(
       screen.queryByText("未绑定上下文，作用于整个项目"),
     ).not.toBeInTheDocument();
-    // 独立决策中心已被内联决策托盘取代，顶栏不再提供入口按钮。
+    // The standalone decision center was replaced by the inline decision tray;
+    // the top bar no longer offers an entry button.
     expect(
       screen.queryByRole("button", { name: "审阅与决策中心" }),
     ).not.toBeInTheDocument();
-    // 无待决策项时托盘不占据任何空间。
+    // With no pending decisions the tray takes up no space at all.
     expect(
       document.querySelector("[data-decision-tray]"),
     ).not.toBeInTheDocument();
-    // 新对话与历史聊天入口已移除。
+    // New-conversation and chat-history entries were removed.
     expect(
       screen.queryByRole("button", { name: "新对话" }),
     ).not.toBeInTheDocument();
@@ -208,14 +209,14 @@ describe("AgentDock origin/main visible fidelity", () => {
 
     await waitFor(() => {
       expect(document.querySelector("[data-agent-dock]")).toBeInTheDocument();
-      // 阻塞级到达：托盘强制展开并标记紧急。
+      // Blocking item arrived: tray force-expands and is flagged urgent.
       const tray = document.querySelector("[data-decision-tray]");
       expect(tray).toBeInTheDocument();
       expect(tray).toHaveAttribute("data-decision-tray-urgent", "true");
       expect(tray).not.toHaveAttribute("data-decision-tray-collapsed");
     });
     expect(screen.getAllByText("生产确认").length).toBeGreaterThan(0);
-    // 对话输入框与托盘同屏，无需切换视图。
+    // Chat input shares the screen with the tray; no view switching needed.
     expect(
       screen.getByRole("textbox", { name: "输入修改意图，@ 可引用对象…" }),
     ).toBeInTheDocument();
@@ -229,7 +230,8 @@ describe("AgentDock origin/main visible fidelity", () => {
     expect(screen.getByText("当前任务")).toBeInTheDocument();
     expect(screen.getByText("素材概况（0）")).toBeInTheDocument();
 
-    // 工作区面板展开时对话输入框仍在（聊天视图不再被决策视图替换）。
+    // Chat input stays while the workspace panel is expanded (the chat view is
+    // no longer replaced by a decision view).
     expect(
       screen.getByRole("textbox", { name: "输入修改意图，@ 可引用对象…" }),
     ).toBeInTheDocument();
@@ -696,14 +698,14 @@ describe("AgentDock origin/main visible fidelity", () => {
     useAgentDockUiStore.getState().setOpen(true);
     renderDock();
 
-    // 运行中 + 输入框为空 → 停止按钮取代发送按钮，带呼吸光圈
+    // Running + empty input → the stop button replaces send, with a breathing glow
     const stop = screen.getByRole("button", { name: "停止所有 Agent" });
     expect(stop).toHaveClass("agent-dock-stop-glow");
     expect(
       screen.queryByRole("button", { name: "发送" }),
     ).not.toBeInTheDocument();
 
-    // 运行中 + 输入框有内容 → 回到可点击的发送按钮
+    // Running + input has content → back to a clickable send button
     const textbox = screen.getByRole("textbox", {
       name: "输入修改意图，@ 可引用对象…",
     });
@@ -714,7 +716,7 @@ describe("AgentDock origin/main visible fidelity", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
 
-    // 清空输入 → 重新变回停止按钮，点击中断整个 Creator Session
+    // Clearing the input → stop button returns; clicking interrupts the whole Creator Session
     textbox.textContent = "";
     fireEvent.input(textbox);
     fireEvent.click(screen.getByRole("button", { name: "停止所有 Agent" }));
@@ -735,13 +737,13 @@ describe("AgentDock origin/main visible fidelity", () => {
     useAgentDockUiStore.getState().setOpen(true);
     renderDock();
 
-    // 未运行 + 空输入 → 置灰的发送按钮
+    // Idle + empty input → disabled (greyed) send button
     expect(
       screen.queryByRole("button", { name: "停止所有 Agent" }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
 
-    // 未运行 + 有内容 → 可点击的发送按钮
+    // Idle + has content → clickable send button
     const textbox = screen.getByRole("textbox", {
       name: "输入修改意图，@ 可引用对象…",
     });
@@ -803,7 +805,8 @@ describe("AgentDock origin/main visible fidelity", () => {
     });
     useAgentDockUiStore.getState().setOpen(true);
     renderDock();
-    // 文件审阅内容直接出现在内联决策托盘，对话输入框同屏可用。
+    // File review content shows up directly in the inline decision tray while
+    // the chat input remains usable on the same screen.
     await waitFor(() =>
       expect(
         document.querySelector("[data-decision-tray]"),

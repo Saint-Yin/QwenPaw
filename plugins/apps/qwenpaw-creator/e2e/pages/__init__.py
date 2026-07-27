@@ -1,2 +1,2 @@
 # -*- coding: utf-8 -*-
-"""Page Object 包。"""
+"""Page Object package."""

@@ -109,8 +109,9 @@ describe("FileProjectReviewPanel", () => {
     const reviewData = review();
     render(<FileProjectReviewPanel projectId="p1" review={reviewData} />);
     expect(screen.getByText("文件项目修改")).toBeInTheDocument();
-    // 文本修改不再在审阅面板内展示 diff；只展示可读摘要，
-    // 完整 diff 通过“查看”跳转到原文位置展示。
+    // Text changes no longer render a diff inside the review panel; only a
+    // readable summary is shown, and the full diff appears at the original
+    // location via the "查看" (view) jump.
     expect(screen.getByText("描述")).toBeInTheDocument();
     expect(screen.getByTitle("/description")).toBeInTheDocument();
     expect(document.querySelector("[data-review-diff]")).toBeNull();

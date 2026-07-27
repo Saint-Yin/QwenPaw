@@ -12,9 +12,10 @@ interface OnboardingHintProps {
 }
 
 /**
- * 一次性情境提示条：某个界面元素首次出现时内联展示一段说明，
- * 用户点击「知道了」后不再出现（跨会话持久）。
- * 采用内联条而非浮层，避免在可滚动容器中出现定位漂移。
+ * One-time contextual hint bar: shown inline the first time a UI element
+ * appears; once the user clicks "知道了" (got it) it never shows again
+ * (persisted across sessions). An inline bar is used instead of an overlay to
+ * avoid positioning drift inside scrollable containers.
  */
 export default function OnboardingHint({
   hintKey,

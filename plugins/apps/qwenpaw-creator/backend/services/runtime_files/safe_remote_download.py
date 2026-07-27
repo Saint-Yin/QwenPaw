@@ -76,7 +76,9 @@ def validate_public_remote_url(
                 ) from error
             addresses = {str(record[4][0]) for record in records if record[4]}
             if not addresses:
-                raise SafeRemoteDownloadError("远程 URL 主机无法解析")
+                raise SafeRemoteDownloadError(
+                    "远程 URL 主机无法解析",
+                ) from None
             for address in addresses:
                 require_public_ip(address)
         else:
@@ -107,7 +109,7 @@ def declared_content_length(
     *,
     max_bytes: int,
 ) -> int | None:
-    """Validate and return Content-Length without trusting it as the only cap."""
+    """Validate and return Content-Length without trusting it as a cap."""
 
     declared = response.headers.get("content-length")
     if not declared:

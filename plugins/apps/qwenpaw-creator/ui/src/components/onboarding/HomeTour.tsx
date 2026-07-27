@@ -3,8 +3,9 @@ import TourRunner, { type TourStepBlueprint } from "./TourRunner";
 import ModelSetupGuide from "./ModelSetupGuide";
 
 /**
- * 首页导览：首次打开项目列表页时自动触发。
- * 模型配置是进入创作工作区的前置条件，因此在首页第一步就完成引导。
+ * Home page tour: auto-triggered the first time the project list page opens.
+ * Model configuration is a prerequisite for entering the creation workspace,
+ * so it is covered in the very first step on the home page.
  */
 
 const STEPS: TourStepBlueprint[] = [

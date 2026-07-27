@@ -138,7 +138,7 @@ export default function HomePage() {
     refreshModelConfig();
   }, [refreshModelConfig]);
 
-  // LLM 是所有创作场景的必选模型，未配置时在首页持续提醒。
+  // An LLM is required for every creation scenario; keep reminding on the home page until configured.
   const llmReady =
     modelConfig === null ||
     Boolean(modelConfig.llm.enabled && modelConfig.llm.model_name);

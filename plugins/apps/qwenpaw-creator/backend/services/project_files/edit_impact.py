@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=too-many-branches,too-many-statements
 """Typed side effects for explicit frontend Element draft commits.
 
 User operations remain ordinary schema-v2 JSON Pointer edits.  Before the
@@ -500,7 +501,7 @@ def _pointer_value(
     document: Mapping[str, Any] | None,
     tokens: tuple[str, ...],
 ) -> tuple[bool, Any]:
-    """按 JSON Pointer token 链取值，返回 (是否存在, 值)。"""
+    """Walk the JSON Pointer token chain; return (exists, value)."""
 
     node: Any = document
     for token in tokens:
@@ -526,7 +527,7 @@ def _pointer_unchanged(
     candidate: Mapping[str, Any],
     tokens: tuple[str, ...],
 ) -> bool:
-    """提交的 pointer 在 base 与 candidate 中值完全相同时为 True。"""
+    """True when the submitted pointer value matches in base and candidate."""
 
     base_found, base_value = _pointer_value(base, tokens)
     candidate_found, candidate_value = _pointer_value(candidate, tokens)
@@ -546,8 +547,9 @@ def apply_frontend_edit_impacts(
     for pointer in dict.fromkeys(submitted_pointers):
         tokens = split_pointer(pointer)
         if base is not None and _pointer_unchanged(base, document, tokens):
-            # 提交了 pointer 但值与基线完全一致（no-op 编辑）：
-            # 不得作废任何已生成产物或成片。
+            # The pointer was submitted but its value equals the baseline
+            # (no-op edit): must not invalidate any generated artifact or
+            # final video.
             continue
         _apply_element_path(
             document,

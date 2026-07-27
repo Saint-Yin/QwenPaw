@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
+# pylint: disable=protected-access
 """OpenAI image provider URL construction must tolerate /v1-suffixed base URLs.
 
 The UI saves official OpenAI endpoints as ``https://api.openai.com/v1``
