@@ -950,113 +950,236 @@ export default function ModelConfigModal({ open, onClose }: Props) {
             }}
           >
             <div style={{ fontSize: 13, fontWeight: 600 }}>1. 搜索</div>
+            {/* 优先级链：Tavily 优先，Qwen 原生搜索回退 */}
             <div
               style={{
                 border: "1px solid var(--color-border)",
                 borderRadius: 8,
-                padding: "10px 12px",
-                background: "var(--color-bg-secondary)",
-                fontSize: 11,
+                padding: "12px 14px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    padding: "1px 6px",
+                    borderRadius: 4,
+                    background: "var(--color-accent-soft)",
+                    color: "var(--color-accent)",
+                    flexShrink: 0,
+                  }}
+                >
+                  优先
+                </span>
+                <span
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "var(--color-text-primary)",
+                  }}
+                >
+                  Tavily 搜索
+                </span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: config.grounding.tavily_api_key
+                      ? "var(--color-success)"
+                      : "var(--color-text-tertiary)",
+                  }}
+                >
+                  {config.grounding.tavily_api_key
+                    ? "已配置"
+                    : "未配置，将直接使用原生搜索"}
+                </span>
+              </div>
+              <div>
+                <label className="field-label">Tavily API Key（可选）</label>
+                <Input.Password
+                  placeholder="tvly-..."
+                  value={config.grounding.tavily_api_key}
+                  onChange={(event) =>
+                    updateGrounding("tavily_api_key", event.target.value)
+                  }
+                />
+              </div>
+            </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                margin: "-8px 0 -8px 16px",
+                fontSize: 13,
+                lineHeight: 1,
                 color: "var(--color-text-tertiary)",
               }}
             >
-              Tavily 优先；无结果时才回退到 Qwen/DashScope 的
-              web_search 与 web_search_image。其他模型不会被误当作原生搜索模型。
+              ↓
             </div>
-            <div>
-              <label className="field-label">Tavily API Key（可选）</label>
-              <Input.Password
-                placeholder="tvly-..."
-                value={config.grounding.tavily_api_key}
-                onChange={(event) =>
-                  updateGrounding("tavily_api_key", event.target.value)
-                }
-              />
-            </div>
-            <Checkbox
-              checked={config.grounding.native_search_enabled}
-              onChange={(event) =>
-                updateGrounding("native_search_enabled", event.target.checked)
-              }
+            <div
+              style={{
+                border: "1px solid var(--color-border)",
+                borderRadius: 8,
+                padding: "12px 14px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+                opacity: config.grounding.native_search_enabled ? 1 : 0.75,
+              }}
             >
-              启用 Qwen 原生搜索回退
-            </Checkbox>
-            {config.grounding.native_search_enabled && (
-              <>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <Checkbox
-                    checked={config.grounding.search_reuse_llm}
-                    onChange={(event) =>
-                      updateGrounding("search_reuse_llm", event.target.checked)
-                    }
-                  >
-                    搜索复用 LLM 配置
-                  </Checkbox>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    padding: "1px 6px",
+                    borderRadius: 4,
+                    background: "var(--color-bg-secondary)",
+                    color: "var(--color-text-secondary)",
+                    flexShrink: 0,
+                  }}
+                >
+                  回退
+                </span>
+                <Checkbox
+                  checked={config.grounding.native_search_enabled}
+                  onChange={(event) =>
+                    updateGrounding(
+                      "native_search_enabled",
+                      event.target.checked,
+                    )
+                  }
+                >
                   <span
                     style={{
-                      fontSize: 11,
-                      color: nativeSearchReady
-                        ? "var(--color-success)"
-                        : "var(--color-text-tertiary)",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "var(--color-text-primary)",
                     }}
                   >
-                    {searchModel.model_name
-                      ? `当前：${searchModel.model_name}${nativeSearchReady ? "" : "（不支持原生搜索）"}`
-                      : "未配置"}
+                    Qwen/DashScope 原生搜索
                   </span>
-                </div>
-                {!config.grounding.search_reuse_llm && (
+                </Checkbox>
+              </div>
+              {config.grounding.native_search_enabled ? (
+                <div
+                  style={{
+                    borderLeft: "2px solid var(--color-border)",
+                    marginLeft: 5,
+                    paddingLeft: 14,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 10,
+                  }}
+                >
                   <div
                     style={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr 1fr",
-                      gap: "0 16px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
                     }}
                   >
-                    <div>
-                      <label className="field-label">Qwen 搜索模型</label>
-                      <Input
-                        placeholder="qwen3.7-plus"
-                        value={config.grounding.search_model_name}
-                        onChange={(event) =>
-                          updateGrounding("search_model_name", event.target.value)
-                        }
-                      />
-                    </div>
-                    <div>
-                      <label className="field-label">Qwen 搜索 API Key</label>
-                      <Input.Password
-                        placeholder="sk-search-..."
-                        value={config.grounding.search_api_key}
-                        onChange={(event) =>
-                          updateGrounding("search_api_key", event.target.value)
-                        }
-                      />
-                    </div>
-                    <div>
-                      <label className="field-label">Qwen 搜索 Base URL</label>
-                      <Input
-                        placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
-                        value={config.grounding.search_base_url}
-                        onChange={(event) =>
-                          updateGrounding("search_base_url", event.target.value)
-                        }
-                      />
-                    </div>
-                    <div>
-                      <label className="field-label">搜索 Adapter</label>
-                      <Select
-                        value={config.grounding.search_protocol}
-                        onChange={(value) =>
-                          updateGrounding("search_protocol", value)
-                        }
-                        options={[{ value: "DashScope（百炼）", label: "Qwen / DashScope（百炼）" }]}
-                      />
-                    </div>
+                    <Checkbox
+                      checked={config.grounding.search_reuse_llm}
+                      onChange={(event) =>
+                        updateGrounding(
+                          "search_reuse_llm",
+                          event.target.checked,
+                        )
+                      }
+                    >
+                      <span
+                        style={{
+                          fontSize: 12,
+                          color: "var(--color-text-secondary)",
+                        }}
+                      >
+                        复用 LLM 配置
+                      </span>
+                    </Checkbox>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: nativeSearchReady
+                          ? "var(--color-success)"
+                          : "var(--color-text-tertiary)",
+                      }}
+                    >
+                      {searchModel.model_name
+                        ? `当前：${searchModel.model_name}${nativeSearchReady ? "" : "（不支持原生搜索）"}`
+                        : "未配置"}
+                    </span>
                   </div>
-                )}
-              </>
-            )}
+                  {!config.grounding.search_reuse_llm && (
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr 1fr",
+                        gap: "0 16px",
+                      }}
+                    >
+                      <div>
+                        <label className="field-label">Qwen 搜索模型</label>
+                        <Input
+                          placeholder="qwen3.7-plus"
+                          value={config.grounding.search_model_name}
+                          onChange={(event) =>
+                            updateGrounding(
+                              "search_model_name",
+                              event.target.value,
+                            )
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="field-label">
+                          Qwen 搜索 API Key
+                        </label>
+                        <Input.Password
+                          placeholder="sk-search-..."
+                          value={config.grounding.search_api_key}
+                          onChange={(event) =>
+                            updateGrounding(
+                              "search_api_key",
+                              event.target.value,
+                            )
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="field-label">
+                          Qwen 搜索 Base URL
+                        </label>
+                        <Input
+                          placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
+                          value={config.grounding.search_base_url}
+                          onChange={(event) =>
+                            updateGrounding(
+                              "search_base_url",
+                              event.target.value,
+                            )
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="field-label">搜索 Adapter</label>
+                        <Select
+                          value={config.grounding.search_protocol}
+                          onChange={(value) =>
+                            updateGrounding("search_protocol", value)
+                          }
+                          options={[{ value: "DashScope（百炼）", label: "Qwen / DashScope（百炼）" }]}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
 
             <div
               style={{
@@ -1160,16 +1283,6 @@ export default function ModelConfigModal({ open, onClose }: Props) {
               >
                 测试验证模型图片输入
               </Button>
-            </div>
-            <div
-              style={{
-                fontSize: 11,
-                lineHeight: 1.5,
-                color: "var(--color-text-tertiary)",
-              }}
-            >
-              搜索负责取得网页与图片来源；验证模型只负责理解候选图片并筛选结果，
-              可以使用任意兼容图片输入的 VLM，不要求支持 web_search 工具。
             </div>
           </div>
         )}
