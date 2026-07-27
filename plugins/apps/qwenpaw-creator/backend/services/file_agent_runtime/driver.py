@@ -211,6 +211,14 @@ class FileAgentRuntimeError(RuntimeError):
     pass
 
 
+class ToolArgumentsJSONError(FileAgentRuntimeError):
+    """The model streamed tool arguments that never became a JSON object.
+
+    Raised per tool call and fed back to the model as a failed tool result;
+    it must never terminate the whole run.
+    """
+
+
 class StaleAgentRun(FileAgentRuntimeError, AgentStreamCallbackPassthrough):
     """Raised when a revoked run reaches a model/tool/commit fence."""
 
@@ -287,7 +295,7 @@ class FileCreatorAgentRuntime:
         self.source_model_client = source_model_client or (
             self.model_client
             if injected_model_client
-            else AgentScopeVlmChatClient(max_tokens=24_000)
+            else AgentScopeVlmChatClient()
         )
         self.poll_interval_seconds = poll_interval_seconds
         self.max_model_turns = max_model_turns
@@ -982,6 +990,8 @@ class FileCreatorAgentRuntime:
                     },
                 )
                 try:
+                    if call.parse_error is not None:
+                        raise ToolArgumentsJSONError(call.parse_error)
                     if (
                         call.name != DELEGATE_TOOL_NAME
                         and call.arguments.get("projectId") != project_id
@@ -1051,6 +1061,7 @@ class FileCreatorAgentRuntime:
                         "error": {
                             "type": type(exc).__name__,
                             "message": str(exc),
+                            "recovery": _specialist_tool_recovery(call.name),
                         },
                     }
                     await self._persist_tool_result(
@@ -1775,7 +1786,10 @@ class FileCreatorAgentRuntime:
 
                 call = turn.tool_calls[0]
                 tool_call_count += 1
-                if call.arguments.get("projectId") != project_id:
+                if (
+                    call.parse_error is None
+                    and call.arguments.get("projectId") != project_id
+                ):
                     raise FileAgentRuntimeError(
                         "specialist tool call attempted another Project",
                     )
@@ -1794,6 +1808,8 @@ class FileCreatorAgentRuntime:
                 )
                 failed = False
                 try:
+                    if call.parse_error is not None:
+                        raise ToolArgumentsJSONError(call.parse_error)
                     result = await self._invoke_specialist_tool(
                         project_id=project_id,
                         session_id=session_id,
@@ -3071,12 +3087,15 @@ def _specialist_tool_recovery(name: str) -> str:
             "complete Project root and preserves all Runtime-protected root fields. "
             "Never assign schema_version, project_id, generation, created_at, or updated_at; "
             "the Runtime maintains them. Start from the input Project `.`, not `$jsonArgs`. "
-            "Put bulk objects in jsonArgs. For every Edit item, set duration_tick to "
-            "round((source_out_tick - source_in_tick) / playback_rate). Remove nonexistent "
-            "references; not-yet-produced artifacts stay null. Parenthesize computed jq "
-            'values before binding them, for example ("source:" + $logicalId) as '
-            "$sourceKey, and parenthesize expressions used as object values. Never finish "
-            "with a saved pre-edit root such as $project because that discards mutations."
+            "Put bulk objects in jsonArgs. If the failure was malformed or misnested argument "
+            "JSON, regenerate the call with program as a top-level field and split an "
+            "oversized jsonArgs into a few smaller jq_project calls. For every Edit item, "
+            "set duration_tick to round((source_out_tick - source_in_tick) / playback_rate). "
+            "Remove nonexistent references; not-yet-produced artifacts stay null. "
+            "Parenthesize computed jq values before binding them, for example "
+            '("source:" + $logicalId) as $sourceKey, and parenthesize expressions used as '
+            "object values. Never finish with a saved pre-edit root such as $project "
+            "because that discards mutations."
         )
     if name == "ai_edit":
         return (

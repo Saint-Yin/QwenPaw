@@ -11,6 +11,8 @@ import inspect
 import json
 from typing import Any, Protocol
 
+from json_repair import repair_json
+
 from agentscope.credential import DashScopeCredential
 from agentscope.formatter import DashScopeChatFormatter
 from agentscope.message import (
@@ -65,6 +67,10 @@ class AgentToolCall:
     call_id: str
     name: str
     arguments: dict[str, Any]
+    # Set when the streamed arguments could not be recovered into a JSON
+    # object even after repair. The driver must surface this back to the
+    # model as a failed tool result instead of failing the whole run.
+    parse_error: str | None = None
 
     def history_dict(self) -> dict[str, Any]:
         """Serialize the call for the driver's provider-independent turn history."""
@@ -89,6 +95,57 @@ class AgentModelTurn:
     thinking: str = ""
     tool_calls: tuple[AgentToolCall, ...] = ()
     provider_message_id: str | None = None
+
+
+_ARGS_PREVIEW_CHARS = 160
+
+
+def _parse_tool_arguments(raw: str) -> tuple[dict[str, Any], str | None]:
+    """Parse streamed tool-call arguments into a JSON object.
+
+    Strict ``json.loads`` first; malformed payloads (truncated stream,
+    unbalanced braces) go through ``json_repair`` exactly like AgentScope's
+    own ``_json_loads_with_repair``. Returns ``(arguments, parse_error)``—
+    an unrecoverable payload yields ``({}, message)`` so the tool call can
+    fail individually while the run keeps going.
+    """
+
+    if not raw.strip():
+        return {}, None
+    decode_error: json.JSONDecodeError | None = None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as error:
+        decode_error = error
+    else:
+        if isinstance(parsed, dict):
+            return parsed, None
+    try:
+        repaired = repair_json(raw, stream_stable=True, return_objects=True)
+    except Exception:
+        repaired = None
+    if isinstance(repaired, dict):
+        return repaired, None
+    if len(raw) > 2 * _ARGS_PREVIEW_CHARS:
+        preview = (
+            raw[:_ARGS_PREVIEW_CHARS]
+            + "...[TRUNCATED]..."
+            + raw[-_ARGS_PREVIEW_CHARS:]
+        )
+    else:
+        preview = raw
+    detail = (
+        f"JSONDecodeError: {decode_error}"
+        if decode_error is not None
+        else "decoded into a non-object value"
+    )
+    return {}, (
+        "工具调用参数不是合法的 JSON 对象且无法自动修复（"
+        + detail
+        + "）。常见原因：花括号遗漏/错位或输出被截断。"
+        "请重新生成本次工具调用；若参数体量巨大，可拆分为少量几次较小的调用。"
+        f"参数原文预览：{preview!r}"
+    )
 
 
 AgentTextDeltaCallback = Callable[[str], Awaitable[None]]
@@ -360,7 +417,9 @@ class AgentScopeAgentChatClient:
         model: DashScopeChatModel | None = None,
         *,
         timeout_seconds: float = 180.0,
-        max_tokens: int = 12000,
+        # ``None`` omits the parameter entirely so the provider/model keeps
+        # control over its own output budget.
+        max_tokens: int | None = None,
         temperature: float = 0.2,
     ) -> None:
         self.timeout_seconds = timeout_seconds
@@ -542,21 +601,15 @@ class AgentScopeAgentChatClient:
                     raise AgentModelError(
                         f"Creator AgentScope returned a tool not offered this turn: {name}",
                     )
-                try:
-                    arguments = json.loads(block.input or "{}")
-                except json.JSONDecodeError as exc:
-                    raise AgentModelError(
-                        "Creator AgentScope ToolCallBlock input is invalid JSON",
-                    ) from exc
-                if not isinstance(arguments, dict):
-                    raise AgentModelError(
-                        "Creator AgentScope ToolCallBlock input must be an object",
-                    )
+                arguments, parse_error = _parse_tool_arguments(
+                    block.input or "",
+                )
                 calls.append(
                     AgentToolCall(
                         call_id=call_id,
                         name=name,
                         arguments=arguments,
+                        parse_error=parse_error,
                     ),
                 )
 

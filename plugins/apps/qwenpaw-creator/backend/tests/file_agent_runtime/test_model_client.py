@@ -306,6 +306,72 @@ def test_agentscope_client_streams_native_blocks_and_raw_argument_deltas() -> (
     ]
 
 
+def _final_tool_call_model(raw_input: str):
+    class FinalToolCallModel:
+        model = "qwen3.7-plus"
+
+        async def __call__(self, messages, *, tools=None):
+            async def chunks():
+                yield ChatResponse(
+                    id="response-broken-1",
+                    content=[
+                        ToolCallBlock(
+                            id="call-jq-1",
+                            name="read_project",
+                            input=raw_input,
+                        ),
+                    ],
+                    is_last=True,
+                )
+
+            return chunks()
+
+    return FinalToolCallModel()
+
+
+def test_truncated_tool_arguments_are_repaired_into_an_object() -> None:
+    truncated = '{"projectId":"project-1","jsonArgs":{"elements":{"e1":{"name":"a'
+
+    async def scenario():
+        client = AgentScopeAgentChatClient(
+            _final_tool_call_model(truncated),  # type: ignore[arg-type]
+        )
+        return await client.complete(messages=[], tools=_tools())
+
+    turn = asyncio.run(scenario())
+    call = turn.tool_calls[0]
+    assert call.parse_error is None
+    assert call.arguments == {
+        "projectId": "project-1",
+        "jsonArgs": {"elements": {"e1": {"name": "a"}}},
+    }
+
+
+def test_unrecoverable_tool_arguments_degrade_to_parse_error() -> None:
+    async def scenario():
+        client = AgentScopeAgentChatClient(
+            _final_tool_call_model('"oops'),  # type: ignore[arg-type]
+        )
+        return await client.complete(messages=[], tools=_tools())
+
+    turn = asyncio.run(scenario())
+    call = turn.tool_calls[0]
+    assert call.arguments == {}
+    assert call.parse_error is not None
+    assert "无法自动修复" in call.parse_error
+    assert "oops" in call.parse_error
+
+
+def test_default_client_does_not_constrain_max_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_text_model(monkeypatch)
+    client = AgentScopeAgentChatClient()
+    assert client.max_tokens is None
+    configured = client._configured_model()
+    assert configured.parameters.max_tokens is None
+
+
 def test_agentscope_client_preserves_stream_control_exceptions() -> None:
     class StreamingAgentScopeModel:
         model = "qwen3.7-plus"

@@ -10,7 +10,6 @@ import pytest
 
 from services.project_files.agent_tools import (
     AGENT_PROJECT_TOOL_SCHEMAS,
-    AgentProjectBaseRequired,
     AgentProjectToolContext,
     AgentProjectToolError,
     AgentProjectTools,
@@ -75,7 +74,6 @@ def test_read_project_returns_and_privately_caches_the_real_base(tmp_path):
     result.project.name = "caller mutation"
     committed = tools.jq_project(
         project_id="project-1",
-        base_etag=base.etag,
         program=".description = $description",
         string_args={"description": "Agent description"},
     )
@@ -87,12 +85,11 @@ def test_read_project_returns_and_privately_caches_the_real_base(tmp_path):
 def test_cached_base_enables_base_candidate_latest_three_way_merge(tmp_path):
     store, base = _store(tmp_path)
     tools = _tools(store)
-    observed = tools.read_project("project-1")
+    tools.read_project("project-1")
     _external_commit(store, base, description="User changed this concurrently")
 
     result = tools.jq_project(
         project_id="project-1",
-        base_etag=observed.etag,
         program=".name = $name",
         string_args={"name": "Agent name"},
     )
@@ -108,7 +105,7 @@ def test_jq_project_rejects_a_nested_object_instead_of_opaque_protected_diff(
 ):
     store, base = _store(tmp_path)
     tools = _tools(store)
-    observed = tools.read_project("project-1")
+    tools.read_project("project-1")
 
     with pytest.raises(
         AgentProjectToolError,
@@ -116,7 +113,6 @@ def test_jq_project_rejects_a_nested_object_instead_of_opaque_protected_diff(
     ) as caught:
         tools.jq_project(
             project_id="project-1",
-            base_etag=observed.etag,
             program='.timelines.items["timeline:main"]',
         )
 
@@ -127,41 +123,33 @@ def test_jq_project_rejects_a_nested_object_instead_of_opaque_protected_diff(
 def test_cached_stale_base_still_detects_same_field_cas_conflict(tmp_path):
     store, base = _store(tmp_path)
     tools = _tools(store)
-    observed = tools.read_project("project-1")
+    tools.read_project("project-1")
     _external_commit(store, base, name="User name")
 
     with pytest.raises(JsonCasConflict):
         tools.jq_project(
             project_id="project-1",
-            base_etag=observed.etag,
             program=".name = $name",
             string_args={"name": "Agent name"},
         )
 
 
-def test_stale_uncached_base_requires_read_but_current_etag_can_be_rebuilt(
+def test_first_contact_without_read_commits_against_the_latest_snapshot(
     tmp_path,
 ):
     store, old = _store(tmp_path)
     current = _external_commit(store, old, description="newer")
 
+    # A boundary that never observed the Project selects the latest
+    # snapshot itself; the model no longer echoes ETags.
     disconnected = _tools(store)
-    with pytest.raises(AgentProjectBaseRequired) as caught:
-        disconnected.jq_project(
-            project_id="project-1",
-            base_etag=old.etag,
-            program='.name = "must not run"',
-        )
-    assert caught.value.latest_etag == current.etag
-
-    # A reconnect carrying the still-current ETag has an unambiguous base and
-    # need not perform a redundant read tool call.
     result = disconnected.jq_project(
         project_id="project-1",
-        base_etag=current.etag,
         program='.name = "reconnected"',
     )
     assert result.project.name == "reconnected"
+    assert result.project.description == "newer"
+    assert result.generation == current.generation + 1
 
 
 def test_runtime_context_not_model_arguments_controls_review(tmp_path):
@@ -185,10 +173,10 @@ def test_runtime_context_not_model_arguments_controls_review(tmp_path):
         ),
     )
     observed = tools.read_project("project-1")
+    assert observed.etag == base.etag
 
     result = tools.jq_project(
         project_id="project-1",
-        base_etag=observed.etag,
         program='.description = "review me"',
     )
 
@@ -220,11 +208,11 @@ def test_manifest_and_invoke_expose_only_model_owned_arguments(tmp_path):
     jq_parameters = schemas["jq_project"]["parameters"]
     assert set(jq_parameters["properties"]) == {
         "projectId",
-        "baseEtag",
         "program",
         "stringArgs",
         "jsonArgs",
     }
+    assert jq_parameters["required"] == ["projectId", "program"]
     assert jq_parameters["additionalProperties"] is False
     assert "完整 Project 根对象" in schemas["jq_project"]["description"]
     assert "jsonArgs" in schemas["jq_project"]["description"]
@@ -260,6 +248,8 @@ def test_manifest_and_invoke_expose_only_model_owned_arguments(tmp_path):
         "jq_project",
         {
             "projectId": "project-1",
+            # A deprecated baseEtag from an older prompt/history is tolerated
+            # and ignored; the Runtime selects the base itself.
             "baseEtag": read["etag"],
             "program": ".name = $name | .settings.platform = $platform",
             "stringArgs": {"name": "Invoked", "platform": "web"},
@@ -274,13 +264,61 @@ def test_manifest_and_invoke_expose_only_model_owned_arguments(tmp_path):
             "jq_project",
             {
                 "projectId": "project-1",
-                "baseEtag": written["etag"],
                 "program": ".",
                 "origin": "agentdock_interrupt",
             },
         )
     with pytest.raises(UnknownAgentProjectTool):
         tools.invoke("write_project", {})
+
+
+def test_invoke_translates_misnested_program_arguments(tmp_path):
+    store, _base = _store(tmp_path)
+    tools = _tools(store)
+    tools.invoke("read_project", {"projectId": "project-1"})
+
+    with pytest.raises(AgentProjectToolError) as caught:
+        tools.invoke(
+            "jq_project",
+            {
+                "projectId": "project-1",
+                "jsonArgs": {
+                    "timeline_elements": {
+                        "elem-01": {"name": "a"},
+                        "elem-02": {
+                            "name": "b",
+                            "program": ". as $p",
+                        },
+                    },
+                },
+            },
+        )
+    message = str(caught.value)
+    assert "花括号" in message
+    assert "$.jsonArgs.timeline_elements.elem-02.program" in message
+    assert "项目未被修改" in message
+
+
+def test_invoke_translates_project_schema_errors_with_paths(tmp_path):
+    store, base = _store(tmp_path)
+    tools = _tools(store)
+    tools.invoke("read_project", {"projectId": "project-1"})
+
+    with pytest.raises(AgentProjectToolError) as caught:
+        tools.invoke(
+            "jq_project",
+            {
+                "projectId": "project-1",
+                "program": (
+                    '.visual.variants = {"items": {}, "order": []}'
+                ),
+            },
+        )
+    message = str(caught.value)
+    assert "visual.variants" in message
+    assert "visual.entities.items" in message
+    assert "项目未被修改" in message
+    assert store.read("project-1").etag == base.etag
 
 
 def test_read_project_file_pages_only_verified_indexed_utf8_text(tmp_path):

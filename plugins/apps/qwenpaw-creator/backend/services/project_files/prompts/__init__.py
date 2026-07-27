@@ -10,7 +10,7 @@ from pathlib import Path
 
 _PROMPT_PATH = Path(__file__).resolve().parent / "workspace_schema.system.txt"
 _PROMPT_SHA256 = (
-    "82d97f322568c693ca18fc49ffa5a646d070d6be6600b963b632cee9ef1d0760"
+    "5cbe92ec5f2ebf5b27c5091843512e1fb3b23b041c61467b4298b379d87a153a"
 )
 _SCHEMA_PLACEHOLDER = "{{project_json_schema}}"
 

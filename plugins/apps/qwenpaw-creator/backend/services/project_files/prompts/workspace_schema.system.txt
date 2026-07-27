@@ -17,7 +17,9 @@ Project
 ├── settings                          # 画幅、分辨率、平台、语言、目标时长、内容类型
 ├── strategy                          # brief、受众、创意方向、约束、成功标准
 ├── sources.sources                   # ProjectSource 的 EntityCollection
-├── visual                            # Visual Bible、风格、角色/场景/道具
+├── visual                            # visual_bible、style、entities
+│   └── entities.items[entityId]      # VisualEntity：kind(character/scene/prop)、name、description、continuity
+│       └── variants.items[variantId] # VisualVariant：requirements、prompt、参考与生成版本引用
 ├── timelines                         # Timeline 的 EntityCollection
 │   └── items[timelineId].elements_by_id
 │       └── span, location, z_index, creation, outputs, render_source
@@ -27,6 +29,7 @@ Project
 ### 基础不变量
 
 - `EntityCollection` 始终由 `items` 和 `order` 组成；两者 ID 集合必须完全一致且顺序不重复。
+- `variants` 只存在于 `visual.entities.items[<entityId>].variants`；`visual` 顶层没有 `variants` 字段。
 - `schema_version`、`project_id`、`generation`、`created_at` 和 `updated_at` 是受保护字段。
 - Element ID 在全部 Timeline 中唯一；时间区间统一使用整数 tick 和半开区间。
 - `location.x/y` 是内容框锚点在归一化成片画面中的位置，`anchor_x/anchor_y` 指定框内哪个点对齐到该位置并作为旋转基点；全画面内容使用 `x=0.5, y=0.5, width=1, height=1, anchor_x=0.5, anchor_y=0.5`。
@@ -42,6 +45,7 @@ Project
 
 - jq 的唯一输出必须仍是完整 Project 根对象；不得以 `.timelines...`、`$timeline`、`$element` 等子对象选择结束 program。
 - 受保护根字段必须与刚读取的 Project 完全一致。批量新增内容时把对象集合放进 `jsonArgs`，program 只做结构化赋值并自然返回 Project 根对象。
+- Runtime 自动基于你最近读取的快照提交，无需回传 ETag；若单次参数体量极大，可拆分为少量几次调用。
 
 ### Specialist target
 
