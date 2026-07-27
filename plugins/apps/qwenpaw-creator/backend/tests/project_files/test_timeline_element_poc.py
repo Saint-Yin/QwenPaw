@@ -157,7 +157,9 @@ def test_ffmpeg_progress_counts_unique_elements_across_segments(
 
     def fake_run(args, *, cwd):
         del cwd
-        segment = work_dir / "segments" / str(args[-1]).split("/")[-1]
+        segment = (
+            work_dir / "segments" / str(args[-1]).rsplit("/", maxsplit=1)[-1]
+        )
         segment.write_bytes(_MP4)
 
     monkeypatch.setattr(runner, "_run", fake_run)
