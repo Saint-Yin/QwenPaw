@@ -387,7 +387,13 @@ async def verify_visual_grounding_with_vlm(
             if delay > 0:
                 await asyncio.sleep(delay)
 
-    assert final_error is not None
+    if final_error is None:
+        # Defensive: every loop exit path assigns final_error today, but a
+        # max_attempts below 1 (or a future loop change) would otherwise
+        # leave the failure cause unset — and asserts vanish under -O.
+        final_error = RuntimeError(
+            "visual verification failed with unknown cause",
+        )
     logger.warning(
         "Visual grounding verification failed model=%s candidates=%d attempts=%d elapsed=%.2f error=%s",
         verification_model_name,

@@ -33,6 +33,18 @@ class AsrConfig(ModelConfigItem):
     reuse_llm_key: bool = True
 
 
+def validation_source_from_reuse_llm(reuse_llm: bool) -> str:
+    """Map the legacy ``reuse_llm`` flag onto ``validation_source``."""
+
+    return "llm" if reuse_llm else "custom"
+
+
+def reuse_llm_from_validation_source(validation_source: str) -> bool:
+    """Mirror ``validation_source`` back onto the legacy wire field."""
+
+    return validation_source == "llm"
+
+
 class GroundingConfig(ModelConfigItem):
     """Web-grounding retrieval and visual-verification configuration.
 
@@ -62,10 +74,12 @@ class GroundingConfig(ModelConfigItem):
             return value
         migrated = dict(value)
         if "validation_source" not in migrated:
-            migrated["validation_source"] = (
-                "llm" if migrated.get("reuse_llm", True) else "custom"
+            migrated["validation_source"] = validation_source_from_reuse_llm(
+                migrated.get("reuse_llm", True),
             )
-        migrated["reuse_llm"] = migrated["validation_source"] == "llm"
+        migrated["reuse_llm"] = reuse_llm_from_validation_source(
+            migrated["validation_source"],
+        )
         if "search_reuse_llm" not in migrated:
             migrated["search_reuse_llm"] = (
                 value.get("reuse_llm", True)

@@ -31,6 +31,8 @@ from schemas.models import (
     ConnectionTestResponse,
     OssConfig,
     VlmConfig,
+    reuse_llm_from_validation_source,
+    validation_source_from_reuse_llm,
 )
 from services.runtime_files.atomic_store import (
     atomic_replace_bytes,
@@ -251,11 +253,13 @@ def load_model_config(*, include_environment: bool = True) -> ModelConfigData:
     if "validation_source" not in grounding_explicit and not os.environ.get(
         "WEB_GROUNDING_VALIDATION_SOURCE",
     ):
-        base["grounding"]["validation_source"] = (
-            "llm" if base["grounding"].get("reuse_llm", True) else "custom"
+        base["grounding"][
+            "validation_source"
+        ] = validation_source_from_reuse_llm(
+            base["grounding"].get("reuse_llm", True),
         )
-    base["grounding"]["reuse_llm"] = (
-        base["grounding"].get("validation_source") == "llm"
+    base["grounding"]["reuse_llm"] = reuse_llm_from_validation_source(
+        base["grounding"].get("validation_source") or "",
     )
     if "search_reuse_llm" not in grounding_explicit and not os.environ.get(
         "WEB_GROUNDING_SEARCH_REUSE_LLM",

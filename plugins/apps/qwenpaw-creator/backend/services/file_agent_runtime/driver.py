@@ -232,6 +232,7 @@ class _JqProjectArgumentDiagnosis:
     invalid_top_level: tuple[str, ...]
     unexpected_top_level: tuple[str, ...]
     nested_required_paths: tuple[str, ...]
+    nested_scan_truncated: bool
     raw_arguments_bytes: int
     strict_json_parsed: bool
     json_repair_applied: bool
@@ -253,6 +254,7 @@ class _JqProjectArgumentDiagnosis:
             "invalidTopLevel": list(self.invalid_top_level),
             "unexpectedTopLevel": list(self.unexpected_top_level),
             "nestedRequiredPaths": list(self.nested_required_paths),
+            "nestedScanTruncated": self.nested_scan_truncated,
             "fingerprint": self.fingerprint,
         }
 
@@ -336,15 +338,23 @@ class MalformedJqProjectArguments(FileAgentRuntimeError):
 def _nested_required_key_paths(
     value: Any,
     required_keys: set[str],
-) -> tuple[str, ...]:
-    """Find misplaced required jq keys without trusting or moving them."""
+) -> tuple[tuple[str, ...], bool]:
+    """Find misplaced required jq keys without trusting or moving them.
+
+    Also reports whether the scan was cut short by the node/depth/result
+    budget, so an exhausted traversal is surfaced as partial instead of
+    silently looking like a complete diagnosis.
+    """
 
     found: list[str] = []
     remaining_nodes = 4_096
+    truncated = False
 
     def visit(current: Any, path: str, depth: int) -> None:
-        nonlocal remaining_nodes
+        nonlocal remaining_nodes, truncated
         if remaining_nodes <= 0 or depth > 16 or len(found) >= 12:
+            if isinstance(current, (Mapping, list)) and current:
+                truncated = True
             return
         remaining_nodes -= 1
         if isinstance(current, Mapping):
@@ -353,6 +363,7 @@ def _nested_required_key_paths(
                 if depth > 0 and key in required_keys:
                     found.append(child_path)
                     if len(found) >= 12:
+                        truncated = True
                         return
                 visit(child, child_path, depth + 1)
         elif isinstance(current, list):
@@ -360,7 +371,7 @@ def _nested_required_key_paths(
                 visit(child, f"{path}[{index}]", depth + 1)
 
     visit(value, "$", 0)
-    return tuple(found)
+    return tuple(found), truncated
 
 
 def _jq_project_argument_diagnosis(
@@ -393,14 +404,16 @@ def _jq_project_argument_diagnosis(
         separators=(",", ":"),
     ).encode("utf-8")
     fingerprint = hashlib.sha256(encoded).hexdigest()[:16]
+    nested_paths, nested_truncated = _nested_required_key_paths(
+        arguments,
+        set(missing),
+    )
     return _JqProjectArgumentDiagnosis(
         missing_top_level=missing,
         invalid_top_level=tuple(sorted(set(invalid))),
         unexpected_top_level=unexpected,
-        nested_required_paths=_nested_required_key_paths(
-            arguments,
-            set(missing),
-        ),
+        nested_required_paths=nested_paths,
+        nested_scan_truncated=nested_truncated,
         raw_arguments_bytes=call.raw_arguments_bytes or len(encoded),
         strict_json_parsed=not call.arguments_repaired,
         json_repair_applied=call.arguments_repaired,
