@@ -25,6 +25,7 @@ from services.file_agent_runtime import (
 from services.file_agent_runtime.driver import (
     MalformedJqProjectArguments,
     _jq_project_argument_diagnosis,
+    _specialist_tool_recovery,
 )
 from services.file_agent_runtime.prompts import render_creator_system_prompt
 from services.observability import read_trace_records
@@ -115,7 +116,6 @@ def test_message_text_includes_exact_project_json_selection_locator() -> None:
 
 def test_ai_edit_idempotency_can_be_scoped_to_one_model_tool_call() -> None:
     from services.file_agent_runtime.driver import (
-        _specialist_tool_recovery,
         _specialist_tool_invocation_id,
     )
 
@@ -386,6 +386,33 @@ def test_malformed_jq_project_arguments_recover_with_a_fresh_small_call(
     assert malformed_results[0]["error"]["type"] == (
         "MalformedJqProjectArguments"
     )
+
+
+def test_r2v_real_face_rejection_gets_targeted_recovery() -> None:
+    """The provider face-moderation error names the exact repair steps.
+
+    A non-retryable real-face rejection can never succeed with the same
+    references; the recovery must say to drop source-photo references and
+    keep generated artifact references instead of the generic retry text.
+    """
+
+    targeted = _specialist_tool_recovery(
+        "r2v_generation",
+        "Task task-1 ended as FAILED: {'code': 'R2V_PROVIDER_FAILED', "
+        "'message': 'The input content is suspected to include real "
+        "human faces.', 'retryable': False}",
+    )
+    assert "real human faces" in targeted
+    assert "video_reference_version_ids" in targeted
+    assert "artifact-version" in targeted
+    assert "do not resubmit the same references" in targeted.casefold()
+
+    # Other r2v failures keep the generic guidance.
+    generic = _specialist_tool_recovery(
+        "r2v_generation",
+        "Task task-2 ended as FAILED: provider timeout",
+    )
+    assert "video_reference_version_ids" not in generic
 
 
 def test_extra_data_recovery_names_the_premature_close() -> None:

@@ -1375,6 +1375,7 @@ class FileCreatorAgentRuntime:
                                 "message": str(exc),
                                 "recovery": _specialist_tool_recovery(
                                     call.name,
+                                    str(exc),
                                 ),
                             },
                         }
@@ -2229,6 +2230,7 @@ class FileCreatorAgentRuntime:
                                 "message": str(exc),
                                 "recovery": _specialist_tool_recovery(
                                     call.name,
+                                    str(exc),
                                 ),
                             },
                         }
@@ -3460,7 +3462,22 @@ def _specialist_terminal(content: str) -> tuple[str, str]:
     )
 
 
-def _specialist_tool_recovery(name: str) -> str:
+def _specialist_tool_recovery(name: str, error: str = "") -> str:
+    if name == "r2v_generation" and "real human face" in error.casefold():
+        # Provider-side face moderation rejects the uploaded pixels, so
+        # resubmitting the same references can never succeed. Identity is
+        # already carried by the generated character-design artifacts.
+        return (
+            "The video provider rejected the uploaded reference images "
+            "because they appear to contain real human faces. This is a "
+            "provider content policy, not a transient failure — do not "
+            "resubmit the same references. Use jq_project to remove every "
+            "source-photo reference (asset-version IDs of downloaded or "
+            "uploaded real images) from the Element's "
+            "video_reference_version_ids, keep only generated "
+            "artifact-version references such as the character design and "
+            "storyboard images, then call r2v_generation again."
+        )
     if name == "jq_project":
         return (
             "Re-read project.json and retry jq_project with a transform "
