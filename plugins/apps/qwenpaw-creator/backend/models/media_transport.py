@@ -3,6 +3,7 @@
 # pylint: disable=line-too-long,too-many-return-statements
 import asyncio
 import base64
+import hashlib
 import io
 import mimetypes
 import re
@@ -17,7 +18,7 @@ from PIL import Image
 
 from models import config as model_config
 from services.runtime_files.safe_remote_download import safe_download_bytes
-from utils.paths import media_path_from_url
+from utils.paths import local_path_from_file_url, media_path_from_url
 
 
 OSS_POLICY_URL = "https://dashscope.aliyuncs.com/api/v1/uploads"
@@ -40,6 +41,8 @@ _dashscope_temp_upload_locks: dict[
     asyncio.Lock,
 ] = {}
 _dashscope_credential_tokens: dict[str, str] = {}
+# Process-local salt for credential cache tokens; never persisted.
+_CREDENTIAL_TOKEN_SALT = uuid.uuid4().bytes
 
 
 async def get_oss_policy(model: str = "wan2.7-r2v") -> dict:
@@ -104,11 +107,32 @@ def _dashscope_transport_filename(path: Path, media_type: str) -> str:
 def _credential_cache_token(api_key: str) -> str:
     """Opaque per-process stand-in for *api_key* inside cache keys.
 
-    The temp-upload cache is process-local, so a random token per
-    credential keeps entries isolated without deriving cache material
-    from the secret itself.
+    Keys are salted PBKDF2 digests so raw credentials never persist in
+    process memory maps and cannot be cheaply brute-forced; values are
+    random tokens that keep entries isolated.
     """
-    return _dashscope_credential_tokens.setdefault(api_key, uuid.uuid4().hex)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        api_key.encode("utf-8"),
+        _CREDENTIAL_TOKEN_SALT,
+        50_000,
+    ).hex()
+    if len(_dashscope_credential_tokens) >= 256:
+        _dashscope_credential_tokens.clear()
+    return _dashscope_credential_tokens.setdefault(digest, uuid.uuid4().hex)
+
+
+def _prune_dashscope_temp_upload_cache(now: float) -> None:
+    expired = [
+        key
+        for key, (_, deadline) in _dashscope_temp_upload_cache.items()
+        if deadline <= now
+    ]
+    for key in expired:
+        _dashscope_temp_upload_cache.pop(key, None)
+        lock = _dashscope_temp_upload_locks.get(key)
+        if lock is not None and not lock.locked():
+            _dashscope_temp_upload_locks.pop(key, None)
 
 
 def _dashscope_temp_upload_cache_key(
@@ -252,6 +276,7 @@ async def upload_local_file_to_dashscope_temp(
         model_name=model_name,
     )
     now = time.monotonic()
+    _prune_dashscope_temp_upload_cache(now)
     cached = _dashscope_temp_upload_cache.get(cache_key)
     if cached is not None and cached[1] > now:
         return cached[0]
@@ -477,26 +502,26 @@ async def read_reference_media(
 
     if max_bytes <= 0:
         raise ValueError("reference media max_bytes must be positive")
-    if url.startswith("file://"):
-        parsed = urlparse(url)
-        media_path = Path(parsed.path)
+
+    def read_local_bounded(media_path: Path) -> bytes:
         if media_path.stat().st_size > max_bytes:
             raise ValueError(
                 f"reference media exceeds {max_bytes} bytes",
             )
-        content = media_path.read_bytes()
+        return media_path.read_bytes()
+
+    if url.startswith("file://"):
+        media_path = local_path_from_file_url(url)
+        content = await asyncio.to_thread(read_local_bounded, media_path)
         filename = media_path.name or f"reference-{uuid.uuid4().hex}"
         if not Path(filename).suffix:
             filename += _suffix_from_magic(content)
         return content, filename
     if url.startswith("/generated/"):
         media_path = media_path_from_url(url)
-        if media_path.stat().st_size > max_bytes:
-            raise ValueError(
-                f"reference media exceeds {max_bytes} bytes",
-            )
+        content = await asyncio.to_thread(read_local_bounded, media_path)
         return (
-            media_path.read_bytes(),
+            content,
             media_path.name or f"reference-{uuid.uuid4().hex}.bin",
         )
     if url.startswith(("http://", "https://")):

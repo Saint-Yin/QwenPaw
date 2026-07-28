@@ -1,5 +1,5 @@
 import type { CreatorEvent } from "@/contracts/creator";
-import { creatorApiUrl } from "./client";
+import { creatorAuthenticatedUrl } from "./client";
 
 export interface CreatorEventStream {
   close(): void;
@@ -50,6 +50,7 @@ const CREATOR_EVENT_TYPES = [
   "task.started",
   "task.completed",
   "task.failed",
+  "task.cancelled",
   "task.quarantined",
   "task.progress_updated",
   "task.retry_scheduled",
@@ -88,7 +89,7 @@ export function openCreatorEvents(
   const path = `/projects/${encodeURIComponent(
     projectId,
   )}/events?after=${Math.max(0, after)}`;
-  const source = new EventSource(creatorApiUrl(path), {
+  const source = new EventSource(creatorAuthenticatedUrl(path), {
     withCredentials: true,
   });
   const consume = (message: MessageEvent<string>) => {

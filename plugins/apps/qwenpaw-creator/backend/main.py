@@ -32,6 +32,13 @@ from utils.env import load_project_env  # noqa: E402
 load_project_env()
 
 from api.router import router as creator_router  # noqa: E402
+from api.file_asset_routes import (  # noqa: E402
+    drain_remote_ingest_tasks,
+    reset_remote_ingest_admission,
+)
+from api.file_execution_routes import (  # noqa: E402
+    drain_timeline_render_jobs,
+)
 from services.file_agent_runtime.registry import (  # noqa: E402
     start_creator_agent_runtime,
     stop_creator_agent_runtime,
@@ -153,7 +160,11 @@ async def _startup() -> None:
             ensure_creator_runtime_dependencies,
         )
         services = creator_file_services(data_root)
-        recover_interrupted_source_analysis(services)
+        await asyncio.to_thread(
+            recover_interrupted_source_analysis,
+            services,
+        )
+        reset_remote_ingest_admission()
     except (CreatorDataRootError, CreatorBinaryDependencyError) as exc:
         trace_event(
             "creator.runtime.startup_failed",
@@ -257,19 +268,25 @@ async def _shutdown() -> None:
     )
     _file_services = None
     try:
-        await shutdown_file_media_execution_services()
+        await drain_remote_ingest_tasks()
     finally:
         try:
-            await shutdown_source_analysis_services()
+            await drain_timeline_render_jobs()
         finally:
             try:
-                await stop_creator_agent_runtime()
+                await shutdown_file_media_execution_services()
             finally:
-                clear_creator_file_service_registry()
-                trace_event(
-                    "creator.runtime.stopped",
-                    component="pawapp",
-                )
+                try:
+                    await shutdown_source_analysis_services()
+                finally:
+                    try:
+                        await stop_creator_agent_runtime()
+                    finally:
+                        clear_creator_file_service_registry()
+                        trace_event(
+                            "creator.runtime.stopped",
+                            component="pawapp",
+                        )
 
 
 # The 'plugin' variable is what PluginLoader looks for.

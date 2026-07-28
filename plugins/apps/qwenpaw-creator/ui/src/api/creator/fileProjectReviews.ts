@@ -166,6 +166,7 @@ export async function getActiveFileProjectReview(
     // cache so a stale body cached by an old deployment is never re-parsed as
     // fresh data on a 304 reuse.
     { headers, cache: "no-store" },
+    { timeoutMs: 30_000 },
   );
   const responseEtag = response.headers?.get("ETag") ?? null;
 

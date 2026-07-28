@@ -12,6 +12,7 @@ They remain diagnostic evidence rather than a second source of truth.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import heapq
 import json
@@ -254,8 +255,49 @@ def trace_event(
     attributes: Mapping[str, Any] | None = None,
     **context: object,
 ) -> None:
+    record = _event_record(
+        name,
+        component=component,
+        status=status,
+        attributes=attributes,
+        **context,
+    )
+    if record is not None:
+        _write(record)
+
+
+async def _trace_event_offloaded(
+    name: str,
+    *,
+    component: str,
+    status: str = "ok",
+    attributes: Mapping[str, Any] | None = None,
+    **context: object,
+) -> None:
+    """Run the complete event emission (config stat, build, write) off the
+    event loop; ``to_thread`` copies contextvars so the trace context binds.
+    """
+
+    await asyncio.to_thread(
+        trace_event,
+        name,
+        component=component,
+        status=status,
+        attributes=attributes,
+        **context,
+    )
+
+
+def _event_record(
+    name: str,
+    *,
+    component: str,
+    status: str = "ok",
+    attributes: Mapping[str, Any] | None = None,
+    **context: object,
+) -> dict[str, Any] | None:
     if not _enabled():
-        return
+        return None
     inherited = current_trace_context()
     inherited.update(
         {
@@ -266,7 +308,7 @@ def trace_event(
     )
     trace_id = inherited.get("traceId") or _trace_id_for(inherited)
     inherited["traceId"] = trace_id
-    record = {
+    return {
         "schemaVersion": 1,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "kind": "event",
@@ -280,7 +322,6 @@ def trace_event(
         },
         "attributes": dict(attributes or {}),
     }
-    _write(record)
 
 
 @asynccontextmanager
@@ -302,7 +343,7 @@ async def trace_span(
         parentSpanId=parent_span_id,
         spanId=span_id,
     ):
-        trace_event(
+        await _trace_event_offloaded(
             f"{name}.started",
             component=component,
             attributes=attributes,
@@ -310,7 +351,7 @@ async def trace_span(
         try:
             yield current_trace_context()
         except BaseException as exc:
-            trace_event(
+            await _trace_event_offloaded(
                 f"{name}.finished",
                 component=component,
                 status="error",
@@ -333,7 +374,7 @@ async def trace_span(
             )
             raise
         else:
-            trace_event(
+            await _trace_event_offloaded(
                 f"{name}.finished",
                 component=component,
                 attributes={

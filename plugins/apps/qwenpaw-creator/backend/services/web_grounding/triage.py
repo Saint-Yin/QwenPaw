@@ -6,13 +6,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
 from typing import Any
 
-from models import config as model_config
 from models import text_model
 from utils.logger import setup_logger
 from utils.structured_output import extract_json_payload

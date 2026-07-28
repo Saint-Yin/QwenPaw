@@ -15,6 +15,7 @@ OpenAI-compatible providers fall back to inline
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import mimetypes
 import time
@@ -29,7 +30,7 @@ from models.media_transport import upload_local_file_to_dashscope_temp
 from models.model_capability_cache import get_capability_cache
 from utils.exceptions import ModelError
 from utils.logger import setup_logger
-from utils.paths import media_path_from_url
+from utils.paths import local_path_from_file_url, media_path_from_url
 
 logger = setup_logger("model.vlm")
 
@@ -45,7 +46,7 @@ def _local_path_from_url(url: str) -> Path | None:
     if url.startswith("/generated/"):
         return media_path_from_url(url)
     if url.startswith("file://"):
-        return Path(urlparse(url).path).expanduser().resolve()
+        return local_path_from_file_url(url).expanduser().resolve()
     return None
 
 
@@ -188,7 +189,7 @@ async def _transport_local_media_part(
         return transported, True
     transported[part_type] = {
         **media_obj,
-        "url": _data_url(local_path, fallback),
+        "url": await asyncio.to_thread(_data_url, local_path, fallback),
     }
     return transported, False
 

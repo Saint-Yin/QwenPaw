@@ -100,7 +100,12 @@ router = APIRouter(
 _DEFAULT_MAX_REMOTE_ASSET_BYTES = 2 * 1024 * 1024 * 1024
 _DEFAULT_REMOTE_ASSET_TIMEOUT_SECONDS = 60 * 60
 _MAX_LOCAL_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024
+_DEFAULT_MAX_LOCAL_UPLOAD_BYTES = 100 * 1024 * 1024
+_DEFAULT_IMPORT_MAX_FILES = 200
+_DEFAULT_IMPORT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024
+_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
 _REMOTE_INGEST_TASKS: dict[tuple[str, str], asyncio.Task[None]] = {}
+_REMOTE_INGEST_SHUTTING_DOWN = False
 
 
 class AssetImportItemRecord(StrictModel):
@@ -246,6 +251,111 @@ def _validate_local_video_upload(
         and size_bytes > _MAX_LOCAL_VIDEO_UPLOAD_BYTES
     ):
         raise ValidationError("本地视频超过 100 MiB 上传限制")
+
+
+def _positive_int_env(variable: str, default: int) -> int:
+    raw = os.environ.get(variable)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise ValidationError(f"{variable} 必须是正整数") from error
+    if value <= 0:
+        raise ValidationError(f"{variable} 必须是正整数")
+    return value
+
+
+def _local_upload_max_bytes(*, name: str, media_type: str) -> int:
+    guessed_type = mimetypes.guess_type(name)[0] or ""
+    is_video = media_type.casefold().startswith(
+        "video/",
+    ) or guessed_type.casefold().startswith("video/")
+    if is_video:
+        return _MAX_LOCAL_VIDEO_UPLOAD_BYTES
+    return _positive_int_env(
+        "CREATOR_UPLOAD_MAX_BYTES",
+        _DEFAULT_MAX_LOCAL_UPLOAD_BYTES,
+    )
+
+
+class _BoundedUploadReader:
+    """Bounded sync reader over an UploadFile's spooled file object."""
+
+    def __init__(self, source: Any, *, max_bytes: int, name: str) -> None:
+        self._source = source
+        self._max_bytes = max_bytes
+        self._name = name
+        self._read_bytes = 0
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._source.read(
+            size if size and size > 0 else _UPLOAD_READ_CHUNK_BYTES,
+        )
+        if chunk:
+            self._read_bytes += len(chunk)
+            if self._read_bytes > self._max_bytes:
+                raise ValidationError(
+                    f"文件「{self._name}」超过 "
+                    f"{_format_byte_limit(self._max_bytes)} 上传限制",
+                )
+        return chunk
+
+
+async def _upload_file_store(
+    services: CreatorFileServices,
+    project_id: str,
+) -> AssetFileStore:
+    # read() maps a missing Project to 404 before staging touches disk.
+    await asyncio.to_thread(services.projects.read, project_id)
+    return await asyncio.to_thread(
+        AssetFileStore,
+        services.projects.project_root(project_id),
+    )
+
+
+async def _stage_upload(
+    upload: UploadFile,
+    *,
+    name: str,
+    media_type: str,
+    file_store: AssetFileStore,
+    staging_id: str,
+) -> _StagedAssetInput:
+    """Stream one upload into Project staging without materializing bytes."""
+
+    max_bytes = _local_upload_max_bytes(name=name, media_type=media_type)
+    if upload.size is not None and upload.size > max_bytes:
+        raise ValidationError(
+            f"文件「{name}」超过 {_format_byte_limit(max_bytes)} 上传限制",
+        )
+    await upload.seek(0)
+    reader = _BoundedUploadReader(
+        upload.file,
+        max_bytes=max_bytes,
+        name=name,
+    )
+    staged = await asyncio.to_thread(
+        file_store.stage_stream,
+        reader,
+        staging_id=staging_id,
+    )
+    return _StagedAssetInput(name=name, staged=staged, media_type=media_type)
+
+
+async def _abandon_staged_uploads(
+    file_store: AssetFileStore | None,
+    items: list[_StagedAssetInput],
+) -> None:
+    """Best-effort cleanup; published handles are already renamed away."""
+
+    if file_store is None:
+        return
+    for item in items:
+        try:
+            await asyncio.to_thread(file_store.abandon, item.staged)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _asset_checksum(item: _AssetInput | _StagedAssetInput) -> str:
@@ -894,6 +1004,8 @@ def _run_remote_task_sync(
 ) -> None:
     executions = ProjectExecutionStore(services.root)
     task_id = _stable_id("task", project_id, key, scope)
+    if _REMOTE_INGEST_SHUTTING_DOWN:
+        return
     task = executions.get_task(project_id, task_id)
     if task.status in {
         TaskStatus.SUCCEEDED,
@@ -913,6 +1025,8 @@ def _run_remote_task_sync(
 
     def report_progress(downloaded: int, total: int | None) -> None:
         nonlocal last_progress
+        if _REMOTE_INGEST_SHUTTING_DOWN:
+            raise RuntimeError("Creator 正在关闭，远程素材入库中止")
         current = executions.get_task(project_id, task_id)
         if current.status is TaskStatus.CANCELLED:
             raise RuntimeError("远程素材入库已取消")
@@ -1008,6 +1122,8 @@ def _start_remote_task(
     attach_source: bool,
     scope: str,
 ) -> None:
+    if _REMOTE_INGEST_SHUTTING_DOWN:
+        return
     task_id = _stable_id("task", project_id, key, scope)
     identity = (project_id, task_id)
     running = _REMOTE_INGEST_TASKS.get(identity)
@@ -1037,6 +1153,33 @@ def _start_remote_task(
     background.add_done_callback(completed)
 
 
+def reset_remote_ingest_admission() -> None:
+    global _REMOTE_INGEST_SHUTTING_DOWN
+    _REMOTE_INGEST_SHUTTING_DOWN = False
+
+
+async def drain_remote_ingest_tasks(timeout_seconds: float = 15.0) -> None:
+    """Stop admission and wait for ingest workers to reach a terminal state.
+
+    These tasks wrap ``asyncio.to_thread`` workers: cancelling the outer
+    Task would only sever the await while the thread keeps writing. The
+    shutdown flag makes workers abort at their next cooperative checkpoint
+    and this coroutine waits for real completion. Workers that outlive the
+    timeout keep their registry entries so they are never mistaken for done.
+    """
+
+    global _REMOTE_INGEST_SHUTTING_DOWN
+    _REMOTE_INGEST_SHUTTING_DOWN = True
+    pending = [
+        task for task in _REMOTE_INGEST_TASKS.values() if not task.done()
+    ]
+    if pending:
+        await asyncio.wait(pending, timeout=timeout_seconds)
+    for identity, task in list(_REMOTE_INGEST_TASKS.items()):
+        if task.done():
+            _REMOTE_INGEST_TASKS.pop(identity, None)
+
+
 def _translate(error: BaseException) -> None:
     if isinstance(error, IdempotencyConflictError):
         raise ConflictError("Idempotency-Key 已用于不同的 Asset 请求") from error
@@ -1055,6 +1198,8 @@ async def ingest_asset(
     services: CreatorFileServices = Depends(project_file_services),
 ) -> dict[str, Any]:
     content_type = request.headers.get("content-type", "")
+    staged_uploads: list[_StagedAssetInput] = []
+    upload_store: AssetFileStore | None = None
     if content_type.startswith("multipart/form-data"):
         form = await request.form()
         upload = next(
@@ -1083,17 +1228,15 @@ async def ingest_asset(
             media_type=media_type,
             size_bytes=upload.size,
         )
-        payload = await upload.read()
-        _validate_local_video_upload(
+        upload_store = await _upload_file_store(services, project_id)
+        input_item: _AssetInput | _StagedAssetInput = await _stage_upload(
+            upload,
             name=name,
             media_type=media_type,
-            size_bytes=len(payload),
+            file_store=upload_store,
+            staging_id=_stable_id("upload", project_id, key, "0"),
         )
-        input_item: _AssetInput | _StagedAssetInput = _AssetInput(
-            name=name,
-            content=payload,
-            media_type=media_type,
-        )
+        staged_uploads.append(input_item)
         remote_url: str | None = None
     else:
         body = TextOrUrlAssetRequest.model_validate(await request.json())
@@ -1170,6 +1313,8 @@ async def ingest_asset(
             )
     except BaseException as error:
         _translate(error)
+    finally:
+        await _abandon_staged_uploads(upload_store, staged_uploads)
     item = result["items"][0]
     return {
         "assetId": item["assetId"],
@@ -1208,33 +1353,47 @@ async def import_assets(
     ]
     if not uploads:
         raise ValidationError("文件夹导入至少包含一个文件")
+    max_files = _positive_int_env(
+        "CREATOR_IMPORT_MAX_FILES",
+        _DEFAULT_IMPORT_MAX_FILES,
+    )
+    if len(uploads) > max_files:
+        raise ValidationError(f"文件夹导入最多支持 {max_files} 个文件")
+    max_total_bytes = _positive_int_env(
+        "CREATOR_IMPORT_MAX_TOTAL_BYTES",
+        _DEFAULT_IMPORT_MAX_TOTAL_BYTES,
+    )
+    upload_store = await _upload_file_store(services, project_id)
+    total_bytes = 0
     inputs: list[_AssetInput | _StagedAssetInput] = []
-    for index, upload in enumerate(uploads):
-        name = Path(upload.filename or f"item-{index + 1}").name
-        media_type = (
-            upload.content_type
-            or mimetypes.guess_type(name)[0]
-            or "application/octet-stream"
-        )
-        _validate_local_video_upload(
-            name=name,
-            media_type=media_type,
-            size_bytes=upload.size,
-        )
-        content = await upload.read()
-        _validate_local_video_upload(
-            name=name,
-            media_type=media_type,
-            size_bytes=len(content),
-        )
-        inputs.append(
-            _AssetInput(
-                name=name,
-                content=content,
-                media_type=media_type,
-            ),
-        )
+    staged_uploads: list[_StagedAssetInput] = []
     try:
+        for index, upload in enumerate(uploads):
+            name = Path(upload.filename or f"item-{index + 1}").name
+            media_type = (
+                upload.content_type
+                or mimetypes.guess_type(name)[0]
+                or "application/octet-stream"
+            )
+            _validate_local_video_upload(
+                name=name,
+                media_type=media_type,
+                size_bytes=upload.size,
+            )
+            item = await _stage_upload(
+                upload,
+                name=name,
+                media_type=media_type,
+                file_store=upload_store,
+                staging_id=_stable_id("upload", project_id, key, str(index)),
+            )
+            staged_uploads.append(item)
+            total_bytes += item.staged.size_bytes
+            if total_bytes > max_total_bytes:
+                raise ValidationError(
+                    f"文件夹导入总量超过 " f"{_format_byte_limit(max_total_bytes)} 限制",
+                )
+            inputs.append(item)
         result, _replayed = await asyncio.to_thread(
             _ingest_many_sync,
             services,
@@ -1246,6 +1405,8 @@ async def import_assets(
         )
     except BaseException as error:
         _translate(error)
+    finally:
+        await _abandon_staged_uploads(upload_store, staged_uploads)
     import_id = _stable_id("asset-import", project_id, key)
     record = AssetImportRecord(
         importId=import_id,

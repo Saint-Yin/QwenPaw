@@ -9,7 +9,6 @@ one process still has the old inode open.
 from __future__ import annotations
 
 import errno
-import fcntl
 import os
 from pathlib import Path
 import time
@@ -17,21 +16,55 @@ from types import TracebackType
 
 from .errors import LockTimeoutError, RuntimeFileValidationError
 
+if os.name == "nt":  # pragma: posix no cover
+    import msvcrt
+
+    def _try_lock(descriptor: int, *, shared: bool) -> None:
+        """Windows byte-range lock; shared degrades to exclusive.
+
+        ``msvcrt.locking`` exposes only exclusive region locks, so reader
+        locks serialize on Windows.  Correctness (mutual exclusion with
+        writers) is preserved; only reader concurrency is reduced.
+        """
+
+        del shared
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+
+    def _unlock(descriptor: int) -> None:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+
+    _BLOCKED_ERRNOS = frozenset({errno.EACCES, errno.EAGAIN, errno.EDEADLK})
+else:
+    import fcntl
+
+    def _try_lock(descriptor: int, *, shared: bool) -> None:
+        lock_op = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+        fcntl.flock(descriptor, lock_op | fcntl.LOCK_NB)
+
+    def _unlock(descriptor: int) -> None:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+
+    _BLOCKED_ERRNOS = frozenset({errno.EACCES, errno.EAGAIN})
+
 
 class CrossProcessFileLock:
-    """An exclusive, process-crash-safe ``fcntl.flock`` lock.
+    """An exclusive, process-crash-safe cross-platform file lock.
 
-    The lock only protects writers that share this primitive.  Runtime locks
-    must therefore be acquired at a single documented boundary and kept out of
-    model/provider calls.  The operating system releases the lock when the
-    descriptor or process exits; the file itself contains no authoritative
+    POSIX uses ``fcntl.flock``; Windows uses ``msvcrt.locking`` byte-range
+    locks.  The lock only protects writers that share this primitive.  Runtime
+    locks must therefore be acquired at a single documented boundary and kept
+    out of model/provider calls.  The operating system releases the lock when
+    the descriptor or process exits; the file itself contains no authoritative
     state.
 
-    Pass ``shared=True`` for a ``LOCK_SH`` reader lock.  Reader locks do not
-    block each other, so concurrent read-only polling never serializes against
-    itself; they still exclude ``LOCK_EX`` writers (and vice versa).  POSIX
-    ``flock`` merges multiple descriptors on the same inode within one process,
-    so reader locks are safe across threads of the same process.
+    Pass ``shared=True`` for a ``LOCK_SH`` reader lock.  On POSIX reader locks
+    do not block each other, so concurrent read-only polling never serializes
+    against itself; they still exclude ``LOCK_EX`` writers (and vice versa).
+    POSIX ``flock`` merges multiple descriptors on the same inode within one
+    process, so reader locks are safe across threads of the same process.  On
+    Windows shared locks degrade to exclusive locks.
     """
 
     def __init__(
@@ -75,18 +108,17 @@ class CrossProcessFileLock:
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         descriptor = os.open(self.path, flags, self.mode)
-        os.fchmod(descriptor, self.mode)
-        lock_op = fcntl.LOCK_SH if self.shared else fcntl.LOCK_EX
-        lock_op |= fcntl.LOCK_NB
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, self.mode)
         started = time.monotonic()
         try:
             while True:
                 try:
-                    fcntl.flock(descriptor, lock_op)
+                    _try_lock(descriptor, shared=self.shared)
                     self._descriptor = descriptor
                     return self
                 except OSError as exc:
-                    if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                    if exc.errno not in _BLOCKED_ERRNOS:
                         raise
                 if self.timeout_seconds is not None:
                     elapsed = time.monotonic() - started
@@ -106,7 +138,7 @@ class CrossProcessFileLock:
             return
         self._descriptor = None
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            _unlock(descriptor)
         finally:
             os.close(descriptor)
 

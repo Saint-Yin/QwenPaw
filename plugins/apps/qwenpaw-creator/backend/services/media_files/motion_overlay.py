@@ -264,11 +264,28 @@ def _normalized_box(
 
 
 def _kill_worker_session(process: subprocess.Popen) -> None:
-    """Terminate a worker and every process in its session."""
+    """Terminate a worker and every process in its session or tree."""
 
     try:
-        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError, OSError):
+        if os.name == "nt":
+            # Windows has no process sessions; taskkill /T removes the tree
+            # so headless Chromium descendants cannot survive as orphans.
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                capture_output=True,
+                timeout=15,
+                check=False,
+            )
+        elif hasattr(os, "killpg") and hasattr(os, "getpgid"):
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        else:
+            process.kill()
+    except (
+        ProcessLookupError,
+        PermissionError,
+        OSError,
+        subprocess.SubprocessError,
+    ):
         process.kill()
     try:
         process.communicate(timeout=10)

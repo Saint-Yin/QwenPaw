@@ -27,6 +27,19 @@ export function creatorApiUrl(path: string): string {
   return `${CREATOR_API_BASE}${normalized}`;
 }
 
+/**
+ * Build a Creator URL usable by EventSource and DOM media elements, which
+ * cannot send an Authorization header. Appends the host token as a `token`
+ * query parameter, matching the QwenPaw AuthMiddleware contract.
+ */
+export function creatorAuthenticatedUrl(path: string): string {
+  const url = creatorApiUrl(path);
+  const token = hostToken();
+  if (!token) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}token=${encodeURIComponent(token)}`;
+}
+
 function secureRandomHex(byteLength = 8): string {
   const bytes = new Uint8Array(byteLength);
   globalThis.crypto.getRandomValues(bytes);
@@ -75,6 +88,7 @@ async function errorFrom(response: Response): Promise<CreatorHttpError> {
 export async function creatorFetch(
   path: string,
   init: RequestInit = {},
+  options: { timeoutMs?: number } = {},
 ): Promise<Response> {
   const headers = creatorHeaders(init.headers);
   if (
@@ -84,14 +98,31 @@ export async function creatorFetch(
   ) {
     headers.set("Content-Type", "application/json");
   }
-  return fetch(creatorApiUrl(path), { ...init, headers });
+  let signal = init.signal ?? undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  if (options.timeoutMs && options.timeoutMs > 0) {
+    const controller = new AbortController();
+    timer = setTimeout(() => controller.abort(), options.timeoutMs);
+    if (init.signal) {
+      const upstream = init.signal;
+      if (upstream.aborted) controller.abort();
+      else upstream.addEventListener("abort", () => controller.abort());
+    }
+    signal = controller.signal;
+  }
+  try {
+    return await fetch(creatorApiUrl(path), { ...init, headers, signal });
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 export async function creatorRequest<T>(
   path: string,
   init: RequestInit = {},
+  options: { timeoutMs?: number } = {},
 ): Promise<T> {
-  const response = await creatorFetch(path, init);
+  const response = await creatorFetch(path, init, options);
   if (!response.ok) throw await errorFrom(response);
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

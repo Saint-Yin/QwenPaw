@@ -430,6 +430,30 @@ async def test_dashscope_non_chat_model_policy_unsupported_still_ok(
     assert "API key verified" in msg
 
 
+async def test_dashscope_non_chat_model_transient_statuses_fail(
+    monkeypatch,
+) -> None:
+    for status_code in (404, 408, 429, 500, 502, 503):
+        provider = _make_dashscope_like_provider()
+        requests: list[dict] = []
+        _install_fake_httpx_get(
+            monkeypatch,
+            requests,
+            _FakeHTTPResponse(
+                status_code,
+                {"code": "ServerError", "message": "unavailable"},
+            ),
+        )
+
+        ok, msg = await provider.check_model_connection(
+            "wan2.2-t2v-plus",
+            timeout=4,
+        )
+
+        assert ok is False, status_code
+        assert f"status={status_code}" in msg
+
+
 async def test_ark_non_chat_model_uses_task_list_probe(monkeypatch) -> None:
     provider = OpenAIProvider(
         id="volcengine-cn",

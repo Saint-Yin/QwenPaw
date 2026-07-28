@@ -22,6 +22,7 @@ from services.project_files.assets import AssetFileError, AssetFileStore
 from services.project_files.facade import CreatorFileServices
 from services.project_files.models import IndexedFile
 from services.project_files.remote_cache import resolve_remote_cache
+from services.project_files.store import ProjectNotFound
 from services.runtime_files.execution_store import ProjectExecutionStore
 from utils.paths import media_path_from_url
 
@@ -33,6 +34,11 @@ router = APIRouter(tags=["media-files"], route_class=CreatorErrorRoute)
 
 
 _STREAM_CHUNK_BYTES = 64 * 1024
+
+# Verified-on-hit version -> project map; avoids scanning every Project for
+# each media request. Uniqueness is still enforced on cache misses.
+_VERSION_PROJECT_CACHE: dict[tuple[str, str], str] = {}
+_VERSION_PROJECT_CACHE_MAX = 4096
 
 
 def _response_range(
@@ -146,47 +152,78 @@ async def _indexed_version(
     version_id: str,
     kind: Literal["source", "artifact"],
 ) -> tuple[Path, IndexedFile | None, Any, str]:
+    cached_project = _VERSION_PROJECT_CACHE.get((kind, version_id))
+    if cached_project is not None:
+        match = await asyncio.to_thread(
+            _version_in_project,
+            services,
+            project_id=cached_project,
+            version_id=version_id,
+            kind=kind,
+        )
+        if match is not None:
+            return match
+        _VERSION_PROJECT_CACHE.pop((kind, version_id), None)
     matches: list[tuple[Path, IndexedFile | None, Any, str]] = []
     summaries = await asyncio.to_thread(services.projects.list)
     for summary in summaries:
-        snapshot = await asyncio.to_thread(
-            services.projects.read,
-            summary.project_id,
+        match = await asyncio.to_thread(
+            _version_in_project,
+            services,
+            project_id=summary.project_id,
+            version_id=version_id,
+            kind=kind,
         )
-        if kind == "source":
-            version: Any = snapshot.project.assets.source_versions_by_id.get(
-                version_id,
-            )
-        else:
-            version = snapshot.project.assets.artifact_versions_by_id.get(
-                version_id,
-            )
-        if version is None:
-            continue
-        indexed = (
-            snapshot.project.assets.files_by_id.get(version.file_id)
-            if version.file_id is not None
-            else None
-        )
-        if indexed is None and not (
-            kind == "source" and version.file_id is None
-        ):
-            raise StorageIntegrityError("AssetVersion 引用的 IndexedFile 不存在")
-        matches.append(
-            (
-                services.projects.project_root(summary.project_id),
-                indexed,
-                version,
-                summary.project_id,
-            ),
-        )
+        if match is not None:
+            matches.append(match)
     if not matches:
         raise NotFoundError(
             "AssetVersion 不存在" if kind == "source" else "ArtifactVersion 不存在",
         )
     if len(matches) != 1:
         raise StorageIntegrityError("跨 Project 的 Version ID 不唯一")
+    if len(_VERSION_PROJECT_CACHE) >= _VERSION_PROJECT_CACHE_MAX:
+        _VERSION_PROJECT_CACHE.clear()
+    _VERSION_PROJECT_CACHE[(kind, version_id)] = matches[0][3]
     return matches[0]
+
+
+def _version_in_project(
+    services: CreatorFileServices,
+    *,
+    project_id: str,
+    version_id: str,
+    kind: Literal["source", "artifact"],
+) -> tuple[Path, IndexedFile | None, Any, str] | None:
+    # Only a genuinely missing Project means "no match here"; integrity,
+    # permission and I/O failures must propagate instead of becoming 404.
+    try:
+        snapshot = services.projects.read(project_id)
+    except ProjectNotFound:
+        return None
+    if kind == "source":
+        version: Any = snapshot.project.assets.source_versions_by_id.get(
+            version_id,
+        )
+    else:
+        version = snapshot.project.assets.artifact_versions_by_id.get(
+            version_id,
+        )
+    if version is None:
+        return None
+    indexed = (
+        snapshot.project.assets.files_by_id.get(version.file_id)
+        if version.file_id is not None
+        else None
+    )
+    if indexed is None and not (kind == "source" and version.file_id is None):
+        raise StorageIntegrityError("AssetVersion 引用的 IndexedFile 不存在")
+    return (
+        services.projects.project_root(project_id),
+        indexed,
+        version,
+        project_id,
+    )
 
 
 async def _indexed_response(

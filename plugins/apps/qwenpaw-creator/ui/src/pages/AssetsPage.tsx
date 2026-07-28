@@ -844,7 +844,11 @@ export default function AssetsPage() {
                           selected.mediaType,
                         );
                         fetch(selected.previewUrl!)
-                          .then((res) => res.blob())
+                          .then((res) => {
+                            if (!res.ok)
+                              throw new Error(`下载失败（${res.status}）`);
+                            return res.blob();
+                          })
                           .then((blob) => {
                             const url = URL.createObjectURL(blob);
                             const a = document.createElement("a");
@@ -852,6 +856,13 @@ export default function AssetsPage() {
                             a.download = filename;
                             a.click();
                             URL.revokeObjectURL(url);
+                          })
+                          .catch((error) => {
+                            message.error(
+                              error instanceof Error
+                                ? error.message
+                                : "下载失败",
+                            );
                           });
                       }}
                     >
