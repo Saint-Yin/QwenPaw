@@ -2,6 +2,8 @@
 
 English | [中文](README_zh.md)
 
+![QwenPaw Creator — agentic video creation platform](https://img.alicdn.com/imgextra/i4/O1CN01k0Q45RQSEyL3FPZ2_!!6000000000720-2-tps-1600-600.png)
+
 <p class="creator-lead">QwenPaw Creator is an <strong>agentic video creation platform</strong>: you set the goal, provide sources, and steer the direction; an Agent team handles planning, generation, editing, and composition, returning every important decision to you.</p>
 
 - **The Agent stays throughout the process**: screenwriting, directing, visual development, motion, and editing Specialists collaborate against live project state;

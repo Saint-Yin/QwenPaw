@@ -2,6 +2,8 @@
 
 [English](README.md) | 中文
 
+![QwenPaw Creator：Agentic 视频创作平台](https://img.alicdn.com/imgextra/i1/O1CN01fqzbpn1uZs98aHllk_!!6000000006052-2-tps-1600-600.png)
+
 <p class="creator-lead">QwenPaw Creator 是一个 <strong>Agentic 视频创作平台</strong>：你负责提出目标、提供素材和把握方向，Agent 团队负责策划、生成、剪辑与合成，并在关键节点把决定权交还给你。</p>
 
 - **Agent 贯穿全程**：编剧、导演、视觉开发、动效、剪辑等 Specialist 按项目状态协作，不是一次性生成后就结束；
