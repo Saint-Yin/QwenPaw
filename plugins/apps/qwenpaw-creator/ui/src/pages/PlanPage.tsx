@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { message, Modal, Button } from "antd";
-import { Download, Loader2, RefreshCw, FileOutput } from "lucide-react";
+import { message, Modal } from "antd";
+import { Download, Loader2, RefreshCw } from "lucide-react";
 import { navigate, useParams, useSearchParams } from "@/routing/navigation";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
@@ -20,7 +20,6 @@ import ElementList from "@/components/timeline/ElementList";
 import ElementDetail from "@/components/timeline/ElementDetail";
 import PageSkeleton from "@/components/PageSkeleton";
 import PageLoadError from "@/components/PageLoadError";
-import { saveExportFile } from "@/components/creator/ProjectImportExport";
 import type { TimelineElementDocument } from "@/contracts/creator";
 
 function sec(tick: number, ticksPerSecond: number): string {
@@ -61,9 +60,6 @@ export default function PlanPage() {
   );
   const [playheadTick, setPlayheadTick] = useState(0);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
-  const [exportLoading, setExportLoading] = useState(false);
-  const [exportBytes, setExportBytes] = useState(0);
   const [composing, setComposing] = useState(false);
   const [requestedComposeTaskId, setRequestedComposeTaskId] = useState<
     string | null
@@ -419,23 +415,6 @@ export default function PlanPage() {
     }
   }, [freshRender, project?.name]);
 
-  const handleExportOk = useCallback(async () => {
-    setExportLoading(true);
-    setExportBytes(0);
-    try {
-      await saveExportFile(id, (byteLength) => {
-        setExportBytes((prev) => prev + byteLength);
-      });
-    } catch (err) {
-      message.error(
-        "导出失败" + (err instanceof Error ? ": " + err.message : ""),
-        10,
-      );
-    } finally {
-      setExportLoading(false);
-    }
-  }, [id]);
-
   if (!project) {
     if (syncStatus === "invalid" || syncStatus === "not_found") {
       return (
@@ -593,60 +572,6 @@ export default function PlanPage() {
               {isComposing ? composeLabel : "下载成片"}
             </span>
           </button>
-          <button
-            type="button"
-            title="导出项目"
-            className="relative inline-flex items-center gap-1.5 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-bg-secondary)] disabled:cursor-not-allowed disabled:opacity-60"
-            onClick={() => setExportOpen((open) => !open)}
-          >
-            <span className="relative z-[1] inline-flex items-center gap-1.5">
-              <FileOutput className="h-3.5 w-3.5" />
-              导出项目
-            </span>
-          </button>
-          <Modal
-            title="导出项目"
-            open={exportOpen}
-            okText="开始导出"
-            cancelText="取消"
-            onOk={handleExportOk}
-            onCancel={() => {
-              setExportLoading(false);
-              setExportOpen((open) => !open);
-            }}
-            footer={[
-              <Button
-                key="back"
-                onClick={() => {
-                  setExportLoading(false);
-                  setExportOpen((open) => !open);
-                }}
-              >
-                取消
-              </Button>,
-              <Button
-                key="submit"
-                type="primary"
-                loading={exportLoading}
-                onClick={handleExportOk}
-              >
-                开始导出
-              </Button>,
-            ]}
-          >
-            <div>导出项目，需要执行:</div>
-            <div>获取整个项目数据控制权、</div>
-            <div>生成压缩文件、</div>
-            <div>下载压缩文件等步骤。</div>
-            <div>
-              实行时间长，且执行期间不能对项目做其他操作，需要在当前窗口等待。
-            </div>
-            {exportLoading && (
-              <div className="mt-3 text-sm text-[var(--color-text-secondary)]">
-                已接收：{exportBytes} 字节
-              </div>
-            )}
-          </Modal>
         </div>
       </header>
 

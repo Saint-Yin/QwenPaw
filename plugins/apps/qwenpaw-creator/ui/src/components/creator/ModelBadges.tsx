@@ -1,70 +1,66 @@
 import { useState, useEffect, useCallback } from "react";
-import { Brain } from "lucide-react";
-import {
-  SettingOutlined,
-  EyeOutlined,
-  PictureOutlined,
-  VideoCameraOutlined,
-  AudioOutlined,
-  GlobalOutlined,
-} from "@ant-design/icons";
+import { GlobalOutlined } from "@ant-design/icons";
 import { getModelConfig } from "@/api/creator";
 import type { ModelConfigData, ModelConfigItem } from "@/contracts/creator";
+import modelLlmIcon from "@/assets/design/model-llm.svg";
+import modelVlmIcon from "@/assets/design/model-vlm.svg";
+import modelAsrIcon from "@/assets/design/model-asr.svg";
+import modelImageIcon from "@/assets/design/model-image.svg";
+import modelVideoIcon from "@/assets/design/model-video.svg";
 import ModelConfigModal, { supportsQwenNativeSearch } from "./ModelConfigModal";
 
 type ModelType = "llm" | "vlm" | "grounding" | "asr" | "image" | "video";
+type ModelStatus = "on" | "off" | "none";
+
+const READY_COLOR = "#14B8A6";
+const READY_HALO = "#C8F4E9";
+const IDLE_COLOR = "#8E8C99";
+const IDLE_HALO = "#EFF0F3";
 
 const BADGE_META: {
   type: ModelType;
+  icon: string | null;
   label: string;
-  icon: React.ReactNode;
 }[] = [
-  { type: "llm", label: "LLM", icon: <Brain size={12} /> },
-  { type: "vlm", label: "VLM", icon: <EyeOutlined style={{ fontSize: 12 }} /> },
-  {
-    type: "grounding",
-    label: "Grounding",
-    icon: <GlobalOutlined style={{ fontSize: 12 }} />,
-  },
-  {
-    type: "asr",
-    label: "ASR",
-    icon: <AudioOutlined style={{ fontSize: 12 }} />,
-  },
-  {
-    type: "image",
-    label: "图片生成",
-    icon: <PictureOutlined style={{ fontSize: 12 }} />,
-  },
-  {
-    type: "video",
-    label: "视频生成",
-    icon: <VideoCameraOutlined style={{ fontSize: 12 }} />,
-  },
+  { type: "llm", icon: modelLlmIcon, label: "文本模型" },
+  { type: "vlm", icon: modelVlmIcon, label: "视觉理解模型" },
+  { type: "grounding", icon: null, label: "Grounding" },
+  { type: "asr", icon: modelAsrIcon, label: "语音识别模型" },
+  { type: "image", icon: modelImageIcon, label: "图像模型" },
+  { type: "video", icon: modelVideoIcon, label: "视频模型" },
 ];
 
+const STATUS_TEXT: Record<ModelStatus, string> = {
+  on: "已配置",
+  off: "已配置但未启用",
+  none: "未配置",
+};
+
+/**
+ * Model readiness indicator from the draft header: a fill-tertiary pill with
+ * one 8px status dot plus one 20px glyph per model type, tinted by state via
+ * a CSS mask. Clicking the pill opens the model configuration.
+ */
 export default function ModelBadges() {
   const [config, setConfig] = useState<ModelConfigData | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
 
-  useEffect(() => {
+  const refresh = useCallback(() => {
     getModelConfig()
       .then(setConfig)
       .catch(() => setConfig(null));
   }, []);
 
-  const handleSaved = useCallback(() => {
-    getModelConfig()
-      .then(setConfig)
-      .catch(() => setConfig(null));
-  }, []);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
 
   const modalClose = useCallback(() => {
     setModalOpen(false);
-    handleSaved();
-  }, [handleSaved]);
+    refresh();
+  }, [refresh]);
 
-  const status = (type: ModelType): "on" | "off" | "none" => {
+  const status = (type: ModelType): ModelStatus => {
     if (!config) return "none";
     if (type === "grounding") {
       if (!config.grounding) return "none";
@@ -110,97 +106,58 @@ export default function ModelBadges() {
 
   return (
     <>
-      <div
+      <button
+        type="button"
         data-onboarding-id="model-badges"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 1,
-          background: "var(--color-bg-primary)",
-          borderRadius: 10,
-          border: "1px solid var(--color-border)",
-          padding: "3px 4px 3px 6px",
-          marginRight: 80,
-        }}
+        onClick={() => setModalOpen(true)}
+        title="模型配置"
+        aria-label="模型配置"
+        className="mr-[92px] flex cursor-pointer items-center gap-3 rounded-full bg-[rgba(43,27,0,0.04)] px-3 py-1 transition-colors hover:bg-[rgba(43,27,0,0.07)]"
       >
         {BADGE_META.map((meta) => {
-          const st = status(meta.type);
-          const statusLabel =
-            st === "on" ? "已配置" : st === "off" ? "已关闭" : "未配置";
+          const state = status(meta.type);
+          const ready = state === "on";
+          const tint = ready ? READY_COLOR : IDLE_COLOR;
           return (
-            <div
+            <span
               key={meta.type}
-              aria-label={`${meta.label}：${statusLabel}`}
-              title={`${meta.label}：${statusLabel}`}
+              className="flex h-5 items-center gap-2"
+              title={`${meta.label}：${STATUS_TEXT[state]}`}
+              aria-label={`${meta.label}：${STATUS_TEXT[state]}`}
               data-model-badge={meta.type}
-              data-status={st}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 3,
-                padding: "3px 4px",
-                borderRadius: 7,
-                fontSize: 11,
-                fontWeight: 500,
-                color:
-                  st === "on"
-                    ? "var(--color-text-primary)"
-                    : "var(--color-text-tertiary)",
-                background:
-                  st === "on" ? "var(--color-success-soft)" : "transparent",
-                transition: "background 0.15s",
-              }}
+              data-status={state}
             >
               <span
-                style={{
-                  width: 5,
-                  height: 5,
-                  borderRadius: "50%",
-                  background:
-                    st === "on"
-                      ? "var(--color-success)"
-                      : st === "off"
-                      ? "var(--color-danger)"
-                      : "var(--color-border)",
-                  flexShrink: 0,
-                }}
-              />
-              {meta.icon}
-            </div>
+                className="flex h-2 w-2 shrink-0 items-center justify-center rounded-full"
+                style={{ background: ready ? READY_HALO : IDLE_HALO }}
+              >
+                <span
+                  className="h-1 w-1 rounded-full"
+                  style={{ background: tint }}
+                />
+              </span>
+              {meta.icon ? (
+                <span
+                  className="h-5 w-5 shrink-0"
+                  style={{
+                    backgroundColor: tint,
+                    // Quoted so inlined `data:` glyphs keep working: an
+                    // unquoted url() would break on their `#` fill colours.
+                    maskImage: `url("${meta.icon}")`,
+                    WebkitMaskImage: `url("${meta.icon}")`,
+                    maskSize: "100% 100%",
+                    WebkitMaskSize: "100% 100%",
+                    maskRepeat: "no-repeat",
+                    WebkitMaskRepeat: "no-repeat",
+                  }}
+                />
+              ) : (
+                <GlobalOutlined style={{ fontSize: 18, color: tint }} />
+              )}
+            </span>
           );
         })}
-        <button
-          onClick={() => setModalOpen(true)}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 26,
-            height: 26,
-            borderRadius: 6,
-            border: "none",
-            background: "transparent",
-            cursor: "pointer",
-            color: "var(--color-text-tertiary)",
-            transition: "all 0.15s",
-            marginLeft: 2,
-          }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.background =
-              "var(--color-accent-soft)";
-            (e.currentTarget as HTMLButtonElement).style.color =
-              "var(--color-accent)";
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.background =
-              "transparent";
-            (e.currentTarget as HTMLButtonElement).style.color =
-              "var(--color-text-tertiary)";
-          }}
-        >
-          <SettingOutlined style={{ fontSize: 13 }} />
-        </button>
-      </div>
+      </button>
       <ModelConfigModal open={modalOpen} onClose={modalClose} />
     </>
   );
