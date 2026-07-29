@@ -77,6 +77,11 @@ logger = setup_logger("project_routes")
 _CREATE_SCOPE = "POST /projects"
 
 
+def _log_safe(value: Any) -> str:
+    """Neutralize CR/LF in user-provided values before logging."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")
+
+
 class _RemovedProjectPutRoute(CreatorErrorRoute):
     """Keep the removed whole-Project PUT absent instead of exposing a 405 alias."""
 
@@ -407,7 +412,7 @@ async def export_project(
     services: CreatorFileServices = Depends(project_file_services),
 ) -> StreamingResponse:
     #
-    logger.info(f"exporting project:{project_id}")
+    logger.info(f"exporting project:{_log_safe(project_id)}")
     resolve_idempotency_key(idempotency_key)
     await interrupt_creator_agent_runtime(
         project_id,
@@ -425,7 +430,10 @@ async def export_project(
             },
         )
     except Exception as e:
-        logger.error(f"failed to export project {project_id}", exc_info=True)
+        logger.error(
+            f"failed to export project {_log_safe(project_id)}",
+            exc_info=True,
+        )
         raise StorageIntegrityError(
             message=f"Failed to export project {project_id}: {str(e)}",
         ) from e
@@ -534,13 +542,15 @@ async def import_project(
     request: Request,
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ) -> dict[str, Any]:
-    logger.info(f"import request, idempotency_key:{idempotency_key}")
+    logger.info(
+        f"import request, idempotency_key:{_log_safe(idempotency_key)}",
+    )
     resolve_idempotency_key(idempotency_key)
     form = await request.form()
     logger.debug("import request, form is ready")
     for k, v in form.multi_items():
         logger.debug(
-            f"import request form, k:{k}, v: type:{type(v)}, value:{v}",
+            f"import request form, k:{_log_safe(k)}, v: type:{type(v)}",
         )
     upload = next(
         (
