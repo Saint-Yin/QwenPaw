@@ -1,7 +1,7 @@
 {
   "id": "qwenpaw-creator",
   "name": "QwenPaw Creator",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "app",
   "description": "QwenPaw plugin that brings the QwenPaw-Creator script-to-assets-to-video workflow into QwenPaw.",
   "description_i18n": {
