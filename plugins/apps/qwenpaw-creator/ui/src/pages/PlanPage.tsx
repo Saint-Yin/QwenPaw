@@ -435,7 +435,11 @@ export default function PlanPage() {
   const exporting = exportProgress?.status === "running";
   const exportProject = useCallback(async () => {
     if (exporting) return;
-    setExportProgress({ receivedBytes: 0, totalBytes: null, status: "running" });
+    setExportProgress({
+      receivedBytes: 0,
+      totalBytes: null,
+      status: "running",
+    });
     try {
       await saveExportFile(id, (receivedBytes, totalBytes) =>
         setExportProgress({ receivedBytes, totalBytes, status: "running" }),

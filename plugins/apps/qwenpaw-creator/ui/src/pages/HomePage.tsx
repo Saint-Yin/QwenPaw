@@ -1,12 +1,6 @@
 import { useEffect, useState, useCallback, memo } from "react";
 import { Modal, message } from "antd";
-import {
-  Film,
-  ArrowUp,
-  ArrowDown,
-  CircleHelp,
-  Trash2,
-} from "lucide-react";
+import { Film, ArrowUp, ArrowDown, CircleHelp, Trash2 } from "lucide-react";
 import logoMarkUrl from "@/assets/design/logo-mark.png";
 import tabCreateIcon from "@/assets/design/icon-tab-create.svg";
 import tabProjectsIcon from "@/assets/design/icon-tab-projects.svg";

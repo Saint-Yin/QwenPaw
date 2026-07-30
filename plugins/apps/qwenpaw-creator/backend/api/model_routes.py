@@ -81,6 +81,7 @@ def _log_safe(value: object) -> str:
     """Neutralize CR/LF in user-provided values before logging."""
     return str(value).replace("\r", "\\r").replace("\n", "\\n")
 
+
 router = APIRouter(
     prefix="/models",
     tags=["models"],

@@ -279,7 +279,9 @@ export function formatBytes(bytes: number): string {
     value /= 1024;
     index += 1;
   }
-  return `${index === 0 ? Math.round(value) : value.toFixed(1)} ${units[index]}`;
+  return `${index === 0 ? Math.round(value) : value.toFixed(1)} ${
+    units[index]
+  }`;
 }
 
 interface ExportProgressCardProps {

@@ -960,10 +960,7 @@ export default function AssetsPage() {
                       下载
                     </Button>
                   )}
-                  <Button
-                    className="flex-1"
-                    onClick={() => selectItem(null)}
-                  >
+                  <Button className="flex-1" onClick={() => selectItem(null)}>
                     关闭
                   </Button>
                 </div>
