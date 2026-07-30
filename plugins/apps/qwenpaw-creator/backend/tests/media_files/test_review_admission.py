@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+import logging
 
 import pytest
 
@@ -151,6 +152,45 @@ def test_resolved_or_unrelated_review_does_not_block() -> None:
         variant_id="variant:other",
         reference_version_ids=(),
     )
+
+
+def test_missing_target_is_skipped_without_stringifying_none(caplog) -> None:
+    artifact = _artifact().model_copy(
+        update={
+            "owner_ref": "",
+            "metadata": {"commandType": "GENERATE_ASSET"},
+        },
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert_media_review_admission(
+            reviews=[_review(artifact=artifact)],
+            command_type="GENERATE_ASSET",
+            target_ref="",
+            variant_id=None,
+            reference_version_ids=(),
+        )
+
+    assert "without target" in caplog.text
+
+
+def test_malformed_artifact_operation_is_observable(caplog) -> None:
+    review = _review()
+    malformed = review.operations[0].model_copy(
+        update={"after": {"version_id": "artifact-version-broken"}},
+    )
+    review = review.model_copy(update={"operations": [malformed]})
+
+    with caplog.at_level(logging.WARNING):
+        assert_media_review_admission(
+            reviews=[review],
+            command_type="GENERATE_ASSET",
+            target_ref="asset:char:hero",
+            variant_id="variant:hero-peak",
+            reference_version_ids=(),
+        )
+
+    assert "malformed pending artifact review operation" in caplog.text
 
 
 def test_image_execution_freezes_only_the_pending_variant(

@@ -9,6 +9,12 @@ from typing import Sequence
 from domain.errors import ConflictError
 from services.project_files.models import ArtifactVersion
 from services.runtime_files.models import ReviewRecord, ReviewStatus
+from utils.logger import setup_logger
+
+
+logger = setup_logger("services.media_files.review_admission")
+
+_ARTIFACT_VERSION_POINTER_PREFIX = "/assets/artifact_versions_by_id/"
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,19 +34,44 @@ def _pending_media_artifacts(
         if review.status is not ReviewStatus.PENDING:
             continue
         for operation in review.operations:
+            if not (operation.json_pointer or "").startswith(
+                _ARTIFACT_VERSION_POINTER_PREFIX,
+            ):
+                continue
             if not isinstance(operation.after, dict):
+                logger.warning(
+                    "ignoring malformed pending artifact review operation "
+                    "review=%r operation=%r",
+                    review.review_id,
+                    operation.operation_id,
+                )
                 continue
             try:
                 artifact = ArtifactVersion.model_validate(operation.after)
             except ValueError:
+                logger.warning(
+                    "ignoring malformed pending artifact review operation "
+                    "review=%r operation=%r",
+                    review.review_id,
+                    operation.operation_id,
+                )
                 continue
             metadata = artifact.metadata
             command_type = str(metadata.get("commandType") or "").strip()
             if not command_type:
                 continue
-            target_ref = str(
-                metadata.get("targetRef") or artifact.owner_ref,
-            ).strip()
+            raw_target = metadata.get("targetRef")
+            if not isinstance(raw_target, str) or not raw_target.strip():
+                raw_target = artifact.owner_ref
+            target_ref = raw_target.strip()
+            if not target_ref:
+                logger.warning(
+                    "ignoring pending artifact review operation "
+                    "without target review=%r operation=%r",
+                    review.review_id,
+                    operation.operation_id,
+                )
+                continue
             raw_variant_id = metadata.get("variantId")
             variant_id = (
                 str(raw_variant_id).strip()
