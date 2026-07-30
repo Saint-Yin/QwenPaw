@@ -30,7 +30,11 @@ export function getHostProviders(): Promise<HostProviderInfo[]> {
   const token = hostToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
   hostProvidersPromise = fetch("/api/models", { headers })
-    .then((r) => (r.ok ? (r.json() as Promise<HostProviderInfo[]>) : []))
+    .then((r) => (r.ok ? r.json() : []))
+    // The host may answer with an error envelope instead of a provider
+    // array; anything non-array must degrade to "no presets" rather than
+    // crash the modal on hostProviders.find.
+    .then((data) => (Array.isArray(data) ? (data as HostProviderInfo[]) : []))
     .catch(() => [])
     .finally(() => {
       hostProvidersPromise = null;
