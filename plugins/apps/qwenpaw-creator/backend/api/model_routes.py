@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -74,6 +75,11 @@ from .dependencies import (
 from utils.logger import setup_logger
 
 logger = setup_logger("model_routes")
+
+
+def _log_safe(value: object) -> str:
+    """Neutralize CR/LF in user-provided values before logging."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")
 
 router = APIRouter(
     prefix="/models",
@@ -396,6 +402,14 @@ def get_host_provider_api_key(provider_id: str) -> str | None:
         logger.debug("QwenPaw secret store not available")
         return None
 
+    # provider_id lands in a filesystem path; reject anything that could
+    # escape the providers directory.
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", provider_id):
+        logger.warning(
+            f"Rejected invalid provider id {_log_safe(provider_id)}",
+        )
+        return None
+
     for subdir in ["builtin", "custom"]:
         provider_file = (
             QWENPAW_SECRET_DIR / "providers" / subdir / f"{provider_id}.json"
@@ -414,7 +428,8 @@ def get_host_provider_api_key(provider_id: str) -> str | None:
                         # (still carrying the ENC: prefix).
                         if decrypted.startswith("ENC:"):
                             logger.warning(
-                                f"Failed to decrypt API key for provider {provider_id}",
+                                "Failed to decrypt API key for provider "
+                                f"{_log_safe(provider_id)}",
                             )
                             continue
                         return decrypted
@@ -422,7 +437,8 @@ def get_host_provider_api_key(provider_id: str) -> str | None:
                     return encrypted_key
             except Exception as e:
                 logger.warning(
-                    f"Failed to read provider {provider_id} from {provider_file}: {e}",
+                    f"Failed to read provider {_log_safe(provider_id)} "
+                    f"from {_log_safe(provider_file)}: {e}",
                 )
                 continue
 
