@@ -389,17 +389,18 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     getHostProviders().then(setHostProviders);
   }, []);
 
-  // 获取真实的 API key（用于测试）
+  // Resolve the real API key (for connection tests).
   const resolveRealApiKey = async (
     section: string,
     item?: ModelConfigItem,
   ): Promise<string> => {
-    // 如果前端已经有真实的 API key（不是掩码，不是空），直接使用
+    // Use the key the frontend already holds when it is real (not the
+    // mask and not empty).
     if (item && item.api_key && item.api_key !== "__CREATOR_SECRET__") {
       return item.api_key;
     }
 
-    // 否则从后端获取
+    // Otherwise fetch it from the backend.
     try {
       const result = await getRealApiKey(section);
       return result.api_key;
@@ -634,7 +635,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
 
       setTestingLlmMultimodal(true);
       try {
-        // 获取真实的 API key（前端存储的是掩码）
+        // Resolve the real API key (the frontend only stores the mask).
         const realApiKey = await resolveRealApiKey("llm", llmItem);
         const data = await testModelConnection({
           type: "vlm",
@@ -687,16 +688,16 @@ export default function ModelConfigModal({ open, onClose }: Props) {
 
       setTesting((prev) => ({ ...prev, [type]: true }));
       try {
-        // 获取真实的 API key（前端存储的是掩码）
+        // Resolve the real API key (the frontend only stores the mask).
         let testApiKey: string;
         if (type === "asr" && config.asr.reuse_llm_key) {
-          // ASR 复用 LLM API key
+          // ASR reuses the LLM API key.
           testApiKey = await resolveRealApiKey("llm", config.llm);
         } else if (type === "vlm" && config.vlm.use_llm) {
-          // VLM 复用 LLM 配置
+          // VLM reuses the LLM config.
           testApiKey = await resolveRealApiKey("llm", config.llm);
         } else {
-          // 使用当前配置的 API key
+          // Use the API key of the current section.
           testApiKey = await resolveRealApiKey(type, item);
         }
 
@@ -740,8 +741,8 @@ export default function ModelConfigModal({ open, onClose }: Props) {
 
     setTesting((prev) => ({ ...prev, grounding: true }));
     try {
-      // 获取真实的 API key（前端存储的是掩码）
-      // 根据验证模型来源获取对应的真实 API key
+      // Resolve the real API key (the frontend only stores the mask),
+      // picking the section that matches the validation model source.
       let realApiKey = item.api_key;
       if (config.grounding.validation_source === "llm") {
         realApiKey = await resolveRealApiKey("llm", config.llm);
@@ -930,10 +931,11 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       }
     }
 
-    // 如果是 LLM/VLM 类型，且是首次配置（api_key 为空），尝试从 host 同步 API key
+    // For LLM/VLM on their first configuration (empty api_key), try to
+    // sync the API key from the host.
     if ((type === "llm" || type === "vlm") && protocol !== "自定义") {
       const currentItem = config[type] as ModelConfigItem;
-      // 只在首次配置时同步（api_key 为空）
+      // Only sync on first configuration (api_key is empty).
       if (
         !currentItem.api_key ||
         currentItem.api_key === "__CREATOR_SECRET__"

@@ -356,7 +356,7 @@ def _assemble_model_config(
             if not base["vlm"].get(field):
                 base["vlm"][field] = base["llm"].get(field, "")
 
-    # 解密敏感字段（如果 QwenPaw secret store 可用）
+    # Decrypt secret fields when the QwenPaw secret store is available.
     _decrypt_secret_fields(base)
 
     return ModelConfigData.model_validate(base)
@@ -383,14 +383,14 @@ def load_model_config(*, include_environment: bool = True) -> ModelConfigData:
 
 
 def get_host_provider_api_key(provider_id: str) -> str | None:
-    """从 QwenPaw 的加密存储中读取 provider 的 API key。
+    """Read a provider's API key from the QwenPaw encrypted store.
 
-    查找顺序：
+    Lookup order:
     1. builtin providers: ~/.qwenpaw.secret/providers/builtin/{provider_id}.json
     2. custom providers: ~/.qwenpaw.secret/providers/custom/{provider_id}.json
 
     Returns:
-        str: 解密后的 API key，如果找不到或解密失败返回 None
+        str: the decrypted API key, or None when missing or undecryptable
     """
     if not QWENPAW_SECRET_AVAILABLE or QWENPAW_SECRET_DIR is None:
         logger.debug("QwenPaw secret store not available")
@@ -407,17 +407,18 @@ def get_host_provider_api_key(provider_id: str) -> str | None:
                     encrypted_key = data.get("api_key", "")
                     if not encrypted_key:
                         continue
-                    # 解密 ENC: 格式的值
+                    # Decrypt values in the ENC: format.
                     if encrypted_key.startswith("ENC:"):
                         decrypted = qwenpaw_decrypt(encrypted_key)
-                        # 如果解密失败，decrypt 会返回原值（仍带 ENC: 前缀）
+                        # On failure decrypt returns the original value
+                        # (still carrying the ENC: prefix).
                         if decrypted.startswith("ENC:"):
                             logger.warning(
                                 f"Failed to decrypt API key for provider {provider_id}",
                             )
                             continue
                         return decrypted
-                    # 明文值（旧版本或测试环境）
+                    # Plaintext value (legacy versions or test environments).
                     return encrypted_key
             except Exception as e:
                 logger.warning(
@@ -435,7 +436,7 @@ _SECRET_FIELDS = ("api_key", "access_key_secret", "policy_api_key")
 
 
 def _decrypt_secret_fields(data: dict) -> dict:
-    """解密数据中的敏感字段"""
+    """Decrypt the secret fields inside the config data."""
     if not (QWENPAW_SECRET_AVAILABLE and qwenpaw_decrypt is not None):
         return data
 
@@ -455,7 +456,7 @@ def _decrypt_secret_fields(data: dict) -> dict:
 
 
 def _encrypt_secret_fields(data: dict) -> dict:
-    """加密数据中的敏感字段"""
+    """Encrypt the secret fields inside the config data."""
     if not (QWENPAW_SECRET_AVAILABLE and qwenpaw_encrypt is not None):
         return data
 
@@ -518,7 +519,7 @@ def mutate_model_config(
         )
         updated = mutator(persisted)
 
-        # 加密敏感字段（如果 QwenPaw secret store 可用）
+        # Encrypt secret fields when the QwenPaw secret store is available.
         updated_dict = updated.model_dump()
         _encrypt_secret_fields(updated_dict)
 
@@ -1279,10 +1280,11 @@ async def test_oss_connection(
 
 @router.get("/real-api-key/{section}")
 async def get_real_api_key(section: str) -> dict[str, str]:
-    """返回指定配置项的真实 API key（用于测试）。
+    """Return the real API key of the given config section (for testing).
 
-    当 VLM/Grounding/ASR 复用 LLM 配置时，前端需要获取真实的 API key 进行测试，
-    因为前端存储的是掩码 "__CREATOR_SECRET__"。
+    When VLM/Grounding/ASR reuse the LLM config, the frontend needs the real
+    API key to run connection tests, because it only stores the mask
+    "__CREATOR_SECRET__".
     """
     valid_sections = {"llm", "vlm", "asr", "image", "video", "grounding"}
     if section not in valid_sections:
@@ -1302,9 +1304,9 @@ async def get_real_api_key(section: str) -> dict[str, str]:
 
 @router.get("/host-provider/{provider_id}/api-key")
 async def get_host_provider_key(provider_id: str) -> dict[str, str | None]:
-    """获取 QwenPaw host 中指定 provider 的 API key。
+    """Fetch the API key of the given provider from the QwenPaw host.
 
-    用于在 Creator 中选择 LLM/VLM provider 时自动同步 API key。
+    Used to auto-sync the API key when picking an LLM/VLM provider in Creator.
     """
     api_key = get_host_provider_api_key(provider_id)
     return {"api_key": api_key}
