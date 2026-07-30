@@ -335,9 +335,8 @@ def _assemble_model_config(
     if isinstance(checkpoints, dict):
         base["creation_checkpoints"].update(checkpoints)
     if base["vlm"].get("use_llm"):
-        for field in ("base_url", "api_key", "model_name"):
-            if not base["vlm"].get(field):
-                base["vlm"][field] = base["llm"].get(field, "")
+        for field in ("base_url", "api_key", "model_name", "protocol"):
+            base["vlm"][field] = base["llm"].get(field, "")
     return ModelConfigData.model_validate(base)
 
 
