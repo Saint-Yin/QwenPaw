@@ -428,11 +428,18 @@ async def export_project(
     resolve_idempotency_key(idempotency_key)
     try:
         safe_id = _safe_project_id(project_id)
+        # The archive is built on disk first; knowing its exact size lets the
+        # download UI show a real percentage instead of an indeterminate bar.
+        archive_size, archive_chunks = await asyncio.to_thread(
+            services.projects.export,
+            project_id,
+        )
         return StreamingResponse(
-            content=services.projects.export(project_id),
+            content=archive_chunks,
             media_type="application/octet-stream",
             headers={
                 "Content-Disposition": f'attachment; filename="{safe_id}.zip"',
+                "Content-Length": str(archive_size),
             },
         )
     except Exception as e:
