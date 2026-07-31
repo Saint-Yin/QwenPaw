@@ -8,6 +8,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from hashlib import sha256
 import json
+import logging
 from typing import Any
 
 from fastapi import (
@@ -70,6 +71,8 @@ from .dependencies import (
     resolve_idempotency_key,
 )
 from .file_execution_routes import _cancel_task_sync
+
+logger = logging.getLogger("qwenpaw.creator.api.file_session_routes")
 
 
 router = APIRouter(
@@ -495,6 +498,13 @@ async def post_message(
     notify_creator_agent_runtime(project_id)
     response.headers["X-Idempotent-Replay"] = (
         "true" if admitted.replayed else "false"
+    )
+    logger.info(
+        "message posted: project=%s session=%s seq=%d replayed=%s",
+        project_id,
+        session.session_id,
+        admitted.message.message_seq,
+        admitted.replayed,
     )
     return {
         "messageSeq": admitted.message.message_seq,
