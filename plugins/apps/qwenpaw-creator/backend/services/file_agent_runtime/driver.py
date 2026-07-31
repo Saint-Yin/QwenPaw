@@ -789,6 +789,10 @@ class FileCreatorAgentRuntime:
                         # A per-Project failure is persisted by its run whenever
                         # possible and must not starve unrelated Projects.
                         continue
+                logger.debug(
+                    "dispatch loop tick: projects=%d",
+                    len(project_ids),
+                )
         except asyncio.CancelledError:
             return
 

@@ -1862,6 +1862,12 @@ class FileLocalMediaExecutionService:
                 item.version_id for item in resolved.inputs
             ),
         )
+        logger.info(
+            "local_media execute: project=%s task=%s command=%s",
+            project_id,
+            ids["task_id"],
+            command_value.value,
+        )
         request_fingerprint = _resolved_fingerprint(resolved)
         reuse = await asyncio.to_thread(
             _reusable_succeeded_task,
