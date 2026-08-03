@@ -339,7 +339,10 @@ def _infer_grounding_domain(
         text,
     ):
         return "sports"
-    if re.search("\\b(brand|logo|product|company)\\b|品牌|产品|公司|标志|logo", text):
+    if re.search(
+        "\\b(brand|logo|product|company)\\b|品牌|产品|公司|标志|logo",
+        text,
+    ):
         return "brand_product"
     if re.search(
         "\\b(place|venue|city|country|stadium|event)\\b|地点|城市|国家|场馆|赛事",
@@ -578,7 +581,10 @@ def detect_grounding_needs(
     if isinstance(context, dict) and context.get("requiresGrounding"):
         reasons.append("context_requires_grounding")
     pure_fiction = bool(
-        re.search("fictional|imaginary|invent|fantasy|虚构|架空|编一个|想象", lower),
+        re.search(
+            "fictional|imaginary|invent|fantasy|虚构|架空|编一个|想象",
+            lower,
+        ),
     )
     if pure_fiction and (
         not set(reasons)
@@ -773,9 +779,11 @@ async def triage_grounding_request(
         "reasons": list(
             dict.fromkeys((str(reason) for reason in reasons if reason)),
         ),
-        "queries": list(analysis.get("queries") or [])[:max_queries]
-        if needs_grounding
-        else [],
+        "queries": (
+            list(analysis.get("queries") or [])[:max_queries]
+            if needs_grounding
+            else []
+        ),
         "entities": entities,
         "detector": analysis.get("detector") or _detector_mode(detector),
         "detector_issues": list(analysis.get("detector_issues") or []),

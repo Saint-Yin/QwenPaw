@@ -37,6 +37,12 @@ SERPER_SEARCH_PARAMS = {"gl": "us", "hl": "en", "location": "United States"}
 SERPER_LENS_PARAMS = {"gl": "us", "hl": "en"}
 
 
+def _tavily_safe_search_enabled() -> bool:
+    """Tavily rejects safe_search outside enterprise plans; opt-in only."""
+    raw = os.environ.get("TAVILY_SAFE_SEARCH", "")
+    return raw.strip().casefold() in {"1", "true", "yes", "on"}
+
+
 async def _search_tavily(
     client: httpx.AsyncClient,
     query: str,
@@ -45,26 +51,28 @@ async def _search_tavily(
     api_key = _tavily_api_key()
     if not api_key:
         raise RuntimeError("TAVILY_API_KEY is not configured")
+    payload: dict[str, Any] = {
+        "query": query,
+        "search_depth": os.environ.get("TAVILY_SEARCH_DEPTH", "basic"),
+        "chunks_per_source": 3,
+        "max_results": limit,
+        "topic": "general",
+        "include_answer": False,
+        "include_raw_content": False,
+        "include_images": False,
+        "include_image_descriptions": False,
+        "include_favicon": False,
+        "auto_parameters": False,
+    }
+    if _tavily_safe_search_enabled():
+        payload["safe_search"] = True
     response = await client.post(
         os.environ.get("TAVILY_SEARCH_URL", TAVILY_SEARCH_URL),
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         },
-        json={
-            "query": query,
-            "search_depth": os.environ.get("TAVILY_SEARCH_DEPTH", "basic"),
-            "chunks_per_source": 3,
-            "max_results": limit,
-            "topic": "general",
-            "include_answer": False,
-            "include_raw_content": False,
-            "include_images": False,
-            "include_image_descriptions": False,
-            "include_favicon": False,
-            "auto_parameters": False,
-            "safe_search": True,
-        },
+        json=payload,
     )
     response.raise_for_status()
     payload = response.json()
@@ -411,26 +419,28 @@ async def _search_tavily_visuals(
     api_key = _tavily_api_key()
     if not api_key:
         raise RuntimeError("TAVILY_API_KEY is not configured")
+    payload: dict[str, Any] = {
+        "query": query,
+        "search_depth": os.environ.get("TAVILY_SEARCH_DEPTH", "basic"),
+        "chunks_per_source": 1,
+        "max_results": max(1, min(limit, DEFAULT_MAX_SOURCES)),
+        "topic": "general",
+        "include_answer": False,
+        "include_raw_content": False,
+        "include_images": True,
+        "include_image_descriptions": True,
+        "include_favicon": False,
+        "auto_parameters": False,
+    }
+    if _tavily_safe_search_enabled():
+        payload["safe_search"] = True
     response = await client.post(
         os.environ.get("TAVILY_SEARCH_URL", TAVILY_SEARCH_URL),
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         },
-        json={
-            "query": query,
-            "search_depth": os.environ.get("TAVILY_SEARCH_DEPTH", "basic"),
-            "chunks_per_source": 1,
-            "max_results": max(1, min(limit, DEFAULT_MAX_SOURCES)),
-            "topic": "general",
-            "include_answer": False,
-            "include_raw_content": False,
-            "include_images": True,
-            "include_image_descriptions": True,
-            "include_favicon": False,
-            "auto_parameters": False,
-            "safe_search": True,
-        },
+        json=payload,
     )
     response.raise_for_status()
     return _normalize_tavily_images(response.json(), query, limit)
@@ -441,9 +451,7 @@ def _normalize_serper_images(
     query: str,
     limit: int,
 ) -> list[dict[str, Any]]:
-    raw_images = (
-        payload.get("images") if isinstance(payload, dict) else None
-    )
+    raw_images = payload.get("images") if isinstance(payload, dict) else None
     if not isinstance(raw_images, list):
         return []
     visual_sources: list[dict[str, Any]] = []
@@ -506,9 +514,7 @@ def _normalize_serper_lens_matches(
     query: str,
     limit: int,
 ) -> list[dict[str, Any]]:
-    raw_matches = (
-        payload.get("organic") if isinstance(payload, dict) else None
-    )
+    raw_matches = payload.get("organic") if isinstance(payload, dict) else None
     if not isinstance(raw_matches, list):
         return []
     visual_sources: list[dict[str, Any]] = []

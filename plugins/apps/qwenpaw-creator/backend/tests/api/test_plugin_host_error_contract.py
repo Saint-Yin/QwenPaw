@@ -16,7 +16,6 @@ from httpx import ASGITransport, AsyncClient
 from api.dependencies import CreatorErrorRoute
 from domain.errors import CreatorError
 
-
 WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 PLUGIN_ENTRYPOINT = WORKSPACE_ROOT / "qwenpaw-creator" / "backend" / "main.py"
 PLUGIN_MANIFEST = WORKSPACE_ROOT / "qwenpaw-creator" / "plugin.json"

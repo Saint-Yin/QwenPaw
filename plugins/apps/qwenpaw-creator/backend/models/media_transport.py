@@ -20,7 +20,6 @@ from models import config as model_config
 from services.runtime_files.safe_remote_download import safe_download_bytes
 from utils.paths import local_path_from_file_url, media_path_from_url
 
-
 OSS_POLICY_URL = "https://dashscope.aliyuncs.com/api/v1/uploads"
 DEFAULT_CREATOR_MEDIA_BUCKET = "creator-store"
 WAN_MEDIA_PREFIX = "wan_media"
@@ -529,7 +528,11 @@ def _presign_upload_with_oss2(
     bucket = oss2.Bucket(auth, endpoint, bucket_name)
     # Keep the bucket default (private) ACL: the object is only reachable
     # through the expiring signed URL below.
-    bucket.put_object(key, file_content, headers={"Content-Type": content_type})
+    bucket.put_object(
+        key,
+        file_content,
+        headers={"Content-Type": content_type},
+    )
     return bucket.sign_url("GET", key, expires_seconds)
 
 

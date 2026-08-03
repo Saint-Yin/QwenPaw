@@ -3,10 +3,13 @@
 # pylint: disable=line-too-long,protected-access,unused-argument
 # pylint: disable=use-implicit-booleaness-not-comparison
 import asyncio
+import io
 import json
 
 import httpx
 import pytest
+import respx
+from PIL import Image
 
 from services.web_grounding import pipeline as web_grounding
 from services.web_grounding import common as grounding_common
@@ -40,6 +43,12 @@ class _FakeClient:
     async def post(self, url, **kwargs):
         self.calls.append((url, kwargs))
         return _FakeResponse(self.payload)
+
+
+def _png_bytes() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (4, 4), "white").save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def test_dashscope_model_falls_back_when_model_config_raises(monkeypatch):
@@ -139,7 +148,9 @@ def test_detect_grounding_needs_for_explicit_search():
 
 
 def test_detect_grounding_skips_self_contained_fiction():
-    result = web_grounding.detect_grounding_needs("编一个虚构太空厨师的短片 prompt，风格温暖")
+    result = web_grounding.detect_grounding_needs(
+        "编一个虚构太空厨师的短片 prompt，风格温暖",
+    )
 
     assert result["needs_grounding"] is False
     assert result["queries"] == []
@@ -212,7 +223,9 @@ def test_grounding_triage_exposes_domain_and_visual_decision(monkeypatch):
         fake_llm_detector,
     )
 
-    triage = asyncio.run(web_grounding.triage_grounding_request("剪辑哈兰德的国家队高光"))
+    triage = asyncio.run(
+        web_grounding.triage_grounding_request("剪辑哈兰德的国家队高光"),
+    )
 
     assert triage["needs_grounding"] is True
     assert triage["domain"] == "sports_target_player"
@@ -445,6 +458,7 @@ def test_search_tavily_visuals_maps_top_level_and_result_images(monkeypatch):
 
 def test_search_serper_maps_response(monkeypatch):
     monkeypatch.setenv("SERPER_API_KEY", "serper-test")
+    monkeypatch.delenv("SERPER_SEARCH_URL", raising=False)
     payload = {
         "organic": [
             {
@@ -456,13 +470,24 @@ def test_search_serper_maps_response(monkeypatch):
             {"snippet": "missing title and link"},
         ],
     }
-    client = _FakeClient(payload)
 
-    results = asyncio.run(adapters._search_serper(client, "Erling Haaland", 3))
+    async def run():
+        async with httpx.AsyncClient() as client:
+            return await adapters._search_serper(
+                client,
+                "Erling Haaland",
+                3,
+            )
 
-    assert client.calls
-    assert client.calls[0][1]["headers"]["X-API-KEY"] == "serper-test"
-    assert client.calls[0][1]["json"]["q"] == "Erling Haaland"
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post("https://google.serper.dev/search").mock(
+            return_value=httpx.Response(200, json=payload),
+        )
+        results = asyncio.run(run())
+
+    request = route.calls.last.request
+    assert request.headers["X-API-KEY"] == "serper-test"
+    assert json.loads(request.content)["q"] == "Erling Haaland"
     assert results == [
         {
             "title": "Erling Haaland Facts",
@@ -487,6 +512,7 @@ def test_search_serper_requires_api_key(monkeypatch):
 
 def test_search_serper_visuals_maps_response(monkeypatch):
     monkeypatch.setenv("SERPER_API_KEY", "serper-test")
+    monkeypatch.delenv("SERPER_IMAGES_URL", raising=False)
     payload = {
         "images": [
             {
@@ -499,15 +525,20 @@ def test_search_serper_visuals_maps_response(monkeypatch):
             {"source": "no image url"},
         ],
     }
-    client = _FakeClient(payload)
 
-    results = asyncio.run(
-        adapters._search_serper_visuals(client, "彝族银饰", 3),
-    )
+    async def run():
+        async with httpx.AsyncClient() as client:
+            return await adapters._search_serper_visuals(client, "彝族银饰", 3)
 
-    assert client.calls
-    assert client.calls[0][1]["headers"]["X-API-KEY"] == "serper-test"
-    assert client.calls[0][1]["json"]["q"] == "彝族银饰"
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post("https://google.serper.dev/images").mock(
+            return_value=httpx.Response(200, json=payload),
+        )
+        results = asyncio.run(run())
+
+    request = route.calls.last.request
+    assert request.headers["X-API-KEY"] == "serper-test"
+    assert json.loads(request.content)["q"] == "彝族银饰"
     assert results == [
         {
             "url": "https://img.test/yi-silver.jpg",
@@ -518,6 +549,37 @@ def test_search_serper_visuals_maps_response(monkeypatch):
             "query": "彝族银饰",
         },
     ]
+
+
+def test_search_tavily_omits_safe_search_by_default(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.delenv("TAVILY_SAFE_SEARCH", raising=False)
+    text_client = _FakeClient({"results": []})
+    visual_client = _FakeClient({"images": []})
+
+    asyncio.run(adapters._search_tavily(text_client, "Erling Haaland", 3))
+    asyncio.run(
+        adapters._search_tavily_visuals(visual_client, "Erling Haaland", 3),
+    )
+
+    # Tavily rejects safe_search outside enterprise plans with HTTP 403.
+    assert "safe_search" not in text_client.calls[0][1]["json"]
+    assert "safe_search" not in visual_client.calls[0][1]["json"]
+
+
+def test_search_tavily_sends_safe_search_when_opted_in(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("TAVILY_SAFE_SEARCH", "1")
+    text_client = _FakeClient({"results": []})
+    visual_client = _FakeClient({"images": []})
+
+    asyncio.run(adapters._search_tavily(text_client, "Erling Haaland", 3))
+    asyncio.run(
+        adapters._search_tavily_visuals(visual_client, "Erling Haaland", 3),
+    )
+
+    assert text_client.calls[0][1]["json"]["safe_search"] is True
+    assert visual_client.calls[0][1]["json"]["safe_search"] is True
 
 
 def test_search_dashscope_web_search_image_visuals_maps_response(monkeypatch):
@@ -1154,8 +1216,7 @@ def test_search_visual_refs_reports_serper_error_and_falls_back(monkeypatch):
         "dashscope_web_search_image",
     ]
     assert (
-        "serper_images:RuntimeError: serper quota exceeded"
-        in result["issues"]
+        "serper_images:RuntimeError: serper quota exceeded" in result["issues"]
     )
 
 
@@ -2835,6 +2896,7 @@ def test_public_provider_helpers_are_removed():
 
 def test_search_serper_lens_maps_response(monkeypatch):
     monkeypatch.setenv("SERPER_API_KEY", "serper-test")
+    monkeypatch.delenv("SERPER_LENS_URL", raising=False)
     payload = {
         "organic": [
             {
@@ -2847,20 +2909,25 @@ def test_search_serper_lens_maps_response(monkeypatch):
             {"title": "missing image url"},
         ],
     }
-    client = _FakeClient(payload)
 
-    results = asyncio.run(
-        adapters._search_serper_lens(
-            client,
-            "https://public.test/reference.jpg",
-            3,
-            query="Erling Haaland",
-        ),
-    )
+    async def run():
+        async with httpx.AsyncClient() as client:
+            return await adapters._search_serper_lens(
+                client,
+                "https://public.test/reference.jpg",
+                3,
+                query="Erling Haaland",
+            )
 
-    assert client.calls
-    assert client.calls[0][1]["headers"]["X-API-KEY"] == "serper-test"
-    assert client.calls[0][1]["json"] == {
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post("https://google.serper.dev/lens").mock(
+            return_value=httpx.Response(200, json=payload),
+        )
+        results = asyncio.run(run())
+
+    request = route.calls.last.request
+    assert request.headers["X-API-KEY"] == "serper-test"
+    assert json.loads(request.content) == {
         "url": "https://public.test/reference.jpg",
         "gl": "us",
         "hl": "en",
@@ -2882,6 +2949,11 @@ def test_search_visual_refs_by_image_uses_public_http_url(monkeypatch):
         provider_search,
         "_serper_api_key",
         lambda: "serper-key",
+    )
+    monkeypatch.setattr(
+        provider_search,
+        "_validate_public_remote_url",
+        lambda value: value,
     )
     captured = {}
 
@@ -2962,6 +3034,102 @@ def test_search_visual_refs_by_image_rejects_dashscope_oss_url(monkeypatch):
     )
 
 
+def test_search_visual_refs_by_image_rejects_non_public_http_url(monkeypatch):
+    monkeypatch.setattr(
+        provider_search,
+        "_serper_api_key",
+        lambda: "serper-key",
+    )
+
+    async def fail_lens(*args, **kwargs):
+        raise AssertionError("private addresses must never reach Serper Lens")
+
+    monkeypatch.setattr(provider_search, "_search_serper_lens", fail_lens)
+
+    result = asyncio.run(
+        provider_search.search_visual_refs_by_image(
+            "http://127.0.0.1/private.jpg",
+        ),
+    )
+
+    assert result["visual_sources"] == []
+    assert result["providers_attempted"] == []
+    assert any(
+        issue.startswith("serper_lens:non_public_image_url")
+        for issue in result["issues"]
+    )
+
+
+def test_search_visual_refs_by_image_rejects_paths_outside_data_root(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        provider_search,
+        "_serper_api_key",
+        lambda: "serper-key",
+    )
+    data_root = tmp_path / "creator-data"
+    data_root.mkdir()
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(data_root))
+    outside_image = tmp_path / "outside.png"
+    outside_image.write_bytes(_png_bytes())
+
+    async def fail_presign(*args, **kwargs):
+        raise AssertionError("files outside the data root must not upload")
+
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "upload_image_for_temporary_public_url",
+        fail_presign,
+    )
+
+    result = asyncio.run(
+        provider_search.search_visual_refs_by_image(str(outside_image)),
+    )
+
+    assert result["visual_sources"] == []
+    assert result["providers_attempted"] == []
+    assert any(
+        issue.startswith("serper_lens:invalid_local_image_reference")
+        for issue in result["issues"]
+    )
+
+
+def test_search_visual_refs_by_image_rejects_non_image_local_files(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        provider_search,
+        "_serper_api_key",
+        lambda: "serper-key",
+    )
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path))
+    secret_file = tmp_path / "model_config.json"
+    secret_file.write_bytes(b'{"llm": {"api_key": "sk-secret"}}')
+
+    async def fail_presign(*args, **kwargs):
+        raise AssertionError("non-image files must not upload")
+
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "upload_image_for_temporary_public_url",
+        fail_presign,
+    )
+
+    result = asyncio.run(
+        provider_search.search_visual_refs_by_image(str(secret_file)),
+    )
+
+    assert result["visual_sources"] == []
+    assert result["providers_attempted"] == []
+    assert any(
+        issue.startswith("serper_lens:invalid_local_image_reference")
+        for issue in result["issues"]
+    )
+
+
 def test_search_visual_refs_by_image_degrades_without_oss_for_local_media(
     monkeypatch,
     tmp_path,
@@ -2971,8 +3139,9 @@ def test_search_visual_refs_by_image_degrades_without_oss_for_local_media(
         "_serper_api_key",
         lambda: "serper-key",
     )
-    local_image = tmp_path / "reference.jpg"
-    local_image.write_bytes(b"fake-jpeg-bytes")
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path))
+    local_image = tmp_path / "reference.png"
+    local_image.write_bytes(_png_bytes())
     monkeypatch.setattr(
         provider_search._media_transport,
         "creator_oss_readiness",
@@ -2998,7 +3167,9 @@ def test_search_visual_refs_by_image_degrades_without_oss_for_local_media(
     degraded = [
         issue
         for issue in result["issues"]
-        if issue.startswith("serper_lens:local_image_requires_creator_media_oss")
+        if issue.startswith(
+            "serper_lens:local_image_requires_creator_media_oss",
+        )
     ]
     assert degraded
     assert "OSS_ACCESS_KEY_ID is required" in degraded[0]
@@ -3013,8 +3184,9 @@ def test_search_visual_refs_by_image_presigns_local_media_when_oss_ready(
         "_serper_api_key",
         lambda: "serper-key",
     )
-    local_image = tmp_path / "reference.jpg"
-    local_image.write_bytes(b"fake-jpeg-bytes")
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path))
+    local_image = tmp_path / "reference.png"
+    local_image.write_bytes(_png_bytes())
     monkeypatch.setattr(
         provider_search._media_transport,
         "creator_oss_readiness",
@@ -3056,8 +3228,8 @@ def test_search_visual_refs_by_image_presigns_local_media_when_oss_ready(
         ),
     )
 
-    assert uploaded["content"] == b"fake-jpeg-bytes"
-    assert uploaded["filename"] == "reference.jpg"
+    assert uploaded["content"] == _png_bytes()
+    assert uploaded["filename"] == "reference.png"
     assert captured["image_url"].startswith("https://bucket.test/")
     assert result["provider"] == "serper_lens"
     # The signed URL must never leak into the result payload.
@@ -3085,9 +3257,7 @@ def test_visual_jobs_carry_entity_reference_image():
         job for job in jobs if job.get("entity_name") == "Erling Haaland"
     ]
     assert identity_jobs
-    assert (
-        identity_jobs[0]["reference_image"] == "/tmp/haaland-reference.jpg"
-    )
+    assert identity_jobs[0]["reference_image"] == "/tmp/haaland-reference.jpg"
 
 
 def test_ground_prompt_context_prefers_serper_lens_for_reference_image_jobs(

@@ -12,10 +12,17 @@ from typing import Any
 import httpx
 
 from models import media_transport as _media_transport
+from services.runtime_files.safe_remote_download import (
+    validate_public_remote_url as _validate_public_remote_url,
+)
+from services.storage_root import require_creator_data_root
 from utils.logger import setup_logger
 from utils.paths import local_path_from_file_url as _local_path_from_file_url
 from utils.paths import media_path_from_url as _media_path_from_url
 
+from ..staging import sniff_image_media_type as _sniff_image_media_type
+from ..staging import validate_raster_image as _validate_raster_image
+from ..staging import visual_download_max_bytes as _visual_download_max_bytes
 from ..triage import _clean_query
 from .adapters import _search_dashscope_web_search_image_visuals
 from .adapters import _search_dashscope_web
@@ -145,7 +152,7 @@ async def search_web(
     max_sources: int = DEFAULT_MAX_SOURCES,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
-    """Run Tavily first, then fall back to DashScope/Qwen web search."""
+    """Run Tavily, then Serper, then DashScope/Qwen web search."""
     query = _clean_query(query)
     if not query:
         return {
@@ -281,9 +288,11 @@ async def search_web(
                     issues.append("dashscope_web_search:no_text_sources")
             else:
                 issues.append(
-                    "dashscope_web_search_api_key_missing"
-                    if not native_search_key
-                    else f"dashscope_web_search:{native_search_issue}",
+                    (
+                        "dashscope_web_search_api_key_missing"
+                        if not native_search_key
+                        else f"dashscope_web_search:{native_search_issue}"
+                    ),
                 )
                 logger.info(
                     "Web grounding provider skipped query=%r provider=dashscope_web_search reason=%s",
@@ -349,9 +358,11 @@ async def search_visual_refs(
             api_key_override=native_search_key,
         )
         issues.append(
-            "dashscope_web_search_image_api_key_missing"
-            if not native_search_key
-            else f"dashscope_web_search_image:{native_search_issue}",
+            (
+                "dashscope_web_search_image_api_key_missing"
+                if not native_search_key
+                else f"dashscope_web_search_image:{native_search_issue}"
+            ),
         )
     async with httpx.AsyncClient(
         timeout=effective_timeout,
@@ -424,9 +435,11 @@ async def search_visual_refs(
                 )
                 if not native_search_key or native_search_issue:
                     issues.append(
-                        "dashscope_web_search_image_api_key_missing"
-                        if not native_search_key
-                        else f"dashscope_web_search_image:{native_search_issue}",
+                        (
+                            "dashscope_web_search_image_api_key_missing"
+                            if not native_search_key
+                            else f"dashscope_web_search_image:{native_search_issue}"
+                        ),
                     )
                     logger.info(
                         "Visual grounding provider skipped query=%r provider=dashscope_web_search_image reason=%s",
@@ -507,37 +520,52 @@ async def search_visual_refs(
     }
 
 
-async def _lens_public_image_url(image_ref: str) -> tuple[str, str]:
-    """Resolve *image_ref* into a public URL Serper Lens can fetch.
+def _lens_local_media_path(ref: str) -> Path:
+    """Resolve a local ref and confine it to the Creator data root.
 
-    Returns ``(url, issue)`` where exactly one side is non-empty. Lens only
-    accepts a public http(s) ``{"url"}`` payload (no base64/upload form);
-    DashScope temporary ``oss://`` URLs are not public and anonymous image
-    hosts are forbidden, so local media must round-trip through
-    ``creator_media_oss`` as a short-lived presigned URL.
+    The grounding context is model-controlled, so an arbitrary filesystem
+    path here would let a prompt-injected run exfiltrate any readable file
+    through the presigned-URL round trip. Symlinks are resolved before the
+    containment check.
     """
-    ref = str(image_ref or "").strip()
-    if not ref:
-        return "", "serper_lens:empty_image_reference"
-    if ref.startswith(("http://", "https://")):
-        return ref, ""
-    if ref.startswith("oss://"):
-        return "", (
-            "serper_lens:oss_url_not_public: DashScope temporary oss:// "
-            "URLs resolve only inside DashScope and cannot be fetched by "
-            "Serper Lens"
+    if ref.startswith("file://"):
+        candidate = _local_path_from_file_url(ref)
+    elif ref.startswith("/generated/"):
+        candidate = _media_path_from_url(ref)
+    else:
+        candidate = Path(ref)
+    resolved = candidate.expanduser().resolve()
+    root = require_creator_data_root(create=False).resolve()
+    if not resolved.is_relative_to(root):
+        raise ValueError(
+            "local reference images must be Creator media files inside "
+            "CREATOR_DATA_ROOT",
         )
-    try:
-        if ref.startswith("file://"):
-            path = _local_path_from_file_url(ref)
-        elif ref.startswith("/generated/"):
-            path = _media_path_from_url(ref)
-        else:
-            path = Path(ref)
-    except ValueError as exc:
-        return "", f"serper_lens:unsupported_image_reference: {exc}"
+    return resolved
+
+
+def _lens_local_image_payload(ref: str) -> tuple[bytes, str]:
+    """Read and validate a confined local image for the Lens round trip."""
+    path = _lens_local_media_path(ref)
     if not path.is_file():
-        return "", f"serper_lens:image_not_found: {path}"
+        raise ValueError(f"image not found: {path}")
+    max_bytes = _visual_download_max_bytes()
+    if path.stat().st_size > max_bytes:
+        raise ValueError(
+            f"image exceeds the {max_bytes} byte visual reference limit",
+        )
+    payload = path.read_bytes()
+    _sniff_image_media_type(payload)
+    _validate_raster_image(payload)
+    return payload, path.name
+
+
+async def _lens_presigned_local_image_url(ref: str) -> tuple[str, str]:
+    """Expose a validated local image through a short-lived presigned URL."""
+    try:
+        payload, filename = _lens_local_image_payload(ref)
+    except Exception as exc:
+        return "", f"serper_lens:invalid_local_image_reference: {exc}"
     readiness = _media_transport.creator_oss_readiness()
     if readiness["status"] != "ready":
         blockers = "; ".join(readiness["blockers"])
@@ -548,9 +576,11 @@ async def _lens_public_image_url(image_ref: str) -> tuple[str, str]:
             f"15-minute presigned URL ({blockers})"
         )
     try:
-        signed_url = await _media_transport.upload_image_for_temporary_public_url(
-            path.read_bytes(),
-            path.name,
+        signed_url = (
+            await _media_transport.upload_image_for_temporary_public_url(
+                payload,
+                filename,
+            )
         )
     except Exception as exc:
         return (
@@ -558,6 +588,37 @@ async def _lens_public_image_url(image_ref: str) -> tuple[str, str]:
             f"serper_lens:oss_presign_failed:{exc.__class__.__name__}: {exc}",
         )
     return signed_url, ""
+
+
+async def _lens_public_image_url(image_ref: str) -> tuple[str, str]:
+    """Resolve *image_ref* into a public URL Serper Lens can fetch.
+
+    Returns ``(url, issue)`` where exactly one side is non-empty. Lens only
+    accepts a public http(s) ``{"url"}`` payload (no base64/upload form);
+    http(s) inputs must pass the SSRF public-address policy, DashScope
+    temporary ``oss://`` URLs are not public, anonymous image hosts are
+    forbidden, and local media must round-trip through ``creator_media_oss``
+    as a short-lived presigned URL.
+    """
+    ref = str(image_ref or "").strip()
+    if not ref:
+        return "", "serper_lens:empty_image_reference"
+    if ref.startswith(("http://", "https://")):
+        try:
+            public_url = await asyncio.to_thread(
+                _validate_public_remote_url,
+                ref,
+            )
+            return public_url, ""
+        except Exception as exc:
+            return "", f"serper_lens:non_public_image_url: {exc}"
+    if ref.startswith("oss://"):
+        return "", (
+            "serper_lens:oss_url_not_public: DashScope temporary oss:// "
+            "URLs resolve only inside DashScope and cannot be fetched by "
+            "Serper Lens"
+        )
+    return await _lens_presigned_local_image_url(ref)
 
 
 async def search_visual_refs_by_image(

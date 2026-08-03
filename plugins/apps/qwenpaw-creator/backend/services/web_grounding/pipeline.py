@@ -146,19 +146,25 @@ async def ground_prompt_context(
             ],
         }
     effective_visual_search_timeout = float(
-        visual_search_timeout
-        if visual_search_timeout is not None
-        else model_config.get_web_grounding_visual_search_timeout_seconds(),
+        (
+            visual_search_timeout
+            if visual_search_timeout is not None
+            else model_config.get_web_grounding_visual_search_timeout_seconds()
+        ),
     )
     effective_image_download_timeout = float(
-        image_download_timeout
-        if image_download_timeout is not None
-        else model_config.get_web_grounding_image_download_timeout_seconds(),
+        (
+            image_download_timeout
+            if image_download_timeout is not None
+            else model_config.get_web_grounding_image_download_timeout_seconds()
+        ),
     )
     effective_verification_timeout = float(
-        verification_timeout
-        if verification_timeout is not None
-        else model_config.get_web_grounding_verification_timeout_seconds(),
+        (
+            verification_timeout
+            if verification_timeout is not None
+            else model_config.get_web_grounding_verification_timeout_seconds()
+        ),
     )
     logger.info(
         "Ground prompt context started prompt_len=%d requested_queries=%d force=%s detect_only=%s include_visuals=%s detector=%s",
@@ -477,9 +483,11 @@ async def ground_prompt_context(
     else:
         visual_download = {
             "status": "skipped",
-            "detail": "visual grounding not requested"
-            if not effective_include_visuals
-            else "no visual search candidates",
+            "detail": (
+                "visual grounding not requested"
+                if not effective_include_visuals
+                else "no visual search candidates"
+            ),
             "downloaded_count": 0,
             "failed_count": 0,
         }
@@ -685,9 +693,11 @@ async def ground_prompt_context(
     else:
         visual_verification = {
             "status": "skipped",
-            "detail": "visual grounding not requested"
-            if not effective_include_visuals
-            else "visual verification disabled",
+            "detail": (
+                "visual grounding not requested"
+                if not effective_include_visuals
+                else "visual verification disabled"
+            ),
         }
     missing_strict_jobs = (
         _strict_identity_jobs_without_accepted_refs(

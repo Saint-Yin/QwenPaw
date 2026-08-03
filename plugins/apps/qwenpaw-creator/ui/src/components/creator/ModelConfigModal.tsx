@@ -1314,7 +1314,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
             >
               ↓
             </div>
-            {/* 次选：Serper（Google 搜索），Tavily 无结果时尝试 */}
+            {/* Second choice: Serper (Google search), tried after Tavily. */}
             <div
               style={{
                 border: "1px solid var(--color-border)",
