@@ -4395,7 +4395,12 @@ def _elide_stale_snapshots(
 
 
 def _compact_wire_project_snapshots(messages: list[dict[str, Any]]) -> None:
-    """Compact superseded full snapshots inside one active model run."""
+    """Compact superseded snapshots in the ephemeral model wire context.
+
+    Mutates message content in place. Durable conversation and execution
+    records remain unchanged. The operation is idempotent because receipts
+    are not recognized as full Project snapshots.
+    """
 
     snapshots: list[tuple[dict[str, Any], _ProjectSnapshotEnvelope, str]] = []
     for message in messages:
