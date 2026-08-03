@@ -26,7 +26,7 @@ from utils.logger import setup_logger
 from .models import Project
 from .serialization import (
     CanonicalJsonError,
-    load_project_json,
+    load_project_json_with_etag,
     project_etag,
     project_file_bytes,
 )
@@ -317,7 +317,7 @@ class ProjectStore:
                 f"project.json exceeds {self.max_project_json_bytes} bytes",
             )
         try:
-            project = load_project_json(payload)
+            project, source_etag = load_project_json_with_etag(payload)
         except CanonicalJsonError as exc:
             raise ProjectIntegrityError(
                 f"Invalid project.json for {safe_id}",
@@ -327,7 +327,11 @@ class ProjectStore:
                 f"Project identity mismatch: directory={safe_id}, file={project.project_id}",
             )
         self._validate_asset_paths(project_root, project)
-        return _snapshot(project)
+        return ProjectSnapshot(
+            project=project,
+            etag=source_etag,
+            generation=project.generation,
+        )
 
     def replace(
         self,
