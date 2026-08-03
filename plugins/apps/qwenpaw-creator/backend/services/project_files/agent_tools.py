@@ -249,6 +249,8 @@ AGENT_PROJECT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "绝不能在 program 中给这些保护字段赋值；updated_at 由 Runtime 自动维护。"
             "不要以 `$jsonArgs | ...` 开始变换；输入 Project `.` 必须始终作为输出根对象。"
             "批量内容通过 jsonArgs 传入，program 只负责结构化赋值。"
+            "jsonArgs 中的 object 已经是 jq object，应直接赋值或合并；"
+            "仅当输入确实是 [{key,value}] 数组时才使用 from_entries。"
             "若单次参数体量极大（如数十个 Element），可拆分为少量几次调用以降低 JSON 出错风险。"
             "动态加法表达式在绑定 jq 变量前必须加括号，例如 "
             '("source:" + $logicalId) as $sourceKey；对象字段值中的运算也必须加括号。'
@@ -281,6 +283,7 @@ AGENT_PROJECT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                         "通过 --argjson 传入的结构化 JSON；新增多项时间线内容时应把对象集合放这里，"
                         "避免在 program 中拼接大段 JSON。program 可使用 "
                         "$jsonArgs.elements，也兼容按 key 使用 $elements。"
+                        "object 参数已经是 jq object，不要再对它使用 from_entries。"
                     ),
                     "additionalProperties": True,
                 },

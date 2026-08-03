@@ -50,6 +50,7 @@ Project
 
 - jq 的唯一输出必须仍是完整 Project 根对象；不得以 `.timelines...`、`$timeline`、`$element` 等子对象选择结束 program。
 - 受保护根字段必须与刚读取的 Project 完全一致。批量新增内容时把对象集合放进 `jsonArgs`，program 只做结构化赋值并自然返回 Project 根对象。
+- `jsonArgs` 中的 object 已经是 jq object，直接赋值或合并；仅对真正的 `[{"key":...,"value":...}]` 数组使用 `from_entries`。
 - Runtime 自动基于你最近读取的快照提交，无需回传 ETag；若单次参数体量极大，可拆分为少量几次调用。
 
 ### Specialist target

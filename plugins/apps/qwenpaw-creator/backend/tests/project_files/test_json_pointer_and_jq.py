@@ -92,6 +92,19 @@ def test_jq_exposes_aggregate_argument_objects() -> None:
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq is not installed")
+def test_jq_explains_from_entries_object_misuse() -> None:
+    with pytest.raises(
+        JqTransformError,
+        match="a jsonArgs object is already a jq object",
+    ):
+        JqProjectTransformer().transform(
+            {"items": {}},
+            ".items = ($jsonArgs.elements | from_entries)",
+            json_args={"elements": {"element-1": {"label": "one"}}},
+        )
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is not installed")
 def test_jq_does_not_depend_on_a_mutable_sidecar_path(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

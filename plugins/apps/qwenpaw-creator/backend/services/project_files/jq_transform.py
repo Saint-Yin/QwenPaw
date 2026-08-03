@@ -127,6 +127,15 @@ class JqProjectTransformer:
             )
         if completed.returncode != 0:
             message = error_output.decode("utf-8", errors="replace").strip()
+            if (
+                "Cannot use null (null) as object key" in message
+                and "from_entries" in program
+            ):
+                message += (
+                    ". Hint: from_entries expects an array of {key,value} "
+                    "entries; a jsonArgs object is already a jq object and "
+                    "should be assigned or merged directly"
+                )
             raise JqTransformError(
                 f"jq transform failed: {message or completed.returncode}",
             )
