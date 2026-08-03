@@ -148,15 +148,22 @@ def test_stale_project_snapshots_are_elided_from_the_continuation() -> None:
     A 50-element production run accumulated 18 full project.json echoes
     (2.09MB) in one Conversation and every model call failed with an
     input-length 400. Older echoes carry no information the model cannot
-    get from read_project, so they collapse to a one-line stub; durable
-    history keeps every byte.
+    get from the latest snapshot, so they collapse to change receipts;
+    durable history keeps every byte.
     """
 
     from services.file_agent_runtime.driver import (
         _continuation_message_text,
     )
 
-    def message(seq: int, *, role: str, source: str, text: str):
+    def message(
+        seq: int,
+        *,
+        role: str,
+        source: str,
+        text: str,
+        metadata: dict | None = None,
+    ):
         return CreatorMessageRecord(
             message_id=f"message-{seq}",
             project_id=PROJECT_ID,
@@ -167,13 +174,32 @@ def test_stale_project_snapshots_are_elided_from_the_continuation() -> None:
             content_parts=[{"type": "text", "text": text}],
             source=source,
             channel=MessageChannel.RUNTIME,
+            metadata=metadata or {},
         )
 
     old_snapshot = json.dumps(
-        {"project": {"generation": 11, "padding": "x" * 8000}},
+        {
+            "project": {
+                "project_id": PROJECT_ID,
+                "generation": 11,
+                "padding": "x" * 8000,
+            },
+            "generation": 11,
+            "etag": "etag-11",
+            "transactionId": "transaction-11",
+            "changedPointers": ["/name"],
+        },
     )
     new_snapshot = json.dumps(
-        {"project": {"generation": 113, "padding": "y" * 8000}},
+        {
+            "project": {
+                "project_id": PROJECT_ID,
+                "generation": 113,
+                "padding": "y" * 8000,
+            },
+            "generation": 113,
+            "etag": "etag-113",
+        },
     )
     prior = [
         message(1, role="user", source="user", text="把故事写完"),
@@ -182,6 +208,12 @@ def test_stale_project_snapshots_are_elided_from_the_continuation() -> None:
             role="tool",
             source="runtime_action_result",
             text=old_snapshot,
+            metadata={
+                "toolName": "jq_project",
+                "resultKind": "project_snapshot",
+                "transactionId": "transaction-11",
+                "changedPointers": ["/name"],
+            },
         ),
         message(3, role="assistant", source="creator_agent", text="写好了"),
         message(
@@ -189,20 +221,282 @@ def test_stale_project_snapshots_are_elided_from_the_continuation() -> None:
             role="tool",
             source="runtime_action_result",
             text=new_snapshot,
+            metadata={
+                "toolName": "read_project",
+                "resultKind": "project_snapshot",
+            },
         ),
     ]
     request = message(5, role="user", source="user", text="继续")
 
     rendered = _continuation_message_text(request, prior)
 
-    # The stale echo is gone, replaced by a stub that names its vintage.
+    # The stale echo is gone, replaced by a deterministic change receipt.
     assert "x" * 100 not in rendered
-    assert "generation 11 时点" in rendered
-    assert "read_project" in rendered
+    assert "project_change_receipt" in rendered
+    assert "transaction-11" in rendered
+    assert "changedPointers" in rendered
+    assert "/name" in rendered
     # The newest echo and ordinary messages survive verbatim.
     assert "y" * 100 in rendered
     assert "把故事写完" in rendered
     assert "写好了" in rendered
+
+
+def test_large_non_snapshot_tool_results_survive_snapshot_compaction() -> None:
+    from services.file_agent_runtime.driver import (
+        _continuation_message_text,
+    )
+
+    def message(
+        seq: int,
+        *,
+        role: str,
+        source: str,
+        text: str,
+        metadata: dict | None = None,
+    ):
+        return CreatorMessageRecord(
+            message_id=f"message-{seq}",
+            project_id=PROJECT_ID,
+            creator_session_id=SESSION_ID,
+            conversation_id=CONVERSATION_ID,
+            message_seq=seq,
+            role=role,
+            content_parts=[{"type": "text", "text": text}],
+            source=source,
+            channel=MessageChannel.RUNTIME,
+            metadata=metadata or {},
+        )
+
+    def snapshot(generation: int, padding: str) -> str:
+        return json.dumps(
+            {
+                "project": {
+                    "project_id": PROJECT_ID,
+                    "generation": generation,
+                    "padding": padding * 8000,
+                },
+                "generation": generation,
+                "etag": f"etag-{generation}",
+            },
+        )
+
+    source_marker = "SOURCE_FACT_MARKER"
+    grounding_marker = "GROUNDING_FACT_MARKER"
+    unknown_marker = "UNKNOWN_TOOL_MARKER"
+    prior = [
+        message(
+            1,
+            role="tool",
+            source="runtime_action_result",
+            text=json.dumps(
+                {"content": source_marker + "s" * 6000},
+            ),
+            metadata={"toolName": "read_project_file"},
+        ),
+        message(
+            2,
+            role="tool",
+            source="runtime_action_result",
+            text=snapshot(1, "x"),
+            metadata={
+                "toolName": "read_project",
+                "resultKind": "project_snapshot",
+            },
+        ),
+        message(
+            3,
+            role="tool",
+            source="runtime_action_result",
+            text=json.dumps(
+                {"sources": [grounding_marker + "g" * 6000]},
+            ),
+            metadata={
+                "toolName": "ground_prompt_context",
+                "resultKind": "web_grounding",
+            },
+        ),
+        message(
+            4,
+            role="tool",
+            source="runtime_action_result",
+            text=json.dumps({"value": unknown_marker + "u" * 6000}),
+            metadata={"toolName": "future_large_tool"},
+        ),
+        message(
+            5,
+            role="tool",
+            source="runtime_action_result",
+            text=snapshot(2, "y"),
+            metadata={
+                "toolName": "jq_project",
+                "resultKind": "project_snapshot",
+            },
+        ),
+    ]
+    request = message(6, role="user", source="user", text="继续")
+
+    rendered = _continuation_message_text(request, prior)
+
+    assert source_marker in rendered
+    assert grounding_marker in rendered
+    assert unknown_marker in rendered
+    assert "x" * 100 not in rendered
+    assert "y" * 100 in rendered
+    assert "project_change_receipt" in rendered
+
+
+def test_invalid_snapshot_payload_is_not_compacted() -> None:
+    from services.file_agent_runtime.driver import (
+        _continuation_message_text,
+    )
+
+    def message(seq: int, text: str, metadata: dict):
+        return CreatorMessageRecord(
+            message_id=f"message-{seq}",
+            project_id=PROJECT_ID,
+            creator_session_id=SESSION_ID,
+            conversation_id=CONVERSATION_ID,
+            message_seq=seq,
+            role="tool",
+            content_parts=[{"type": "text", "text": text}],
+            source="runtime_action_result",
+            channel=MessageChannel.RUNTIME,
+            metadata=metadata,
+        )
+
+    invalid_marker = "INVALID_SNAPSHOT_MARKER"
+    invalid = json.dumps(
+        {
+            "project": {
+                "generation": 1,
+                "padding": invalid_marker + "x" * 8000,
+            },
+            "generation": 1,
+            "etag": "etag-1",
+        },
+    )
+    valid = json.dumps(
+        {
+            "project": {
+                "project_id": PROJECT_ID,
+                "generation": 2,
+                "padding": "y" * 8000,
+            },
+            "generation": 2,
+            "etag": "etag-2",
+        },
+    )
+    metadata = {
+        "toolName": "read_project",
+        "resultKind": "project_snapshot",
+    }
+    request = CreatorMessageRecord(
+        message_id="message-3",
+        project_id=PROJECT_ID,
+        creator_session_id=SESSION_ID,
+        conversation_id=CONVERSATION_ID,
+        message_seq=3,
+        role="user",
+        content_parts=[{"type": "text", "text": "继续"}],
+        source="user",
+        channel=MessageChannel.RUNTIME,
+    )
+
+    rendered = _continuation_message_text(
+        request,
+        [message(1, invalid, metadata), message(2, valid, metadata)],
+    )
+
+    assert invalid_marker in rendered
+
+
+def test_active_run_compacts_only_superseded_project_snapshots() -> None:
+    from services.file_agent_runtime.driver import (
+        _compact_wire_project_snapshots,
+    )
+
+    def snapshot(generation: int, padding: str) -> str:
+        return json.dumps(
+            {
+                "project": {
+                    "project_id": PROJECT_ID,
+                    "generation": generation,
+                    "padding": padding * 8000,
+                },
+                "generation": generation,
+                "etag": f"etag-{generation}",
+                "changedPointers": ["/generationMarker"],
+            },
+        )
+
+    grounding_marker = "ACTIVE_GROUNDING_MARKER"
+    messages = [
+        {"role": "tool", "name": "jq_project", "content": snapshot(1, "x")},
+        {
+            "role": "tool",
+            "name": "ground_prompt_context",
+            "content": grounding_marker + "g" * 6000,
+        },
+        {"role": "tool", "name": "read_project", "content": snapshot(2, "y")},
+    ]
+
+    _compact_wire_project_snapshots(messages)
+
+    assert "x" * 100 not in messages[0]["content"]
+    assert "project_change_receipt" in messages[0]["content"]
+    assert "changedPointers" in messages[0]["content"]
+    assert grounding_marker in messages[1]["content"]
+    assert "y" * 100 in messages[2]["content"]
+
+
+def test_runtime_action_result_kind_requires_a_valid_snapshot() -> None:
+    from services.file_agent_runtime.driver import (
+        _runtime_action_result_kind,
+    )
+
+    valid_snapshot = {
+        "project": {
+            "project_id": PROJECT_ID,
+            "generation": 3,
+        },
+        "generation": 3,
+        "etag": "etag-3",
+    }
+
+    assert (
+        _runtime_action_result_kind(
+            "read_project",
+            valid_snapshot,
+            failed=False,
+        )
+        == "project_snapshot"
+    )
+    assert (
+        _runtime_action_result_kind(
+            "read_project_file",
+            valid_snapshot,
+            failed=False,
+        )
+        is None
+    )
+    assert (
+        _runtime_action_result_kind(
+            "read_project",
+            {"project": valid_snapshot["project"]},
+            failed=False,
+        )
+        is None
+    )
+    assert (
+        _runtime_action_result_kind(
+            "read_project",
+            valid_snapshot,
+            failed=True,
+        )
+        is None
+    )
 
 
 def test_small_runtime_results_are_never_elided() -> None:

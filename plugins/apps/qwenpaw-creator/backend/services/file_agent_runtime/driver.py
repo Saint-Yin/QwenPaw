@@ -52,6 +52,7 @@ from services.project_files.agent_tools import (
     AgentProjectToolContext,
     AgentProjectTools,
     JQ_PROJECT_TOOL_NAME,
+    READ_PROJECT_TOOL_NAME,
     agent_project_tool_manifest,
 )
 from services.project_files.commit import ProjectCommitBoundary
@@ -138,6 +139,12 @@ logger = setup_logger("creator.agent_runtime")
 GROUND_PROMPT_CONTEXT_TOOL_NAME = "ground_prompt_context"
 GROUNDING_VISUAL_MAX_BYTES = 16 * 1024 * 1024
 MAX_MALFORMED_JQ_PROJECT_RETRIES = 2
+
+_PROJECT_SNAPSHOT_RESULT_KIND = "project_snapshot"
+_PROJECT_CHANGE_RECEIPT_RESULT_KIND = "project_change_receipt"
+_PROJECT_SNAPSHOT_TOOL_NAMES = frozenset(
+    {READ_PROJECT_TOOL_NAME, JQ_PROJECT_TOOL_NAME},
+)
 
 
 def _specialist_waiting_review_summary(
@@ -1398,6 +1405,7 @@ class FileCreatorAgentRuntime:
         malformed_jq_fingerprints: set[str] = set()
         for _turn_number in range(1, self.max_model_turns + 1):
             self._assert_epoch(project_id, run_id, epoch)
+            _compact_wire_project_snapshots(messages)
             assistant_message_id = f"message-{uuid4().hex}"
             delta_index = 0
             # The authoritative assistant message is still persisted durably by
@@ -2289,6 +2297,7 @@ class FileCreatorAgentRuntime:
                     if role is SpecialistRole.SOURCE_INTELLIGENCE
                     else self.model_client
                 )
+                _compact_wire_project_snapshots(messages)
                 turn = await model_client.complete(
                     messages=messages,
                     tools=tool_manifest,
@@ -3557,6 +3566,11 @@ class FileCreatorAgentRuntime:
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        result_kind = _runtime_action_result_kind(
+            tool_name,
+            result,
+            failed=failed,
+        )
         appended = await asyncio.to_thread(
             self.sessions.append_message,
             project_id,
@@ -3571,11 +3585,7 @@ class FileCreatorAgentRuntime:
                 "toolCallId": call_id,
                 "toolName": tool_name,
                 "tool": tool_name,
-                **(
-                    {"resultKind": "web_grounding"}
-                    if tool_name == GROUND_PROMPT_CONTEXT_TOOL_NAME
-                    else {}
-                ),
+                **({"resultKind": result_kind} if result_kind else {}),
                 "failed": failed,
                 "generation": result.get("generation"),
                 "etag": result.get("etag"),
@@ -4222,64 +4232,204 @@ def _message_text(message: CreatorMessageRecord) -> str:
     return "\n".join(chunks).strip() or "请处理本消息中的项目请求。"
 
 
-# A conversation accumulates full project.json echoes from runtime
-# actions; a 50-element Project makes each echo ~400KB and the sum
-# overflows the model input window (observed: 2.09MB of history against a
-# 0.98MB limit, every run failing instantly with an invalid-parameter
-# 400). Only the newest echo can describe the current Project, so older
-# ones are pure — and misleading — weight. They are elided at prompt
-# assembly only; the durable history keeps every byte.
+# A conversation accumulates full project.json echoes from read_project and
+# jq_project; a 50-element Project makes each echo ~400KB and the sum overflows
+# the model input window (observed: 2.09MB of history against a 0.98MB limit).
+# Keep one latest materialized snapshot as the model's source of truth and turn
+# older snapshots into compact mutation receipts. The jq tool call immediately
+# before each receipt still records the exact mutation program and arguments,
+# so history remains change-based without asking the model to replay those
+# changes to reconstruct current state. Durable Runtime history keeps every
+# original byte.
 _SNAPSHOT_SOURCE = "runtime_action_result"
 _SNAPSHOT_ELISION_MIN_CHARS = 4096
 
 
-def _snapshot_generation(text: str) -> int | None:
+@dataclass(frozen=True)
+class _ProjectSnapshotEnvelope:
+    payload: Mapping[str, Any]
+    project_id: str
+    generation: int
+    etag: str
+
+
+def _project_snapshot_envelope(
+    payload: Mapping[str, Any],
+) -> _ProjectSnapshotEnvelope | None:
+    project = payload.get("project")
+    if not isinstance(project, Mapping):
+        return None
+    project_id = project.get("project_id")
+    generation = payload.get("generation")
+    project_generation = project.get("generation")
+    etag = payload.get("etag")
+    if not isinstance(project_id, str) or not project_id.strip():
+        return None
+    if not isinstance(generation, int) or isinstance(generation, bool):
+        return None
+    if (
+        not isinstance(project_generation, int)
+        or isinstance(project_generation, bool)
+        or project_generation != generation
+    ):
+        return None
+    if not isinstance(etag, str) or not etag.strip():
+        return None
+    return _ProjectSnapshotEnvelope(
+        payload=payload,
+        project_id=project_id,
+        generation=generation,
+        etag=etag,
+    )
+
+
+def _project_snapshot_from_text(text: str) -> _ProjectSnapshotEnvelope | None:
     try:
         payload = json.loads(text)
     except ValueError:
         return None
-    if not isinstance(payload, dict):
+    if not isinstance(payload, Mapping):
         return None
-    project = payload.get("project")
-    document = project if isinstance(project, dict) else payload
-    generation = document.get("generation")
-    return generation if isinstance(generation, int) else None
+    return _project_snapshot_envelope(payload)
+
+
+def _runtime_action_result_kind(
+    tool_name: str,
+    result: Mapping[str, Any],
+    *,
+    failed: bool,
+) -> str | None:
+    if (
+        not failed
+        and tool_name in _PROJECT_SNAPSHOT_TOOL_NAMES
+        and _project_snapshot_envelope(result) is not None
+    ):
+        return _PROJECT_SNAPSHOT_RESULT_KIND
+    if not failed and tool_name == GROUND_PROMPT_CONTEXT_TOOL_NAME:
+        return "web_grounding"
+    return None
+
+
+def _message_project_snapshot(
+    message: CreatorMessageRecord,
+) -> tuple[_ProjectSnapshotEnvelope, str] | None:
+    tool_name = str(
+        message.metadata.get("toolName") or message.metadata.get("tool") or "",
+    ).strip()
+    if tool_name not in _PROJECT_SNAPSHOT_TOOL_NAMES:
+        return None
+    result_kind = message.metadata.get("resultKind")
+    if result_kind not in (None, "", _PROJECT_SNAPSHOT_RESULT_KIND):
+        return None
+    for part in message.content_parts:
+        if not part.text:
+            continue
+        snapshot = _project_snapshot_from_text(part.text)
+        if snapshot is not None:
+            return snapshot, tool_name
+    return None
+
+
+def _project_change_receipt(
+    snapshot: _ProjectSnapshotEnvelope,
+    *,
+    tool_name: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> str:
+    source = metadata or snapshot.payload
+    receipt: dict[str, Any] = {
+        "resultKind": _PROJECT_CHANGE_RECEIPT_RESULT_KIND,
+        "supersededProjectSnapshot": True,
+        "toolName": tool_name,
+        "projectId": snapshot.project_id,
+        "generation": snapshot.generation,
+        "etag": snapshot.etag,
+        "note": (
+            "The full project snapshot from this historical tool result was "
+            "omitted. A later project_snapshot in this conversation is the "
+            "authoritative materialized state."
+        ),
+    }
+    for key in ("transactionId", "reviewId"):
+        value = source.get(key)
+        if value in (None, ""):
+            value = snapshot.payload.get(key)
+        if value not in (None, ""):
+            receipt[key] = value
+    changed_pointers = source.get("changedPointers")
+    if not isinstance(changed_pointers, list):
+        changed_pointers = snapshot.payload.get("changedPointers")
+    if isinstance(changed_pointers, list):
+        receipt["changedPointers"] = [
+            str(pointer)
+            for pointer in changed_pointers
+            if isinstance(pointer, str) and pointer
+        ]
+    return json.dumps(receipt, ensure_ascii=False, separators=(",", ":"))
 
 
 def _elide_stale_snapshots(
     prior_context: list[CreatorMessageRecord],
 ) -> dict[int, str]:
-    """Map message seq → stub for every superseded project echo."""
+    """Map message seq to a receipt for each large superseded snapshot."""
 
-    candidates = [
-        item
-        for item in prior_context
-        if item.role == "tool"
-        and item.source == _SNAPSHOT_SOURCE
-        and sum(
+    snapshots: list[
+        tuple[CreatorMessageRecord, _ProjectSnapshotEnvelope, str]
+    ] = []
+    for item in prior_context:
+        if item.role != "tool" or item.source != _SNAPSHOT_SOURCE:
+            continue
+        identified = _message_project_snapshot(item)
+        if identified is None:
+            continue
+        snapshot, tool_name = identified
+        snapshots.append((item, snapshot, tool_name))
+
+    receipts: dict[int, str] = {}
+    for item, snapshot, tool_name in snapshots[:-1]:
+        size = sum(
             len(part.text or "")
             for part in item.content_parts
             if part.text is not None
         )
-        >= _SNAPSHOT_ELISION_MIN_CHARS
-    ]
-    stubs: dict[int, str] = {}
-    for item in candidates[:-1]:
-        generation = next(
-            (
-                _snapshot_generation(part.text)
-                for part in item.content_parts
-                if part.text
-            ),
-            None,
+        if size < _SNAPSHOT_ELISION_MIN_CHARS:
+            continue
+        receipts[item.message_seq] = _project_change_receipt(
+            snapshot,
+            tool_name=tool_name,
+            metadata=item.metadata,
         )
-        marker = (
-            f"generation {generation} 时点" if generation is not None else "历史时点"
+    return receipts
+
+
+def _compact_wire_project_snapshots(messages: list[dict[str, Any]]) -> None:
+    """Compact superseded full snapshots inside one active model run."""
+
+    snapshots: list[tuple[dict[str, Any], _ProjectSnapshotEnvelope, str]] = []
+    for message in messages:
+        if message.get("role") != "tool":
+            continue
+        tool_name = str(message.get("name") or "").strip()
+        content = message.get("content")
+        if tool_name not in _PROJECT_SNAPSHOT_TOOL_NAMES or not isinstance(
+            content,
+            str,
+        ):
+            continue
+        snapshot = _project_snapshot_from_text(content)
+        if snapshot is not None:
+            snapshots.append((message, snapshot, tool_name))
+    for message, snapshot, tool_name in snapshots[:-1]:
+        content = message.get("content")
+        if (
+            not isinstance(content, str)
+            or len(content) < _SNAPSHOT_ELISION_MIN_CHARS
+        ):
+            continue
+        message["content"] = _project_change_receipt(
+            snapshot,
+            tool_name=tool_name,
         )
-        stubs[item.message_seq] = (
-            f"[已省略{marker}的项目快照；它早已过期，" "当前项目状态请用 read_project 获取]"
-        )
-    return stubs
 
 
 def _continuation_message_text(
@@ -4291,21 +4441,33 @@ def _continuation_message_text(
     current = _message_text(request)
     if not prior_context:
         return current
-    stubs = _elide_stale_snapshots(prior_context)
+    snapshot_receipts = _elide_stale_snapshots(prior_context)
     history = [
         {
             "messageSeq": item.message_seq,
             "role": item.role,
             "source": item.source,
             "content": (
-                [{"type": "text", "text": stubs[item.message_seq]}]
-                if item.message_seq in stubs
+                [
+                    {
+                        "type": "text",
+                        "text": snapshot_receipts[item.message_seq],
+                    },
+                ]
+                if item.message_seq in snapshot_receipts
                 else [
                     part.model_dump(mode="json", exclude_none=True)
                     for part in item.content_parts
                 ]
             ),
-            "metadata": dict(item.metadata),
+            "metadata": {
+                **dict(item.metadata),
+                **(
+                    {"resultKind": _PROJECT_CHANGE_RECEIPT_RESULT_KIND}
+                    if item.message_seq in snapshot_receipts
+                    else {}
+                ),
+            },
         }
         for item in prior_context
     ]
