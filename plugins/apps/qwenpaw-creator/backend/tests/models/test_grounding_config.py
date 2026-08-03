@@ -54,9 +54,7 @@ def test_runtime_reads_decrypt_persisted_search_provider_keys(
 
     try:
         assert config.get_web_grounding_tavily_api_key() == "decrypted-tvly"
-        assert (
-            config.get_web_grounding_serper_api_key() == "decrypted-serper"
-        )
+        assert config.get_web_grounding_serper_api_key() == "decrypted-serper"
     finally:
         config._clear_user_config_cache()
 
