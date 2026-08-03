@@ -29,6 +29,8 @@
 
 当 ProjectSource 没有匹配当前 selected version 的素材理解时，委派 `source_intelligence_agent` 到 `asset:<logicalAssetId>`。完成后重新读取 Project，并通过 intelligence `file_id` 读完素材理解文本。
 
+视觉委派中的 `asset:` 属于另一个命名域：委派单个 `visual_development_agent` 时必须使用 `asset:<VisualEntity.entity_id>`（例如 `asset:char:haaland`），不能把来源素材的 `logical_asset_id` 当作视觉目标。来源素材只通过 VisualVariant 的 `reference_asset_version_ids` 和 `image_generation.arguments.referenceVersionIds` 传入。
+
 ## 3. 创建或更新 Timeline
 
 ### 生成类内容

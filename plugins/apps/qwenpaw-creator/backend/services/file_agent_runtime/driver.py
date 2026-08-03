@@ -29,7 +29,7 @@ from domain.enums import (
     SpecialistRunStatus,
     TaskStatus,
 )
-from domain.errors import ConflictError, ReviewPendingError
+from domain.errors import ConflictError, CreatorError, ReviewPendingError
 from models.config import (
     CREATION_CHECKPOINT_REQUIRED,
     EXECUTION_AUTHORIZATION_ALLOW_ALL,
@@ -139,6 +139,8 @@ logger = setup_logger("creator.agent_runtime")
 GROUND_PROMPT_CONTEXT_TOOL_NAME = "ground_prompt_context"
 GROUNDING_VISUAL_MAX_BYTES = 16 * 1024 * 1024
 MAX_MALFORMED_JQ_PROJECT_RETRIES = 2
+MAX_REPEATED_DETERMINISTIC_TOOL_FAILURES = 2
+DEFAULT_MODEL_TURN_TIMEOUT_SECONDS = 180.0
 
 _PROJECT_SNAPSHOT_RESULT_KIND = "project_snapshot"
 _PROJECT_CHANGE_RECEIPT_RESULT_KIND = "project_change_receipt"
@@ -164,6 +166,29 @@ def _agent_waiting_review_summary(
     if not summary:
         summary = "当前产物已生成，后续步骤尚未开始。请先完成审阅；审阅通过后系统将自动继续。"
     return f"{summary}\n\n无需另行发送消息。"
+
+
+def _deterministic_tool_failure_fingerprint(
+    call: AgentToolCall,
+    error: Exception,
+) -> str | None:
+    """Identify an exact, non-retryable tool failure across model turns."""
+
+    if not isinstance(error, CreatorError) or error.retryable:
+        return None
+    payload = json.dumps(
+        {
+            "tool": call.name,
+            "arguments": call.arguments,
+            "errorType": type(error).__name__,
+            "error": str(error),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _grounding_stable_id(prefix: str, project_id: str, identity: str) -> str:
@@ -626,11 +651,14 @@ class FileCreatorAgentRuntime:
         source_model_client: AgentChatClient | None = None,
         poll_interval_seconds: float = 1.0,
         max_model_turns: int = 16,
+        model_turn_timeout_seconds: float = DEFAULT_MODEL_TURN_TIMEOUT_SECONDS,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be positive")
         if max_model_turns <= 0:
             raise ValueError("max_model_turns must be positive")
+        if model_turn_timeout_seconds <= 0:
+            raise ValueError("model_turn_timeout_seconds must be positive")
         self.services = services
         self.sessions = ProjectRuntimeSessionStore(services.root)
         self.runs = CreatorAgentRunStore(services.root)
@@ -645,6 +673,7 @@ class FileCreatorAgentRuntime:
         )
         self.poll_interval_seconds = poll_interval_seconds
         self.max_model_turns = max_model_turns
+        self.model_turn_timeout_seconds = model_turn_timeout_seconds
         self._loop: asyncio.AbstractEventLoop | None = None
         self._dispatcher: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
@@ -653,6 +682,36 @@ class FileCreatorAgentRuntime:
         self._blocked_heads: dict[str, int] = {}
         self._epochs: dict[str, int] = {}
         self._publication_lock = threading.RLock()
+
+    async def _complete_model_turn(
+        self,
+        client: AgentChatClient,
+        *,
+        label: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        on_text_delta: Any,
+        on_thinking_delta: Any,
+        on_tool_call_delta: Any,
+    ) -> AgentModelTurn:
+        """Bound one provider turn; max_model_turns cannot stop a hung turn."""
+
+        try:
+            return await asyncio.wait_for(
+                client.complete(
+                    messages=messages,
+                    tools=tools,
+                    on_text_delta=on_text_delta,
+                    on_thinking_delta=on_thinking_delta,
+                    on_tool_call_delta=on_tool_call_delta,
+                ),
+                timeout=self.model_turn_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise AgentModelError(
+                f"{label} model turn exceeded "
+                f"{self.model_turn_timeout_seconds:g} seconds",
+            ) from exc
 
     @property
     def started(self) -> bool:
@@ -1473,7 +1532,9 @@ class FileCreatorAgentRuntime:
                 )
                 delta_index += 1
 
-            turn = await self.model_client.complete(
+            turn = await self._complete_model_turn(
+                self.model_client,
+                label="Creator Agent",
                 messages=messages,
                 tools=tool_manifest,
                 on_text_delta=persist_text_delta,
@@ -2096,6 +2157,7 @@ class FileCreatorAgentRuntime:
             self.services.projects.read,
             project_id,
         )
+        delegated.validate_project_targets(project=snapshot.project)
         specialist_run_id = f"specialist-run-{uuid4().hex}"
         round_id = tools.context.round_id or f"agent-round-{parent_run_id}"
         prompt = specialist_system_prompt(
@@ -2233,6 +2295,7 @@ class FileCreatorAgentRuntime:
         review_ids: list[str] = []
         malformed_jq_attempts = 0
         malformed_jq_fingerprints: set[str] = set()
+        deterministic_failure_counts: dict[str, int] = {}
         try:
             for _turn_number in range(1, self.max_model_turns + 1):
                 self._assert_epoch(project_id, parent_run_id, epoch)
@@ -2298,7 +2361,9 @@ class FileCreatorAgentRuntime:
                     else self.model_client
                 )
                 _compact_wire_project_snapshots(messages)
-                turn = await model_client.complete(
+                turn = await self._complete_model_turn(
+                    model_client,
+                    label=role_name,
                     messages=messages,
                     tools=tool_manifest,
                     on_text_delta=text_delta,
@@ -2548,6 +2613,7 @@ class FileCreatorAgentRuntime:
                 )
                 failed = False
                 malformed_budget_exhausted = False
+                repeated_failure_exhausted = False
                 waiting_review: ReviewPendingError | None = None
                 try:
                     if call.parse_error is not None:
@@ -2666,6 +2732,24 @@ class FileCreatorAgentRuntime:
                         )
                     else:
                         failed = True
+                        failure_fingerprint = (
+                            _deterministic_tool_failure_fingerprint(call, exc)
+                        )
+                        if failure_fingerprint is not None:
+                            failure_count = (
+                                deterministic_failure_counts.get(
+                                    failure_fingerprint,
+                                    0,
+                                )
+                                + 1
+                            )
+                            deterministic_failure_counts[
+                                failure_fingerprint
+                            ] = failure_count
+                            repeated_failure_exhausted = (
+                                failure_count
+                                >= MAX_REPEATED_DETERMINISTIC_TOOL_FAILURES
+                            )
                         result = {
                             "ok": False,
                             "error": {
@@ -2810,6 +2894,13 @@ class FileCreatorAgentRuntime:
                         "jq_project produced structurally corrupted tool "
                         "arguments after 2 bounded retries; the specialist "
                         "stopped before jq execution",
+                    )
+                if repeated_failure_exhausted:
+                    raise AgentModelError(
+                        f"{role_name} repeated the same non-retryable "
+                        f"{call.name} failure twice without changing its "
+                        "arguments; the specialist stopped instead of "
+                        "starting another model turn",
                     )
             raise AgentModelError(
                 f"{role_name} exceeded {self.max_model_turns} model turns",

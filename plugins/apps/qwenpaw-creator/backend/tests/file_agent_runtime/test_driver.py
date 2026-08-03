@@ -13,7 +13,7 @@ import pytest
 from PIL import Image
 
 from api.file_asset_routes import _AssetInput, _ingest_many_sync
-from domain.errors import ReviewPendingError
+from domain.errors import NotFoundError, ReviewPendingError
 from schemas.assets import SourceMediaMetadata, SourceModelRunRef
 from services.file_agent_runtime import (
     AgentModelConfigurationError,
@@ -33,7 +33,7 @@ from services.file_agent_runtime.driver import (
 from services.file_agent_runtime.prompts import render_creator_system_prompt
 from services.observability import read_trace_records
 from services.project_files.facade import CreatorFileServices
-from services.project_files.models import Project
+from services.project_files.models import Project, VisualEntity
 from services.project_files.review import ReviewDecisionItem
 from services.runtime_files.atomic_store import AtomicJsonRecordStore
 from services.runtime_files.models import (
@@ -705,8 +705,15 @@ def _create_project(tmp_path, *, initial_goal: str | None):
             ),
         )
 
+    project = Project.new(project_id=PROJECT_ID, name="Initial")
+    project.visual.entities.items["hero"] = VisualEntity(
+        entity_id="hero",
+        kind="character",
+        name="Hero",
+    )
+    project.visual.entities.order.append("hero")
     snapshot = services.projects.create(
-        Project.new(project_id=PROJECT_ID, name="Initial"),
+        project,
         initialize_staged_project=initialize,
     )
     services.poller.note_commit(snapshot)
@@ -762,6 +769,215 @@ def _edit_client(*, description: str):
         return AgentModelTurn(content="项目说明已更新。")
 
     return CallbackAgentChatClient(callback)
+
+
+def test_visual_delegation_rejects_source_logical_asset_target(
+    tmp_path,
+) -> None:
+    parent_turn = 0
+
+    async def callback(messages, tools):
+        nonlocal parent_turn
+        names = {item["function"]["name"] for item in tools}
+        assert (
+            "image_generation" not in names
+        ), "an invalid visual target must fail before a specialist starts"
+        parent_turn += 1
+        if parent_turn == 1:
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id="delegate-wrong-asset-domain",
+                        name="delegate_to_agent",
+                        arguments={
+                            "role": "visual_development_agent",
+                            "target_refs": ["asset:asset-source-logical-id"],
+                            "task": "生成角色定妆图",
+                        },
+                    ),
+                ),
+            )
+        tool_result = json.loads(messages[-1]["content"])
+        assert tool_result["ok"] is False
+        assert "VisualEntity.entity_id" in tool_result["error"]["message"]
+        return AgentModelTurn(content="已识别错误的视觉目标。")
+
+    async def scenario():
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="为来源素材中的人物生成定妆图",
+        )
+        driver = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(callback),
+            poll_interval_seconds=0.01,
+        )
+        await driver.start()
+        driver.notify(PROJECT_ID)
+        await _wait_for(
+            lambda: services.sessions.get_project_session(
+                PROJECT_ID,
+            ).last_consumed_message_seq
+            == 1,
+        )
+        await driver.wait_until_idle(PROJECT_ID)
+        specialist_runs = driver.executions.list_specialist_runs(PROJECT_ID)
+        await driver.stop()
+        return specialist_runs
+
+    assert asyncio.run(scenario()) == []
+
+
+def test_specialist_stops_after_repeated_non_retryable_tool_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import services.file_agent_runtime.driver as driver_module
+
+    monkeypatch.setattr(
+        driver_module,
+        "get_execution_authorization_mode",
+        lambda: "allow_all",
+    )
+    monkeypatch.setattr(
+        driver_module,
+        "get_creation_checkpoint_mode",
+        lambda: "skip",
+    )
+    parent_turn = 0
+    specialist_turn = 0
+
+    async def callback(messages, tools):
+        nonlocal parent_turn, specialist_turn
+        names = {item["function"]["name"] for item in tools}
+        if "image_generation" in names:
+            specialist_turn += 1
+            assert specialist_turn <= 2, "a third model turn must not start"
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id=f"missing-image-{specialist_turn}",
+                        name="image_generation",
+                        arguments={
+                            "projectId": PROJECT_ID,
+                            "targetRef": "asset:hero",
+                            "arguments": {"prompt": "hero portrait"},
+                        },
+                    ),
+                ),
+            )
+        parent_turn += 1
+        if parent_turn == 1:
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id="delegate-visual",
+                        name="delegate_to_agent",
+                        arguments={
+                            "role": "visual_development_agent",
+                            "target_refs": ["asset:hero"],
+                            "task": "生成角色图",
+                        },
+                    ),
+                ),
+            )
+        return AgentModelTurn(content="视觉任务已明确失败，停止重试。")
+
+    async def scenario():
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="生成角色图",
+        )
+        driver = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(callback),
+            poll_interval_seconds=0.01,
+        )
+
+        async def missing_visual_entity(**_kwargs):
+            raise NotFoundError("视觉 Asset 不存在")
+
+        driver.specialist_tools.invoke = (  # type: ignore[method-assign]
+            missing_visual_entity
+        )
+        await driver.start()
+        driver.notify(PROJECT_ID)
+        await _wait_for(
+            lambda: services.sessions.get_project_session(
+                PROJECT_ID,
+            ).last_consumed_message_seq
+            == 1,
+        )
+        await driver.wait_until_idle(PROJECT_ID)
+        specialist = driver.executions.list_specialist_runs(PROJECT_ID)[0]
+        await driver.stop()
+        return specialist
+
+    specialist = asyncio.run(scenario())
+    assert specialist_turn == 2
+    assert specialist.status.value == "FAILED"
+    assert "repeated the same non-retryable" in (
+        specialist.final_summary_text or ""
+    )
+
+
+def test_specialist_model_turn_has_a_wall_clock_timeout(tmp_path) -> None:
+    parent_turn = 0
+    specialist_started = asyncio.Event()
+
+    async def callback(_messages, tools):
+        nonlocal parent_turn
+        names = {item["function"]["name"] for item in tools}
+        if "image_generation" in names:
+            specialist_started.set()
+            await asyncio.Event().wait()
+        parent_turn += 1
+        if parent_turn == 1:
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id="delegate-hanging-visual",
+                        name="delegate_to_agent",
+                        arguments={
+                            "role": "visual_development_agent",
+                            "target_refs": ["asset:hero"],
+                            "task": "生成角色图",
+                        },
+                    ),
+                ),
+            )
+        return AgentModelTurn(content="视觉模型超时，当前运行已结束。")
+
+    async def scenario():
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="生成角色图",
+        )
+        driver = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(callback),
+            poll_interval_seconds=0.01,
+            model_turn_timeout_seconds=0.02,
+        )
+        await driver.start()
+        driver.notify(PROJECT_ID)
+        await asyncio.wait_for(specialist_started.wait(), timeout=2.0)
+        await _wait_for(
+            lambda: services.sessions.get_project_session(
+                PROJECT_ID,
+            ).last_consumed_message_seq
+            == 1,
+        )
+        await driver.wait_until_idle(PROJECT_ID)
+        specialist = driver.executions.list_specialist_runs(PROJECT_ID)[0]
+        await driver.stop()
+        return specialist
+
+    specialist = asyncio.run(scenario())
+    assert specialist.status.value == "FAILED"
+    assert "model turn exceeded 0.02 seconds" in (
+        specialist.final_summary_text or ""
+    )
 
 
 def _corrupted_jq_call(*, call_id: str, etag: str) -> AgentToolCall:
