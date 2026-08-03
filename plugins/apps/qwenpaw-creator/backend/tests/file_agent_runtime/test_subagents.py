@@ -142,6 +142,7 @@ def test_visual_target_must_resolve_to_visual_entity() -> None:
         entity_id="char:wembanyama",
         kind="character",
         name="Victor Wembanyama",
+        required_variant_ids=[],
     )
     project.visual.entities.order.append("char:wembanyama")
 

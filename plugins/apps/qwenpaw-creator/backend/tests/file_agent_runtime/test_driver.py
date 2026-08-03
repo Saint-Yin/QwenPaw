@@ -761,6 +761,7 @@ def _create_project(tmp_path, *, initial_goal: str | None):
         entity_id="hero",
         kind="character",
         name="Hero",
+        required_variant_ids=[],
     )
     project.visual.entities.order.append("hero")
     snapshot = services.projects.create(
