@@ -23,7 +23,10 @@ from .config import (
 )
 from .config import dashscope_web_search_model as _dashscope_web_search_model
 from .config import responses_url_from_base as _responses_url_from_base
+from .config import serper_api_key as _serper_api_key
 from .config import tavily_api_key as _tavily_api_key
+from .serper import SERPER_IMAGES_URL
+from .serper import SERPER_SEARCH_URL
 
 DEFAULT_MAX_SOURCES = 6
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
@@ -74,6 +77,48 @@ async def _search_tavily(
                     "provider": "tavily",
                     "query": query,
                     "score": item.get("score"),
+                },
+            )
+    return results
+
+
+async def _search_serper(
+    client: httpx.AsyncClient,
+    query: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    api_key = _serper_api_key()
+    if not api_key:
+        raise RuntimeError("SERPER_API_KEY is not configured")
+    response = await client.post(
+        os.environ.get("SERPER_SEARCH_URL", SERPER_SEARCH_URL),
+        headers={
+            "X-API-KEY": api_key,
+            "Content-Type": "application/json",
+        },
+        json={
+            "q": query,
+            "num": max(1, min(limit, DEFAULT_MAX_SOURCES)),
+        },
+    )
+    response.raise_for_status()
+    payload = response.json()
+    results = []
+    for item in payload.get("organic", [])[:limit]:
+        if not isinstance(item, dict):
+            continue
+        title = _clean_text(item.get("title"), max_chars=180)
+        url = str(item.get("link") or item.get("url") or "").strip()
+        snippet = _clean_text(item.get("snippet"), max_chars=500)
+        if title and url:
+            results.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "snippet": snippet,
+                    "provider": "serper",
+                    "query": query,
+                    "score": None,
                 },
             )
     return results
@@ -383,6 +428,70 @@ async def _search_tavily_visuals(
     )
     response.raise_for_status()
     return _normalize_tavily_images(response.json(), query, limit)
+
+
+def _normalize_serper_images(
+    payload: dict[str, Any],
+    query: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    raw_images = (
+        payload.get("images") if isinstance(payload, dict) else None
+    )
+    if not isinstance(raw_images, list):
+        return []
+    visual_sources: list[dict[str, Any]] = []
+    for item in raw_images:
+        url = _image_url_from_value(item)
+        if not url:
+            continue
+        if isinstance(item, dict):
+            title = _clean_text(
+                item.get("title") or item.get("source") or "",
+                max_chars=180,
+            )
+            source_url = _source_url_from_value(item)
+            thumbnail_url = _thumbnail_url_from_value(item)
+        else:
+            title = ""
+            source_url = ""
+            thumbnail_url = ""
+        visual_sources.append(
+            {
+                "url": url,
+                "thumbnail_url": thumbnail_url,
+                "source_url": source_url,
+                "title": title,
+                "provider": "serper",
+                "query": query,
+            },
+        )
+        if len(visual_sources) >= limit:
+            break
+    return visual_sources
+
+
+async def _search_serper_visuals(
+    client: httpx.AsyncClient,
+    query: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    api_key = _serper_api_key()
+    if not api_key:
+        raise RuntimeError("SERPER_API_KEY is not configured")
+    response = await client.post(
+        os.environ.get("SERPER_IMAGES_URL", SERPER_IMAGES_URL),
+        headers={
+            "X-API-KEY": api_key,
+            "Content-Type": "application/json",
+        },
+        json={
+            "q": query,
+            "num": max(1, min(limit, DEFAULT_MAX_SOURCES)),
+        },
+    )
+    response.raise_for_status()
+    return _normalize_serper_images(response.json(), query, limit)
 
 
 async def _search_dashscope_web_search_image_visuals(

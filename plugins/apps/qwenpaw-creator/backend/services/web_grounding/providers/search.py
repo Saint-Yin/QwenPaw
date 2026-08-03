@@ -15,6 +15,8 @@ from utils.logger import setup_logger
 from ..triage import _clean_query
 from .adapters import _search_dashscope_web_search_image_visuals
 from .adapters import _search_dashscope_web
+from .adapters import _search_serper
+from .adapters import _search_serper_visuals
 from .adapters import _search_tavily
 from .adapters import _search_tavily_visuals
 from .config import dashscope_api_key as _dashscope_web_search_image_api_key
@@ -27,6 +29,7 @@ from .config import (
 from .config import (
     dashscope_native_search_unavailable_reason as _dashscope_native_search_unavailable_reason,
 )
+from .config import serper_api_key as _serper_api_key
 from .config import tavily_api_key as _tavily_api_key
 from .config import (
     visual_search_min_results_for_fallback as _visual_search_min_results_for_fallback,
@@ -187,6 +190,35 @@ async def search_web(
             )
 
         if not sources:
+            if _serper_api_key():
+                providers_attempted.append("serper")
+                serper_sources: list[dict[str, Any]] = []
+                try:
+                    serper_sources = await _search_serper(
+                        client,
+                        query,
+                        max_sources,
+                    )
+                except Exception as exc:
+                    issues.append(f"serper:{exc.__class__.__name__}: {exc}")
+                    logger.warning(
+                        "Web grounding provider failed query=%r provider=serper error=%s",
+                        query,
+                        exc,
+                    )
+                if serper_sources:
+                    sources = serper_sources
+                    providers.append("serper")
+                else:
+                    issues.append("serper:no_text_sources")
+            else:
+                issues.append("serper_api_key_missing")
+                logger.info(
+                    "Web grounding provider skipped query=%r provider=serper reason=api_key_missing",
+                    query,
+                )
+
+        if not sources:
             native_search_key = _dashscope_web_search_api_key()
             native_search_issue = _dashscope_native_search_unavailable_reason(
                 api_key_override=native_search_key,
@@ -305,6 +337,8 @@ async def search_visual_refs(
     if not providers:
         if not _tavily_api_key():
             issues.append("tavily_api_key_missing")
+        if not _serper_api_key():
+            issues.append("serper_api_key_missing")
         native_search_key = _dashscope_web_search_image_api_key()
         native_search_issue = _dashscope_native_search_unavailable_reason(
             api_key_override=native_search_key,
@@ -348,6 +382,31 @@ async def search_visual_refs(
                     )
                     logger.warning(
                         "Visual grounding provider failed query=%r provider=tavily error=%s",
+                        query,
+                        exc,
+                    )
+            elif provider == "serper":
+                if not _serper_api_key():
+                    issues.append("serper_api_key_missing")
+                    logger.info(
+                        "Visual grounding provider skipped query=%r provider=serper reason=api_key_missing",
+                        query,
+                    )
+                    continue
+                attempted_providers.append(provider)
+                try:
+                    provider_sources = await _search_serper_visuals(
+                        client,
+                        query,
+                        remaining,
+                    )
+                except Exception as exc:
+                    provider_sources = []
+                    issues.append(
+                        f"serper_images:{exc.__class__.__name__}: {exc}",
+                    )
+                    logger.warning(
+                        "Visual grounding provider failed query=%r provider=serper error=%s",
                         query,
                         exc,
                     )

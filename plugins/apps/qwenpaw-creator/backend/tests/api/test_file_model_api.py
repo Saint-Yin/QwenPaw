@@ -370,6 +370,7 @@ def test_model_config_is_single_file_native_and_idempotent(
         "reuse_llm": True,
         "validation_source": "llm",
         "tavily_api_key": "tvly-test",
+        "serper_api_key": "",
         "native_search_enabled": True,
         "search_provider": "dashscope_qwen",
         "search_reuse_llm": True,

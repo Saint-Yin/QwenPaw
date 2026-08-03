@@ -593,6 +593,13 @@ def get_web_grounding_tavily_api_key() -> str:
     )
 
 
+def get_web_grounding_serper_api_key() -> str:
+    return _grounding_explicit(
+        "serper_api_key",
+        ("SERPER_API_KEY", "WEB_GROUNDING_SERPER_API_KEY"),
+    )
+
+
 def _grounding_bool(
     field: str,
     env_name: str,

@@ -107,6 +107,10 @@ _ENV_MAPPING: dict[str, dict[str, tuple[str, ...]]] = {
             "TAVILY_API_KEY",
             "WEB_GROUNDING_TAVILY_API_KEY",
         ),
+        "serper_api_key": (
+            "SERPER_API_KEY",
+            "WEB_GROUNDING_SERPER_API_KEY",
+        ),
         "reuse_llm": (
             "WEB_GROUNDING_REUSE_LLM",
             "WEB_GROUNDING_REUSE_VLM",
@@ -605,20 +609,20 @@ def _ensure_grounding_model_configured(data: ModelConfigData) -> None:
         raise ValidationError(
             f"Grounding 默认启用；请完整配置 {source} 的 Base URL、API Key 和模型名称，或关闭 Grounding",
         )
-    if grounding.tavily_api_key:
+    if grounding.tavily_api_key or grounding.serper_api_key:
         return
     search_model = _grounding_search_model(data)
     if not grounding.native_search_enabled:
         raise ValidationError(
-            "Grounding 搜索未配置；请配置 Tavily，或启用 Qwen/DashScope 原生搜索",
+            "Grounding 搜索未配置；请配置 Tavily/Serper，或启用 Qwen/DashScope 原生搜索",
         )
     if not _model_config_complete(search_model):
         raise ValidationError(
-            "Grounding 搜索未配置；请配置 Tavily，或完整配置 Qwen/DashScope 搜索模型",
+            "Grounding 搜索未配置；请配置 Tavily/Serper，或完整配置 Qwen/DashScope 搜索模型",
         )
     if not _supports_dashscope_native_search(search_model):
         raise ValidationError(
-            "当前搜索模型不支持 Qwen/DashScope 原生 web_search；请配置 Tavily，或选择 DashScope（百炼）搜索模型",
+            "当前搜索模型不支持 Qwen/DashScope 原生 web_search；请配置 Tavily/Serper，或选择 DashScope（百炼）搜索模型",
         )
 
 
@@ -664,6 +668,7 @@ def request_tool_configs() -> dict[str, dict[str, Any]]:
     configs[model_config.CREATOR_GROUNDING_CONFIG_TOOL] = {
         "enabled": grounding.enabled,
         "tavily_api_key": grounding.tavily_api_key,
+        "serper_api_key": grounding.serper_api_key,
         "reuse_llm": grounding.reuse_llm,
         "validation_source": grounding.validation_source,
         "api_key": grounding.api_key,

@@ -443,6 +443,83 @@ def test_search_tavily_visuals_maps_top_level_and_result_images(monkeypatch):
     assert results[1]["source_url"] == "https://example.test/haaland"
 
 
+def test_search_serper_maps_response(monkeypatch):
+    monkeypatch.setenv("SERPER_API_KEY", "serper-test")
+    payload = {
+        "organic": [
+            {
+                "title": "Erling Haaland Facts",
+                "link": "https://example.test/haaland",
+                "snippet": "Norway striker for Manchester City.",
+                "position": 1,
+            },
+            {"snippet": "missing title and link"},
+        ],
+    }
+    client = _FakeClient(payload)
+
+    results = asyncio.run(adapters._search_serper(client, "Erling Haaland", 3))
+
+    assert client.calls
+    assert client.calls[0][1]["headers"]["X-API-KEY"] == "serper-test"
+    assert client.calls[0][1]["json"]["q"] == "Erling Haaland"
+    assert results == [
+        {
+            "title": "Erling Haaland Facts",
+            "url": "https://example.test/haaland",
+            "snippet": "Norway striker for Manchester City.",
+            "provider": "serper",
+            "query": "Erling Haaland",
+            "score": None,
+        },
+    ]
+
+
+def test_search_serper_requires_api_key(monkeypatch):
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("WEB_GROUNDING_SERPER_API_KEY", raising=False)
+    client = _FakeClient({"organic": []})
+
+    with pytest.raises(RuntimeError, match="SERPER_API_KEY"):
+        asyncio.run(adapters._search_serper(client, "Erling Haaland", 3))
+    assert not client.calls
+
+
+def test_search_serper_visuals_maps_response(monkeypatch):
+    monkeypatch.setenv("SERPER_API_KEY", "serper-test")
+    payload = {
+        "images": [
+            {
+                "title": "Yi silver headdress",
+                "imageUrl": "https://img.test/yi-silver.jpg",
+                "thumbnailUrl": "https://img.test/yi-silver-thumb.jpg",
+                "link": "https://example.test/yi",
+                "source": "example.test",
+            },
+            {"source": "no image url"},
+        ],
+    }
+    client = _FakeClient(payload)
+
+    results = asyncio.run(
+        adapters._search_serper_visuals(client, "彝族银饰", 3),
+    )
+
+    assert client.calls
+    assert client.calls[0][1]["headers"]["X-API-KEY"] == "serper-test"
+    assert client.calls[0][1]["json"]["q"] == "彝族银饰"
+    assert results == [
+        {
+            "url": "https://img.test/yi-silver.jpg",
+            "thumbnail_url": "https://img.test/yi-silver-thumb.jpg",
+            "source_url": "https://example.test/yi",
+            "title": "Yi silver headdress",
+            "provider": "serper",
+            "query": "彝族银饰",
+        },
+    ]
+
+
 def test_search_dashscope_web_search_image_visuals_maps_response(monkeypatch):
     monkeypatch.setenv("TEXT_API_KEY", "dashscope-test")
     monkeypatch.setenv(
@@ -594,6 +671,11 @@ def test_search_web_uses_tavily_without_dashscope_fallback(monkeypatch):
     )
     monkeypatch.setattr(
         provider_search,
+        "_serper_api_key",
+        lambda: "serper-key",
+    )
+    monkeypatch.setattr(
+        provider_search,
         "_dashscope_web_search_api_key",
         lambda: "dashscope-key",
     )
@@ -609,10 +691,14 @@ def test_search_web_uses_tavily_without_dashscope_fallback(monkeypatch):
             },
         ]
 
+    async def fail_serper(*args, **kwargs):
+        raise AssertionError("Serper should not run when Tavily succeeds")
+
     async def fail_dashscope(*args, **kwargs):
         raise AssertionError("DashScope should not run when Tavily succeeds")
 
     monkeypatch.setattr(provider_search, "_search_tavily", fake_tavily)
+    monkeypatch.setattr(provider_search, "_search_serper", fail_serper)
     monkeypatch.setattr(
         provider_search,
         "_search_dashscope_web",
@@ -628,6 +714,7 @@ def test_search_web_uses_tavily_without_dashscope_fallback(monkeypatch):
 
 def test_search_web_falls_back_to_dashscope_when_tavily_missing(monkeypatch):
     monkeypatch.setattr(provider_search, "_tavily_api_key", lambda: "")
+    monkeypatch.setattr(provider_search, "_serper_api_key", lambda: "")
     monkeypatch.setattr(
         provider_search,
         "_dashscope_web_search_api_key",
@@ -658,6 +745,145 @@ def test_search_web_falls_back_to_dashscope_when_tavily_missing(monkeypatch):
     assert result["providers_attempted"] == ["dashscope_web_search"]
     assert result["sources"][0]["url"] == "https://example.test/qwen"
     assert "tavily_api_key_missing" in result["issues"]
+    assert "serper_api_key_missing" in result["issues"]
+
+
+def test_search_web_prefers_serper_over_dashscope_when_tavily_empty(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        provider_search,
+        "_tavily_api_key",
+        lambda: "tavily-key",
+    )
+    monkeypatch.setattr(
+        provider_search,
+        "_serper_api_key",
+        lambda: "serper-key",
+    )
+    monkeypatch.setattr(
+        provider_search,
+        "_dashscope_web_search_api_key",
+        lambda: "dashscope-key",
+    )
+
+    async def empty_tavily(client, query, limit):
+        return []
+
+    async def fake_serper(client, query, limit):
+        return [
+            {
+                "title": "Serper source",
+                "url": "https://example.test/serper",
+                "snippet": "source",
+                "provider": "serper",
+                "query": query,
+                "score": None,
+            },
+        ]
+
+    async def fail_dashscope(*args, **kwargs):
+        raise AssertionError("DashScope should not run when Serper succeeds")
+
+    monkeypatch.setattr(provider_search, "_search_tavily", empty_tavily)
+    monkeypatch.setattr(provider_search, "_search_serper", fake_serper)
+    monkeypatch.setattr(
+        provider_search,
+        "_search_dashscope_web",
+        fail_dashscope,
+    )
+
+    result = asyncio.run(web_grounding.search_web("Erling Haaland"))
+
+    assert result["provider"] == "serper"
+    assert result["providers"] == ["serper"]
+    assert result["providers_attempted"] == ["tavily", "serper"]
+    assert result["sources"][0]["url"] == "https://example.test/serper"
+    assert "tavily:no_text_sources" in result["issues"]
+
+
+def test_search_web_skips_serper_without_key_before_dashscope(monkeypatch):
+    monkeypatch.setattr(provider_search, "_tavily_api_key", lambda: "")
+    monkeypatch.setattr(provider_search, "_serper_api_key", lambda: "")
+    monkeypatch.setattr(
+        provider_search,
+        "_dashscope_web_search_api_key",
+        lambda: "dashscope-key",
+    )
+
+    async def fail_serper(*args, **kwargs):
+        raise AssertionError("Serper should not run without an API key")
+
+    async def fake_dashscope(client, query, limit):
+        return [
+            {
+                "title": "Qwen source",
+                "url": "https://example.test/qwen",
+                "snippet": "source",
+                "provider": "dashscope_web_search",
+                "query": query,
+            },
+        ]
+
+    monkeypatch.setattr(provider_search, "_search_serper", fail_serper)
+    monkeypatch.setattr(
+        provider_search,
+        "_search_dashscope_web",
+        fake_dashscope,
+    )
+
+    result = asyncio.run(web_grounding.search_web("Erling Haaland"))
+
+    assert result["provider"] == "dashscope_web_search"
+    assert result["providers_attempted"] == ["dashscope_web_search"]
+    assert "serper_api_key_missing" in result["issues"]
+
+
+def test_search_web_falls_back_to_serper_when_serper_errors_then_dashscope(
+    monkeypatch,
+):
+    monkeypatch.setattr(provider_search, "_tavily_api_key", lambda: "")
+    monkeypatch.setattr(
+        provider_search,
+        "_serper_api_key",
+        lambda: "serper-key",
+    )
+    monkeypatch.setattr(
+        provider_search,
+        "_dashscope_web_search_api_key",
+        lambda: "dashscope-key",
+    )
+
+    async def broken_serper(client, query, limit):
+        raise RuntimeError("serper quota exceeded")
+
+    async def fake_dashscope(client, query, limit):
+        return [
+            {
+                "title": "Qwen source",
+                "url": "https://example.test/qwen",
+                "snippet": "source",
+                "provider": "dashscope_web_search",
+                "query": query,
+            },
+        ]
+
+    monkeypatch.setattr(provider_search, "_search_serper", broken_serper)
+    monkeypatch.setattr(
+        provider_search,
+        "_search_dashscope_web",
+        fake_dashscope,
+    )
+
+    result = asyncio.run(web_grounding.search_web("Erling Haaland"))
+
+    assert result["provider"] == "dashscope_web_search"
+    assert result["providers_attempted"] == [
+        "serper",
+        "dashscope_web_search",
+    ]
+    assert "serper:RuntimeError: serper quota exceeded" in result["issues"]
+    assert "serper:no_text_sources" in result["issues"]
 
 
 def test_search_web_falls_back_to_dashscope_when_tavily_empty(monkeypatch):
@@ -666,6 +892,7 @@ def test_search_web_falls_back_to_dashscope_when_tavily_empty(monkeypatch):
         "_tavily_api_key",
         lambda: "tavily-key",
     )
+    monkeypatch.setattr(provider_search, "_serper_api_key", lambda: "")
     monkeypatch.setattr(
         provider_search,
         "_dashscope_web_search_api_key",
@@ -704,6 +931,7 @@ def test_search_web_retries_dashscope_timeout_with_sixty_second_client(
     monkeypatch,
 ):
     monkeypatch.setattr(provider_search, "_tavily_api_key", lambda: "")
+    monkeypatch.setattr(provider_search, "_serper_api_key", lambda: "")
     monkeypatch.setattr(
         provider_search,
         "_dashscope_web_search_api_key",
@@ -759,6 +987,8 @@ def test_search_visual_refs_supplements_insufficient_tavily_results(
 ):
     monkeypatch.delenv("WEB_GROUNDING_IMAGE_PROVIDERS", raising=False)
     monkeypatch.delenv("WEB_GROUNDING_VISUAL_PROVIDERS", raising=False)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("WEB_GROUNDING_SERPER_API_KEY", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("TEXT_API_KEY", "dashscope-test")
 
@@ -809,6 +1039,8 @@ def test_visual_provider_order_is_fixed_and_ignores_legacy_override(
         "WEB_GROUNDING_IMAGE_PROVIDERS",
         "dashscope_web_search_image,tavily",
     )
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("WEB_GROUNDING_SERPER_API_KEY", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("TEXT_API_KEY", "dashscope-test")
 
@@ -818,11 +1050,122 @@ def test_visual_provider_order_is_fixed_and_ignores_legacy_override(
     )
 
 
+def test_visual_provider_order_includes_serper_when_keyed(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("SERPER_API_KEY", "serper-test")
+    monkeypatch.setenv("TEXT_API_KEY", "dashscope-test")
+
+    assert provider_config.visual_search_provider_order() == (
+        "tavily",
+        "serper",
+        "dashscope_web_search_image",
+    )
+
+
+def test_search_visual_refs_uses_serper_after_insufficient_tavily_results(
+    monkeypatch,
+):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    monkeypatch.setenv("SERPER_API_KEY", "serper-test")
+    monkeypatch.setenv("TEXT_API_KEY", "dashscope-test")
+
+    async def fake_tavily(client, query, limit):
+        return [
+            {
+                "url": "https://img.test/tavily.jpg",
+                "title": "Tavily image",
+                "provider": "tavily",
+                "query": query,
+            },
+        ]
+
+    async def fake_serper(client, query, limit):
+        return [
+            {
+                "url": "https://img.test/serper.jpg",
+                "title": "Serper image",
+                "provider": "serper",
+                "query": query,
+            },
+        ]
+
+    async def fail_dashscope(*args, **kwargs):
+        raise AssertionError(
+            "DashScope should not run once min results are met",
+        )
+
+    monkeypatch.setattr(provider_search, "_search_tavily_visuals", fake_tavily)
+    monkeypatch.setattr(
+        provider_search,
+        "_search_serper_visuals",
+        fake_serper,
+    )
+    monkeypatch.setattr(
+        provider_search,
+        "_search_dashscope_web_search_image_visuals",
+        fail_dashscope,
+    )
+
+    result = asyncio.run(web_grounding.search_visual_refs("Erling Haaland"))
+
+    assert result["providers"] == ["tavily", "serper"]
+    assert result["providers_attempted"] == ["tavily", "serper"]
+    assert [source["url"] for source in result["visual_sources"]] == [
+        "https://img.test/tavily.jpg",
+        "https://img.test/serper.jpg",
+    ]
+
+
+def test_search_visual_refs_reports_serper_error_and_falls_back(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("WEB_GROUNDING_TAVILY_API_KEY", raising=False)
+    monkeypatch.setenv("SERPER_API_KEY", "serper-test")
+    monkeypatch.setenv("TEXT_API_KEY", "dashscope-test")
+
+    async def broken_serper(client, query, limit):
+        raise RuntimeError("serper quota exceeded")
+
+    async def fake_dashscope(client, query, limit):
+        return [
+            {
+                "url": "https://img.test/qwen.jpg",
+                "title": "Qwen image",
+                "provider": "dashscope_web_search_image",
+                "query": query,
+            },
+        ]
+
+    monkeypatch.setattr(
+        provider_search,
+        "_search_serper_visuals",
+        broken_serper,
+    )
+    monkeypatch.setattr(
+        provider_search,
+        "_search_dashscope_web_search_image_visuals",
+        fake_dashscope,
+    )
+
+    result = asyncio.run(web_grounding.search_visual_refs("彝族银饰"))
+
+    assert result["providers"] == ["dashscope_web_search_image"]
+    assert result["providers_attempted"] == [
+        "serper",
+        "dashscope_web_search_image",
+    ]
+    assert (
+        "serper_images:RuntimeError: serper quota exceeded"
+        in result["issues"]
+    )
+
+
 def test_search_visual_refs_falls_back_to_dashscope_when_tavily_empty(
     monkeypatch,
 ):
     monkeypatch.delenv("WEB_GROUNDING_IMAGE_PROVIDERS", raising=False)
     monkeypatch.delenv("WEB_GROUNDING_VISUAL_PROVIDERS", raising=False)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("WEB_GROUNDING_SERPER_API_KEY", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.setenv("TEXT_API_KEY", "dashscope-test")
 
@@ -865,6 +1208,8 @@ def test_search_visual_refs_uses_dashscope_when_tavily_key_absent(monkeypatch):
     monkeypatch.delenv("WEB_GROUNDING_VISUAL_PROVIDERS", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("WEB_GROUNDING_TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("WEB_GROUNDING_SERPER_API_KEY", raising=False)
     monkeypatch.setenv("TEXT_API_KEY", "dashscope-test")
 
     async def fail_tavily(*args, **kwargs):
@@ -906,6 +1251,8 @@ def test_search_visual_refs_retries_dashscope_timeout(monkeypatch):
     monkeypatch.delenv("WEB_GROUNDING_VISUAL_PROVIDERS", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("WEB_GROUNDING_TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("WEB_GROUNDING_SERPER_API_KEY", raising=False)
     monkeypatch.setenv("TEXT_API_KEY", "dashscope-test")
     attempts = 0
 
@@ -949,6 +1296,8 @@ def test_search_visual_refs_reports_nonretryable_dashscope_error(monkeypatch):
     monkeypatch.delenv("WEB_GROUNDING_VISUAL_PROVIDERS", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("WEB_GROUNDING_TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("WEB_GROUNDING_SERPER_API_KEY", raising=False)
     monkeypatch.setenv("TEXT_API_KEY", "dashscope-test")
     attempts = 0
 
@@ -2428,6 +2777,7 @@ def test_search_web_uses_tavily_when_keyed(monkeypatch):
 
 def test_search_web_reports_when_both_provider_keys_are_missing(monkeypatch):
     monkeypatch.setattr(provider_search, "_tavily_api_key", lambda: "")
+    monkeypatch.setattr(provider_search, "_serper_api_key", lambda: "")
     monkeypatch.setattr(
         provider_search,
         "_dashscope_web_search_api_key",
@@ -2440,12 +2790,14 @@ def test_search_web_reports_when_both_provider_keys_are_missing(monkeypatch):
     assert result["sources"] == []
     assert result["issues"] == [
         "tavily_api_key_missing",
+        "serper_api_key_missing",
         "dashscope_web_search_api_key_missing",
     ]
 
 
 def test_search_web_skips_incompatible_native_search_model(monkeypatch):
     monkeypatch.setattr(provider_search, "_tavily_api_key", lambda: "")
+    monkeypatch.setattr(provider_search, "_serper_api_key", lambda: "")
     monkeypatch.setattr(
         provider_search,
         "_dashscope_web_search_api_key",
