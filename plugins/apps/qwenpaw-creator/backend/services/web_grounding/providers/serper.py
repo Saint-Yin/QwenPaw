@@ -8,3 +8,4 @@ provider-specific endpoint constants and response parsing.
 
 SERPER_SEARCH_URL = "https://google.serper.dev/search"
 SERPER_IMAGES_URL = "https://google.serper.dev/images"
+SERPER_LENS_URL = "https://google.serper.dev/lens"

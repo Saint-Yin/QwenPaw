@@ -60,6 +60,7 @@ verify_visual_grounding_with_vlm = (
     verification.verify_visual_grounding_with_vlm
 )
 search_visual_refs = provider_search.search_visual_refs
+search_visual_refs_by_image = provider_search.search_visual_refs_by_image
 search_web = provider_search.search_web
 _dedupe_sources = provider_search._dedupe_sources
 _dedupe_visual_sources = provider_search._dedupe_visual_sources
@@ -332,12 +333,44 @@ async def ground_prompt_context(
 
     async def _safe_search_visual_refs(job: dict[str, Any]) -> dict[str, Any]:
         query = str(job.get("query") or "")
+        reference_image = str(job.get("reference_image") or "").strip()
         try:
+            lens_issues: list[str] = []
+            lens_attempted: list[str] = []
+            if reference_image:
+                # Serper Lens reverse image search runs first when the entity
+                # carries a reference image; text search remains the fallback.
+                lens_result = await search_visual_refs_by_image(
+                    reference_image,
+                    query=query,
+                    max_sources=min(
+                        DEFAULT_VISUAL_RESULTS_PER_JOB,
+                        max_sources,
+                    ),
+                    timeout=effective_visual_search_timeout,
+                )
+                if lens_result.get("visual_sources"):
+                    lens_result["visual_job"] = job
+                    return lens_result
+                lens_issues = list(lens_result.get("issues") or [])
+                lens_attempted = list(
+                    lens_result.get("providers_attempted") or [],
+                )
             result = await search_visual_refs(
                 query,
                 max_sources=min(DEFAULT_VISUAL_RESULTS_PER_JOB, max_sources),
                 timeout=effective_visual_search_timeout,
             )
+            if lens_issues:
+                result["issues"] = [
+                    *lens_issues,
+                    *(result.get("issues") or []),
+                ]
+            if lens_attempted:
+                result["providers_attempted"] = [
+                    *lens_attempted,
+                    *(result.get("providers_attempted") or []),
+                ]
             result["visual_job"] = job
             return result
         except (

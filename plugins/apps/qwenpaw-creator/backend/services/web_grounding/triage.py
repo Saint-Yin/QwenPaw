@@ -256,6 +256,15 @@ def _normalize_entities(value: Any) -> list[dict[str, Any]]:
                     )
                     if description:
                         normalized["description"] = description
+                    # A caller-provided reference image unlocks Serper Lens
+                    # reverse image search for this entity's visual job.
+                    reference_image = str(
+                        item.get("reference_image")
+                        or item.get("referenceImage")
+                        or "",
+                    ).strip()
+                    if reference_image:
+                        normalized["reference_image"] = reference_image[:2048]
                     entities.append(normalized)
             else:
                 text = _clean_text(item, max_chars=120)

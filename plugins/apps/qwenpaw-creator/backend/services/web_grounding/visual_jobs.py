@@ -214,6 +214,9 @@ def _visual_entities_from_context(
                 ),
                 "strict_identity": entity.get("strict_identity"),
                 "needs_visual_grounding": entity.get("needs_visual_grounding"),
+                "reference_image": str(
+                    entity.get("reference_image") or "",
+                ).strip(),
             },
         )
     if isinstance(context, dict):
@@ -242,6 +245,9 @@ def _visual_entities_from_context(
                     "needs_visual_grounding": entity.get(
                         "needs_visual_grounding",
                     ),
+                    "reference_image": str(
+                        entity.get("reference_image") or "",
+                    ).strip(),
                 },
             )
     for name, description in descriptions.items():
@@ -485,6 +491,9 @@ def _expand_visual_query_jobs(
                     max_chars=240,
                 ),
                 "usage": usage,
+                "reference_image": str(
+                    entity.get("reference_image") or "",
+                ).strip(),
                 "strict_identity": _explicit_or_inferred_bool(
                     entity.get("strict_identity"),
                     inferred=usage == "identity"

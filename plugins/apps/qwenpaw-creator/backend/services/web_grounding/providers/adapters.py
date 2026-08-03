@@ -26,10 +26,15 @@ from .config import responses_url_from_base as _responses_url_from_base
 from .config import serper_api_key as _serper_api_key
 from .config import tavily_api_key as _tavily_api_key
 from .serper import SERPER_IMAGES_URL
+from .serper import SERPER_LENS_URL
 from .serper import SERPER_SEARCH_URL
 
 DEFAULT_MAX_SOURCES = 6
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
+# Region defaults mirror the upstream qwen-mm-plugins Serper client, whose
+# request shape is the field-proven reference for this integration.
+SERPER_SEARCH_PARAMS = {"gl": "us", "hl": "en", "location": "United States"}
+SERPER_LENS_PARAMS = {"gl": "us", "hl": "en"}
 
 
 async def _search_tavily(
@@ -98,6 +103,7 @@ async def _search_serper(
         },
         json={
             "q": query,
+            **SERPER_SEARCH_PARAMS,
             "num": max(1, min(limit, DEFAULT_MAX_SOURCES)),
         },
     )
@@ -487,11 +493,80 @@ async def _search_serper_visuals(
         },
         json={
             "q": query,
+            **SERPER_SEARCH_PARAMS,
             "num": max(1, min(limit, DEFAULT_MAX_SOURCES)),
         },
     )
     response.raise_for_status()
     return _normalize_serper_images(response.json(), query, limit)
+
+
+def _normalize_serper_lens_matches(
+    payload: dict[str, Any],
+    query: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    raw_matches = (
+        payload.get("organic") if isinstance(payload, dict) else None
+    )
+    if not isinstance(raw_matches, list):
+        return []
+    visual_sources: list[dict[str, Any]] = []
+    for item in raw_matches:
+        url = _image_url_from_value(item)
+        if not url:
+            continue
+        if isinstance(item, dict):
+            title = _clean_text(
+                item.get("title") or item.get("source") or "",
+                max_chars=180,
+            )
+            source_url = _source_url_from_value(item)
+            thumbnail_url = _thumbnail_url_from_value(item)
+        else:
+            title = ""
+            source_url = ""
+            thumbnail_url = ""
+        visual_sources.append(
+            {
+                "url": url,
+                "thumbnail_url": thumbnail_url,
+                "source_url": source_url,
+                "title": title,
+                "provider": "serper_lens",
+                "query": query,
+            },
+        )
+        if len(visual_sources) >= limit:
+            break
+    return visual_sources
+
+
+async def _search_serper_lens(
+    client: httpx.AsyncClient,
+    image_url: str,
+    limit: int,
+    *,
+    query: str = "",
+) -> list[dict[str, Any]]:
+    """Reverse image search (Google Lens via Serper).
+
+    Serper Lens only accepts a public http(s) ``url`` payload; the caller is
+    responsible for resolving local media to a temporary public URL first.
+    """
+    api_key = _serper_api_key()
+    if not api_key:
+        raise RuntimeError("SERPER_API_KEY is not configured")
+    response = await client.post(
+        os.environ.get("SERPER_LENS_URL", SERPER_LENS_URL),
+        headers={
+            "X-API-KEY": api_key,
+            "Content-Type": "application/json",
+        },
+        json={"url": image_url, **SERPER_LENS_PARAMS},
+    )
+    response.raise_for_status()
+    return _normalize_serper_lens_matches(response.json(), query, limit)
 
 
 async def _search_dashscope_web_search_image_visuals(

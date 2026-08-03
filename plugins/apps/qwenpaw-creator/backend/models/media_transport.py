@@ -25,6 +25,10 @@ OSS_POLICY_URL = "https://dashscope.aliyuncs.com/api/v1/uploads"
 DEFAULT_CREATOR_MEDIA_BUCKET = "creator-store"
 WAN_MEDIA_PREFIX = "wan_media"
 SD2_MEDIA_PREFIX = "sd2_media"
+GROUNDING_LENS_MEDIA_PREFIX = "grounding_lens"
+# Serper Lens only fetches public URLs, so local media round-trips through
+# creator-media as a private object with a short-lived presigned GET URL.
+GROUNDING_LENS_SIGNED_URL_EXPIRES_SECONDS = 15 * 60
 DASHSCOPE_TEMP_UPLOAD_MAX_BYTES = 1024 * 1024 * 1024
 DASHSCOPE_TEMP_UPLOAD_CACHE_SECONDS = 47 * 60 * 60
 # Ark (Volcengine) Seedance accepts Base64 data URLs for reference images:
@@ -490,6 +494,57 @@ async def upload_reference_media_to_creator_oss(
         file_content,
         filename,
         backend,
+    )
+
+
+def _presign_upload_with_oss2(
+    file_content: bytes,
+    filename: str,
+    expires_seconds: int,
+) -> str:
+    try:
+        import oss2  # type: ignore
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "oss2 package is required for creator-media uploads",
+        ) from exc
+
+    access_key_id = model_config.get_oss_access_key_id()
+    access_key_secret = model_config.get_oss_access_key_secret()
+    endpoint = model_config.get_oss_endpoint()
+    if not access_key_id or not access_key_secret or not endpoint:
+        readiness = creator_oss_readiness()
+        raise RuntimeError("; ".join(readiness["blockers"]))
+
+    bucket_name = _creator_media_bucket()
+    date = datetime.now(timezone.utc).strftime("%Y%m%d")
+    key = (
+        f"{GROUNDING_LENS_MEDIA_PREFIX}/{date}/"
+        f"{uuid.uuid4().hex}-{_safe_filename(filename)}"
+    )
+    content_type = (
+        mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    )
+    auth = oss2.Auth(access_key_id, access_key_secret)
+    bucket = oss2.Bucket(auth, endpoint, bucket_name)
+    # Keep the bucket default (private) ACL: the object is only reachable
+    # through the expiring signed URL below.
+    bucket.put_object(key, file_content, headers={"Content-Type": content_type})
+    return bucket.sign_url("GET", key, expires_seconds)
+
+
+async def upload_image_for_temporary_public_url(
+    file_content: bytes,
+    filename: str,
+    *,
+    expires_seconds: int = GROUNDING_LENS_SIGNED_URL_EXPIRES_SECONDS,
+) -> str:
+    """Upload an image privately and return a short-lived presigned URL."""
+    return await asyncio.to_thread(
+        _presign_upload_with_oss2,
+        file_content,
+        filename,
+        expires_seconds,
     )
 
 

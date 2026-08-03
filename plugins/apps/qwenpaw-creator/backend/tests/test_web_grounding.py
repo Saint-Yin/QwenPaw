@@ -2831,3 +2831,486 @@ def test_public_provider_helpers_are_removed():
     assert not hasattr(web_grounding, "_search_duckduckgo")
     assert not hasattr(web_grounding, "_search_wikidata")
     assert not hasattr(web_grounding, "_search_wikipedia")
+
+
+def test_search_serper_lens_maps_response(monkeypatch):
+    monkeypatch.setenv("SERPER_API_KEY", "serper-test")
+    payload = {
+        "organic": [
+            {
+                "title": "Erling Haaland portrait",
+                "source": "example.test",
+                "link": "https://example.test/haaland-photo",
+                "imageUrl": "https://img.test/haaland.jpg",
+                "thumbnailUrl": "https://img.test/haaland-thumb.jpg",
+            },
+            {"title": "missing image url"},
+        ],
+    }
+    client = _FakeClient(payload)
+
+    results = asyncio.run(
+        adapters._search_serper_lens(
+            client,
+            "https://public.test/reference.jpg",
+            3,
+            query="Erling Haaland",
+        ),
+    )
+
+    assert client.calls
+    assert client.calls[0][1]["headers"]["X-API-KEY"] == "serper-test"
+    assert client.calls[0][1]["json"] == {
+        "url": "https://public.test/reference.jpg",
+        "gl": "us",
+        "hl": "en",
+    }
+    assert results == [
+        {
+            "url": "https://img.test/haaland.jpg",
+            "thumbnail_url": "https://img.test/haaland-thumb.jpg",
+            "source_url": "https://example.test/haaland-photo",
+            "title": "Erling Haaland portrait",
+            "provider": "serper_lens",
+            "query": "Erling Haaland",
+        },
+    ]
+
+
+def test_search_visual_refs_by_image_uses_public_http_url(monkeypatch):
+    monkeypatch.setattr(
+        provider_search,
+        "_serper_api_key",
+        lambda: "serper-key",
+    )
+    captured = {}
+
+    async def fake_lens(client, image_url, limit, *, query=""):
+        captured["image_url"] = image_url
+        captured["query"] = query
+        return [
+            {
+                "url": "https://img.test/match.jpg",
+                "thumbnail_url": "",
+                "source_url": "https://example.test/match",
+                "title": "Match",
+                "provider": "serper_lens",
+                "query": query,
+            },
+        ]
+
+    monkeypatch.setattr(provider_search, "_search_serper_lens", fake_lens)
+
+    result = asyncio.run(
+        provider_search.search_visual_refs_by_image(
+            "https://public.test/reference.jpg",
+            query="Erling Haaland",
+        ),
+    )
+
+    assert captured["image_url"] == "https://public.test/reference.jpg"
+    assert captured["query"] == "Erling Haaland"
+    assert result["provider"] == "serper_lens"
+    assert result["providers"] == ["serper_lens"]
+    assert result["providers_attempted"] == ["serper_lens"]
+    assert result["visual_sources"][0]["url"] == "https://img.test/match.jpg"
+    assert result["issues"] == []
+
+
+def test_search_visual_refs_by_image_requires_serper_key(monkeypatch):
+    monkeypatch.setattr(provider_search, "_serper_api_key", lambda: "")
+
+    async def fail_lens(*args, **kwargs):
+        raise AssertionError("Lens must not run without a Serper key")
+
+    monkeypatch.setattr(provider_search, "_search_serper_lens", fail_lens)
+
+    result = asyncio.run(
+        provider_search.search_visual_refs_by_image(
+            "https://public.test/reference.jpg",
+        ),
+    )
+
+    assert result["visual_sources"] == []
+    assert result["providers_attempted"] == []
+    assert result["issues"] == ["serper_api_key_missing"]
+
+
+def test_search_visual_refs_by_image_rejects_dashscope_oss_url(monkeypatch):
+    monkeypatch.setattr(
+        provider_search,
+        "_serper_api_key",
+        lambda: "serper-key",
+    )
+
+    async def fail_lens(*args, **kwargs):
+        raise AssertionError("oss:// URLs must never reach Serper Lens")
+
+    monkeypatch.setattr(provider_search, "_search_serper_lens", fail_lens)
+
+    result = asyncio.run(
+        provider_search.search_visual_refs_by_image(
+            "oss://temp/reference.jpg",
+        ),
+    )
+
+    assert result["visual_sources"] == []
+    assert result["providers_attempted"] == []
+    assert any(
+        issue.startswith("serper_lens:oss_url_not_public")
+        for issue in result["issues"]
+    )
+
+
+def test_search_visual_refs_by_image_degrades_without_oss_for_local_media(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        provider_search,
+        "_serper_api_key",
+        lambda: "serper-key",
+    )
+    local_image = tmp_path / "reference.jpg"
+    local_image.write_bytes(b"fake-jpeg-bytes")
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "creator_oss_readiness",
+        lambda: {
+            "status": "blocked",
+            "blockers": [
+                "creator_media_oss.access_key_id or OSS_ACCESS_KEY_ID is required",
+            ],
+        },
+    )
+
+    async def fail_lens(*args, **kwargs):
+        raise AssertionError("Lens must not run without a public URL")
+
+    monkeypatch.setattr(provider_search, "_search_serper_lens", fail_lens)
+
+    result = asyncio.run(
+        provider_search.search_visual_refs_by_image(str(local_image)),
+    )
+
+    assert result["visual_sources"] == []
+    assert result["providers_attempted"] == []
+    degraded = [
+        issue
+        for issue in result["issues"]
+        if issue.startswith("serper_lens:local_image_requires_creator_media_oss")
+    ]
+    assert degraded
+    assert "OSS_ACCESS_KEY_ID is required" in degraded[0]
+
+
+def test_search_visual_refs_by_image_presigns_local_media_when_oss_ready(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        provider_search,
+        "_serper_api_key",
+        lambda: "serper-key",
+    )
+    local_image = tmp_path / "reference.jpg"
+    local_image.write_bytes(b"fake-jpeg-bytes")
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "creator_oss_readiness",
+        lambda: {"status": "ready", "blockers": []},
+    )
+    uploaded = {}
+
+    async def fake_presign(file_content, filename, **kwargs):
+        uploaded["content"] = file_content
+        uploaded["filename"] = filename
+        return "https://bucket.test/grounding_lens/reference.jpg?Signature=abc"
+
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "upload_image_for_temporary_public_url",
+        fake_presign,
+    )
+    captured = {}
+
+    async def fake_lens(client, image_url, limit, *, query=""):
+        captured["image_url"] = image_url
+        return [
+            {
+                "url": "https://img.test/match.jpg",
+                "thumbnail_url": "",
+                "source_url": "",
+                "title": "Match",
+                "provider": "serper_lens",
+                "query": query,
+            },
+        ]
+
+    monkeypatch.setattr(provider_search, "_search_serper_lens", fake_lens)
+
+    result = asyncio.run(
+        provider_search.search_visual_refs_by_image(
+            str(local_image),
+            query="local reference",
+        ),
+    )
+
+    assert uploaded["content"] == b"fake-jpeg-bytes"
+    assert uploaded["filename"] == "reference.jpg"
+    assert captured["image_url"].startswith("https://bucket.test/")
+    assert result["provider"] == "serper_lens"
+    # The signed URL must never leak into the result payload.
+    assert result["query"] == "local reference"
+    assert result["image_reference"] == str(local_image)
+
+
+def test_visual_jobs_carry_entity_reference_image():
+    jobs = grounding_visual_jobs._expand_visual_query_jobs(
+        ["Erling Haaland appearance"],
+        context={
+            "entities": [
+                {
+                    "text": "Erling Haaland",
+                    "type": "person",
+                    "reference_image": "/tmp/haaland-reference.jpg",
+                },
+            ],
+        },
+        entities=[],
+        max_visual_queries=4,
+    )
+
+    identity_jobs = [
+        job for job in jobs if job.get("entity_name") == "Erling Haaland"
+    ]
+    assert identity_jobs
+    assert (
+        identity_jobs[0]["reference_image"] == "/tmp/haaland-reference.jpg"
+    )
+
+
+def test_ground_prompt_context_prefers_serper_lens_for_reference_image_jobs(
+    monkeypatch,
+):
+    lens_calls: list[dict] = []
+    text_visual_calls: list[str] = []
+
+    async def fake_search_web(query, *, max_sources=6, timeout=8.0):
+        return {
+            "query": query,
+            "issues": [],
+            "sources": [],
+            "provider": "",
+        }
+
+    async def fake_search_visual_refs_by_image(
+        image_ref,
+        *,
+        query="",
+        max_sources=6,
+        timeout=8.0,
+    ):
+        lens_calls.append({"image_ref": image_ref, "query": query})
+        return {
+            "query": query,
+            "image_reference": image_ref,
+            "issues": [],
+            "visual_sources": [
+                {
+                    "url": "https://img.test/lens-match.jpg",
+                    "title": "Lens match",
+                    "provider": "serper_lens",
+                    "query": query,
+                },
+            ],
+            "provider": "serper_lens",
+            "providers": ["serper_lens"],
+            "providers_attempted": ["serper_lens"],
+        }
+
+    async def fake_search_visual_refs(query, *, max_sources=6, timeout=8.0):
+        text_visual_calls.append(query)
+        return {
+            "query": query,
+            "issues": [],
+            "visual_sources": [],
+            "provider": "",
+            "providers": [],
+            "providers_attempted": [],
+        }
+
+    async def fake_stage_visual_grounding_sources(
+        visual_sources,
+        *,
+        timeout=8.0,
+    ):
+        return visual_sources, {
+            "status": "success",
+            "downloaded_count": len(visual_sources),
+            "failed_count": 0,
+        }
+
+    monkeypatch.setattr(web_grounding, "search_web", fake_search_web)
+    monkeypatch.setattr(
+        web_grounding,
+        "search_visual_refs_by_image",
+        fake_search_visual_refs_by_image,
+    )
+    monkeypatch.setattr(
+        web_grounding,
+        "search_visual_refs",
+        fake_search_visual_refs,
+    )
+    monkeypatch.setattr(
+        web_grounding,
+        "stage_visual_grounding_sources",
+        fake_stage_visual_grounding_sources,
+    )
+
+    result = asyncio.run(
+        web_grounding.ground_prompt_context(
+            "哈兰德官方写真参考",
+            queries=["Erling Haaland current appearance"],
+            context={
+                "entities": [
+                    {
+                        "text": "Erling Haaland",
+                        "type": "person",
+                        "reference_image": (
+                            "https://public.test/haaland-ref.jpg"
+                        ),
+                    },
+                ],
+            },
+            force=True,
+            include_visuals=True,
+            verify_visuals=False,
+            max_sources=4,
+        ),
+    )
+
+    assert lens_calls
+    assert lens_calls[0]["image_ref"] == "https://public.test/haaland-ref.jpg"
+    lens_sources = [
+        source
+        for source in result["visual_sources"]
+        if source.get("provider") == "serper_lens"
+    ]
+    assert lens_sources
+    # The lens-backed job must not fall through to text-query search.
+    assert (
+        "Erling Haaland official profile portrait clear face single person"
+        not in text_visual_calls
+    )
+    assert "serper_lens" in result["visual_providers"]
+
+
+def test_ground_prompt_context_falls_back_to_text_search_when_lens_degrades(
+    monkeypatch,
+):
+    text_visual_calls: list[str] = []
+
+    async def fake_search_web(query, *, max_sources=6, timeout=8.0):
+        return {
+            "query": query,
+            "issues": [],
+            "sources": [],
+            "provider": "",
+        }
+
+    async def degraded_search_visual_refs_by_image(
+        image_ref,
+        *,
+        query="",
+        max_sources=6,
+        timeout=8.0,
+    ):
+        return {
+            "query": query,
+            "image_reference": image_ref,
+            "issues": [
+                "serper_lens:local_image_requires_creator_media_oss: "
+                "configure creator_media_oss",
+            ],
+            "visual_sources": [],
+            "provider": "",
+            "providers": [],
+            "providers_attempted": [],
+        }
+
+    async def fake_search_visual_refs(query, *, max_sources=6, timeout=8.0):
+        text_visual_calls.append(query)
+        return {
+            "query": query,
+            "issues": [],
+            "visual_sources": [
+                {
+                    "url": "https://img.test/text-match.jpg",
+                    "title": "Text match",
+                    "provider": "tavily",
+                    "query": query,
+                },
+            ],
+            "provider": "tavily",
+            "providers": ["tavily"],
+            "providers_attempted": ["tavily"],
+        }
+
+    async def fake_stage_visual_grounding_sources(
+        visual_sources,
+        *,
+        timeout=8.0,
+    ):
+        return visual_sources, {
+            "status": "success",
+            "downloaded_count": len(visual_sources),
+            "failed_count": 0,
+        }
+
+    monkeypatch.setattr(web_grounding, "search_web", fake_search_web)
+    monkeypatch.setattr(
+        web_grounding,
+        "search_visual_refs_by_image",
+        degraded_search_visual_refs_by_image,
+    )
+    monkeypatch.setattr(
+        web_grounding,
+        "search_visual_refs",
+        fake_search_visual_refs,
+    )
+    monkeypatch.setattr(
+        web_grounding,
+        "stage_visual_grounding_sources",
+        fake_stage_visual_grounding_sources,
+    )
+
+    result = asyncio.run(
+        web_grounding.ground_prompt_context(
+            "哈兰德官方写真参考",
+            queries=["Erling Haaland current appearance"],
+            context={
+                "entities": [
+                    {
+                        "text": "Erling Haaland",
+                        "type": "person",
+                        "reference_image": "/tmp/haaland-local.jpg",
+                    },
+                ],
+            },
+            force=True,
+            include_visuals=True,
+            verify_visuals=False,
+            max_sources=4,
+        ),
+    )
+
+    assert text_visual_calls
+    assert any(
+        issue.startswith("serper_lens:local_image_requires_creator_media_oss")
+        for issue in result["issues"]
+    )
+    assert any(
+        source.get("provider") == "tavily"
+        for source in result["visual_sources"]
+    )

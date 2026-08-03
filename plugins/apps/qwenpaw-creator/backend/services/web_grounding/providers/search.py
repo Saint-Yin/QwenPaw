@@ -6,16 +6,21 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import httpx
 
+from models import media_transport as _media_transport
 from utils.logger import setup_logger
+from utils.paths import local_path_from_file_url as _local_path_from_file_url
+from utils.paths import media_path_from_url as _media_path_from_url
 
 from ..triage import _clean_query
 from .adapters import _search_dashscope_web_search_image_visuals
 from .adapters import _search_dashscope_web
 from .adapters import _search_serper
+from .adapters import _search_serper_lens
 from .adapters import _search_serper_visuals
 from .adapters import _search_tavily
 from .adapters import _search_tavily_visuals
@@ -500,3 +505,138 @@ async def search_visual_refs(
         "providers": used_providers,
         "providers_attempted": attempted_providers,
     }
+
+
+async def _lens_public_image_url(image_ref: str) -> tuple[str, str]:
+    """Resolve *image_ref* into a public URL Serper Lens can fetch.
+
+    Returns ``(url, issue)`` where exactly one side is non-empty. Lens only
+    accepts a public http(s) ``{"url"}`` payload (no base64/upload form);
+    DashScope temporary ``oss://`` URLs are not public and anonymous image
+    hosts are forbidden, so local media must round-trip through
+    ``creator_media_oss`` as a short-lived presigned URL.
+    """
+    ref = str(image_ref or "").strip()
+    if not ref:
+        return "", "serper_lens:empty_image_reference"
+    if ref.startswith(("http://", "https://")):
+        return ref, ""
+    if ref.startswith("oss://"):
+        return "", (
+            "serper_lens:oss_url_not_public: DashScope temporary oss:// "
+            "URLs resolve only inside DashScope and cannot be fetched by "
+            "Serper Lens"
+        )
+    try:
+        if ref.startswith("file://"):
+            path = _local_path_from_file_url(ref)
+        elif ref.startswith("/generated/"):
+            path = _media_path_from_url(ref)
+        else:
+            path = Path(ref)
+    except ValueError as exc:
+        return "", f"serper_lens:unsupported_image_reference: {exc}"
+    if not path.is_file():
+        return "", f"serper_lens:image_not_found: {path}"
+    readiness = _media_transport.creator_oss_readiness()
+    if readiness["status"] != "ready":
+        blockers = "; ".join(readiness["blockers"])
+        return "", (
+            "serper_lens:local_image_requires_creator_media_oss: Serper "
+            "Lens only accepts public http(s) image URLs; configure "
+            "creator_media_oss so local media can be exposed through a "
+            f"15-minute presigned URL ({blockers})"
+        )
+    try:
+        signed_url = await _media_transport.upload_image_for_temporary_public_url(
+            path.read_bytes(),
+            path.name,
+        )
+    except Exception as exc:
+        return (
+            "",
+            f"serper_lens:oss_presign_failed:{exc.__class__.__name__}: {exc}",
+        )
+    return signed_url, ""
+
+
+async def search_visual_refs_by_image(
+    image_ref: str,
+    *,
+    query: str = "",
+    max_sources: int = DEFAULT_MAX_SOURCES,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Reverse image search for one reference image via Serper Lens.
+
+    *image_ref* may be a public http(s) URL or a local image (plain path,
+    ``file://`` URL, or canonical ``/generated/...`` media URL). Local media
+    requires ``creator_media_oss``; without it the result degrades with a
+    readable issue instead of raising.
+    """
+    label = _clean_query(query) or str(image_ref or "").strip()
+    result: dict[str, Any] = {
+        "query": label,
+        "image_reference": str(image_ref or "").strip(),
+        "visual_sources": [],
+        "issues": [],
+        "provider": "",
+        "providers": [],
+        "providers_attempted": [],
+    }
+    if not _serper_api_key():
+        result["issues"].append("serper_api_key_missing")
+        logger.info(
+            "Visual grounding by image skipped provider=serper_lens reason=api_key_missing",
+        )
+        return result
+    image_url, issue = await _lens_public_image_url(image_ref)
+    if issue:
+        result["issues"].append(issue)
+        logger.info("Visual grounding by image skipped reason=%s", issue)
+        return result
+    effective_timeout = max(float(timeout), DEFAULT_VISUAL_SEARCH_TIMEOUT)
+    logger.info(
+        "Visual grounding by image started provider=serper_lens max_sources=%d timeout=%s",
+        max_sources,
+        effective_timeout,
+    )
+    result["providers_attempted"].append("serper_lens")
+    visual_sources: list[dict[str, Any]] = []
+    async with httpx.AsyncClient(
+        timeout=effective_timeout,
+        follow_redirects=True,
+        headers={"User-Agent": USER_AGENT},
+    ) as client:
+        try:
+            visual_sources = await _search_serper_lens(
+                client,
+                image_url,
+                max_sources,
+                query=label,
+            )
+        except Exception as exc:
+            visual_sources = []
+            result["issues"].append(
+                f"serper_lens:{exc.__class__.__name__}: {exc}",
+            )
+            logger.warning(
+                "Visual grounding by image failed provider=serper_lens error=%s",
+                exc,
+            )
+    visual_sources = _dedupe_visual_sources(
+        visual_sources,
+        max_sources=max_sources,
+    )
+    if visual_sources:
+        result["providers"].append("serper_lens")
+        result["provider"] = "serper_lens"
+    else:
+        result["issues"].append("serper_lens:no_visual_sources")
+    result["visual_sources"] = visual_sources
+    logger.info(
+        "Visual grounding by image completed provider=serper_lens visual_sources=%d issues=%d",
+        len(visual_sources),
+        len(result["issues"]),
+    )
+    return result
