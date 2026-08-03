@@ -257,7 +257,15 @@ def _clear_user_config_cache():
     _USER_CONFIG_CACHE_FINGERPRINT = None
 
 
-_SECRET_FIELDS = ("api_key", "access_key_secret", "policy_api_key")
+# Mirrors api.model_routes._SECRET_FIELDS so runtime reads of
+# model_config.json can decrypt every field the API layer encrypts.
+_SECRET_FIELDS = (
+    "api_key",
+    "access_key_secret",
+    "policy_api_key",
+    "tavily_api_key",
+    "serper_api_key",
+)
 
 
 def _decrypt_config_secrets(data: dict) -> dict:
