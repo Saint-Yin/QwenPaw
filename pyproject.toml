@@ -171,6 +171,7 @@ markers = [
     "contract: marks tests as contract tests",
     "integration: marks tests as integration tests",
     "e2e: marks tests as end-to-end tests",
+    "manual_real: opt-in acceptance against real paid provider APIs",
 ]
 testpaths = [
     "tests",

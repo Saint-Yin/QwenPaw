@@ -25,6 +25,8 @@ import pytest
 
 from services.web_grounding.providers import adapters
 
+pytestmark = pytest.mark.manual_real
+
 requires_serper_key = pytest.mark.skipif(
     not os.environ.get("SERPER_API_KEY"),
     reason="SERPER_API_KEY not configured; manual real-provider run only",
