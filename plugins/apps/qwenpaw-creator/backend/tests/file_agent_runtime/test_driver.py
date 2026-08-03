@@ -1227,6 +1227,111 @@ def test_extra_data_recovery_names_the_premature_close() -> None:
     assert "one jq_project call per timeline" in recovery
 
 
+def test_jq_argument_diagnosis_reports_component_sizes() -> None:
+    payload = "x" * (256 * 1024)
+    diagnosis = _jq_project_argument_diagnosis(
+        AgentToolCall(
+            call_id="large-jq-write",
+            name="jq_project",
+            arguments={
+                "projectId": PROJECT_ID,
+                "program": ".description = $description",
+                "jsonArgs": {"description": payload},
+            },
+        ),
+    )
+
+    event = diagnosis.event_payload()
+    assert event["programBytes"] == len(
+        ".description = $description".encode(),
+    )
+    assert event["jsonArgsBytes"] > 256 * 1024
+    assert event["largePayloadAdvisory"] is True
+
+
+def test_main_agent_stops_repeating_deterministic_jq_failure(
+    tmp_path,
+) -> None:
+    turn = 0
+    failed_program = ".visual.entities.items = ($entities | from_entries)"
+    failed_arguments = {
+        "projectId": PROJECT_ID,
+        "program": failed_program,
+        "jsonArgs": {
+            "entities": {"char:hero": {"entity_id": "char:hero"}},
+        },
+    }
+
+    async def callback(messages, _tools):
+        nonlocal turn
+        turn += 1
+        assert turn <= 2, "a third model turn must not start"
+        if turn == 2:
+            first_failure = json.loads(messages[-1]["content"])
+            assert first_failure["error"]["code"] == (
+                "JQ_ARGUMENT_TYPE_MISMATCH"
+            )
+            assert first_failure["error"]["retryable"] is False
+            assert (
+                "assign or merge it directly"
+                in first_failure["error"]["recovery"]
+            )
+        return AgentModelTurn(
+            tool_calls=(
+                AgentToolCall(
+                    call_id=f"repeat-invalid-jq-{turn}",
+                    name="jq_project",
+                    arguments=failed_arguments,
+                ),
+            ),
+        )
+
+    async def scenario():
+        services, snapshot = _create_project(
+            tmp_path,
+            initial_goal="更新视觉实体",
+        )
+        driver = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(callback),
+            poll_interval_seconds=0.01,
+        )
+        await driver.start()
+        driver.notify(PROJECT_ID)
+        await _wait_for(
+            lambda: services.sessions.get_project_session(
+                PROJECT_ID,
+            ).status.value
+            == "ERROR",
+        )
+        await driver.wait_until_idle(PROJECT_ID)
+        session = services.sessions.get_project_session(PROJECT_ID)
+        project = services.projects.read(PROJECT_ID)
+        tool_results = [
+            json.loads(message.content_parts[0].text or "{}")
+            for message in services.sessions.list_messages(
+                PROJECT_ID,
+                SESSION_ID,
+            )
+            if message.role == "tool"
+            and message.metadata.get("toolName") == "jq_project"
+        ]
+        await driver.stop()
+        return session, project, snapshot, tool_results
+
+    session, project, snapshot, tool_results = asyncio.run(scenario())
+    assert turn == 2
+    assert session.error is not None
+    assert session.error["code"] == "TOOL_NON_PROGRESS"
+    assert session.error["retryable"] is False
+    assert project.etag == snapshot.etag
+    assert len(tool_results) == 2
+    assert all(
+        result["error"]["code"] == "JQ_ARGUMENT_TYPE_MISMATCH"
+        for result in tool_results
+    )
+
+
 def test_repaired_jq_project_arguments_never_execute_even_when_schema_valid(
     tmp_path,
 ) -> None:
@@ -1424,8 +1529,8 @@ def test_repeated_malformed_jq_project_arguments_stop_after_two_retries(
     assert project.generation == 0
     assert turn == 4
     assert session.error is not None
-    assert session.error["code"] == "MODEL_REQUEST_FAILED"
-    assert session.error["retryable"] is True
+    assert session.error["code"] == "TOOL_NON_PROGRESS"
+    assert session.error["retryable"] is False
     assert "after 2 bounded retries" in session.error["message"]
     errors = [
         json.loads(message.content_parts[0].text or "{}")["error"]

@@ -117,6 +117,8 @@ def test_jq_project_rejects_a_nested_object_instead_of_opaque_protected_diff(
         )
 
     assert "/project_id" in str(caught.value)
+    assert caught.value.code == "JQ_RESULT_NOT_PROJECT_ROOT"
+    assert "/project_id" in caught.value.details["changedProtectedPointers"]
     assert store.read("project-1").etag == base.etag
 
 
@@ -296,6 +298,7 @@ def test_invoke_translates_misnested_program_arguments(tmp_path):
             },
         )
     message = str(caught.value)
+    assert caught.value.code == "JQ_ARGUMENTS_MALFORMED"
     assert "花括号" in message
     assert "$.jsonArgs.timeline_elements.elem-02.program" in message
     assert "项目未被修改" in message
@@ -315,6 +318,7 @@ def test_invoke_translates_project_schema_errors_with_paths(tmp_path):
             },
         )
     message = str(caught.value)
+    assert caught.value.code == "JQ_PROJECT_SCHEMA_INVALID"
     assert "visual.variants" in message
     assert "visual.entities.items" in message
     assert "项目未被修改" in message

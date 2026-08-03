@@ -49,12 +49,14 @@ from models.config import (
 )
 from models.media_transport import validate_reference_image_bytes
 from services.project_files.agent_tools import (
+    AgentProjectToolError,
     AgentProjectToolContext,
     AgentProjectTools,
     JQ_PROJECT_TOOL_NAME,
     READ_PROJECT_TOOL_NAME,
     agent_project_tool_manifest,
 )
+from services.project_files.jq_transform import JqTransformError
 from services.project_files.commit import ProjectCommitBoundary
 from services.project_files.facade import CreatorFileServices
 from services.project_files.assets import AssetAlreadyExists, AssetFileStore
@@ -141,6 +143,7 @@ GROUNDING_VISUAL_MAX_BYTES = 16 * 1024 * 1024
 MAX_MALFORMED_JQ_PROJECT_RETRIES = 2
 MAX_REPEATED_DETERMINISTIC_TOOL_FAILURES = 2
 DEFAULT_MODEL_TURN_TIMEOUT_SECONDS = 180.0
+JQ_PROJECT_LARGE_ARGUMENT_ADVISORY_BYTES = 256 * 1024
 
 _PROJECT_SNAPSHOT_RESULT_KIND = "project_snapshot"
 _PROJECT_CHANGE_RECEIPT_RESULT_KIND = "project_change_receipt"
@@ -174,13 +177,18 @@ def _deterministic_tool_failure_fingerprint(
 ) -> str | None:
     """Identify an exact, non-retryable tool failure across model turns."""
 
-    if not isinstance(error, CreatorError) or error.retryable:
+    supported = isinstance(
+        error,
+        (CreatorError, AgentProjectToolError, JqTransformError),
+    )
+    if not supported or bool(getattr(error, "retryable", False)):
         return None
     payload = json.dumps(
         {
             "tool": call.name,
             "arguments": call.arguments,
             "errorType": type(error).__name__,
+            "errorCode": getattr(error, "code", None),
             "error": str(error),
         },
         ensure_ascii=False,
@@ -189,6 +197,36 @@ def _deterministic_tool_failure_fingerprint(
         default=str,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _tool_failure_result(
+    name: str,
+    error: Exception,
+    *,
+    recovery: str | None = None,
+) -> dict[str, Any]:
+    """Expose stable error fields without flattening useful diagnostics."""
+
+    error_payload: dict[str, Any] = {
+        "type": type(error).__name__,
+        "message": str(error),
+        "recovery": recovery
+        or _specialist_tool_recovery(
+            name,
+            str(error),
+            code=getattr(error, "code", None),
+        ),
+    }
+    code = getattr(error, "code", None)
+    if isinstance(code, str) and code:
+        error_payload["code"] = code
+        error_payload["retryable"] = bool(
+            getattr(error, "retryable", False),
+        )
+    details = getattr(error, "details", None)
+    if isinstance(details, Mapping) and details:
+        error_payload["details"] = dict(details)
+    return {"ok": False, "error": error_payload}
 
 
 def _grounding_stable_id(prefix: str, project_id: str, identity: str) -> str:
@@ -340,6 +378,9 @@ class _JqProjectArgumentDiagnosis:
     nested_required_paths: tuple[str, ...]
     nested_scan_truncated: bool
     raw_arguments_bytes: int
+    program_bytes: int
+    json_args_bytes: int
+    large_payload_advisory: bool
     strict_json_parsed: bool
     json_repair_applied: bool
     strict_json_error: str | None
@@ -369,6 +410,9 @@ class _JqProjectArgumentDiagnosis:
     def event_payload(self) -> dict[str, Any]:
         return {
             "rawArgumentsBytes": self.raw_arguments_bytes,
+            "programBytes": self.program_bytes,
+            "jsonArgsBytes": self.json_args_bytes,
+            "largePayloadAdvisory": self.large_payload_advisory,
             "strictJsonParsed": self.strict_json_parsed,
             "jsonRepairApplied": self.json_repair_applied,
             "strictJsonError": self.strict_json_error,
@@ -483,7 +527,9 @@ class MalformedJqProjectArguments(FileAgentRuntimeError):
             "ok": False,
             "error": {
                 "type": type(self).__name__,
+                "code": "JQ_ARGUMENTS_MALFORMED",
                 "message": str(self),
+                "retryable": self.retries_remaining > 0,
                 "details": self.diagnosis.event_payload(),
                 "retry": {
                     "attempt": self.attempt,
@@ -563,6 +609,25 @@ def _jq_project_argument_diagnosis(
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+    program = arguments.get("program")
+    program_bytes = (
+        len(program.encode("utf-8")) if isinstance(program, str) else 0
+    )
+    json_args = arguments.get("jsonArgs")
+    json_args_bytes = (
+        len(
+            json.dumps(
+                json_args,
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8"),
+        )
+        if isinstance(json_args, Mapping)
+        else 0
+    )
+    raw_arguments_bytes = call.raw_arguments_bytes or len(encoded)
     fingerprint = hashlib.sha256(encoded).hexdigest()[:16]
     nested_paths, nested_truncated = _nested_required_key_paths(
         arguments,
@@ -574,7 +639,12 @@ def _jq_project_argument_diagnosis(
         unexpected_top_level=unexpected,
         nested_required_paths=nested_paths,
         nested_scan_truncated=nested_truncated,
-        raw_arguments_bytes=call.raw_arguments_bytes or len(encoded),
+        raw_arguments_bytes=raw_arguments_bytes,
+        program_bytes=program_bytes,
+        json_args_bytes=json_args_bytes,
+        large_payload_advisory=(
+            raw_arguments_bytes >= JQ_PROJECT_LARGE_ARGUMENT_ADVISORY_BYTES
+        ),
         strict_json_parsed=not call.arguments_repaired,
         json_repair_applied=call.arguments_repaired,
         strict_json_error=call.strict_json_error,
@@ -588,6 +658,10 @@ class ToolArgumentsJSONError(FileAgentRuntimeError):
     Raised per tool call and fed back to the model as a failed tool result;
     it must never terminate the whole run.
     """
+
+
+class RepeatedDeterministicToolFailure(AgentModelError):
+    """The model repeated an identical non-retryable tool failure."""
 
 
 class StaleAgentRun(FileAgentRuntimeError, AgentStreamCallbackPassthrough):
@@ -1364,6 +1438,24 @@ class FileCreatorAgentRuntime:
                 retryable=False,
             )
             self._blocked_heads[project_id] = message.message_seq
+        except RepeatedDeterministicToolFailure as exc:
+            logger.error(
+                "Agent run %s stopped after repeated deterministic tool "
+                "failure: %s",
+                run_id,
+                exc,
+            )
+            await self._fail_run(
+                project_id,
+                session.session_id,
+                goal.goal_id,
+                run_id,
+                message,
+                code="TOOL_NON_PROGRESS",
+                message_text=str(exc),
+                retryable=False,
+            )
+            self._blocked_heads[project_id] = message.message_seq
         except AgentModelError as exc:
             logger.error(
                 "Agent run %s failed — model request error: %s",
@@ -1462,6 +1554,7 @@ class FileCreatorAgentRuntime:
         waiting_review_summary: str | None = None
         malformed_jq_attempts = 0
         malformed_jq_fingerprints: set[str] = set()
+        deterministic_failure_counts: dict[str, int] = {}
         for _turn_number in range(1, self.max_model_turns + 1):
             self._assert_epoch(project_id, run_id, epoch)
             _compact_wire_project_snapshots(messages)
@@ -1588,6 +1681,7 @@ class FileCreatorAgentRuntime:
                 tool_call_count += 1
                 tool_failed = False
                 malformed_budget_exhausted = False
+                repeated_failure_exhausted = False
                 self._assert_epoch(project_id, run_id, epoch)
                 logger.info(
                     "tool: project=%s run=%s tool=%s call_id=%s args=%s",
@@ -1735,17 +1829,25 @@ class FileCreatorAgentRuntime:
                             exc.attempt > MAX_MALFORMED_JQ_PROJECT_RETRIES
                         )
                     else:
-                        error_result = {
-                            "ok": False,
-                            "error": {
-                                "type": type(exc).__name__,
-                                "message": str(exc),
-                                "recovery": _specialist_tool_recovery(
-                                    call.name,
-                                    str(exc),
-                                ),
-                            },
-                        }
+                        failure_fingerprint = (
+                            _deterministic_tool_failure_fingerprint(call, exc)
+                        )
+                        if failure_fingerprint is not None:
+                            failure_count = (
+                                deterministic_failure_counts.get(
+                                    failure_fingerprint,
+                                    0,
+                                )
+                                + 1
+                            )
+                            deterministic_failure_counts[
+                                failure_fingerprint
+                            ] = failure_count
+                            repeated_failure_exhausted = (
+                                failure_count
+                                >= MAX_REPEATED_DETERMINISTIC_TOOL_FAILURES
+                            )
+                        error_result = _tool_failure_result(call.name, exc)
                     await self._persist_tool_result(
                         project_id,
                         session_id,
@@ -1771,10 +1873,17 @@ class FileCreatorAgentRuntime:
                     },
                 )
                 if malformed_budget_exhausted:
-                    raise AgentModelError(
+                    raise RepeatedDeterministicToolFailure(
                         "jq_project produced structurally corrupted tool "
                         "arguments after 2 bounded retries; the run stopped "
                         "before jq execution",
+                    )
+                if repeated_failure_exhausted:
+                    raise RepeatedDeterministicToolFailure(
+                        "Creator Agent repeated the same non-retryable "
+                        f"{call.name} failure twice without changing its "
+                        "arguments; the run stopped instead of starting "
+                        "another model turn",
                     )
         raise AgentModelError(
             f"Creator Agent exceeded {self.max_model_turns} model turns",
@@ -2750,24 +2859,18 @@ class FileCreatorAgentRuntime:
                                 failure_count
                                 >= MAX_REPEATED_DETERMINISTIC_TOOL_FAILURES
                             )
-                        result = {
-                            "ok": False,
-                            "error": {
-                                "type": type(exc).__name__,
-                                "message": str(exc),
-                                "recovery": (
-                                    exc.recovery()
-                                    if isinstance(
-                                        exc,
-                                        CreationCheckpointBlocked,
-                                    )
-                                    else _specialist_tool_recovery(
-                                        call.name,
-                                        str(exc),
-                                    )
-                                ),
-                            },
-                        }
+                        result = _tool_failure_result(
+                            call.name,
+                            exc,
+                            recovery=(
+                                exc.recovery()
+                                if isinstance(
+                                    exc,
+                                    CreationCheckpointBlocked,
+                                )
+                                else None
+                            ),
+                        )
                 await asyncio.to_thread(
                     self.executions.append_specialist_message,
                     project_id,
@@ -2890,13 +2993,13 @@ class FileCreatorAgentRuntime:
                         "reviewId": waiting_review.details.get("reviewId"),
                     }
                 if malformed_budget_exhausted:
-                    raise AgentModelError(
+                    raise RepeatedDeterministicToolFailure(
                         "jq_project produced structurally corrupted tool "
                         "arguments after 2 bounded retries; the specialist "
                         "stopped before jq execution",
                     )
                 if repeated_failure_exhausted:
-                    raise AgentModelError(
+                    raise RepeatedDeterministicToolFailure(
                         f"{role_name} repeated the same non-retryable "
                         f"{call.name} failure twice without changing its "
                         "arguments; the specialist stopped instead of "
@@ -4721,7 +4824,55 @@ def _specialist_terminal(content: str) -> tuple[str, str]:
     )
 
 
-def _specialist_tool_recovery(name: str, error: str = "") -> str:
+def _jq_project_recovery(code: str | None) -> str:
+    if code == "JQ_ARGUMENT_TYPE_MISMATCH":
+        return (
+            "Preserve each jsonArgs value's JSON type. The failed "
+            "from_entries input is already an object map; assign or "
+            "merge it directly. Use from_entries only for an array of "
+            "{key, value} entries, and do not repeat the failed call."
+        )
+    if code == "JQ_RESULT_NOT_PROJECT_ROOT":
+        return (
+            "Issue a new jq_project transform rooted at the input "
+            "Project `.` and return the complete Project object. Do not "
+            "finish with a Timeline, Element, jsonArgs value, or other "
+            "child object."
+        )
+    if code == "JQ_PROJECT_SCHEMA_INVALID":
+        return (
+            "Use the reported validation paths to correct program or "
+            "jsonArgs, then issue a changed jq_project call. The invalid "
+            "candidate was not published."
+        )
+    return (
+        "Re-read project.json and retry jq_project with a transform "
+        "that returns the complete Project root and preserves all "
+        "Runtime-protected root fields. Never assign schema_version, "
+        "project_id, generation, created_at, or updated_at; the "
+        "Runtime maintains them. Start from the input Project `.`, "
+        "not `$jsonArgs`. If the failure was malformed or misnested "
+        "argument JSON: " + _JQ_PROJECT_CALL_SHAPE_RECOVERY + " For "
+        "structured jsonArgs, preserve their JSON type: assign or merge "
+        "object maps directly, and use from_entries only for an array "
+        "of {key, value} entries. "
+        "every Edit item, set duration_tick to "
+        "round((source_out_tick - source_in_tick) / playback_rate). "
+        "Remove nonexistent references; not-yet-produced artifacts "
+        "stay null. Parenthesize computed jq values before binding "
+        "them, for example "
+        '("source:" + $logicalId) as $sourceKey, and parenthesize '
+        "expressions used as object values. Never finish with a saved "
+        "pre-edit root such as $project because that discards mutations."
+    )
+
+
+def _specialist_tool_recovery(
+    name: str,
+    error: str = "",
+    *,
+    code: str | None = None,
+) -> str:
     media_tools = {"image_generation", "r2v_generation", "ai_edit"}
     if name in media_tools and (
         "PROJECT_INPUT_SNAPSHOT_STALE" in error
@@ -4759,27 +4910,7 @@ def _specialist_tool_recovery(name: str, error: str = "") -> str:
             "storyboard images, then call r2v_generation again."
         )
     if name == "jq_project":
-        return (
-            "Re-read project.json and retry jq_project with a transform "
-            "that returns the complete Project root and preserves all "
-            "Runtime-protected root fields. Never assign schema_version, "
-            "project_id, generation, created_at, or updated_at; the "
-            "Runtime maintains them. Start from the input Project `.`, "
-            "not `$jsonArgs`. If the failure was malformed or misnested "
-            "argument JSON: " + _JQ_PROJECT_CALL_SHAPE_RECOVERY + " For "
-            "structured jsonArgs, preserve their JSON type: assign or merge "
-            "object maps directly, and use from_entries only for an array "
-            "of {key, value} entries. "
-            "every Edit item, set duration_tick to "
-            "round((source_out_tick - source_in_tick) / playback_rate). "
-            "Remove nonexistent references; not-yet-produced artifacts "
-            "stay null. Parenthesize computed jq values before binding "
-            "them, for example "
-            '("source:" + $logicalId) as $sourceKey, and parenthesize '
-            "expressions used as object values. Never finish with a saved "
-            "pre-edit root such as $project because that discards "
-            "mutations."
-        )
+        return _jq_project_recovery(code)
     if name == "ai_edit":
         return (
             "Use the persisted Runtime Task error as the cause and retry ai_edit with "

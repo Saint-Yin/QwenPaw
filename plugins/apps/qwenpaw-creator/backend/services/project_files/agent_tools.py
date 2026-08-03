@@ -49,6 +49,19 @@ _MAX_TEXT_PAGE_BYTES = 256 * 1024
 class AgentProjectToolError(RuntimeError):
     """Base error for the Project tool boundary."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "PROJECT_TOOL_ERROR",
+        retryable: bool = False,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+        self.details = dict(details or {})
+
 
 class UnknownAgentProjectTool(AgentProjectToolError):
     pass
@@ -611,6 +624,8 @@ class AgentProjectTools:
                 "当前输出缺失或改变了 "
                 + ", ".join(changed_protected)
                 + "。不要以 `| $child` 或嵌套路径选择结束 jq program。",
+                code="JQ_RESULT_NOT_PROJECT_ROOT",
+                details={"changedProtectedPointers": changed_protected},
             )
         result = self.commits.commit(
             base=base,
@@ -685,7 +700,17 @@ class AgentProjectTools:
                 translated = _translate_jq_input_error(arguments, exc)
                 if translated is None:
                     raise
-                raise AgentProjectToolError(translated) from exc
+                raise AgentProjectToolError(
+                    translated,
+                    code="JQ_ARGUMENTS_MALFORMED",
+                    details={
+                        "validationErrors": exc.errors(
+                            include_context=False,
+                            include_input=False,
+                            include_url=False,
+                        ),
+                    },
+                ) from exc
             try:
                 result = self.jq_project(
                     project_id=request.project_id,
@@ -696,6 +721,14 @@ class AgentProjectTools:
             except ValidationError as exc:
                 raise AgentProjectToolError(
                     _translate_project_schema_error(exc),
+                    code="JQ_PROJECT_SCHEMA_INVALID",
+                    details={
+                        "validationErrors": exc.errors(
+                            include_context=False,
+                            include_input=False,
+                            include_url=False,
+                        ),
+                    },
                 ) from exc
         elif tool_name == ELEMENTS_AT_TOOL_NAME:
             request = ElementsAtToolInput.model_validate(dict(arguments))
