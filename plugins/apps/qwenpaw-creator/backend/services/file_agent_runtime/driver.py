@@ -4591,30 +4591,59 @@ def _elide_stale_snapshots(
 def _compact_wire_project_snapshots(messages: list[dict[str, Any]]) -> None:
     """Compact superseded snapshots in the ephemeral model wire context.
 
-    Mutates message content in place. Durable conversation and execution
-    records remain unchanged. The operation is idempotent because receipts
-    are not recognized as full Project snapshots.
+    Tool content is normally a string, but OpenAI-compatible wire messages
+    may represent it as text content parts. Mutates message content in place
+    while preserving any multipart structure and part metadata. Durable
+    conversation and execution records remain unchanged. The operation is
+    idempotent because receipts are not recognized as full Project snapshots.
     """
 
-    snapshots: list[tuple[dict[str, Any], _ProjectSnapshotEnvelope, str]] = []
+    snapshots: list[
+        tuple[dict[str, Any], _ProjectSnapshotEnvelope, str, int | None]
+    ] = []
     for message in messages:
         if message.get("role") != "tool":
             continue
         tool_name = str(message.get("name") or "").strip()
-        content = message.get("content")
-        if tool_name not in _PROJECT_SNAPSHOT_TOOL_NAMES or not isinstance(
-            content,
-            str,
-        ):
+        if tool_name not in _PROJECT_SNAPSHOT_TOOL_NAMES:
             continue
-        snapshot = _project_snapshot_from_text(content)
-        if snapshot is not None:
-            snapshots.append((message, snapshot, tool_name))
-    for message, snapshot, tool_name in snapshots[:-1]:
-        message["content"] = _project_change_receipt(
+        content = message.get("content")
+        if isinstance(content, str):
+            snapshot = _project_snapshot_from_text(content)
+            if snapshot is not None:
+                snapshots.append((message, snapshot, tool_name, None))
+            continue
+        if not isinstance(content, list):
+            continue
+        for part_index, part in enumerate(content):
+            if not isinstance(part, Mapping) or part.get("type") != "text":
+                continue
+            text = part.get("text")
+            if not isinstance(text, str):
+                continue
+            snapshot = _project_snapshot_from_text(text)
+            if snapshot is not None:
+                snapshots.append(
+                    (message, snapshot, tool_name, part_index),
+                )
+                break
+    for message, snapshot, tool_name, part_index in snapshots[:-1]:
+        receipt = _project_change_receipt(
             snapshot,
             tool_name=tool_name,
         )
+        if part_index is None:
+            message["content"] = receipt
+            continue
+        content = message.get("content")
+        if not isinstance(content, list) or part_index >= len(content):
+            continue
+        part = content[part_index]
+        if not isinstance(part, Mapping):
+            continue
+        updated_content = list(content)
+        updated_content[part_index] = {**part, "text": receipt}
+        message["content"] = updated_content
 
 
 def _continuation_message_text(

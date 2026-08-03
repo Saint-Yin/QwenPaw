@@ -493,6 +493,57 @@ def test_active_run_compacts_only_superseded_project_snapshots() -> None:
     assert "y" * 100 in messages[2]["content"]
 
 
+def test_active_run_compacts_snapshot_inside_multipart_tool_content() -> None:
+    from services.file_agent_runtime.driver import (
+        _compact_wire_project_snapshots,
+    )
+
+    def snapshot(generation: int, padding: str) -> str:
+        return json.dumps(
+            {
+                "project": {
+                    "project_id": PROJECT_ID,
+                    "generation": generation,
+                    "padding": padding * 8000,
+                },
+                "generation": generation,
+                "etag": f"etag-{generation}",
+            },
+        )
+
+    messages = [
+        {
+            "role": "tool",
+            "name": "jq_project",
+            "content": [
+                {"type": "text", "text": "preserved supplemental text"},
+                {
+                    "type": "text",
+                    "text": snapshot(1, "x"),
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "name": "read_project",
+            "content": [{"type": "text", "text": snapshot(2, "y")}],
+        },
+    ]
+
+    _compact_wire_project_snapshots(messages)
+
+    old_content = messages[0]["content"]
+    assert isinstance(old_content, list)
+    assert old_content[0]["text"] == "preserved supplemental text"
+    assert "project_change_receipt" in old_content[1]["text"]
+    assert "x" * 100 not in old_content[1]["text"]
+    assert old_content[1]["cache_control"] == {"type": "ephemeral"}
+    latest_content = messages[1]["content"]
+    assert isinstance(latest_content, list)
+    assert "y" * 100 in latest_content[0]["text"]
+
+
 def test_runtime_action_result_kind_requires_a_valid_snapshot() -> None:
     from services.file_agent_runtime.driver import (
         _runtime_action_result_kind,
