@@ -381,8 +381,9 @@ def test_model_config_is_single_file_native_and_idempotent(
         "custom_protocol": "",
         "reuse_llm": True,
         "validation_source": "llm",
-        "tavily_api_key": "tvly-test",
-        # serper_api_key is a secret field: GET returns the keep-placeholder.
+        # Search-provider keys are secret fields: GET returns the
+        # keep-placeholder instead of the persisted credentials.
+        "tavily_api_key": model_routes.SECRET_MASK,
         "serper_api_key": model_routes.SECRET_MASK,
         "native_search_enabled": True,
         "search_provider": "dashscope_qwen",

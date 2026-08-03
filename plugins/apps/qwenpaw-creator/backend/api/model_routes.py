@@ -457,6 +457,7 @@ _SECRET_FIELDS = (
     "api_key",
     "access_key_secret",
     "policy_api_key",
+    "tavily_api_key",
     "serper_api_key",
 )
 
