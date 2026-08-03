@@ -4242,7 +4242,6 @@ def _message_text(message: CreatorMessageRecord) -> str:
 # changes to reconstruct current state. Durable Runtime history keeps every
 # original byte.
 _SNAPSHOT_SOURCE = "runtime_action_result"
-_SNAPSHOT_ELISION_MIN_CHARS = 4096
 
 
 @dataclass(frozen=True)
@@ -4371,7 +4370,7 @@ def _project_change_receipt(
 def _elide_stale_snapshots(
     prior_context: list[CreatorMessageRecord],
 ) -> dict[int, str]:
-    """Map message seq to a receipt for each large superseded snapshot."""
+    """Map message seq to a receipt for each superseded snapshot."""
 
     snapshots: list[
         tuple[CreatorMessageRecord, _ProjectSnapshotEnvelope, str]
@@ -4387,13 +4386,6 @@ def _elide_stale_snapshots(
 
     receipts: dict[int, str] = {}
     for item, snapshot, tool_name in snapshots[:-1]:
-        size = sum(
-            len(part.text or "")
-            for part in item.content_parts
-            if part.text is not None
-        )
-        if size < _SNAPSHOT_ELISION_MIN_CHARS:
-            continue
         receipts[item.message_seq] = _project_change_receipt(
             snapshot,
             tool_name=tool_name,
@@ -4420,12 +4412,6 @@ def _compact_wire_project_snapshots(messages: list[dict[str, Any]]) -> None:
         if snapshot is not None:
             snapshots.append((message, snapshot, tool_name))
     for message, snapshot, tool_name in snapshots[:-1]:
-        content = message.get("content")
-        if (
-            not isinstance(content, str)
-            or len(content) < _SNAPSHOT_ELISION_MIN_CHARS
-        ):
-            continue
         message["content"] = _project_change_receipt(
             snapshot,
             tool_name=tool_name,

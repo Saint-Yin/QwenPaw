@@ -347,6 +347,48 @@ def test_large_non_snapshot_tool_results_survive_snapshot_compaction() -> None:
     assert "project_change_receipt" in rendered
 
 
+def test_small_superseded_project_snapshot_is_compacted() -> None:
+    from services.file_agent_runtime.driver import _elide_stale_snapshots
+
+    def snapshot_message(seq: int, generation: int) -> CreatorMessageRecord:
+        return CreatorMessageRecord(
+            message_id=f"message-{seq}",
+            project_id=PROJECT_ID,
+            creator_session_id=SESSION_ID,
+            conversation_id=CONVERSATION_ID,
+            message_seq=seq,
+            role="tool",
+            content_parts=[
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "project": {
+                                "project_id": PROJECT_ID,
+                                "generation": generation,
+                            },
+                            "generation": generation,
+                            "etag": f"etag-{generation}",
+                        },
+                    ),
+                },
+            ],
+            source="runtime_action_result",
+            channel=MessageChannel.RUNTIME,
+            metadata={
+                "toolName": "read_project",
+                "resultKind": "project_snapshot",
+            },
+        )
+
+    receipts = _elide_stale_snapshots(
+        [snapshot_message(1, 1), snapshot_message(2, 2)],
+    )
+
+    assert set(receipts) == {1}
+    assert "project_change_receipt" in receipts[1]
+
+
 def test_invalid_snapshot_payload_is_not_compacted() -> None:
     from services.file_agent_runtime.driver import (
         _continuation_message_text,
