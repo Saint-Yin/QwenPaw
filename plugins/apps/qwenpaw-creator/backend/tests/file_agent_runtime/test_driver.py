@@ -28,6 +28,7 @@ from services.file_agent_runtime.driver import (
     _ToolArgumentProgressReporter,
     _apply_review_feedback_to_tool_arguments,
     _jq_project_argument_diagnosis,
+    _jq_project_recovery,
     _review_feedback_target_refs,
     _specialist_tool_recovery,
     _tool_call_transport_metadata,
@@ -1360,6 +1361,14 @@ def test_jq_argument_diagnosis_reports_component_sizes() -> None:
     assert event["largePayloadAdvisory"] is True
 
 
+def test_generic_jq_recovery_only_describes_jq_call_repair() -> None:
+    recovery = _jq_project_recovery(None)
+
+    assert "complete Project root" in recovery
+    assert "duration_tick" not in recovery
+    assert "playback_rate" not in recovery
+
+
 def test_main_agent_stops_repeating_deterministic_jq_failure(
     tmp_path,
 ) -> None:
@@ -1737,7 +1746,6 @@ def test_initial_creation_runs_auto_fix_tool_loop_without_review(
         "agent.tool_started",
         "agent.tool_completed",
     } <= event_types
-    assert "agent.tool_delta" not in event_types
     trace_records = read_trace_records(filters={"projectId": PROJECT_ID})
     trace_names = {item["name"] for item in trace_records}
     assert {

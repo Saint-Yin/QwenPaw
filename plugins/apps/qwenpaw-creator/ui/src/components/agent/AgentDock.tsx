@@ -885,13 +885,9 @@ function NestedSubagentToolCard({ item }: { item: SubagentStreamTool }) {
       : item.status;
   const active = resolvedStatus === "started";
   const { expanded, setExpanded } = useLiveDisclosure(active);
-  const rawArguments = Object.entries(item.argumentDeltas ?? {})
-    .sort(([left], [right]) => Number(left) - Number(right))
-    .map(([, value]) => value)
-    .join("");
   const renderedArguments = item.arguments
     ? JSON.stringify(item.arguments, null, 2)
-    : rawArguments;
+    : "";
   const hasArgs = Boolean(renderedArguments);
   const hasResult = item.result !== undefined && item.result !== null;
   const hasOutputEvents = item.outputEvents.length > 0;
@@ -1743,11 +1739,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
                   name: item.toolCall.name,
                   ...(item.toolCall.arguments
                     ? { arguments: item.toolCall.arguments }
-                    : {
-                        argumentsDelta: orderedDeltas(
-                          item.toolCall.argumentDeltas,
-                        ),
-                      }),
+                    : {}),
                 },
                 actionId: item.toolCall.id,
               }

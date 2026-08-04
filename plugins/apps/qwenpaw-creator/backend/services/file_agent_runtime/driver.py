@@ -5020,8 +5020,6 @@ def _jq_project_recovery(code: str | None) -> str:
         "structured jsonArgs, preserve their JSON type: assign or merge "
         "object maps directly, and use from_entries only for an array "
         "of {key, value} entries. "
-        "every Edit item, set duration_tick to "
-        "round((source_out_tick - source_in_tick) / playback_rate). "
         "Remove nonexistent references; not-yet-produced artifacts "
         "stay null. Parenthesize computed jq values before binding "
         "them, for example "

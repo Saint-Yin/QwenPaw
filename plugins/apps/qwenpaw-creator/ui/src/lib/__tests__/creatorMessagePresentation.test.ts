@@ -640,48 +640,34 @@ describe("Creator conversation presentation", () => {
     ]);
   });
 
-  it("assembles main-agent native tool deltas and removes rejected calls", () => {
-    const deltas = [
+  it("projects canonical tool arguments and removes rejected calls", () => {
+    const started = [
       creatorEvent({
-        eventId: "delta-1",
+        eventId: "started",
         seq: 1,
-        type: "agent.tool_delta",
+        type: "agent.tool_started",
         data: {
           messageId: "assistant-native",
           toolCallId: "call-read",
           tool: "read_file",
-          deltaIndex: 0,
-          argumentsDelta: '{"file_path":"story/',
-        },
-      }),
-      creatorEvent({
-        eventId: "delta-2",
-        seq: 2,
-        type: "agent.tool_delta",
-        data: {
-          messageId: "assistant-native",
-          toolCallId: "call-read",
-          tool: "read_file",
-          deltaIndex: 1,
-          argumentsDelta: 'outline.md"}',
+          arguments: { file_path: "story/outline.md" },
         },
       }),
     ];
-    expect(toolCallPresentations([], deltas)).toMatchObject([
+    expect(toolCallPresentations([], started)).toMatchObject([
       {
         actionId: "call-read",
         anchorMessageId: "assistant-native",
         status: "started",
         tool: "read_file",
         arguments: { file_path: "story/outline.md" },
-        argumentsText: '{"file_path":"story/outline.md"}',
       },
     ]);
     expect(
       toolCallPresentations(
         [],
         [
-          ...deltas,
+          ...started,
           creatorEvent({
             eventId: "rejected",
             seq: 3,

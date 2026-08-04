@@ -51,7 +51,6 @@ export interface StreamingAssistantMessage {
   toolCall?: {
     id: string;
     name: string;
-    argumentDeltas: Record<number, string>;
     arguments?: Record<string, unknown>;
     receivedBytes?: number;
     providerChunkCount?: number;
@@ -79,7 +78,6 @@ export interface SubagentStreamTool {
   tool: string;
   firstEventSeq: number;
   status: "started" | "succeeded" | "failed";
-  argumentDeltas?: Record<number, string>;
   arguments?: Record<string, unknown>;
   receivedBytes?: number;
   providerChunkCount?: number;
@@ -1015,7 +1013,6 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
             const subagentDetail =
               event.type === "subagent.message_delta" ||
               event.type === "subagent.message_completed" ||
-              event.type === "subagent.tool_delta" ||
               event.type === "subagent.tool_progress" ||
               event.type === "subagent.tool_started" ||
               event.type === "subagent.tool_completed";
@@ -1188,7 +1185,6 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
               }
 
               if (
-                event.type === "subagent.tool_delta" ||
                 event.type === "subagent.tool_progress" ||
                 event.type === "subagent.tool_started" ||
                 event.type === "subagent.tool_completed"
@@ -1199,40 +1195,9 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
                 if (toolCallId && runId) {
                   const toolKey = `${runId}:${toolCallId}`;
                   const existingTool = activity.tools[toolKey];
-                  let argumentDeltas = existingTool?.argumentDeltas ?? {};
-                  if (event.type === "subagent.tool_delta") {
-                    const deltaIndex = Number(event.data.deltaIndex);
-                    const argumentsDelta = event.data.argumentsDelta;
-                    if (
-                      Number.isInteger(deltaIndex) &&
-                      deltaIndex >= 0 &&
-                      typeof argumentsDelta === "string" &&
-                      !(deltaIndex in argumentDeltas)
-                    ) {
-                      argumentDeltas = {
-                        ...argumentDeltas,
-                        [deltaIndex]: argumentsDelta,
-                      };
-                    }
-                  }
-                  let parsedArguments = isRecord(event.data.arguments)
+                  const parsedArguments = isRecord(event.data.arguments)
                     ? event.data.arguments
                     : existingTool?.arguments;
-                  if (
-                    !parsedArguments &&
-                    Object.keys(argumentDeltas).length > 0
-                  ) {
-                    const rawArguments = Object.entries(argumentDeltas)
-                      .sort(([left], [right]) => Number(left) - Number(right))
-                      .map(([, value]) => value)
-                      .join("");
-                    try {
-                      const candidate = JSON.parse(rawArguments) as unknown;
-                      if (isRecord(candidate)) parsedArguments = candidate;
-                    } catch {
-                      // Partial JSON stays visible until deltas complete it.
-                    }
-                  }
                   const nextTool: SubagentStreamTool = {
                     toolCallId,
                     runId,
@@ -1245,7 +1210,6 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
                       event.type !== "subagent.tool_completed"
                         ? "started"
                         : subagentToolStatus(event.data.state),
-                    argumentDeltas,
                     arguments: parsedArguments,
                     receivedBytes:
                       typeof event.data.receivedBytes === "number"
@@ -1373,62 +1337,6 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
                 }
               }
             }
-            if (event.type === "agent.tool_delta") {
-              const messageId = eventString(event.data, "messageId");
-              const toolCallId = eventString(event.data, "toolCallId");
-              const toolName = eventString(event.data, "tool");
-              const deltaIndex = Number(event.data.deltaIndex);
-              const argumentsDelta = event.data.argumentsDelta;
-              const alreadyDurable = messageId
-                ? messages.some((message) => message.messageId === messageId)
-                : false;
-              if (
-                messageId &&
-                toolCallId &&
-                toolName &&
-                Number.isInteger(deltaIndex) &&
-                deltaIndex >= 0 &&
-                typeof argumentsDelta === "string" &&
-                !alreadyDurable
-              ) {
-                const existing = streamingAssistantMessages[messageId];
-                const currentTool = existing?.toolCall;
-                const argumentDeltas = {
-                  ...(currentTool?.id === toolCallId
-                    ? currentTool.argumentDeltas
-                    : {}),
-                  [deltaIndex]: argumentsDelta,
-                };
-                const rawArguments = Object.entries(argumentDeltas)
-                  .sort(([left], [right]) => Number(left) - Number(right))
-                  .map(([, value]) => value)
-                  .join("");
-                let parsedArguments: Record<string, unknown> | undefined;
-                try {
-                  const candidate = JSON.parse(rawArguments) as unknown;
-                  if (isRecord(candidate)) parsedArguments = candidate;
-                } catch {
-                  // Partial provider JSON is retained in argumentDeltas.
-                }
-                streamingAssistantMessages = {
-                  ...streamingAssistantMessages,
-                  [messageId]: {
-                    messageId,
-                    runId: eventString(event.data, "runId") ?? existing?.runId,
-                    firstEventSeq: existing?.firstEventSeq ?? event.seq,
-                    deltas: existing?.deltas ?? {},
-                    thinkingDeltas: existing?.thinkingDeltas ?? {},
-                    toolCall: {
-                      id: toolCallId,
-                      name: toolName,
-                      argumentDeltas,
-                      arguments: parsedArguments,
-                    },
-                    createdAt: existing?.createdAt ?? event.at,
-                  },
-                };
-              }
-            }
             if (event.type === "agent.tool_progress") {
               const messageId = eventString(event.data, "messageId");
               const toolCallId = eventString(event.data, "toolCallId");
@@ -1450,10 +1358,6 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
                     toolCall: {
                       id: toolCallId,
                       name: toolName,
-                      argumentDeltas:
-                        currentTool?.id === toolCallId
-                          ? currentTool.argumentDeltas
-                          : {},
                       arguments:
                         currentTool?.id === toolCallId
                           ? currentTool.arguments
