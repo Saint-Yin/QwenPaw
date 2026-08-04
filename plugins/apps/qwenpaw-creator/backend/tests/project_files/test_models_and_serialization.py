@@ -182,13 +182,22 @@ def test_r2v_variant_binding_must_target_a_referenced_entity_and_variant():
     creation["visual_variant_refs"] = {
         "char:hero": "variant:missing",
     }
-    with pytest.raises(ValidationError, match="missing variant"):
+    with pytest.raises(
+        ValidationError,
+        match="element element:hero: .*missing variant variant:missing",
+    ):
         Project.model_validate(raw)
 
     creation["visual_variant_refs"] = {
         "char:other": "variant:fallen",
     }
-    with pytest.raises(ValidationError, match="unreferenced entity"):
+    with pytest.raises(
+        ValidationError,
+        match=(
+            "element element:hero: .*unreferenced entity char:other; "
+            "add it to this creation's character_refs"
+        ),
+    ):
         Project.model_validate(raw)
 
 
@@ -408,3 +417,34 @@ def test_project_json_is_plain_json_with_no_runtime_state():
         "original_sound",
         "source_intelligence_version_id",
     }
+
+
+def test_fabricated_artifact_slots_are_rejected():
+    """Hand-written slots (unknown kind or empty shell) must not validate.
+
+    Reproduces the 2026-08 incident: the model fabricated video slots via
+    jq_project (kind ``r2v_video``, no versions) to claim completion, and
+    the real pipeline write-back later collided with them.
+    """
+
+    raw = Project.new(project_id="project-1", name="Initial").model_dump(
+        mode="json",
+    )
+    raw["assets"]["artifact_slots_by_id"]["element:el:x:main"] = {
+        "slot_id": "element:el:x:main",
+        "kind": "r2v_video",
+        "owner_ref": "element:el:x",
+        "version_ids": [],
+        "selected_version_id": None,
+        "metadata": {},
+    }
+    with pytest.raises(ValidationError, match="unknown kind"):
+        Project.model_validate(raw)
+
+    # A known kind with no versions is still an empty shell no pipeline
+    # ever writes.
+    raw["assets"]["artifact_slots_by_id"]["element:el:x:main"][
+        "kind"
+    ] = "element_video"
+    with pytest.raises(ValidationError, match="no artifact"):
+        Project.model_validate(raw)

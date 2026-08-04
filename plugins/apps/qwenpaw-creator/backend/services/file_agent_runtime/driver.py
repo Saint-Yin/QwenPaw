@@ -35,6 +35,8 @@ from models.config import (
     EXECUTION_AUTHORIZATION_ALLOW_ALL,
     get_creation_checkpoint_mode,
     get_execution_authorization_mode,
+    get_mainline_max_model_turns,
+    get_specialist_max_model_turns,
     get_text_model_name,
     get_vlm_model_name,
     get_web_grounding_enabled,
@@ -143,7 +145,13 @@ GROUNDING_VISUAL_MAX_BYTES = 16 * 1024 * 1024
 MAX_MALFORMED_JQ_PROJECT_RETRIES = 2
 MAX_REPEATED_DETERMINISTIC_TOOL_FAILURES = 2
 DEFAULT_MODEL_TURN_TIMEOUT_SECONDS = 180.0
-JQ_PROJECT_LARGE_ARGUMENT_ADVISORY_BYTES = 256 * 1024
+# The workspace schema prompt instructs the model to keep each jq_project
+# argument JSON under 4KB; the advisory fires at 2x that guidance so the
+# diagnosis surfaces payloads that ignored the instruction.
+JQ_PROJECT_ARGUMENT_SIZE_GUIDANCE_BYTES = 4 * 1024
+JQ_PROJECT_LARGE_ARGUMENT_ADVISORY_BYTES = (
+    2 * JQ_PROJECT_ARGUMENT_SIZE_GUIDANCE_BYTES
+)
 TOOL_ARGUMENT_PROGRESS_BYTES = 1024
 MAX_PERSISTED_RAW_TOOL_ARGUMENT_BYTES = 256 * 1024
 
@@ -252,10 +260,18 @@ def _specialist_waiting_review_summary(
     role: SpecialistRole,
     target_refs: list[str],
 ) -> str:
+    # The Runtime does not auto-resume a paused specialist: after approval
+    # the mainline must re-delegate the same target. The summary must not
+    # promise an automation that does not exist, or the mainline skips the
+    # re-delegation and falsely reports the video as in progress.
     target = "、".join(target_refs) or "当前目标"
     if role is SpecialistRole.R2V_GENERATION_DIRECTOR:
-        return f"{target} 的分镜图已生成，视频尚未开始。" "请先审阅分镜图；审阅通过后将自动继续生成视频。"
-    return f"{target} 的产物已生成，后续步骤尚未开始。请先完成审阅；审阅通过后将自动继续。"
+        return (
+            f"{target} 的分镜图已生成，视频尚未开始。请先审阅分镜图；"
+            "审阅通过后，主线需对该 Element 重新委派 R2V 生成 Director 以继续生成视频；"
+            "这不算重新生成已通过产物。"
+        )
+    return f"{target} 的产物已生成，后续步骤尚未开始。请先完成审阅；" "审阅通过后，主线需重新委派同一目标以继续后续步骤。"
 
 
 def _agent_waiting_review_summary(
@@ -263,7 +279,7 @@ def _agent_waiting_review_summary(
 ) -> str:
     summary = (specialist_summary or "").strip()
     if not summary:
-        summary = "当前产物已生成，后续步骤尚未开始。请先完成审阅；审阅通过后系统将自动继续。"
+        summary = "当前产物已生成，后续步骤尚未开始。请先完成审阅；审阅通过后主线需重新委派同一目标以继续。"
     return f"{summary}\n\n无需另行发送消息。"
 
 
@@ -609,10 +625,12 @@ class MalformedJqProjectArguments(FileAgentRuntimeError):
                     "payload was complete. "
                 )
             recovery = (
-                syntax_hint
-                + "Re-send the work as one jq_project call per timeline "
-                "element or settings change, keeping every payload well "
-                "under the size that failed. " + recovery
+                syntax_hint + "Your arguments were "
+                f"{self.diagnosis.raw_arguments_bytes} bytes; keep each "
+                "call's JSON under "
+                f"{JQ_PROJECT_ARGUMENT_SIZE_GUIDANCE_BYTES} bytes and "
+                "write one timeline element or settings change per "
+                "jq_project call. " + recovery
             )
         if self.repeated_payload:
             recovery = (
@@ -820,13 +838,20 @@ class FileCreatorAgentRuntime:
         model_client: AgentChatClient | None = None,
         source_model_client: AgentChatClient | None = None,
         poll_interval_seconds: float = 1.0,
-        max_model_turns: int = 16,
+        max_model_turns: int | None = None,
+        specialist_max_model_turns: int | None = None,
         model_turn_timeout_seconds: float = DEFAULT_MODEL_TURN_TIMEOUT_SECONDS,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be positive")
+        if max_model_turns is None:
+            max_model_turns = get_mainline_max_model_turns()
+        if specialist_max_model_turns is None:
+            specialist_max_model_turns = get_specialist_max_model_turns()
         if max_model_turns <= 0:
             raise ValueError("max_model_turns must be positive")
+        if specialist_max_model_turns <= 0:
+            raise ValueError("specialist_max_model_turns must be positive")
         if model_turn_timeout_seconds <= 0:
             raise ValueError("model_turn_timeout_seconds must be positive")
         self.services = services
@@ -843,6 +868,7 @@ class FileCreatorAgentRuntime:
         )
         self.poll_interval_seconds = poll_interval_seconds
         self.max_model_turns = max_model_turns
+        self.specialist_max_model_turns = specialist_max_model_turns
         self.model_turn_timeout_seconds = model_turn_timeout_seconds
         self._loop: asyncio.AbstractEventLoop | None = None
         self._dispatcher: asyncio.Task[None] | None = None
@@ -2519,7 +2545,10 @@ class FileCreatorAgentRuntime:
         malformed_jq_fingerprints: set[str] = set()
         deterministic_failure_counts: dict[str, int] = {}
         try:
-            for _turn_number in range(1, self.max_model_turns + 1):
+            for _turn_number in range(
+                1,
+                self.specialist_max_model_turns + 1,
+            ):
                 self._assert_epoch(project_id, parent_run_id, epoch)
                 message_id = f"specialist-message-{uuid4().hex}"
                 delta_index = 0
@@ -3066,7 +3095,7 @@ class FileCreatorAgentRuntime:
                         summary = (
                             f"{target_ref} 的前置产物已生成，"
                             "本步骤尚未开始。请先完成审阅；"
-                            "审阅通过后将自动继续。"
+                            "审阅通过后，主线需重新委派同一目标以继续。"
                         )
                     waiting_metadata = {
                         **record_metadata,
@@ -3138,7 +3167,8 @@ class FileCreatorAgentRuntime:
                         "starting another model turn",
                     )
             raise AgentModelError(
-                f"{role_name} exceeded {self.max_model_turns} model turns",
+                f"{role_name} exceeded "
+                f"{self.specialist_max_model_turns} model turns",
             )
         except (asyncio.CancelledError, StaleAgentRun):
             logger.warning(

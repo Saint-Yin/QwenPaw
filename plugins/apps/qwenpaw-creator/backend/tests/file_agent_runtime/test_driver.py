@@ -1336,7 +1336,42 @@ def test_extra_data_recovery_names_the_premature_close() -> None:
 
     assert "closed the top-level JSON object too early" in recovery
     assert "char 5756" in recovery
-    assert "one jq_project call per timeline" in recovery
+    assert "9364 bytes" in recovery
+    assert "under 4096 bytes" in recovery
+    assert (
+        "one timeline element or settings change per jq_project call"
+        in recovery
+    )
+
+
+def test_large_payload_advisory_fires_at_twice_prompt_guidance() -> None:
+    """The advisory threshold tracks the prompt's 4KB argument guidance.
+
+    An 11KB payload (the size observed truncating in production) must
+    surface ``largePayloadAdvisory`` instead of staying silent until the
+    former 256KB threshold.
+    """
+
+    def diagnosis_for(raw_bytes: int):
+        return _jq_project_argument_diagnosis(
+            AgentToolCall(
+                call_id=f"advisory-{raw_bytes}",
+                name="jq_project",
+                arguments={
+                    "projectId": PROJECT_ID,
+                    "program": ".description = $description",
+                    "stringArgs": {"description": "compact"},
+                },
+                raw_arguments_bytes=raw_bytes,
+            ),
+        )
+
+    assert diagnosis_for(11_260).event_payload()["largePayloadAdvisory"] is (
+        True
+    )
+    assert diagnosis_for(4_096).event_payload()["largePayloadAdvisory"] is (
+        False
+    )
 
 
 def test_jq_argument_diagnosis_reports_component_sizes() -> None:
@@ -1513,7 +1548,12 @@ def test_repaired_jq_project_arguments_never_execute_even_when_schema_valid(
             recovery = rejected["error"]["recovery"]
             assert "cut off" in recovery
             assert "Unterminated string at EOF" in recovery
-            assert "one jq_project call per timeline" in recovery
+            assert "18522 bytes" in recovery
+            assert "under 4096 bytes" in recovery
+            assert (
+                "one timeline element or settings change "
+                "per jq_project call" in recovery
+            )
             return AgentModelTurn(
                 tool_calls=(
                     AgentToolCall(
@@ -4136,7 +4176,11 @@ def test_model_blocked_with_its_pending_review_is_a_neutral_pause(
     assert specialist.status.value == "BLOCKED"
     assert specialist.metadata["waitingReview"] is True
     assert specialist.metadata["waitingReviewId"] == "review-ep22-storyboard"
-    waiting_summary = "element:ep22 的分镜图已生成，视频尚未开始。请先审阅分镜图；审阅通过后将自动继续生成视频。"
+    waiting_summary = (
+        "element:ep22 的分镜图已生成，视频尚未开始。请先审阅分镜图；"
+        "审阅通过后，主线需对该 Element 重新委派 R2V 生成 Director 以继续生成视频；"
+        "这不算重新生成已通过产物。"
+    )
     assert specialist.final_summary_text == waiting_summary
     blocked = [
         item for item in events if item.event_type == "subagent.blocked"

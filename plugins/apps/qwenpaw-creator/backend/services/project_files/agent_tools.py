@@ -31,6 +31,7 @@ from services.runtime_files.models import (
 )
 
 from .assets import AssetFileStore
+from .candidate_normalization import normalize_project_candidate
 from .commit import PROTECTED_EXACT_POINTERS, ProjectCommitBoundary
 from .jq_transform import JqProjectTransformer
 from .models import Project, TimelineElement
@@ -202,6 +203,13 @@ class AgentProjectFileResult(_ToolModel):
 class AgentProjectCommitResult(AgentProjectSnapshotResult):
     transaction_id: str = Field(alias="transactionId", min_length=1)
     changed_pointers: list[str] = Field(alias="changedPointers")
+    # Redundant identity echoes stripped before validation; see
+    # ``candidate_normalization``. Tells the model what was removed so the
+    # habit is not silently reinforced.
+    normalized_pointers: list[str] = Field(
+        default_factory=list,
+        alias="normalizedPointers",
+    )
     review_id: str | None = Field(default=None, alias="reviewId")
 
 
@@ -412,6 +420,29 @@ _PROJECT_SCHEMA_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
         "overlay_kind=motion 或 media 的 Overlay 必须携带非空 prompt",
     ),
 )
+# Root-level model validators surface with an empty ``loc``, so path-prefix
+# hints never match them; these hints key on the error message instead.
+# More specific needles must come first.
+_PROJECT_SCHEMA_MESSAGE_HINTS: tuple[tuple[str, str], ...] = (
+    (
+        "visual variant binding references missing variant",
+        "绑定的 variantId 必须已存在于该实体的 variants.items 中；"
+        "先创建 Variant（并在 required_variant_ids 声明）再在 Element 中绑定，"
+        "或检查 variant id 拼写",
+    ),
+    (
+        "visual variant binding",
+        "visual_variant_refs 的每个 entityId 必须同时出现在同一 creation 的 "
+        "character_refs/prop_refs/scene_ref 中；先把实体加入引用列表"
+        "（或移除该绑定）再提交",
+    ),
+    (
+        "must not be authored via jq_project",
+        "artifact_slots_by_id 与 elements outputs 是媒体管线的写回区，"
+        "禁止用 jq_project 手写或补全；视频/分镜产物只能通过委派对应的"
+        "生成 Director 产生，生成完成后 Runtime 会自动写回",
+    ),
+)
 _MAX_SCHEMA_ERROR_LINES = 8
 
 
@@ -423,6 +454,7 @@ def _translate_project_schema_error(error: ValidationError) -> str:
     for item in items[:_MAX_SCHEMA_ERROR_LINES]:
         loc = tuple(str(part) for part in item.get("loc", ()))
         path = ".".join(loc) or "$"
+        message = str(item.get("msg", "invalid"))
         hint = ""
         for prefix, text in _PROJECT_SCHEMA_HINTS:
             if loc[: len(prefix)] == prefix or any(
@@ -432,12 +464,17 @@ def _translate_project_schema_error(error: ValidationError) -> str:
                 hint = f"（{text}）"
                 break
         else:
-            if item.get("type") == "extra_forbidden":
-                hint = (
-                    "（该字段不在 Project Schema 中，"
-                    "请对照 system prompt 里的 PROJECT_JSON_SCHEMA）"
-                )
-        lines.append(f"- {path}: {item.get('msg', 'invalid')}{hint}")
+            for needle, text in _PROJECT_SCHEMA_MESSAGE_HINTS:
+                if needle in message:
+                    hint = f"（{text}）"
+                    break
+            else:
+                if item.get("type") == "extra_forbidden":
+                    hint = (
+                        "（该字段不在 Project Schema 中，"
+                        "请对照 system prompt 里的 PROJECT_JSON_SCHEMA）"
+                    )
+        lines.append(f"- {path}: {message}{hint}")
     if len(items) > _MAX_SCHEMA_ERROR_LINES:
         lines.append(f"- ...另有 {len(items) - _MAX_SCHEMA_ERROR_LINES} 处错误")
     return (
@@ -612,6 +649,7 @@ class AgentProjectTools:
             string_args=request.string_args,
             json_args=request.json_args,
         )
+        normalized_pointers = normalize_project_candidate(candidate)
         base_data = base.project.model_dump(mode="json")
         changed_protected = [
             pointer
@@ -642,6 +680,7 @@ class AgentProjectTools:
                 for change in result.changeset.changes
                 if change.json_pointer is not None
             ],
+            normalizedPointers=normalized_pointers,
             reviewId=result.review.review_id
             if result.review is not None
             else None,
