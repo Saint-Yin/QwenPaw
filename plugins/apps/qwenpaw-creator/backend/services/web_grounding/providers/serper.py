@@ -15,3 +15,10 @@ SERPER_SEARCH_MAX_ATTEMPTS = 10
 SERPER_LENS_MAX_ATTEMPTS = 10
 SERPER_SCRAPE_MAX_ATTEMPTS = 3
 SERPER_RETRY_BACKOFF_CAP_SECONDS = 10.0
+
+# Serper /lens intermittently answers HTTP 200 with an empty ``organic``
+# array for images it can match moments later (observed ~1 hit in 6 calls
+# for the same reference). Empty payloads are therefore retried a bounded
+# number of times before the caller falls back to text search.
+SERPER_LENS_EMPTY_RESULT_ATTEMPTS = 5
+SERPER_LENS_EMPTY_RETRY_BACKOFF_SECONDS = 1.5

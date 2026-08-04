@@ -3076,6 +3076,75 @@ def test_search_serper_lens_maps_response(monkeypatch):
     ]
 
 
+def test_search_serper_lens_retries_transient_empty_organic(monkeypatch):
+    monkeypatch.setenv("SERPER_API_KEY", "serper-test")
+    monkeypatch.delenv("SERPER_LENS_URL", raising=False)
+    monkeypatch.setattr(
+        adapters,
+        "SERPER_LENS_EMPTY_RETRY_BACKOFF_SECONDS",
+        0.0,
+    )
+    populated = {
+        "organic": [
+            {
+                "title": "Eiffel Tower",
+                "link": "https://example.test/eiffel",
+                "imageUrl": "https://img.test/eiffel.jpg",
+            },
+        ],
+    }
+
+    async def run():
+        async with httpx.AsyncClient() as client:
+            return await adapters._search_serper_lens(
+                client,
+                "https://public.test/reference.jpg",
+                3,
+                query="Eiffel Tower",
+            )
+
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post("https://google.serper.dev/lens").mock(
+            side_effect=[
+                httpx.Response(200, json={"organic": []}),
+                httpx.Response(200, json=populated),
+            ],
+        )
+        results = asyncio.run(run())
+
+    assert route.call_count == 2
+    assert [source["url"] for source in results] == [
+        "https://img.test/eiffel.jpg",
+    ]
+
+
+def test_search_serper_lens_gives_up_after_bounded_empty_retries(monkeypatch):
+    monkeypatch.setenv("SERPER_API_KEY", "serper-test")
+    monkeypatch.delenv("SERPER_LENS_URL", raising=False)
+    monkeypatch.setattr(
+        adapters,
+        "SERPER_LENS_EMPTY_RETRY_BACKOFF_SECONDS",
+        0.0,
+    )
+
+    async def run():
+        async with httpx.AsyncClient() as client:
+            return await adapters._search_serper_lens(
+                client,
+                "https://public.test/reference.jpg",
+                3,
+            )
+
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post("https://google.serper.dev/lens").mock(
+            return_value=httpx.Response(200, json={"organic": []}),
+        )
+        results = asyncio.run(run())
+
+    assert route.call_count == adapters.SERPER_LENS_EMPTY_RESULT_ATTEMPTS
+    assert results == []
+
+
 def test_search_visual_refs_by_image_uses_public_http_url(monkeypatch):
     monkeypatch.setattr(
         provider_search,

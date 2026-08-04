@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+from utils.logger import setup_logger
+
 from ..common import clean_text as _clean_text
 from ..triage import _clean_query
 from .config import dashscope_api_key as _dashscope_web_search_image_api_key
@@ -28,6 +30,8 @@ from .config import serper_api_key as _serper_api_key
 from .config import tavily_api_key as _tavily_api_key
 from .serper import SERPER_IMAGES_URL
 from .serper import SERPER_LENS_URL
+from .serper import SERPER_LENS_EMPTY_RESULT_ATTEMPTS
+from .serper import SERPER_LENS_EMPTY_RETRY_BACKOFF_SECONDS
 from .serper import SERPER_LENS_MAX_ATTEMPTS
 from .serper import SERPER_RETRY_BACKOFF_CAP_SECONDS
 from .serper import SERPER_SCRAPE_MAX_ATTEMPTS
@@ -37,6 +41,7 @@ from .serper import SERPER_SEARCH_MAX_ATTEMPTS
 
 DEFAULT_MAX_SOURCES = 6
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
+logger = setup_logger(__name__)
 # Region defaults mirror the upstream qwen-mm-plugins Serper client, whose
 # request shape is the field-proven reference for this integration.
 SERPER_SEARCH_PARAMS = {"gl": "us", "hl": "en", "location": "United States"}
@@ -623,18 +628,32 @@ async def _search_serper_lens(
 
     Serper Lens only accepts a public http(s) ``url`` payload; the caller is
     responsible for resolving local media to a temporary public URL first.
+    Successful responses with an empty ``organic`` array are treated as a
+    transient upstream miss and retried a bounded number of times.
     """
     api_key = _serper_api_key()
     if not api_key:
         raise RuntimeError("SERPER_API_KEY is not configured")
-    payload = await _post_serper_json(
-        client,
-        os.environ.get("SERPER_LENS_URL", SERPER_LENS_URL),
-        api_key=api_key,
-        payload={"url": image_url, **SERPER_LENS_PARAMS},
-        max_attempts=SERPER_LENS_MAX_ATTEMPTS,
-    )
-    return _normalize_serper_lens_matches(payload, query, limit)
+    lens_url = os.environ.get("SERPER_LENS_URL", SERPER_LENS_URL)
+    attempts = max(1, int(SERPER_LENS_EMPTY_RESULT_ATTEMPTS))
+    for attempt in range(1, attempts + 1):
+        payload = await _post_serper_json(
+            client,
+            lens_url,
+            api_key=api_key,
+            payload={"url": image_url, **SERPER_LENS_PARAMS},
+            max_attempts=SERPER_LENS_MAX_ATTEMPTS,
+        )
+        matches = _normalize_serper_lens_matches(payload, query, limit)
+        if matches or attempt >= attempts:
+            return matches
+        logger.info(
+            "Serper Lens returned no matches; retrying attempt=%d/%d",
+            attempt,
+            attempts,
+        )
+        await asyncio.sleep(SERPER_LENS_EMPTY_RETRY_BACKOFF_SECONDS)
+    return []
 
 
 async def _extract_serper_pages(
