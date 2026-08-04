@@ -6,12 +6,18 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import math
 from pathlib import Path
 from typing import Any
 
 import httpx
+from PIL import Image
 
 from models import media_transport as _media_transport
+from services.runtime_files.safe_remote_download import (
+    safe_download_bytes as _safe_download_bytes,
+)
 from services.runtime_files.safe_remote_download import (
     validate_public_remote_url as _validate_public_remote_url,
 )
@@ -26,6 +32,7 @@ from ..staging import visual_download_max_bytes as _visual_download_max_bytes
 from ..triage import _clean_query
 from .adapters import _search_dashscope_web_search_image_visuals
 from .adapters import _search_dashscope_web
+from .adapters import _extract_serper_pages
 from .adapters import _search_serper
 from .adapters import _search_serper_lens
 from .adapters import _search_serper_visuals
@@ -317,6 +324,65 @@ async def search_web(
     }
 
 
+async def extract_web_pages(
+    urls: list[str],
+    *,
+    goal: str = "",
+    timeout: float = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Extract public pages through Serper without letting one URL abort all."""
+    normalized_urls = list(
+        dict.fromkeys(
+            str(url or "").strip() for url in urls if str(url or "").strip()
+        ),
+    )
+    result: dict[str, Any] = {
+        "goal": _clean_query(goal),
+        "sources": [],
+        "issues": [],
+        "provider": "",
+        "providers": [],
+        "providers_attempted": [],
+    }
+    if not normalized_urls:
+        result["issues"].append("serper_scrape:empty_urls")
+        return result
+    if not _serper_api_key():
+        result["issues"].append("serper_api_key_missing")
+        return result
+    result["providers_attempted"].append("serper_scrape")
+    async with httpx.AsyncClient(
+        timeout=max(float(timeout), DEFAULT_TEXT_SEARCH_TIMEOUT),
+        follow_redirects=True,
+        headers={"User-Agent": USER_AGENT},
+    ) as client:
+        for raw_url in normalized_urls:
+            try:
+                public_url = await asyncio.to_thread(
+                    _validate_public_remote_url,
+                    raw_url,
+                )
+                pages = await _extract_serper_pages(
+                    client,
+                    [public_url],
+                    goal=result["goal"],
+                )
+                if pages:
+                    result["sources"].extend(pages)
+                else:
+                    result["issues"].append(
+                        f"serper_scrape:no_content:{public_url}",
+                    )
+            except Exception as exc:
+                result["issues"].append(
+                    f"serper_scrape:{exc.__class__.__name__}: {exc}",
+                )
+    if result["sources"]:
+        result["provider"] = "serper_scrape"
+        result["providers"].append("serper_scrape")
+    return result
+
+
 async def search_visual_refs(
     query: str,
     *,
@@ -560,85 +626,199 @@ def _lens_local_image_payload(ref: str) -> tuple[bytes, str]:
     return payload, path.name
 
 
-async def _lens_presigned_local_image_url(ref: str) -> tuple[str, str]:
-    """Expose a validated local image through a short-lived presigned URL."""
+def _normalized_lens_bbox(
+    bbox: list[float] | None,
+) -> tuple[float, ...] | None:
+    if bbox is None:
+        return None
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        raise ValueError("bbox must contain [x1, y1, x2, y2]")
+    values = tuple(float(value) for value in bbox)
+    if any(not math.isfinite(value) for value in values):
+        raise ValueError("bbox coordinates must be finite")
+    x1, y1, x2, y2 = values
+    if not all(0.0 <= value <= 1000.0 for value in values):
+        raise ValueError("bbox coordinates must be between 0 and 1000")
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError("bbox must have positive width and height")
+    if values == (0.0, 0.0, 1000.0, 1000.0):
+        return None
+    return values
+
+
+def _crop_lens_image_payload(
+    payload: bytes,
+    filename: str,
+    bbox: list[float] | None,
+) -> tuple[bytes, str]:
+    normalized = _normalized_lens_bbox(bbox)
+    if normalized is None:
+        return payload, filename
+    try:
+        with Image.open(io.BytesIO(payload)) as image:
+            image.load()
+            x1, y1, x2, y2 = normalized
+            left = max(0, min(image.width - 1, int(x1 * image.width / 1000)))
+            top = max(0, min(image.height - 1, int(y1 * image.height / 1000)))
+            right = max(
+                left + 1,
+                min(image.width, math.ceil(x2 * image.width / 1000)),
+            )
+            bottom = max(
+                top + 1,
+                min(image.height, math.ceil(y2 * image.height / 1000)),
+            )
+            cropped = image.crop((left, top, right, bottom)).convert("RGB")
+            output = io.BytesIO()
+            cropped.save(output, format="JPEG", quality=90)
+    except Exception as exc:
+        raise ValueError(f"bbox crop failed: {exc}") from exc
+    return output.getvalue(), f"{Path(filename).stem or 'reference'}-crop.jpg"
+
+
+async def _lens_host_image_payload(
+    payload: bytes,
+    filename: str,
+) -> tuple[str, list[str], str]:
+    """Host a validated image via configured OSS or automatic Uguu fallback."""
+    readiness = _media_transport.creator_oss_readiness()
+    status = str(readiness.get("status") or "invalid")
+    issues: list[str] = []
+    if status == "ready":
+        try:
+            signed_url = (
+                await _media_transport.upload_image_for_temporary_public_url(
+                    payload,
+                    filename,
+                )
+            )
+            return signed_url, issues, "creator_oss"
+        except Exception as exc:
+            issues.append(
+                f"serper_lens:creator_oss_upload_failed:{exc.__class__.__name__}: {exc}",
+            )
+    elif status != "absent":
+        blockers = "; ".join(readiness.get("blockers") or [])
+        issues.append(
+            f"serper_lens:creator_oss_invalid: {blockers or 'invalid OSS configuration'}",
+        )
+    try:
+        public_url = await _media_transport.upload_image_to_uguu_for_temporary_public_url(
+            payload,
+            filename,
+        )
+        validated_url = await asyncio.to_thread(
+            _validate_public_remote_url,
+            public_url,
+        )
+        return validated_url, issues, "uguu"
+    except Exception as exc:
+        issues.append(
+            f"serper_lens:uguu_upload_failed:{exc.__class__.__name__}: {exc}",
+        )
+        return "", issues, "uguu"
+
+
+async def _lens_local_image_url(
+    ref: str,
+    bbox: list[float] | None,
+) -> tuple[str, list[str], str]:
     try:
         payload, filename = _lens_local_image_payload(ref)
-    except Exception as exc:
-        return "", f"serper_lens:invalid_local_image_reference: {exc}"
-    readiness = _media_transport.creator_oss_readiness()
-    if readiness["status"] != "ready":
-        blockers = "; ".join(readiness["blockers"])
-        return "", (
-            "serper_lens:local_image_requires_creator_media_oss: Serper "
-            "Lens only accepts public http(s) image URLs; configure "
-            "creator_media_oss so local media can be exposed through a "
-            f"15-minute presigned URL ({blockers})"
-        )
-    try:
-        signed_url = (
-            await _media_transport.upload_image_for_temporary_public_url(
-                payload,
-                filename,
-            )
-        )
+        payload, filename = _crop_lens_image_payload(payload, filename, bbox)
     except Exception as exc:
         return (
             "",
-            f"serper_lens:oss_presign_failed:{exc.__class__.__name__}: {exc}",
+            [f"serper_lens:invalid_local_image_reference: {exc}"],
+            "",
         )
-    return signed_url, ""
+    return await _lens_host_image_payload(payload, filename)
 
 
-async def _lens_public_image_url(image_ref: str) -> tuple[str, str]:
+async def _lens_public_image_url(
+    image_ref: str,
+    bbox: list[float] | None = None,
+) -> tuple[str, list[str], str]:
     """Resolve *image_ref* into a public URL Serper Lens can fetch.
 
-    Returns ``(url, issue)`` where exactly one side is non-empty. Lens only
+    Returns ``(url, issues, transport)``. Lens only
     accepts a public http(s) ``{"url"}`` payload (no base64/upload form);
     http(s) inputs must pass the SSRF public-address policy, DashScope
-    temporary ``oss://`` URLs are not public, anonymous image hosts are
-    forbidden, and local media must round-trip through ``creator_media_oss``
-    as a short-lived presigned URL.
+    temporary ``oss://`` URLs are not public. Local media prefers configured
+    Creator OSS and falls back to the Uguu temporary host when OSS is absent,
+    incomplete, or fails during upload/signing.
     """
     ref = str(image_ref or "").strip()
     if not ref:
-        return "", "serper_lens:empty_image_reference"
+        return "", ["serper_lens:empty_image_reference"], ""
     if ref.startswith(("http://", "https://")):
         try:
             public_url = await asyncio.to_thread(
                 _validate_public_remote_url,
                 ref,
             )
-            return public_url, ""
+            if _normalized_lens_bbox(bbox) is None:
+                return public_url, [], "direct_url"
+            payload = await asyncio.to_thread(
+                _safe_download_bytes,
+                public_url,
+                max_bytes=_visual_download_max_bytes(),
+                timeout=DEFAULT_VISUAL_SEARCH_TIMEOUT,
+            )
+            _sniff_image_media_type(payload)
+            _validate_raster_image(payload)
+            filename = Path(httpx.URL(public_url).path).name or "reference.jpg"
+            payload, filename = _crop_lens_image_payload(
+                payload,
+                filename,
+                bbox,
+            )
+            return await _lens_host_image_payload(payload, filename)
         except Exception as exc:
-            return "", f"serper_lens:non_public_image_url: {exc}"
+            return "", [f"serper_lens:non_public_image_url: {exc}"], ""
     if ref.startswith("oss://"):
-        return "", (
-            "serper_lens:oss_url_not_public: DashScope temporary oss:// "
-            "URLs resolve only inside DashScope and cannot be fetched by "
-            "Serper Lens"
+        return (
+            "",
+            [
+                "serper_lens:oss_url_not_public: DashScope temporary oss:// "
+                "URLs resolve only inside DashScope and cannot be fetched by "
+                "Serper Lens",
+            ],
+            "",
         )
-    return await _lens_presigned_local_image_url(ref)
+    return await _lens_local_image_url(ref, bbox)
 
 
 async def search_visual_refs_by_image(
     image_ref: str,
     *,
     query: str = "",
+    bbox: list[float] | None = None,
     max_sources: int = DEFAULT_MAX_SOURCES,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
     """Reverse image search for one reference image via Serper Lens.
 
     *image_ref* may be a public http(s) URL or a local image (plain path,
-    ``file://`` URL, or canonical ``/generated/...`` media URL). Local media
-    requires ``creator_media_oss``; without it the result degrades with a
-    readable issue instead of raising.
+    ``file://`` URL, or canonical ``/generated/...`` media URL). Local/cropped
+    media prefers configured Creator OSS and uses the free Uguu temporary host
+    whenever OSS is absent, invalid, or fails during upload/signing.
     """
     label = _clean_query(query) or str(image_ref or "").strip()
     result: dict[str, Any] = {
         "query": label,
-        "image_reference": str(image_ref or "").strip(),
+        "image_reference": (
+            str(image_ref or "").strip()
+            if str(image_ref or "").startswith(("http://", "https://"))
+            else ""
+        ),
+        "image_reference_kind": (
+            "public_url"
+            if str(image_ref or "").startswith(("http://", "https://"))
+            else "local_media"
+        ),
+        "image_transport": "",
+        "bbox": list(bbox) if bbox is not None else None,
         "visual_sources": [],
         "issues": [],
         "provider": "",
@@ -651,10 +831,17 @@ async def search_visual_refs_by_image(
             "Visual grounding by image skipped provider=serper_lens reason=api_key_missing",
         )
         return result
-    image_url, issue = await _lens_public_image_url(image_ref)
-    if issue:
-        result["issues"].append(issue)
-        logger.info("Visual grounding by image skipped reason=%s", issue)
+    image_url, resolution_issues, transport = await _lens_public_image_url(
+        image_ref,
+        bbox,
+    )
+    result["image_transport"] = transport
+    result["issues"].extend(resolution_issues)
+    if not image_url:
+        logger.info(
+            "Visual grounding by image skipped issues=%s",
+            resolution_issues,
+        )
         return result
     effective_timeout = max(float(timeout), DEFAULT_VISUAL_SEARCH_TIMEOUT)
     logger.info(

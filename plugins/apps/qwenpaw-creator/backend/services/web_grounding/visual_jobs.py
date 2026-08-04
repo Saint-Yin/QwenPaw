@@ -217,6 +217,7 @@ def _visual_entities_from_context(
                 "reference_image": str(
                     entity.get("reference_image") or "",
                 ).strip(),
+                "reference_bbox": entity.get("reference_bbox"),
             },
         )
     if isinstance(context, dict):
@@ -248,6 +249,7 @@ def _visual_entities_from_context(
                     "reference_image": str(
                         entity.get("reference_image") or "",
                     ).strip(),
+                    "reference_bbox": entity.get("reference_bbox"),
                 },
             )
     for name, description in descriptions.items():
@@ -494,6 +496,7 @@ def _expand_visual_query_jobs(
                 "reference_image": str(
                     entity.get("reference_image") or "",
                 ).strip(),
+                "reference_bbox": entity.get("reference_bbox"),
                 "strict_identity": _explicit_or_inferred_bool(
                     entity.get("strict_identity"),
                     inferred=usage == "identity"
@@ -682,6 +685,8 @@ def _filter_visual_search_result_for_job(
         "provider": visual_result.get("provider") or "",
         "providers": visual_result.get("providers") or [],
         "providers_attempted": visual_result.get("providers_attempted") or [],
+        "image_transport": visual_result.get("image_transport") or "",
+        "bbox": visual_result.get("bbox"),
         "issues": issues,
     }
     if retry:

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from typing import Any
@@ -27,7 +28,12 @@ from .config import serper_api_key as _serper_api_key
 from .config import tavily_api_key as _tavily_api_key
 from .serper import SERPER_IMAGES_URL
 from .serper import SERPER_LENS_URL
+from .serper import SERPER_LENS_MAX_ATTEMPTS
+from .serper import SERPER_RETRY_BACKOFF_CAP_SECONDS
+from .serper import SERPER_SCRAPE_MAX_ATTEMPTS
+from .serper import SERPER_SCRAPE_URL
 from .serper import SERPER_SEARCH_URL
+from .serper import SERPER_SEARCH_MAX_ATTEMPTS
 
 DEFAULT_MAX_SOURCES = 6
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
@@ -35,6 +41,67 @@ TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 # request shape is the field-proven reference for this integration.
 SERPER_SEARCH_PARAMS = {"gl": "us", "hl": "en", "location": "United States"}
 SERPER_LENS_PARAMS = {"gl": "us", "hl": "en"}
+SERPER_EXTRACT_CONTENT_LIMIT = 8000
+
+
+class SerperAuthenticationError(RuntimeError):
+    """Serper rejected the configured API credential."""
+
+
+def _is_retryable_serper_response(response: httpx.Response) -> bool:
+    return response.status_code == 429 or response.status_code >= 500
+
+
+async def _post_serper_json(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    api_key: str,
+    payload: dict[str, Any],
+    max_attempts: int,
+) -> dict[str, Any]:
+    """POST JSON with bounded retries for transient Serper failures."""
+    attempts = max(1, int(max_attempts))
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = await client.post(
+                url,
+                headers={
+                    "X-API-KEY": api_key,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            if response.status_code in {401, 403}:
+                raise SerperAuthenticationError(
+                    "Serper rejected SERPER_API_KEY "
+                    f"(HTTP {response.status_code} Unauthorized); verify that "
+                    "the key is active and belongs to an enabled Serper "
+                    "account",
+                )
+            if _is_retryable_serper_response(response):
+                response.raise_for_status()
+            response.raise_for_status()
+            data = response.json()
+            return data if isinstance(data, dict) else {}
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            last_error = exc
+        except httpx.HTTPStatusError as exc:
+            last_error = exc
+            if not _is_retryable_serper_response(exc.response):
+                raise
+        if attempt >= attempts:
+            break
+        await asyncio.sleep(
+            min(
+                SERPER_RETRY_BACKOFF_CAP_SECONDS,
+                float(2 ** (attempt - 1)),
+            ),
+        )
+    raise RuntimeError(
+        f"Serper request failed after {attempts} attempts: {last_error}",
+    )
 
 
 def _tavily_safe_search_enabled() -> bool:
@@ -103,20 +170,17 @@ async def _search_serper(
     api_key = _serper_api_key()
     if not api_key:
         raise RuntimeError("SERPER_API_KEY is not configured")
-    response = await client.post(
+    payload = await _post_serper_json(
+        client,
         os.environ.get("SERPER_SEARCH_URL", SERPER_SEARCH_URL),
-        headers={
-            "X-API-KEY": api_key,
-            "Content-Type": "application/json",
-        },
-        json={
+        api_key=api_key,
+        payload={
             "q": query,
             **SERPER_SEARCH_PARAMS,
             "num": max(1, min(limit, DEFAULT_MAX_SOURCES)),
         },
+        max_attempts=SERPER_SEARCH_MAX_ATTEMPTS,
     )
-    response.raise_for_status()
-    payload = response.json()
     results = []
     for item in payload.get("organic", [])[:limit]:
         if not isinstance(item, dict):
@@ -125,16 +189,18 @@ async def _search_serper(
         url = str(item.get("link") or item.get("url") or "").strip()
         snippet = _clean_text(item.get("snippet"), max_chars=500)
         if title and url:
-            results.append(
-                {
-                    "title": title,
-                    "url": url,
-                    "snippet": snippet,
-                    "provider": "serper",
-                    "query": query,
-                    "score": None,
-                },
-            )
+            result = {
+                "title": title,
+                "url": url,
+                "snippet": snippet,
+                "provider": "serper",
+                "query": query,
+                "score": None,
+            }
+            date = _clean_text(item.get("date"), max_chars=80)
+            if date:
+                result["date"] = date
+            results.append(result)
     return results
 
 
@@ -493,20 +559,18 @@ async def _search_serper_visuals(
     api_key = _serper_api_key()
     if not api_key:
         raise RuntimeError("SERPER_API_KEY is not configured")
-    response = await client.post(
+    payload = await _post_serper_json(
+        client,
         os.environ.get("SERPER_IMAGES_URL", SERPER_IMAGES_URL),
-        headers={
-            "X-API-KEY": api_key,
-            "Content-Type": "application/json",
-        },
-        json={
+        api_key=api_key,
+        payload={
             "q": query,
             **SERPER_SEARCH_PARAMS,
             "num": max(1, min(limit, DEFAULT_MAX_SOURCES)),
         },
+        max_attempts=SERPER_SEARCH_MAX_ATTEMPTS,
     )
-    response.raise_for_status()
-    return _normalize_serper_images(response.json(), query, limit)
+    return _normalize_serper_images(payload, query, limit)
 
 
 def _normalize_serper_lens_matches(
@@ -563,16 +627,55 @@ async def _search_serper_lens(
     api_key = _serper_api_key()
     if not api_key:
         raise RuntimeError("SERPER_API_KEY is not configured")
-    response = await client.post(
+    payload = await _post_serper_json(
+        client,
         os.environ.get("SERPER_LENS_URL", SERPER_LENS_URL),
-        headers={
-            "X-API-KEY": api_key,
-            "Content-Type": "application/json",
-        },
-        json={"url": image_url, **SERPER_LENS_PARAMS},
+        api_key=api_key,
+        payload={"url": image_url, **SERPER_LENS_PARAMS},
+        max_attempts=SERPER_LENS_MAX_ATTEMPTS,
     )
-    response.raise_for_status()
-    return _normalize_serper_lens_matches(response.json(), query, limit)
+    return _normalize_serper_lens_matches(payload, query, limit)
+
+
+async def _extract_serper_pages(
+    client: httpx.AsyncClient,
+    urls: list[str],
+    *,
+    goal: str = "",
+    content_limit: int = SERPER_EXTRACT_CONTENT_LIMIT,
+) -> list[dict[str, Any]]:
+    """Extract bounded page content with Serper's scrape endpoint."""
+    api_key = _serper_api_key()
+    if not api_key:
+        raise RuntimeError("SERPER_API_KEY is not configured")
+    extracted: list[dict[str, Any]] = []
+    for url in urls:
+        payload = await _post_serper_json(
+            client,
+            os.environ.get("SERPER_SCRAPE_URL", SERPER_SCRAPE_URL),
+            api_key=api_key,
+            payload={"url": url, "includeMarkdown": True},
+            max_attempts=SERPER_SCRAPE_MAX_ATTEMPTS,
+        )
+        content = str(payload.get("markdown") or payload.get("text") or "")
+        if not content.strip():
+            continue
+        extracted.append(
+            {
+                "title": _clean_text(
+                    payload.get("title") or url,
+                    max_chars=180,
+                ),
+                "url": url,
+                "snippet": _clean_text(content, max_chars=500),
+                "content": content[: max(1, int(content_limit))],
+                "goal": _clean_text(goal, max_chars=300),
+                "provider": "serper_scrape",
+                "query": _clean_text(goal, max_chars=300),
+                "score": None,
+            },
+        )
+    return extracted
 
 
 async def _search_dashscope_web_search_image_visuals(

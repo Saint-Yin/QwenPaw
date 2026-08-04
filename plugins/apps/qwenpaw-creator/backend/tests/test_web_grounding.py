@@ -551,6 +551,138 @@ def test_search_serper_visuals_maps_response(monkeypatch):
     ]
 
 
+def test_search_serper_retries_transient_5xx(monkeypatch):
+    monkeypatch.setenv("SERPER_API_KEY", "serper-test")
+    calls = []
+
+    async def no_sleep(_seconds):
+        return None
+
+    async def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(503, json={"error": "temporary"})
+        return httpx.Response(
+            200,
+            json={
+                "organic": [
+                    {
+                        "title": "Recovered",
+                        "link": "https://example.test/recovered",
+                        "snippet": "retry succeeded",
+                    },
+                ],
+            },
+        )
+
+    monkeypatch.setattr(adapters.asyncio, "sleep", no_sleep)
+
+    async def run():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        ) as client:
+            return await adapters._search_serper(client, "retry query", 3)
+
+    results = asyncio.run(run())
+
+    assert len(calls) == 2
+    assert results[0]["title"] == "Recovered"
+
+
+def test_search_serper_classifies_auth_failure_without_retry(monkeypatch):
+    monkeypatch.setenv("SERPER_API_KEY", "serper-test")
+    calls = []
+
+    async def handler(request):
+        calls.append(request)
+        return httpx.Response(403, json={"error": "forbidden"})
+
+    async def run():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        ) as client:
+            return await adapters._search_serper(client, "forbidden query", 3)
+
+    with pytest.raises(adapters.SerperAuthenticationError, match="HTTP 403"):
+        asyncio.run(run())
+    assert len(calls) == 1
+
+
+def test_extract_serper_pages_maps_markdown_and_goal(monkeypatch):
+    monkeypatch.setenv("SERPER_API_KEY", "serper-test")
+    observed = {}
+
+    async def handler(request):
+        observed["url"] = str(request.url)
+        observed["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"title": "Eiffel Tower", "markdown": "Built in 1889."},
+        )
+
+    async def run():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        ) as client:
+            return await adapters._extract_serper_pages(
+                client,
+                ["https://example.test/eiffel"],
+                goal="construction year",
+            )
+
+    results = asyncio.run(run())
+
+    assert observed == {
+        "url": "https://google.serper.dev/scrape",
+        "payload": {
+            "url": "https://example.test/eiffel",
+            "includeMarkdown": True,
+        },
+    }
+    assert results[0]["provider"] == "serper_scrape"
+    assert results[0]["goal"] == "construction year"
+    assert results[0]["content"] == "Built in 1889."
+
+
+def test_extract_web_pages_keeps_other_urls_when_one_fails(monkeypatch):
+    monkeypatch.setattr(provider_search, "_serper_api_key", lambda: "key")
+    monkeypatch.setattr(
+        provider_search,
+        "_validate_public_remote_url",
+        lambda value: value,
+    )
+
+    async def fake_extract(client, urls, *, goal="", content_limit=8000):
+        if "bad" in urls[0]:
+            raise httpx.TimeoutException("timeout")
+        return [
+            {
+                "title": "Good page",
+                "url": urls[0],
+                "snippet": "confirmed",
+                "content": "confirmed",
+                "goal": goal,
+                "provider": "serper_scrape",
+                "query": goal,
+                "score": None,
+            },
+        ]
+
+    monkeypatch.setattr(provider_search, "_extract_serper_pages", fake_extract)
+
+    result = asyncio.run(
+        provider_search.extract_web_pages(
+            ["https://bad.test/page", "https://good.test/page"],
+            goal="confirm identity",
+        ),
+    )
+
+    assert len(result["sources"]) == 1
+    assert result["sources"][0]["url"] == "https://good.test/page"
+    assert result["provider"] == "serper_scrape"
+    assert any("TimeoutException" in issue for issue in result["issues"])
+
+
 def test_search_tavily_omits_safe_search_by_default(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     monkeypatch.delenv("TAVILY_SAFE_SEARCH", raising=False)
@@ -3130,7 +3262,7 @@ def test_search_visual_refs_by_image_rejects_non_image_local_files(
     )
 
 
-def test_search_visual_refs_by_image_degrades_without_oss_for_local_media(
+def test_search_visual_refs_by_image_uses_uguu_without_oss_for_local_media(
     monkeypatch,
     tmp_path,
 ):
@@ -3146,33 +3278,54 @@ def test_search_visual_refs_by_image_degrades_without_oss_for_local_media(
         provider_search._media_transport,
         "creator_oss_readiness",
         lambda: {
-            "status": "blocked",
-            "blockers": [
-                "creator_media_oss.access_key_id or OSS_ACCESS_KEY_ID is required",
-            ],
+            "status": "absent",
+            "blockers": [],
         },
     )
+    uploaded = {}
 
-    async def fail_lens(*args, **kwargs):
-        raise AssertionError("Lens must not run without a public URL")
+    async def fake_uguu(file_content, filename, **kwargs):
+        uploaded["content"] = file_content
+        uploaded["filename"] = filename
+        return "https://uguu.test/reference.png"
 
-    monkeypatch.setattr(provider_search, "_search_serper_lens", fail_lens)
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "upload_image_to_uguu_for_temporary_public_url",
+        fake_uguu,
+    )
+    monkeypatch.setattr(
+        provider_search,
+        "_validate_public_remote_url",
+        lambda value: value,
+    )
+
+    async def fake_lens(client, image_url, limit, *, query=""):
+        assert image_url == "https://uguu.test/reference.png"
+        return [
+            {
+                "url": "https://img.test/match.jpg",
+                "thumbnail_url": "",
+                "source_url": "",
+                "title": "Match",
+                "provider": "serper_lens",
+                "query": query,
+            },
+        ]
+
+    monkeypatch.setattr(provider_search, "_search_serper_lens", fake_lens)
 
     result = asyncio.run(
         provider_search.search_visual_refs_by_image(str(local_image)),
     )
 
-    assert result["visual_sources"] == []
-    assert result["providers_attempted"] == []
-    degraded = [
-        issue
-        for issue in result["issues"]
-        if issue.startswith(
-            "serper_lens:local_image_requires_creator_media_oss",
-        )
-    ]
-    assert degraded
-    assert "OSS_ACCESS_KEY_ID is required" in degraded[0]
+    assert uploaded == {
+        "content": _png_bytes(),
+        "filename": "reference.png",
+    }
+    assert result["provider"] == "serper_lens"
+    assert result["image_transport"] == "uguu"
+    assert result["issues"] == []
 
 
 def test_search_visual_refs_by_image_presigns_local_media_when_oss_ready(
@@ -3234,7 +3387,240 @@ def test_search_visual_refs_by_image_presigns_local_media_when_oss_ready(
     assert result["provider"] == "serper_lens"
     # The signed URL must never leak into the result payload.
     assert result["query"] == "local reference"
-    assert result["image_reference"] == str(local_image)
+    assert result["image_reference"] == ""
+    assert result["image_reference_kind"] == "local_media"
+    assert result["image_transport"] == "creator_oss"
+
+
+def test_search_visual_refs_by_image_falls_back_to_uguu_for_invalid_oss(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(provider_search, "_serper_api_key", lambda: "key")
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path))
+    local_image = tmp_path / "reference.png"
+    local_image.write_bytes(_png_bytes())
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "creator_oss_readiness",
+        lambda: {
+            "status": "invalid",
+            "blockers": ["creator_media_oss.endpoint is required"],
+        },
+    )
+
+    async def fake_uguu(*args, **kwargs):
+        return "https://uguu.test/reference.png"
+
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "upload_image_to_uguu_for_temporary_public_url",
+        fake_uguu,
+    )
+    monkeypatch.setattr(
+        provider_search,
+        "_validate_public_remote_url",
+        lambda value: value,
+    )
+
+    async def fake_lens(client, image_url, limit, *, query=""):
+        assert image_url == "https://uguu.test/reference.png"
+        return []
+
+    monkeypatch.setattr(provider_search, "_search_serper_lens", fake_lens)
+
+    result = asyncio.run(
+        provider_search.search_visual_refs_by_image(str(local_image)),
+    )
+
+    assert result["visual_sources"] == []
+    assert result["providers_attempted"] == ["serper_lens"]
+    assert result["image_transport"] == "uguu"
+    assert any(
+        issue.startswith("serper_lens:creator_oss_invalid")
+        for issue in result["issues"]
+    )
+
+
+def test_search_visual_refs_by_image_falls_back_to_uguu_after_oss_failure(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(provider_search, "_serper_api_key", lambda: "key")
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path))
+    local_image = tmp_path / "reference.png"
+    local_image.write_bytes(_png_bytes())
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "creator_oss_readiness",
+        lambda: {"status": "ready", "blockers": []},
+    )
+
+    async def fail_oss(*args, **kwargs):
+        raise RuntimeError("OSS unavailable")
+
+    async def fake_uguu(*args, **kwargs):
+        return "https://uguu.test/reference.png"
+
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "upload_image_for_temporary_public_url",
+        fail_oss,
+    )
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "upload_image_to_uguu_for_temporary_public_url",
+        fake_uguu,
+    )
+    monkeypatch.setattr(
+        provider_search,
+        "_validate_public_remote_url",
+        lambda value: value,
+    )
+
+    async def fake_lens(client, image_url, limit, *, query=""):
+        assert image_url == "https://uguu.test/reference.png"
+        return []
+
+    monkeypatch.setattr(provider_search, "_search_serper_lens", fake_lens)
+
+    result = asyncio.run(
+        provider_search.search_visual_refs_by_image(str(local_image)),
+    )
+
+    assert result["providers_attempted"] == ["serper_lens"]
+    assert result["image_transport"] == "uguu"
+    assert any(
+        issue.startswith("serper_lens:creator_oss_upload_failed")
+        for issue in result["issues"]
+    )
+
+
+def test_search_visual_refs_by_image_reports_both_transport_failures(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(provider_search, "_serper_api_key", lambda: "key")
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path))
+    local_image = tmp_path / "reference.png"
+    local_image.write_bytes(_png_bytes())
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "creator_oss_readiness",
+        lambda: {"status": "ready", "blockers": []},
+    )
+
+    async def fail_oss(*args, **kwargs):
+        raise RuntimeError("OSS unavailable")
+
+    async def fail_uguu(*args, **kwargs):
+        raise RuntimeError("Uguu unavailable")
+
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "upload_image_for_temporary_public_url",
+        fail_oss,
+    )
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "upload_image_to_uguu_for_temporary_public_url",
+        fail_uguu,
+    )
+
+    result = asyncio.run(
+        provider_search.search_visual_refs_by_image(str(local_image)),
+    )
+
+    assert result["providers_attempted"] == []
+    assert result["image_transport"] == "uguu"
+    assert any(
+        issue.startswith("serper_lens:creator_oss_upload_failed")
+        for issue in result["issues"]
+    )
+    assert any(
+        issue.startswith("serper_lens:uguu_upload_failed")
+        for issue in result["issues"]
+    )
+
+
+def test_search_visual_refs_by_image_crops_bbox_before_uguu(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(provider_search, "_serper_api_key", lambda: "key")
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path))
+    local_image = tmp_path / "reference.png"
+    local_image.write_bytes(_png_bytes())
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "creator_oss_readiness",
+        lambda: {"status": "absent", "blockers": []},
+    )
+    cropped = {}
+
+    async def fake_uguu(file_content, filename, **kwargs):
+        with Image.open(io.BytesIO(file_content)) as image:
+            cropped["size"] = image.size
+        cropped["filename"] = filename
+        return "https://uguu.test/cropped.jpg"
+
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "upload_image_to_uguu_for_temporary_public_url",
+        fake_uguu,
+    )
+    monkeypatch.setattr(
+        provider_search,
+        "_validate_public_remote_url",
+        lambda value: value,
+    )
+
+    async def fake_lens(client, image_url, limit, *, query=""):
+        return []
+
+    monkeypatch.setattr(provider_search, "_search_serper_lens", fake_lens)
+
+    result = asyncio.run(
+        provider_search.search_visual_refs_by_image(
+            str(local_image),
+            bbox=[0, 0, 500, 1000],
+        ),
+    )
+
+    assert cropped == {"size": (2, 4), "filename": "reference-crop.jpg"}
+    assert result["bbox"] == [0, 0, 500, 1000]
+    assert result["image_transport"] == "uguu"
+
+
+def test_search_visual_refs_by_image_rejects_invalid_bbox_before_upload(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(provider_search, "_serper_api_key", lambda: "key")
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path))
+    local_image = tmp_path / "reference.png"
+    local_image.write_bytes(_png_bytes())
+
+    async def fail_upload(*args, **kwargs):
+        raise AssertionError("invalid bbox must not upload")
+
+    monkeypatch.setattr(
+        provider_search._media_transport,
+        "upload_image_to_uguu_for_temporary_public_url",
+        fail_upload,
+    )
+
+    result = asyncio.run(
+        provider_search.search_visual_refs_by_image(
+            str(local_image),
+            bbox=[500, 0, 100, 1000],
+        ),
+    )
+
+    assert result["visual_sources"] == []
+    assert any(
+        "bbox must have positive width" in issue for issue in result["issues"]
+    )
 
 
 def test_visual_jobs_carry_entity_reference_image():
@@ -3246,6 +3632,7 @@ def test_visual_jobs_carry_entity_reference_image():
                     "text": "Erling Haaland",
                     "type": "person",
                     "reference_image": "/tmp/haaland-reference.jpg",
+                    "reference_bbox": [100, 50, 900, 950],
                 },
             ],
         },
@@ -3258,6 +3645,7 @@ def test_visual_jobs_carry_entity_reference_image():
     ]
     assert identity_jobs
     assert identity_jobs[0]["reference_image"] == "/tmp/haaland-reference.jpg"
+    assert identity_jobs[0]["reference_bbox"] == [100, 50, 900, 950]
 
 
 def test_ground_prompt_context_prefers_serper_lens_for_reference_image_jobs(
@@ -3374,6 +3762,129 @@ def test_ground_prompt_context_prefers_serper_lens_for_reference_image_jobs(
         not in text_visual_calls
     )
     assert "serper_lens" in result["visual_providers"]
+
+
+def test_ground_prompt_context_confirms_lens_candidate_with_search_and_extract(
+    monkeypatch,
+):
+    searched = []
+    extracted = []
+
+    async def fake_search_web(query, *, max_sources=6, timeout=8.0):
+        searched.append(query)
+        sources = []
+        if query == "Eiffel Tower official identity":
+            sources = [
+                {
+                    "title": "Eiffel Tower official facts",
+                    "url": "https://example.test/eiffel",
+                    "snippet": "A Paris landmark.",
+                    "provider": "serper",
+                    "query": query,
+                    "score": None,
+                },
+            ]
+        return {
+            "query": query,
+            "issues": [],
+            "sources": sources,
+            "provider": "serper" if sources else "",
+        }
+
+    async def fake_extract_web_pages(urls, *, goal="", timeout=8.0):
+        extracted.append({"urls": urls, "goal": goal})
+        return {
+            "goal": goal,
+            "issues": [],
+            "sources": [
+                {
+                    "title": "Eiffel Tower official facts",
+                    "url": urls[0],
+                    "snippet": "The Eiffel Tower was completed in 1889.",
+                    "content": "The Eiffel Tower was completed in 1889.",
+                    "provider": "serper_scrape",
+                    "query": goal,
+                    "score": None,
+                },
+            ],
+            "provider": "serper_scrape",
+        }
+
+    async def fake_search_visual_refs_by_image(
+        image_ref,
+        *,
+        query="",
+        max_sources=6,
+        timeout=8.0,
+    ):
+        return {
+            "query": query,
+            "issues": [],
+            "visual_sources": [
+                {
+                    "url": "https://img.test/eiffel.jpg",
+                    "source_url": "https://example.test/lens-eiffel",
+                    "title": "Eiffel Tower",
+                    "provider": "serper_lens",
+                    "query": query,
+                },
+            ],
+            "provider": "serper_lens",
+            "providers": ["serper_lens"],
+            "providers_attempted": ["serper_lens"],
+        }
+
+    async def fake_stage(visual_sources, *, timeout=8.0):
+        return visual_sources, {
+            "status": "success",
+            "downloaded_count": len(visual_sources),
+            "failed_count": 0,
+        }
+
+    monkeypatch.setattr(web_grounding, "search_web", fake_search_web)
+    monkeypatch.setattr(
+        web_grounding,
+        "extract_web_pages",
+        fake_extract_web_pages,
+    )
+    monkeypatch.setattr(
+        web_grounding,
+        "search_visual_refs_by_image",
+        fake_search_visual_refs_by_image,
+    )
+    monkeypatch.setattr(
+        web_grounding,
+        "stage_visual_grounding_sources",
+        fake_stage,
+    )
+
+    result = asyncio.run(
+        web_grounding.ground_prompt_context(
+            "请识别并核实这个地标",
+            queries=["unknown landmark"],
+            context={
+                "entities": [
+                    {
+                        "text": "unknown landmark",
+                        "type": "place",
+                        "strict_identity": True,
+                        "reference_image": "https://public.test/reference.jpg",
+                    },
+                ],
+            },
+            force=True,
+            include_visuals=True,
+            verify_visuals=False,
+            max_sources=6,
+        ),
+    )
+
+    assert "Eiffel Tower official identity" in searched
+    assert extracted[0]["urls"] == ["https://example.test/eiffel"]
+    assert result["identity_confirmation"]["status"] == "confirmed"
+    assert any(
+        source["provider"] == "serper_scrape" for source in result["sources"]
+    )
 
 
 def test_ground_prompt_context_falls_back_to_text_search_when_lens_degrades(

@@ -202,6 +202,23 @@ def _compact_context_for_detector(
     return compact
 
 
+def _entity_reference_fields(item: dict[str, Any]) -> dict[str, Any]:
+    reference_image = str(
+        item.get("reference_image") or item.get("referenceImage") or "",
+    ).strip()
+    if not reference_image:
+        return {}
+    fields: dict[str, Any] = {"reference_image": reference_image[:2048]}
+    reference_bbox = (
+        item.get("reference_bbox")
+        or item.get("referenceBbox")
+        or item.get("bbox")
+    )
+    if isinstance(reference_bbox, (list, tuple)):
+        fields["reference_bbox"] = list(reference_bbox)
+    return fields
+
+
 def _normalize_entities(value: Any) -> list[dict[str, Any]]:
     entities: list[dict[str, Any]] = []
     if isinstance(value, list):
@@ -256,15 +273,8 @@ def _normalize_entities(value: Any) -> list[dict[str, Any]]:
                     )
                     if description:
                         normalized["description"] = description
-                    # A caller-provided reference image unlocks Serper Lens
-                    # reverse image search for this entity's visual job.
-                    reference_image = str(
-                        item.get("reference_image")
-                        or item.get("referenceImage")
-                        or "",
-                    ).strip()
-                    if reference_image:
-                        normalized["reference_image"] = reference_image[:2048]
+                    # A caller-provided reference unlocks Lens for this job.
+                    normalized.update(_entity_reference_fields(item))
                     entities.append(normalized)
             else:
                 text = _clean_text(item, max_chars=120)
