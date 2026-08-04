@@ -862,6 +862,11 @@ function SubagentMessageBubble({
   );
 }
 
+function formatToolArgumentBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+}
+
 function NestedSubagentToolCard({ item }: { item: SubagentStreamTool }) {
   const allowExpand = useAgentDockUiStore((state) => state.allowExpandDetails);
   const isReplaying = useCreatorSessionStore((state) => state.isReplaying);
@@ -925,6 +930,11 @@ function NestedSubagentToolCard({ item }: { item: SubagentStreamTool }) {
               ? "完成"
               : "失败"}
           </span>
+          {active && item.receivedBytes !== undefined && (
+            <span className="text-[9px] text-[var(--color-text-tertiary)]">
+              · 参数 {formatToolArgumentBytes(item.receivedBytes)}
+            </span>
+          )}
         </span>
         {hasDetails && allowExpand && (
           <button
@@ -1223,6 +1233,11 @@ function ToolCallCard({ data }: { data: ToolCallPresentation }) {
           {estimatedDuration && (
             <span className="text-[10px] text-[var(--color-text-tertiary)]">
               {estimatedDuration}
+            </span>
+          )}
+          {active && data.receivedBytes !== undefined && (
+            <span className="text-[10px] text-[var(--color-text-tertiary)]">
+              · 参数 {formatToolArgumentBytes(data.receivedBytes)}
             </span>
           )}
         </span>

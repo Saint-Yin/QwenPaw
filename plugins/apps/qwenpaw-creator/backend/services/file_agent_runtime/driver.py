@@ -144,12 +144,108 @@ MAX_MALFORMED_JQ_PROJECT_RETRIES = 2
 MAX_REPEATED_DETERMINISTIC_TOOL_FAILURES = 2
 DEFAULT_MODEL_TURN_TIMEOUT_SECONDS = 180.0
 JQ_PROJECT_LARGE_ARGUMENT_ADVISORY_BYTES = 256 * 1024
+TOOL_ARGUMENT_PROGRESS_BYTES = 1024
+MAX_PERSISTED_RAW_TOOL_ARGUMENT_BYTES = 256 * 1024
 
 _PROJECT_SNAPSHOT_RESULT_KIND = "project_snapshot"
 _PROJECT_CHANGE_RECEIPT_RESULT_KIND = "project_change_receipt"
 _PROJECT_SNAPSHOT_TOOL_NAMES = frozenset(
     {READ_PROJECT_TOOL_NAME, JQ_PROJECT_TOOL_NAME},
 )
+
+
+@dataclass
+class _ToolArgumentProgressState:
+    tool: str
+    received_bytes: int = 0
+    provider_chunk_count: int = 0
+    last_reported_bytes: int = 0
+
+
+class _ToolArgumentProgressReporter:
+    """Collapse provider fragments into bounded, content-free progress events."""
+
+    def __init__(self, emit: Any) -> None:
+        self._emit = emit
+        self._states: dict[str, _ToolArgumentProgressState] = {}
+
+    async def feed(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        arguments_delta: str,
+    ) -> None:
+        if not arguments_delta:
+            return
+        state = self._states.setdefault(
+            tool_call_id,
+            _ToolArgumentProgressState(tool=tool_name),
+        )
+        state.tool = tool_name or state.tool
+        state.received_bytes += len(arguments_delta.encode("utf-8"))
+        state.provider_chunk_count += 1
+        if (
+            state.last_reported_bytes == 0
+            or state.received_bytes - state.last_reported_bytes
+            >= TOOL_ARGUMENT_PROGRESS_BYTES
+        ):
+            await self._emit(tool_call_id, state, False)
+            state.last_reported_bytes = state.received_bytes
+
+    async def finish(self, calls: tuple[AgentToolCall, ...]) -> None:
+        for call in calls:
+            state = self._states.setdefault(
+                call.call_id,
+                _ToolArgumentProgressState(tool=call.name),
+            )
+            state.tool = call.name
+            state.received_bytes = max(
+                state.received_bytes,
+                call.raw_arguments_bytes,
+            )
+            state.provider_chunk_count = max(
+                state.provider_chunk_count,
+                call.provider_chunk_count,
+            )
+            await self._emit(call.call_id, state, True)
+            state.last_reported_bytes = state.received_bytes
+
+
+def _tool_call_transport_metadata(call: AgentToolCall) -> dict[str, Any]:
+    """Return one bounded forensic record for a completed provider payload."""
+
+    raw = call.raw_arguments
+    raw_bytes = raw.encode("utf-8")
+    payload: dict[str, Any] = {
+        "rawArgumentsBytes": call.raw_arguments_bytes or len(raw_bytes),
+        "providerChunkCount": call.provider_chunk_count,
+        "argumentsRepaired": call.arguments_repaired,
+        "strictJsonError": call.strict_json_error,
+        "rawArgumentsCaptured": bool(raw),
+    }
+    if raw:
+        payload["rawArgumentsSha256"] = hashlib.sha256(raw_bytes).hexdigest()
+        if len(raw_bytes) <= MAX_PERSISTED_RAW_TOOL_ARGUMENT_BYTES:
+            payload["rawArguments"] = raw
+        else:
+            # Preserve useful forensic boundaries without allowing one model
+            # response to make an unbounded Runtime record.
+            boundary = MAX_PERSISTED_RAW_TOOL_ARGUMENT_BYTES // 2
+            payload.update(
+                {
+                    "rawArgumentsCaptured": False,
+                    "rawArgumentsTruncated": True,
+                    "rawArgumentsPrefix": raw_bytes[:boundary].decode(
+                        "utf-8",
+                        errors="replace",
+                    ),
+                    "rawArgumentsSuffix": raw_bytes[-boundary:].decode(
+                        "utf-8",
+                        errors="replace",
+                    ),
+                },
+            )
+    return payload
 
 
 def _specialist_waiting_review_summary(
@@ -1440,8 +1536,7 @@ class FileCreatorAgentRuntime:
             self._blocked_heads[project_id] = message.message_seq
         except RepeatedDeterministicToolFailure as exc:
             logger.error(
-                "Agent run %s stopped after repeated deterministic tool "
-                "failure: %s",
+                "Agent run %s stopped after repeated deterministic tool failure: %s",
                 run_id,
                 exc,
             )
@@ -1599,32 +1694,40 @@ class FileCreatorAgentRuntime:
             async def persist_thinking_delta(delta: str) -> None:
                 await persist_message_delta("thinking", delta)
 
-            async def persist_tool_delta(
+            async def persist_tool_progress(
                 tool_call_id: str,
-                tool_name: str,
-                arguments_delta: str,
+                state: _ToolArgumentProgressState,
+                complete: bool,
             ) -> None:
                 nonlocal delta_index
-                if not arguments_delta:
-                    return
                 self._assert_epoch(project_id, run_id, epoch)
                 await self._event(
                     project_id,
                     session_id,
-                    "agent.tool_delta",
+                    "agent.tool_progress",
                     run_id,
                     request,
                     {
                         "runId": run_id,
                         "messageId": assistant_message_id,
                         "toolCallId": tool_call_id,
-                        "tool": tool_name,
+                        "tool": state.tool,
                         "deltaIndex": delta_index,
-                        "argumentsDelta": arguments_delta,
+                        "receivedBytes": state.received_bytes,
+                        "providerChunkCount": state.provider_chunk_count,
+                        "complete": complete,
+                        "stage": (
+                            "arguments_complete"
+                            if complete
+                            else "assembling_arguments"
+                        ),
                     },
                 )
                 delta_index += 1
 
+            tool_progress = _ToolArgumentProgressReporter(
+                persist_tool_progress,
+            )
             turn = await self._complete_model_turn(
                 self.model_client,
                 label="Creator Agent",
@@ -1632,8 +1735,9 @@ class FileCreatorAgentRuntime:
                 tools=tool_manifest,
                 on_text_delta=persist_text_delta,
                 on_thinking_delta=persist_thinking_delta,
-                on_tool_call_delta=persist_tool_delta,
+                on_tool_call_delta=tool_progress.feed,
             )
+            await tool_progress.finish(turn.tool_calls)
             self._assert_epoch(project_id, run_id, epoch)
             if len(turn.tool_calls) > 1:
                 raise AgentModelError(
@@ -1651,6 +1755,8 @@ class FileCreatorAgentRuntime:
                     content=canonical_summary,
                     thinking=turn.thinking,
                     provider_message_id=turn.provider_message_id,
+                    finish_reason=turn.finish_reason,
+                    usage=turn.usage,
                 )
                 await persist_message_delta("text", canonical_summary)
             await self._persist_assistant_turn(
@@ -1689,9 +1795,11 @@ class FileCreatorAgentRuntime:
                     run_id,
                     call.name,
                     call.call_id,
-                    _prompt_preview(call.arguments, limit=200)
-                    if call.name != DELEGATE_TOOL_NAME
-                    else call.arguments.get("task"),
+                    (
+                        _prompt_preview(call.arguments, limit=200)
+                        if call.name != DELEGATE_TOOL_NAME
+                        else call.arguments.get("task")
+                    ),
                 )
                 await self._event(
                     project_id,
@@ -1705,6 +1813,11 @@ class FileCreatorAgentRuntime:
                         "toolCallId": call.call_id,
                         "tool": call.name,
                         "messageId": assistant_message_id,
+                        "arguments": dict(call.arguments),
+                        "rawArgumentsBytes": call.raw_arguments_bytes,
+                        "providerChunkCount": call.provider_chunk_count,
+                        "argumentsRepaired": call.arguments_repaired,
+                        "finishReason": turn.finish_reason,
                     },
                 )
                 try:
@@ -2438,28 +2551,33 @@ class FileCreatorAgentRuntime:
                 async def thinking_delta(delta: str) -> None:
                     await message_delta("thinking", delta)
 
-                async def tool_delta(
+                async def subagent_tool_progress(
                     tool_call_id: str,
-                    tool_name: str,
-                    arguments_delta: str,
+                    state: _ToolArgumentProgressState,
+                    complete: bool,
                 ) -> None:
                     nonlocal delta_index
-                    if not arguments_delta:
-                        return
                     self._assert_epoch(project_id, parent_run_id, epoch)
                     await self._event(
                         project_id,
                         session_id,
-                        "subagent.tool_delta",
+                        "subagent.tool_progress",
                         parent_run_id,
                         request,
                         {
                             **common,
                             "messageId": message_id,
                             "toolCallId": tool_call_id,
-                            "tool": tool_name,
+                            "tool": state.tool,
                             "deltaIndex": delta_index,
-                            "argumentsDelta": arguments_delta,
+                            "receivedBytes": state.received_bytes,
+                            "providerChunkCount": state.provider_chunk_count,
+                            "complete": complete,
+                            "stage": (
+                                "arguments_complete"
+                                if complete
+                                else "assembling_arguments"
+                            ),
                         },
                     )
                     delta_index += 1
@@ -2470,6 +2588,9 @@ class FileCreatorAgentRuntime:
                     else self.model_client
                 )
                 _compact_wire_project_snapshots(messages)
+                tool_progress = _ToolArgumentProgressReporter(
+                    subagent_tool_progress,
+                )
                 turn = await self._complete_model_turn(
                     model_client,
                     label=role_name,
@@ -2477,8 +2598,9 @@ class FileCreatorAgentRuntime:
                     tools=tool_manifest,
                     on_text_delta=text_delta,
                     on_thinking_delta=thinking_delta,
-                    on_tool_call_delta=tool_delta,
+                    on_tool_call_delta=tool_progress.feed,
                 )
+                await tool_progress.finish(turn.tool_calls)
                 if len(turn.tool_calls) > 1:
                     raise AgentModelError(
                         f"{role_name} returned more than one tool call in one turn",
@@ -2487,6 +2609,8 @@ class FileCreatorAgentRuntime:
                     "parentActionId": parent_action_id,
                     "providerMessageId": turn.provider_message_id,
                     "providerThinking": turn.thinking,
+                    "providerFinishReason": turn.finish_reason,
+                    "providerUsage": turn.usage,
                 }
                 if turn.tool_calls:
                     call = turn.tool_calls[0]
@@ -2494,6 +2618,7 @@ class FileCreatorAgentRuntime:
                         "id": call.call_id,
                         "name": call.name,
                         "arguments": dict(call.arguments),
+                        "transport": _tool_call_transport_metadata(call),
                     }
                 await asyncio.to_thread(
                     self.executions.append_specialist_message,
@@ -2517,6 +2642,8 @@ class FileCreatorAgentRuntime:
                         **common,
                         "messageId": message_id,
                         "text": turn.content or "",
+                        "finishReason": turn.finish_reason,
+                        "usage": turn.usage,
                     },
                 )
                 assistant_wire: dict[str, Any] = {
@@ -2718,6 +2845,11 @@ class FileCreatorAgentRuntime:
                         "messageId": message_id,
                         "toolCallId": call.call_id,
                         "tool": call.name,
+                        "arguments": dict(call.arguments),
+                        "rawArgumentsBytes": call.raw_arguments_bytes,
+                        "providerChunkCount": call.provider_chunk_count,
+                        "argumentsRepaired": call.arguments_repaired,
+                        "finishReason": turn.finish_reason,
                     },
                 )
                 failed = False
@@ -3702,6 +3834,8 @@ class FileCreatorAgentRuntime:
             "runId": run_id,
             "providerMessageId": turn.provider_message_id,
             "providerThinking": turn.thinking,
+            "providerFinishReason": turn.finish_reason,
+            "providerUsage": turn.usage,
         }
         open_action_ids: list[str] = []
         if turn.tool_calls:
@@ -3715,6 +3849,7 @@ class FileCreatorAgentRuntime:
                         "id": call.call_id,
                         "name": call.name,
                         "arguments": dict(call.arguments),
+                        "transport": _tool_call_transport_metadata(call),
                     },
                 },
             )

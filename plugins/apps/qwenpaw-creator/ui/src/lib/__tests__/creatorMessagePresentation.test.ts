@@ -692,4 +692,46 @@ describe("Creator conversation presentation", () => {
       ),
     ).toEqual([]);
   });
+
+  it("shows aggregated argument progress and final parsed arguments", () => {
+    const events = [
+      creatorEvent({
+        eventId: "progress",
+        seq: 1,
+        type: "agent.tool_progress",
+        data: {
+          messageId: "assistant-progress",
+          toolCallId: "call-jq",
+          tool: "jq_project",
+          receivedBytes: 25_257,
+          providerChunkCount: 2_140,
+          complete: true,
+        },
+      }),
+      creatorEvent({
+        eventId: "started",
+        seq: 2,
+        type: "agent.tool_started",
+        data: {
+          messageId: "assistant-progress",
+          toolCallId: "call-jq",
+          tool: "jq_project",
+          arguments: { projectId: "project-1", program: "." },
+        },
+      }),
+    ];
+
+    expect(toolCallPresentations([], events)).toMatchObject([
+      {
+        actionId: "call-jq",
+        anchorMessageId: "assistant-progress",
+        status: "started",
+        tool: "jq_project",
+        arguments: { projectId: "project-1", program: "." },
+        receivedBytes: 25_257,
+        providerChunkCount: 2_140,
+        argumentStreamComplete: true,
+      },
+    ]);
+  });
 });

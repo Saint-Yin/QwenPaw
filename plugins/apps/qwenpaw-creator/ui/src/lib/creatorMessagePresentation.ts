@@ -421,6 +421,9 @@ export interface ToolCallPresentation {
   tool: string;
   arguments?: Record<string, unknown>;
   argumentsText?: string;
+  receivedBytes?: number;
+  providerChunkCount?: number;
+  argumentStreamComplete?: boolean;
   result?: unknown;
   error?: string;
 }
@@ -436,6 +439,9 @@ interface MutableToolCall {
   result?: unknown;
   error?: string;
   argumentDeltas?: Record<number, string>;
+  receivedBytes?: number;
+  providerChunkCount?: number;
+  argumentStreamComplete?: boolean;
 }
 
 function textContent(message: CreatorMessage): string {
@@ -584,6 +590,7 @@ export function toolCallPresentations(
       if (
         ![
           "agent.tool_delta",
+          "agent.tool_progress",
           "agent.tool_started",
           "agent.tool_completed",
           "agent.tool.started",
@@ -638,6 +645,17 @@ export function toolCallPresentations(
           }
         }
       }
+      if (event.type === "agent.tool_progress") {
+        if (typeof event.data.receivedBytes === "number")
+          call.receivedBytes = event.data.receivedBytes;
+        if (typeof event.data.providerChunkCount === "number")
+          call.providerChunkCount = event.data.providerChunkCount;
+        if (typeof event.data.complete === "boolean")
+          call.argumentStreamComplete = event.data.complete;
+      }
+      if (isRecord(event.data.arguments)) {
+        call.arguments = event.data.arguments;
+      }
       if (
         event.type === "agent.tool_completed" ||
         event.type === "agent.tool.completed" ||
@@ -689,5 +707,14 @@ export function toolCallPresentations(
         : {}),
       result: call.result,
       error: call.error,
+      ...(call.receivedBytes !== undefined
+        ? { receivedBytes: call.receivedBytes }
+        : {}),
+      ...(call.providerChunkCount !== undefined
+        ? { providerChunkCount: call.providerChunkCount }
+        : {}),
+      ...(call.argumentStreamComplete !== undefined
+        ? { argumentStreamComplete: call.argumentStreamComplete }
+        : {}),
     }));
 }

@@ -25,10 +25,12 @@ from services.file_agent_runtime import (
 )
 from services.file_agent_runtime.driver import (
     MalformedJqProjectArguments,
+    _ToolArgumentProgressReporter,
     _apply_review_feedback_to_tool_arguments,
     _jq_project_argument_diagnosis,
     _review_feedback_target_refs,
     _specialist_tool_recovery,
+    _tool_call_transport_metadata,
 )
 from services.file_agent_runtime.prompts import render_creator_system_prompt
 from services.observability import read_trace_records
@@ -58,6 +60,57 @@ PROJECT_ID = "project-1"
 SESSION_ID = "session-1"
 CONVERSATION_ID = "conversation-1"
 GOAL_ID = "goal-1"
+
+
+def test_tool_argument_fragments_are_aggregated_and_persisted_once() -> None:
+    emitted: list[tuple[str, int, int, bool]] = []
+    fragment = "abcdefghijkl"
+    raw = fragment * 2_140
+
+    async def scenario() -> None:
+        async def emit(tool_call_id, state, complete) -> None:
+            emitted.append(
+                (
+                    tool_call_id,
+                    state.received_bytes,
+                    state.provider_chunk_count,
+                    complete,
+                ),
+            )
+
+        reporter = _ToolArgumentProgressReporter(emit)
+        for _ in range(2_140):
+            await reporter.feed("call-large", "jq_project", fragment)
+        await reporter.finish(
+            (
+                AgentToolCall(
+                    call_id="call-large",
+                    name="jq_project",
+                    arguments={"projectId": PROJECT_ID},
+                    raw_arguments=raw,
+                    raw_arguments_bytes=len(raw.encode("utf-8")),
+                    provider_chunk_count=2_140,
+                ),
+            ),
+        )
+
+    asyncio.run(scenario())
+
+    assert len(emitted) < 30
+    assert emitted[0][3] is False
+    assert emitted[-1] == ("call-large", len(raw), 2_140, True)
+    transport = _tool_call_transport_metadata(
+        AgentToolCall(
+            call_id="call-large",
+            name="jq_project",
+            arguments={"projectId": PROJECT_ID},
+            raw_arguments=raw,
+            raw_arguments_bytes=len(raw),
+            provider_chunk_count=2_140,
+        ),
+    )
+    assert transport["rawArguments"] == raw
+    assert transport["providerChunkCount"] == 2_140
 
 
 def test_rejection_feedback_is_fenced_and_injected_into_media_prompt() -> None:
@@ -748,9 +801,9 @@ def _create_project(tmp_path, *, initial_goal: str | None):
             conversation_id=CONVERSATION_ID,
             initial_goal=initial_goal,
             goal_id=GOAL_ID if initial_goal is not None else None,
-            initial_message_id="message-initial"
-            if initial_goal is not None
-            else None,
+            initial_message_id=(
+                "message-initial" if initial_goal is not None else None
+            ),
             initial_client_message_id=(
                 "client-initial" if initial_goal is not None else None
             ),
@@ -867,10 +920,12 @@ def test_visual_delegation_rejects_source_logical_asset_target(
         await driver.start()
         driver.notify(PROJECT_ID)
         await _wait_for(
-            lambda: services.sessions.get_project_session(
-                PROJECT_ID,
-            ).last_consumed_message_seq
-            == 1,
+            lambda: (
+                services.sessions.get_project_session(
+                    PROJECT_ID,
+                ).last_consumed_message_seq
+                == 1
+            ),
         )
         await driver.wait_until_idle(PROJECT_ID)
         specialist_runs = driver.executions.list_specialist_runs(PROJECT_ID)
@@ -955,10 +1010,12 @@ def test_specialist_stops_after_repeated_non_retryable_tool_failure(
         await driver.start()
         driver.notify(PROJECT_ID)
         await _wait_for(
-            lambda: services.sessions.get_project_session(
-                PROJECT_ID,
-            ).last_consumed_message_seq
-            == 1,
+            lambda: (
+                services.sessions.get_project_session(
+                    PROJECT_ID,
+                ).last_consumed_message_seq
+                == 1
+            ),
         )
         await driver.wait_until_idle(PROJECT_ID)
         specialist = driver.executions.list_specialist_runs(PROJECT_ID)[0]
@@ -1015,10 +1072,12 @@ def test_specialist_model_turn_has_a_wall_clock_timeout(tmp_path) -> None:
         driver.notify(PROJECT_ID)
         await asyncio.wait_for(specialist_started.wait(), timeout=2.0)
         await _wait_for(
-            lambda: services.sessions.get_project_session(
-                PROJECT_ID,
-            ).last_consumed_message_seq
-            == 1,
+            lambda: (
+                services.sessions.get_project_session(
+                    PROJECT_ID,
+                ).last_consumed_message_seq
+                == 1
+            ),
         )
         await driver.wait_until_idle(PROJECT_ID)
         specialist = driver.executions.list_specialist_runs(PROJECT_ID)[0]
@@ -1351,10 +1410,12 @@ def test_main_agent_stops_repeating_deterministic_jq_failure(
         await driver.start()
         driver.notify(PROJECT_ID)
         await _wait_for(
-            lambda: services.sessions.get_project_session(
-                PROJECT_ID,
-            ).status.value
-            == "ERROR",
+            lambda: (
+                services.sessions.get_project_session(
+                    PROJECT_ID,
+                ).status.value
+                == "ERROR"
+            ),
         )
         await driver.wait_until_idle(PROJECT_ID)
         session = services.sessions.get_project_session(PROJECT_ID)
@@ -1622,7 +1683,10 @@ def test_initial_creation_runs_auto_fix_tool_loop_without_review(
     monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path))
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="请完善项目说明")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="请完善项目说明",
+        )
         driver = FileCreatorAgentRuntime(
             services,
             model_client=_edit_client(description="由初始任务生成"),
@@ -1668,11 +1732,12 @@ def test_initial_creation_runs_auto_fix_tool_loop_without_review(
     event_types = {item.event_type for item in events}
     assert {
         "agent.message_delta",
-        "agent.tool_delta",
+        "agent.tool_progress",
         "message.completed",
         "agent.tool_started",
         "agent.tool_completed",
     } <= event_types
+    assert "agent.tool_delta" not in event_types
     trace_records = read_trace_records(filters={"projectId": PROJECT_ID})
     trace_names = {item["name"] for item in trace_records}
     assert {
@@ -1694,11 +1759,15 @@ def test_initial_creation_runs_auto_fix_tool_loop_without_review(
     )
     assert assistant_turns[0].source == "creator_agent"
     assert assistant_turns[0].metadata["actionId"] == "read-1"
-    assert assistant_turns[0].metadata["toolCall"] == {
+    persisted_tool_call = assistant_turns[0].metadata["toolCall"]
+    assert {
+        key: persisted_tool_call[key] for key in ("id", "name", "arguments")
+    } == {
         "id": "read-1",
         "name": "read_project",
         "arguments": {"projectId": PROJECT_ID},
     }
+    assert persisted_tool_call["transport"]["rawArgumentsCaptured"] is False
     assert all(item.source == "runtime_action_result" for item in tool_results)
     assert all(
         isinstance(json.loads(item.content_parts[0].text or ""), dict)
@@ -1911,7 +1980,10 @@ def test_stream_persistence_failure_is_not_reported_as_a_model_failure(
         return AgentModelTurn(content="完整结果")
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="请生成结果")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="请生成结果",
+        )
         driver = FileCreatorAgentRuntime(
             services,
             model_client=CallbackAgentChatClient(callback),
@@ -2136,10 +2208,14 @@ def test_source_intelligence_receives_every_user_media_part_directly(
             content = messages[1]["content"]
             assert isinstance(content, list)
             observed_source_content.extend(content)
-            return AgentModelTurn(content="[SUCCESS]\n已直接观察全部用户素材。")
+            return AgentModelTurn(
+                content="[SUCCESS]\n已直接观察全部用户素材。",
+            )
         assert messages[-1]["role"] == "user"
         observed_correction = str(messages[-1]["content"])
-        return AgentModelTurn(content="[FAILED]\n测试未提供可提交的 ProjectSource。")
+        return AgentModelTurn(
+            content="[FAILED]\n测试未提供可提交的 ProjectSource。",
+        )
 
     async def scenario():
         services, _snapshot = _create_project(tmp_path, initial_goal=None)
@@ -2479,7 +2555,12 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
                                         "startMs": 0,
                                         "endMs": 5000,
                                         "text": "人物在海边日落中完成走向镜头的动作",
-                                        "tags": ["海边", "日落", "行走", "接近镜头"],
+                                        "tags": [
+                                            "海边",
+                                            "日落",
+                                            "行走",
+                                            "接近镜头",
+                                        ],
                                         "confidence": 0.95,
                                     },
                                 ],
@@ -2546,7 +2627,9 @@ def test_parent_reads_persisted_source_intelligence_and_links_project_structure(
             SESSION_ID,
             CONVERSATION_ID,
             role="user",
-            content_parts=[{"type": "text", "text": "把上传素材剪成一个短视频"}],
+            content_parts=[
+                {"type": "text", "text": "把上传素材剪成一个短视频"},
+            ],
             source="initial_creation",
             channel=MessageChannel.COMPOSER,
             classification=MessageClassification.MUTATION_INSTRUCTION,
@@ -2905,7 +2988,10 @@ def test_intervention_completion_queues_mainline_resume(tmp_path) -> None:
 
 def test_interrupt_revokes_stale_run_before_late_tool_commit(tmp_path) -> None:
     async def scenario():
-        services, snapshot = _create_project(tmp_path, initial_goal="请修改项目")
+        services, snapshot = _create_project(
+            tmp_path,
+            initial_goal="请修改项目",
+        )
         started = asyncio.Event()
 
         async def stubborn_model(_messages, _tools):
@@ -2956,7 +3042,10 @@ def test_interrupt_revokes_stale_run_before_late_tool_commit(tmp_path) -> None:
 
 def test_interrupt_returns_before_slow_task_cleanup_finishes(tmp_path) -> None:
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="请修改项目")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="请修改项目",
+        )
         started = asyncio.Event()
         cleanup_started = asyncio.Event()
         release_cleanup = asyncio.Event()
@@ -3003,7 +3092,10 @@ def test_specialist_cancel_emits_terminal_event(tmp_path) -> None:
     """
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="生成角色图")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="生成角色图",
+        )
         specialist_started = asyncio.Event()
         cancel_entered = asyncio.Event()
 
@@ -3103,7 +3195,10 @@ def test_specialist_cancel_while_waiting_runtime_emits_terminal_event(
     )
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="生成角色图")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="生成角色图",
+        )
         invoke_started = asyncio.Event()
         cancel_entered = asyncio.Event()
 
@@ -3348,7 +3443,9 @@ def test_agentdock_message_after_interrupt_reuses_goal_and_conversation_context(
             CONVERSATION_ID,
             request_id="continue-request",
             client_message_id="continue-message",
-            content_parts=[{"type": "text", "text": "继续刚才的任务，开始剪辑。"}],
+            content_parts=[
+                {"type": "text", "text": "继续刚才的任务，开始剪辑。"},
+            ],
             channel=MessageChannel.AGENTDOCK,
             classification=MessageClassification.MUTATION_INSTRUCTION,
         )
@@ -3418,7 +3515,10 @@ def test_durable_interrupt_stops_remote_owner_without_restarting_message(
     tmp_path,
 ) -> None:
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="请修改项目")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="请修改项目",
+        )
         started = asyncio.Event()
         cancelled = asyncio.Event()
 
@@ -3485,7 +3585,10 @@ def test_durable_interrupt_stops_remote_owner_without_restarting_message(
 
 def test_missing_model_configuration_persists_session_error(tmp_path) -> None:
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="请修改项目")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="请修改项目",
+        )
 
         async def missing(_messages, _tools):
             raise AgentModelConfigurationError(
@@ -3544,7 +3647,10 @@ def test_failed_run_is_not_relaunched_after_restart_or_notify(
         return AgentModelTurn(content="不应被调用")
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="请修改项目")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="请修改项目",
+        )
         first = FileCreatorAgentRuntime(
             services,
             model_client=CallbackAgentChatClient(failing),
@@ -3607,7 +3713,10 @@ def test_legacy_unconsumed_failed_head_is_consumed_instead_of_relaunched(
         return AgentModelTurn(content="不应被调用")
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="请修改项目")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="请修改项目",
+        )
         first = FileCreatorAgentRuntime(
             services,
             model_client=CallbackAgentChatClient(failing),
@@ -3721,7 +3830,10 @@ def test_costly_specialist_tool_waits_for_file_authorization(
         return AgentModelTurn(content="视觉 Specialist 已完成。")
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="生成角色图")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="生成角色图",
+        )
         driver = FileCreatorAgentRuntime(
             services,
             model_client=CallbackAgentChatClient(callback),

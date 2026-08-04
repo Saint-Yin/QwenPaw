@@ -53,6 +53,9 @@ export interface StreamingAssistantMessage {
     name: string;
     argumentDeltas: Record<number, string>;
     arguments?: Record<string, unknown>;
+    receivedBytes?: number;
+    providerChunkCount?: number;
+    argumentStreamComplete?: boolean;
   };
   createdAt: string;
 }
@@ -78,6 +81,9 @@ export interface SubagentStreamTool {
   status: "started" | "succeeded" | "failed";
   argumentDeltas?: Record<number, string>;
   arguments?: Record<string, unknown>;
+  receivedBytes?: number;
+  providerChunkCount?: number;
+  argumentStreamComplete?: boolean;
   result?: unknown;
   state?: string;
   taskId?: string;
@@ -1010,6 +1016,7 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
               event.type === "subagent.message_delta" ||
               event.type === "subagent.message_completed" ||
               event.type === "subagent.tool_delta" ||
+              event.type === "subagent.tool_progress" ||
               event.type === "subagent.tool_started" ||
               event.type === "subagent.tool_completed";
             const subagentLifecycle = SUBAGENT_LIFECYCLE_EVENTS.has(event.type);
@@ -1182,6 +1189,7 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
 
               if (
                 event.type === "subagent.tool_delta" ||
+                event.type === "subagent.tool_progress" ||
                 event.type === "subagent.tool_started" ||
                 event.type === "subagent.tool_completed"
               ) {
@@ -1239,6 +1247,18 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
                         : subagentToolStatus(event.data.state),
                     argumentDeltas,
                     arguments: parsedArguments,
+                    receivedBytes:
+                      typeof event.data.receivedBytes === "number"
+                        ? event.data.receivedBytes
+                        : existingTool?.receivedBytes,
+                    providerChunkCount:
+                      typeof event.data.providerChunkCount === "number"
+                        ? event.data.providerChunkCount
+                        : existingTool?.providerChunkCount,
+                    argumentStreamComplete:
+                      typeof event.data.complete === "boolean"
+                        ? event.data.complete
+                        : existingTool?.argumentStreamComplete,
                     result:
                       event.type === "subagent.tool_completed"
                         ? event.data.result
@@ -1403,6 +1423,53 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
                       name: toolName,
                       argumentDeltas,
                       arguments: parsedArguments,
+                    },
+                    createdAt: existing?.createdAt ?? event.at,
+                  },
+                };
+              }
+            }
+            if (event.type === "agent.tool_progress") {
+              const messageId = eventString(event.data, "messageId");
+              const toolCallId = eventString(event.data, "toolCallId");
+              const toolName = eventString(event.data, "tool");
+              const alreadyDurable = messageId
+                ? messages.some((message) => message.messageId === messageId)
+                : false;
+              if (messageId && toolCallId && toolName && !alreadyDurable) {
+                const existing = streamingAssistantMessages[messageId];
+                const currentTool = existing?.toolCall;
+                streamingAssistantMessages = {
+                  ...streamingAssistantMessages,
+                  [messageId]: {
+                    messageId,
+                    runId: eventString(event.data, "runId") ?? existing?.runId,
+                    firstEventSeq: existing?.firstEventSeq ?? event.seq,
+                    deltas: existing?.deltas ?? {},
+                    thinkingDeltas: existing?.thinkingDeltas ?? {},
+                    toolCall: {
+                      id: toolCallId,
+                      name: toolName,
+                      argumentDeltas:
+                        currentTool?.id === toolCallId
+                          ? currentTool.argumentDeltas
+                          : {},
+                      arguments:
+                        currentTool?.id === toolCallId
+                          ? currentTool.arguments
+                          : undefined,
+                      receivedBytes:
+                        typeof event.data.receivedBytes === "number"
+                          ? event.data.receivedBytes
+                          : currentTool?.receivedBytes,
+                      providerChunkCount:
+                        typeof event.data.providerChunkCount === "number"
+                          ? event.data.providerChunkCount
+                          : currentTool?.providerChunkCount,
+                      argumentStreamComplete:
+                        typeof event.data.complete === "boolean"
+                          ? event.data.complete
+                          : currentTool?.argumentStreamComplete,
                     },
                     createdAt: existing?.createdAt ?? event.at,
                   },

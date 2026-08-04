@@ -281,6 +281,44 @@ describe("bounded frontend caches", () => {
     });
   });
 
+  it("projects aggregated tool progress without retaining raw fragments", () => {
+    useCreatorSessionStore.setState({ projectId: "p1", lastEventSeq: 0 });
+    act(() =>
+      useCreatorSessionStore.getState().ingestEvents([
+        {
+          eventId: "main-tool-progress-1",
+          seq: 1,
+          type: "agent.tool_progress",
+          projectId: "p1",
+          creatorSessionId: "s1",
+          at: "now",
+          data: {
+            messageId: "assistant-progress",
+            toolCallId: "call-jq",
+            tool: "jq_project",
+            receivedBytes: 24_576,
+            providerChunkCount: 2_021,
+            complete: false,
+          },
+        },
+      ]),
+    );
+
+    expect(
+      useCreatorSessionStore.getState().streamingAssistantMessages[
+        "assistant-progress"
+      ].toolCall,
+    ).toEqual({
+      id: "call-jq",
+      name: "jq_project",
+      argumentDeltas: {},
+      arguments: undefined,
+      receivedBytes: 24_576,
+      providerChunkCount: 2_021,
+      argumentStreamComplete: false,
+    });
+  });
+
   it("bootstraps canonical DTOs and replays the durable named SSE log after refresh", async () => {
     installMockFetch([
       {
