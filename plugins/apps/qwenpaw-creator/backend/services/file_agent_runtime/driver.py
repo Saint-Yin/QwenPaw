@@ -37,6 +37,7 @@ from models.config import (
     get_execution_authorization_mode,
     get_mainline_max_model_turns,
     get_specialist_max_model_turns,
+    scale_mainline_max_model_turns,
     get_text_model_name,
     get_vlm_model_name,
     get_web_grounding_enabled,
@@ -61,6 +62,7 @@ from services.project_files.agent_tools import (
     AgentProjectToolContext,
     AgentProjectTools,
     JQ_PROJECT_TOOL_NAME,
+    PATCH_PROJECT_TOOL_NAME,
     READ_PROJECT_TOOL_NAME,
     agent_project_tool_manifest,
 )
@@ -171,7 +173,7 @@ MAX_PERSISTED_RAW_TOOL_ARGUMENT_BYTES = 256 * 1024
 _PROJECT_SNAPSHOT_RESULT_KIND = "project_snapshot"
 _PROJECT_CHANGE_RECEIPT_RESULT_KIND = "project_change_receipt"
 _PROJECT_SNAPSHOT_TOOL_NAMES = frozenset(
-    {READ_PROJECT_TOOL_NAME, JQ_PROJECT_TOOL_NAME},
+    {READ_PROJECT_TOOL_NAME, JQ_PROJECT_TOOL_NAME, PATCH_PROJECT_TOOL_NAME},
 )
 
 
@@ -1753,7 +1755,26 @@ class FileCreatorAgentRuntime:
         malformed_jq_attempts = 0
         malformed_jq_fingerprints: set[str] = set()
         deterministic_failure_counts: dict[str, int] = {}
-        for _turn_number in range(1, self.max_model_turns + 1):
+        # Element-heavy projects legitimately need more mainline turns
+        # (one element per jq_project call plus one delegation each), so
+        # the runaway cap scales with the current timeline size instead of
+        # failing healthy long runs.
+        try:
+            snapshot = await asyncio.to_thread(
+                self.services.projects.read,
+                project_id,
+            )
+            element_count = sum(
+                len(timeline.elements_by_id)
+                for timeline in snapshot.project.timelines.items.values()
+            )
+        except Exception:
+            element_count = 0
+        turn_budget = scale_mainline_max_model_turns(
+            self.max_model_turns,
+            element_count,
+        )
+        for _turn_number in range(1, turn_budget + 1):
             self._assert_epoch(project_id, run_id, epoch)
             _compact_wire_project_snapshots(messages)
             assistant_message_id = f"message-{uuid4().hex}"
@@ -2026,7 +2047,7 @@ class FileCreatorAgentRuntime:
                         tool_name=call.name,
                         result=result,
                     )
-                    if call.name == "jq_project":
+                    if call.name in {"jq_project", "patch_project"}:
                         await self._workspace_changed(
                             project_id,
                             session_id,
@@ -2107,7 +2128,7 @@ class FileCreatorAgentRuntime:
                         "another model turn",
                     )
         raise AgentModelError(
-            f"Creator Agent exceeded {self.max_model_turns} model turns",
+            f"Creator Agent exceeded {turn_budget} model turns",
         )
 
     async def _run_ground_prompt_context(
@@ -3228,7 +3249,7 @@ class FileCreatorAgentRuntime:
                         and review_id not in review_ids
                     ):
                         review_ids.append(review_id)
-                    if call.name == "jq_project":
+                    if call.name in {"jq_project", "patch_project"}:
                         await self._workspace_changed(
                             project_id,
                             session_id,
@@ -5378,6 +5399,30 @@ def _specialist_tool_recovery(
             "video_reference_version_ids, keep only generated "
             "artifact-version references such as the character design and "
             "storyboard images, then call r2v_generation again."
+        )
+    if name == "image_generation" and any(
+        marker in error.casefold()
+        for marker in (
+            "rejected by the safety system",
+            "content policy",
+            "content_policy_violation",
+        )
+    ):
+        # The image provider's safety system deterministically rejects the
+        # request; identical resubmission can never succeed. The dominant
+        # cause in practice is real-person photos travelling as reference
+        # images — including into scene/prop generations that do not need
+        # any face at all.
+        return (
+            "The image provider's safety system rejected this request — a "
+            "deterministic content policy, not a transient failure; do not "
+            "resubmit the same arguments. For scene or prop targets, remove "
+            "every reference image that contains a person before retrying. "
+            "For character targets, drop real-photo references "
+            "(asset-version IDs of downloaded or uploaded images) and use "
+            "already generated stylized artifact-version references — or a "
+            "text-only prompt — instead, then call image_generation again "
+            "with the adjusted references or a rephrased prompt."
         )
     if name == "jq_project":
         return _jq_project_recovery(code)
