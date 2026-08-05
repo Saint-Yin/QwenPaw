@@ -25,7 +25,7 @@ import {
 import {
   getModelConfig,
   saveModelConfig,
-  patchExecutionAuthorization,
+  patchPermissionMode,
   testModelConnection,
   getHostProviders,
   getHostProviderApiKey,
@@ -254,7 +254,57 @@ const DEFAULT_CONFIG: ModelConfigData = {
     policy_api_key: "",
   },
   executionAuthorization: { mode: "required" },
+  creationCheckpoints: { mode: "required" },
+  mediaReview: { mode: "required" },
 };
+
+// One-dimensional automation ladder projected onto the three persisted
+// permission fields. Index equals the slider position.
+const PERMISSION_MODES: {
+  label: string;
+  description: string;
+  checkpoints: "required" | "skip";
+  execution: "required" | "allow_all";
+  mediaReview: "required" | "auto_approve";
+}[] = [
+  {
+    label: "全程确认",
+    description: "创作检查点逐站确认，高花费模型执行逐次授权。",
+    checkpoints: "required",
+    execution: "required",
+    mediaReview: "required",
+  },
+  {
+    label: "仅高花费确认",
+    description: "跳过创作检查点，仅在高花费模型执行前确认。",
+    checkpoints: "skip",
+    execution: "required",
+    mediaReview: "required",
+  },
+  {
+    label: "自动生成",
+    description: "生成不再逐次询问；产物仍需人工审阅，分镜过审后自动继续视频。",
+    checkpoints: "skip",
+    execution: "allow_all",
+    mediaReview: "required",
+  },
+  {
+    label: "YOLO",
+    description:
+      "完全无人值守：审阅自动通过，持续执行直至成片——质量不设防，注意成本。",
+    checkpoints: "skip",
+    execution: "allow_all",
+    mediaReview: "auto_approve",
+  },
+];
+
+function permissionModeIndex(config: ModelConfigData): number {
+  if (config.executionAuthorization.mode === "allow_all") {
+    return config.mediaReview.mode === "auto_approve" ? 3 : 2;
+  }
+  if (config.creationCheckpoints.mode === "skip") return 1;
+  return 0;
+}
 
 function hasUsableApiKey(item: ModelConfigItem): boolean {
   return item.api_key !== undefined && item.api_key.length > 0;
@@ -384,6 +434,46 @@ const CARD_META: {
 export default function ModelConfigModal({ open, onClose }: Props) {
   const [config, setConfig] = useState<ModelConfigData>(DEFAULT_CONFIG);
   const snapshotRef = useRef<ModelConfigData | null>(null);
+  // Latest-wins serialization for the permission slider: a drag across
+  // several stops fires one onChange per stop; concurrent saves could
+  // finish out of order and strand an intermediate stop on the server.
+  const permissionSaveRef = useRef<{
+    inflight: boolean;
+    queued: number | null;
+    baseline: ModelConfigData | null;
+  }>({ inflight: false, queued: null, baseline: null });
+
+  const savePermissionMode = useCallback(
+    async (index: number): Promise<void> => {
+      const state = permissionSaveRef.current;
+      const target = PERMISSION_MODES[index];
+      if (!target) return;
+      state.inflight = true;
+      try {
+        await patchPermissionMode({
+          execution: target.execution,
+          checkpoints: target.checkpoints,
+          mediaReview: target.mediaReview,
+        });
+        const queued = state.queued;
+        state.queued = null;
+        if (queued !== null && queued !== index) {
+          await savePermissionMode(queued);
+          return;
+        }
+        state.baseline = null;
+      } catch (err) {
+        const baseline = state.baseline;
+        state.baseline = null;
+        state.queued = null;
+        if (baseline) setConfig(baseline);
+        message.error((err as Error).message || "授权模式保存失败");
+      } finally {
+        state.inflight = false;
+      }
+    },
+    [],
+  );
   const [activeTab, setActiveTab] = useState<TabType>("llm");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({
     llm: true,
@@ -444,6 +534,14 @@ export default function ModelConfigModal({ open, onClose }: Props) {
         executionAuthorization: {
           ...DEFAULT_CONFIG.executionAuthorization,
           ...data.executionAuthorization,
+        },
+        creationCheckpoints: {
+          ...DEFAULT_CONFIG.creationCheckpoints,
+          ...data.creationCheckpoints,
+        },
+        mediaReview: {
+          ...DEFAULT_CONFIG.mediaReview,
+          ...data.mediaReview,
         },
       };
       if (!VLM_PROTOCOLS.includes(merged.vlm.protocol))
@@ -1940,7 +2038,8 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                 color: "var(--color-text-primary)",
               }}
             >
-              高花费模型执行授权
+              执行确认模式：
+              {PERMISSION_MODES[permissionModeIndex(config)].label}
             </div>
             <div
               style={{
@@ -1950,30 +2049,75 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                 color: "var(--color-text-tertiary)",
               }}
             >
-              开启后，高花费模型的执行需要确认。
+              {PERMISSION_MODES[permissionModeIndex(config)].description}
             </div>
           </div>
-          <label className="desktop-toggle" style={{ flexShrink: 0 }}>
+          <div
+            style={{
+              flexShrink: 0,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "stretch",
+              width: 220,
+              gap: 4,
+            }}
+          >
             <input
-              type="checkbox"
-              aria-label="高花费模型执行授权"
-              checked={config.executionAuthorization.mode === "required"}
-              onChange={async (event) => {
-                const mode = event.target.checked ? "required" : "allow_all";
+              type="range"
+              min={0}
+              max={3}
+              step={1}
+              aria-label="执行确认模式"
+              aria-valuetext={
+                PERMISSION_MODES[permissionModeIndex(config)].label
+              }
+              value={permissionModeIndex(config)}
+              onChange={(event) => {
+                const index = Number(event.target.value);
+                const target = PERMISSION_MODES[index];
+                if (!target) return;
+                const state = permissionSaveRef.current;
+                // One rollback anchor per drag burst: the config before
+                // the first optimistic update.
+                if (state.baseline === null) state.baseline = config;
                 setConfig((previous) => ({
                   ...previous,
-                  executionAuthorization: { mode },
+                  executionAuthorization: { mode: target.execution },
+                  creationCheckpoints: { mode: target.checkpoints },
+                  mediaReview: { mode: target.mediaReview },
                 }));
-                try {
-                  await patchExecutionAuthorization(mode);
-                } catch (err) {
-                  message.error((err as Error).message || "授权设置保存失败");
+                if (state.inflight) {
+                  state.queued = index;
+                  return;
                 }
+                void savePermissionMode(index);
               }}
             />
-            <div className="track" />
-            <div className="thumb" />
-          </label>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                fontSize: 11,
+                color: "var(--color-text-tertiary)",
+              }}
+            >
+              {PERMISSION_MODES.map((mode, index) => (
+                <span
+                  key={mode.label}
+                  style={
+                    index === permissionModeIndex(config)
+                      ? {
+                          color: "var(--color-text-primary)",
+                          fontWeight: 600,
+                        }
+                      : undefined
+                  }
+                >
+                  {mode.label}
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* Segmented tabs */}
