@@ -217,8 +217,9 @@ export interface EditCreationDocument extends ProjectJsonRecord {
 }
 
 export interface MotionGraphicDocument extends ProjectJsonRecord {
-  format: "html_css";
-  html: string;
+  format: "html_css" | "html_js";
+  html?: string | null;
+  html_file_id?: string | null;
   fps: number;
   loop: boolean;
   design_notes: string;
@@ -234,7 +235,9 @@ export interface MotionGraphicDocument extends ProjectJsonRecord {
 
 export interface OverlayCreationDocument extends ProjectJsonRecord {
   type: "overlay";
-  overlay_kind: "pet_os" | "interview_summary" | "motion" | "media";
+  // The overlay role derives from data: non-empty text = caption card;
+  // empty text with motion/prompt = text-free decoration; media stickers
+  // reference their payload through the element's render_source.
   text: string;
   vibe: string;
   prompt: string;
@@ -250,6 +253,15 @@ export interface TransitionCreationDocument extends ProjectJsonRecord {
   easing: string;
 }
 
+// A full-canvas motion document that carries the segment's whole picture
+// (pure motion-graphics cut, no footage behind it).
+export interface MotionClipCreationDocument extends ProjectJsonRecord {
+  type: "motion_clip";
+  intent: string;
+  prompt: string;
+  motion?: MotionGraphicDocument | null;
+}
+
 export interface AudioCreationDocument extends ProjectJsonRecord {
   type: "audio";
   source_asset_version_id: string;
@@ -261,6 +273,7 @@ export type ElementCreationDocument =
   | R2VCreationDocument
   | EditCreationDocument
   | OverlayCreationDocument
+  | MotionClipCreationDocument
   | TransitionCreationDocument
   | AudioCreationDocument;
 
