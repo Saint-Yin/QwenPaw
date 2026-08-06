@@ -25,6 +25,7 @@ import json
 import mimetypes
 import os
 from pathlib import Path, PurePosixPath
+import threading
 import re
 import socket
 import stat
@@ -109,9 +110,13 @@ from utils.exceptions import ModelError
 from utils.paths import media_path_from_url, media_task_scope
 
 # pylint: enable=no-name-in-module
+from utils.logger import setup_logger
 
 if TYPE_CHECKING:
     from services.project_files.facade import CreatorFileServices
+
+
+logger = setup_logger("services.media_files.image_execution")
 
 
 _IMAGE_COMMANDS = frozenset(
@@ -121,6 +126,20 @@ _IMAGE_COMMANDS = frozenset(
         CreatorCommandType.GENERATE_CAST_LINEUP_IMAGE,
     },
 )
+_IMAGE_MODES = ("generate", "edit", "translate")
+
+# Background supervision of accepted (billed) asynchronous provider tasks.
+# A finished result stays retrievable upstream for 24h, so the supervisor
+# keeps polling well past one pass instead of dropping a paid result.
+_RESUME_POLL_INTERVAL_SECONDS = 3.0
+_RESUME_POLL_BUDGET_SECONDS = 60.0
+_RESUME_RETRY_INTERVAL_SECONDS = 15.0
+_RESUME_HORIZON_SECONDS = 6 * 60 * 60.0
+# Retries only back off; a terminal verdict comes from the provider or from
+# the horizon above, never from a run of transient failures.
+_RESUME_BACKOFF_MAX_SHIFT = 5
+_RESUME_BACKOFF_CAP_SECONDS = 300.0
+_EDIT_MAX_REFERENCES = 3
 _MAX_IMAGE_BYTES = 64 * 1024 * 1024
 _SAFE_SUFFIX = re.compile(r"^\.[A-Za-z0-9]{1,10}$")
 
@@ -134,6 +153,9 @@ class ImageProvider(Protocol):
         prompt: str,
         aspect_ratio: str,
         reference_image_urls: Sequence[str],
+        mode: str = "generate",
+        source_lang: str = "",
+        target_lang: str = "",
     ) -> Mapping[str, Any]:
         ...
 
@@ -151,6 +173,9 @@ class ExistingImageProvider:
         prompt: str,
         aspect_ratio: str,
         reference_image_urls: Sequence[str],
+        mode: str = "generate",
+        source_lang: str = "",
+        target_lang: str = "",
     ) -> Mapping[str, Any]:
         from models.image import generate_image
 
@@ -158,6 +183,9 @@ class ExistingImageProvider:
             prompt,
             aspect_ratio=aspect_ratio,
             reference_image_urls=list(reference_image_urls),
+            mode=mode,
+            source_lang=source_lang,
+            target_lang=target_lang,
         )
         return {"url": url, "media_type": "image/png"}
 
@@ -199,6 +227,9 @@ class _ResolvedRequest:
     role: SpecialistRole
     target_id: str
     variant_id: str | None = None
+    mode: str = "generate"
+    source_lang: str = ""
+    target_lang: str = ""
 
 
 def _stable_id(prefix: str, project_id: str, idempotency_key: str) -> str:
@@ -528,13 +559,50 @@ def _resolve_request(
 ) -> _ResolvedRequest:
     project = snapshot.project
     explicit_prompt = str(arguments.get("prompt") or "").strip()
+    mode = (
+        str(arguments.get("mode") or "generate").strip().casefold()
+        or "generate"
+    )
+    if mode not in _IMAGE_MODES:
+        raise ValidationError(
+            f"mode 必须是 {', '.join(_IMAGE_MODES)} 之一",
+        )
+    source_lang = str(arguments.get("sourceLang") or "").strip()
+    target_lang = str(arguments.get("targetLang") or "").strip()
+    reference_image_refs = _list_of_strings(
+        arguments.get("referenceImageRefs"),
+        label="referenceImageRefs",
+    )
+    if len(reference_image_refs) > _EDIT_MAX_REFERENCES:
+        raise ValidationError(
+            f"referenceImageRefs 最多 {_EDIT_MAX_REFERENCES} 个",
+        )
+    # Each entry is either a bare exact version id or an
+    # asset://... / artifact://...@<versionId> reference.
+    reference_image_ref_ids = [
+        _exact_version_from_ref(item) or item for item in reference_image_refs
+    ]
     explicit_version_ids = _list_of_strings(
         arguments.get("referenceVersionIds")
         or arguments.get("referenceAssetVersionIds"),
         label="referenceVersionIds",
     )
     explicit_urls, exact_ref_version_ids = _explicit_references(arguments)
-    explicit_version_ids = [*explicit_version_ids, *exact_ref_version_ids]
+    if mode == "translate":
+        if len(reference_image_ref_ids) != 1:
+            raise ValidationError(
+                "translate 模式需要且仅需要 1 个 referenceImageRefs"
+                "（图内文字翻译的输入图 exact version id）",
+            )
+        if explicit_urls:
+            raise ValidationError(
+                "translate 模式仅接受 referenceImageRefs，不接受 referenceImageUrls",
+            )
+    explicit_version_ids = [
+        *explicit_version_ids,
+        *exact_ref_version_ids,
+        *reference_image_ref_ids,
+    ]
 
     if command is CreatorCommandType.GENERATE_STORYBOARD_IMAGE:
         element_id = target_element_id(
@@ -703,19 +771,35 @@ def _resolve_request(
     else:  # pragma: no cover - public entry validates this first
         raise ValidationError(f"不支持的图片命令: {command.value}")
 
+    # In translate mode the provider input is exactly the referenced image;
+    # variant/creation references would pollute the single-image contract.
+    active_version_ids = (
+        tuple(dict.fromkeys(reference_image_ref_ids))
+        if mode == "translate"
+        else resolved.reference_version_ids
+    )
     local_urls, checksums, read_set = _resolve_version_references(
         project=project,
         project_root=project_root,
-        version_ids=resolved.reference_version_ids,
+        version_ids=active_version_ids,
     )
-    urls = tuple(dict.fromkeys([*local_urls, *explicit_urls]))
+    urls = tuple(
+        dict.fromkeys(
+            [*local_urls, *([] if mode == "translate" else explicit_urls)],
+        ),
+    )
+    if mode == "edit" and not 1 <= len(urls) <= _EDIT_MAX_REFERENCES:
+        raise ValidationError(
+            f"edit 模式需要 1–{_EDIT_MAX_REFERENCES} 张参考图，"
+            f"当前解析到 {len(urls)} 张；用 referenceImageRefs 指定要编辑的图",
+        )
     return _ResolvedRequest(
         command=resolved.command,
         target_ref=resolved.target_ref,
         prompt=resolved.prompt,
         aspect_ratio=resolved.aspect_ratio,
         reference_image_urls=urls,
-        reference_version_ids=resolved.reference_version_ids,
+        reference_version_ids=active_version_ids,
         reference_checksums=tuple(checksums),
         read_set=tuple(read_set),
         slot_id=resolved.slot_id,
@@ -725,6 +809,9 @@ def _resolve_request(
         role=resolved.role,
         target_id=resolved.target_id,
         variant_id=resolved.variant_id,
+        mode=mode,
+        source_lang=source_lang,
+        target_lang=target_lang,
     )
 
 
@@ -921,6 +1008,74 @@ def _image_suffix(media_type: str) -> str:
     return guessed if _SAFE_SUFFIX.fullmatch(guessed) else ".png"
 
 
+def _accepted_provider_task_hint(task_id: str, project_id: str) -> str:
+    """Name the billed provider task ids so a result stays retrievable."""
+
+    try:
+        from models.provider_tasks import read_provider_tasks
+
+        ids = [
+            str(entry.get("providerTaskId"))
+            for entry in read_provider_tasks(task_id, project_id)
+            if entry.get("providerTaskId")
+        ]
+    except Exception:  # noqa: BLE001 - hint only
+        return ""
+    if not ids:
+        return ""
+    return f" (billed provider task(s): {', '.join(ids)})"
+
+
+def _publish_snapshot(resolved: _ResolvedRequest) -> dict[str, Any]:
+    """The subset of a resolved request needed to publish its output."""
+
+    return {
+        "command": resolved.command.value,
+        "targetRef": resolved.target_ref,
+        "mode": resolved.mode,
+        "prompt": resolved.prompt,
+        "aspectRatio": resolved.aspect_ratio,
+        "referenceVersionIds": list(resolved.reference_version_ids),
+        "readSet": [dict(item) for item in resolved.read_set],
+        "slotId": resolved.slot_id,
+        "slotKind": resolved.slot_kind,
+        "ownerRef": resolved.owner_ref,
+        "artifactName": resolved.artifact_name,
+        "role": resolved.role.value,
+        "targetId": resolved.target_id,
+        "variantId": resolved.variant_id,
+    }
+
+
+def _resolved_from_publish_snapshot(
+    snapshot: Mapping[str, Any],
+) -> _ResolvedRequest:
+    """Rebuild the publish-relevant resolved request after a restart."""
+
+    return _ResolvedRequest(
+        command=CreatorCommandType(str(snapshot["command"])),
+        target_ref=str(snapshot["targetRef"]),
+        prompt=str(snapshot.get("prompt") or ""),
+        aspect_ratio=str(snapshot.get("aspectRatio") or "16:9"),
+        reference_image_urls=(),
+        reference_version_ids=tuple(
+            str(item) for item in snapshot.get("referenceVersionIds") or ()
+        ),
+        reference_checksums=(),
+        read_set=tuple(dict(item) for item in snapshot.get("readSet") or ()),
+        slot_id=str(snapshot["slotId"]),
+        slot_kind=str(snapshot["slotKind"]),
+        owner_ref=str(snapshot["ownerRef"]),
+        artifact_name=str(snapshot.get("artifactName") or ""),
+        role=SpecialistRole(str(snapshot["role"])),
+        target_id=str(snapshot.get("targetId") or ""),
+        variant_id=(
+            str(snapshot["variantId"]) if snapshot.get("variantId") else None
+        ),
+        mode=str(snapshot.get("mode") or "generate"),
+    )
+
+
 class FileImageExecutionService:
     """Convergent P0 image worker over Project and Runtime files."""
 
@@ -930,6 +1085,10 @@ class FileImageExecutionService:
         *,
         provider: ImageProvider | None = None,
         max_output_bytes: int = _MAX_IMAGE_BYTES,
+        resume_poll_interval_seconds: float = _RESUME_POLL_INTERVAL_SECONDS,
+        resume_poll_budget_seconds: float = _RESUME_POLL_BUDGET_SECONDS,
+        resume_retry_interval_seconds: float = _RESUME_RETRY_INTERVAL_SECONDS,
+        resume_horizon_seconds: float = _RESUME_HORIZON_SECONDS,
     ) -> None:
         if max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be positive")
@@ -937,6 +1096,13 @@ class FileImageExecutionService:
         self.provider = provider or ExistingImageProvider()
         self.executions = ProjectExecutionStore(services.root)
         self.max_output_bytes = max_output_bytes
+        self.resume_poll_interval_seconds = resume_poll_interval_seconds
+        self.resume_poll_budget_seconds = resume_poll_budget_seconds
+        self.resume_retry_interval_seconds = resume_retry_interval_seconds
+        self.resume_horizon_seconds = resume_horizon_seconds
+        # Background pollers for accepted (billed) async provider tasks,
+        # keyed by Task id so one Task is never supervised twice.
+        self._resume_jobs: dict[str, asyncio.Task] = {}
         # (project_id, target_ref) -> reference ids of the last safety-
         # rejected call. Process-local: worth losing on restart, priceless
         # for cutting off same-refs resend loops within a session.
@@ -1025,19 +1191,28 @@ class FileImageExecutionService:
             target_ref=target_ref,
             arguments=dict(arguments),
         )
-        request_fingerprint = _fingerprint(
-            {
-                "command": command_value.value,
-                "targetRef": resolved.target_ref,
-                "prompt": resolved.prompt,
-                "aspectRatio": resolved.aspect_ratio,
-                "referenceImageUrls": list(resolved.reference_image_urls),
-                "referenceVersionIds": list(resolved.reference_version_ids),
-                "referenceChecksums": list(resolved.reference_checksums),
-                "inputGeneration": base.generation,
-                "inputEtag": base.etag,
-            },
-        )
+        fingerprint_payload: dict[str, Any] = {
+            "command": command_value.value,
+            "targetRef": resolved.target_ref,
+            "prompt": resolved.prompt,
+            "aspectRatio": resolved.aspect_ratio,
+            "referenceImageUrls": list(resolved.reference_image_urls),
+            "referenceVersionIds": list(resolved.reference_version_ids),
+            "referenceChecksums": list(resolved.reference_checksums),
+            "inputGeneration": base.generation,
+            "inputEtag": base.etag,
+        }
+        if resolved.mode != "generate":
+            # Only non-default modes join the fingerprint so legacy generate
+            # requests keep their replay identity across the upgrade.
+            fingerprint_payload.update(
+                {
+                    "mode": resolved.mode,
+                    "sourceLang": resolved.source_lang,
+                    "targetLang": resolved.target_lang,
+                },
+            )
+        request_fingerprint = _fingerprint(fingerprint_payload)
         reviews = await asyncio.to_thread(
             self.services.reviews.all_pending,
             project_id,
@@ -1087,10 +1262,20 @@ class FileImageExecutionService:
             # scopes compatibility scratch emitted by the existing provider.
             self._block_known_safety_refs(project_id, resolved)
             with media_task_scope(task.task_id, project_id=project_id):
+                extra_arguments: dict[str, Any] = {}
+                if resolved.mode != "generate":
+                    # Passed only for explicit modes so injected test
+                    # providers with the legacy signature keep working.
+                    extra_arguments = {
+                        "mode": resolved.mode,
+                        "source_lang": resolved.source_lang,
+                        "target_lang": resolved.target_lang,
+                    }
                 provider_output = await self.provider.generate(
                     prompt=resolved.prompt,
                     aspect_ratio=resolved.aspect_ratio,
                     reference_image_urls=resolved.reference_image_urls,
+                    **extra_arguments,
                 )
             published_result = await self._materialize_and_publish(
                 base=base,
@@ -1150,13 +1335,20 @@ class FileImageExecutionService:
                 replayed=False,
             )
         except (ConflictError, ValidationError, StorageIntegrityError):
-            await self._fail_if_running(
-                project_id,
-                ids,
-                "IMAGE_GENERATION_FAILED",
-            )
+            if not await self._defer_to_resume_supervisor(project_id, ids):
+                await self._fail_if_running(
+                    project_id,
+                    ids,
+                    "IMAGE_GENERATION_FAILED",
+                )
             raise
         except Exception as exc:
+            if await self._defer_to_resume_supervisor(project_id, ids):
+                raise ConflictError(
+                    "图片 provider 任务已被受理（已计费）但本地等待未完成；"
+                    "后台轮询已接管，完成后会自动写回 Asset Index，"
+                    "请勿重复提交",
+                ) from exc
             message = str(exc)
             if _is_safety_rejection_message(message):
                 self._note_safety_rejection(project_id, resolved)
@@ -1208,6 +1400,189 @@ class FileImageExecutionService:
             self._safety_rejected_refs[
                 (project_id, resolved.target_ref)
             ] = refs
+
+    async def _defer_to_resume_supervisor(
+        self,
+        project_id: str,
+        ids: Mapping[str, str],
+    ) -> bool:
+        """Keep an accepted (billed) async provider task alive and supervised.
+
+        A local failure after the provider accepted the job — a polling
+        budget that expired, a dropped connection — must not terminalize the
+        Task: the paid result still exists upstream, so the Task stays
+        RUNNING and the background poller finishes it.
+        """
+
+        from models.provider_tasks import read_provider_tasks
+
+        try:
+            accepted = [
+                entry
+                for entry in read_provider_tasks(ids["task_id"], project_id)
+                if entry.get("providerTaskId")
+            ]
+        except Exception:  # noqa: BLE001 - bookkeeping must not mask errors
+            return False
+        if not accepted:
+            return False
+        try:
+            task = await asyncio.to_thread(
+                self.executions.get_task,
+                project_id,
+                ids["task_id"],
+            )
+        except RecordNotFoundError:
+            return False
+        if task.status is not TaskStatus.RUNNING or task.result is not None:
+            return False
+        logger.info(
+            "image provider task accepted but not awaited; handing it to the "
+            "background poller | task=%s provider_task=%s",
+            task.task_id,
+            accepted[-1].get("providerTaskId"),
+        )
+        self.schedule_resume(task)
+        return True
+
+    def schedule_resume(self, task: TaskRecord) -> None:
+        """Poll one accepted provider task in the background until terminal."""
+
+        existing = self._resume_jobs.get(task.task_id)
+        if existing is not None and not existing.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        job = loop.create_task(
+            self._resume_until_terminal(task),
+            name=f"image-translate-resume:{task.task_id}",
+        )
+        self._resume_jobs[task.task_id] = job
+        job.add_done_callback(
+            lambda _job, task_id=task.task_id: self._resume_jobs.pop(
+                task_id,
+                None,
+            ),
+        )
+
+    async def _resume_until_terminal(self, task: TaskRecord) -> None:
+        """Supervise one accepted provider task across transient failures.
+
+        The provider keeps a finished result for 24h, so polling continues
+        well past a single pass; only a definitive provider failure or an
+        exhausted horizon terminalizes the Task.
+        """
+
+        deadline = (
+            asyncio.get_running_loop().time() + self.resume_horizon_seconds
+        )
+        failures = 0
+        while True:
+            try:
+                outcome = await self.resume_provider_task(
+                    task,
+                    poll_interval_seconds=self.resume_poll_interval_seconds,
+                    poll_budget_seconds=self.resume_poll_budget_seconds,
+                )
+                failures = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001 - retry transient errors
+                failures += 1
+                outcome = "error"
+                logger.warning(
+                    "image provider task resume attempt failed (%d) | "
+                    "task=%s: %s",
+                    failures,
+                    task.task_id,
+                    error,
+                )
+                # A retryable failure never terminalizes a paid task: the
+                # count only drives backoff, so a network or parsing outage
+                # cannot strand a result that is still retrievable upstream.
+            if outcome in {"published", "failed", "unsupported", "cancelled"}:
+                return
+            try:
+                latest = await asyncio.to_thread(
+                    self.executions.get_task,
+                    task.project_id,
+                    task.task_id,
+                )
+            except RecordNotFoundError:
+                return
+            if latest.status not in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
+                # Cancelled or terminalized elsewhere; stop supervising.
+                return
+            if asyncio.get_running_loop().time() >= deadline:
+                await self._fail_if_running(
+                    task.project_id,
+                    self._ids(
+                        task.project_id,
+                        str(task.idempotency_key or task.task_id),
+                    ),
+                    "IMAGE_RESUME_TIMEOUT",
+                    message=(
+                        "the accepted image provider task did not finish "
+                        f"within {self.resume_horizon_seconds:.0f}s"
+                        + _accepted_provider_task_hint(
+                            task.task_id,
+                            task.project_id,
+                        )
+                    ),
+                )
+                return
+            await asyncio.sleep(self._resume_backoff_seconds(failures))
+
+    def _resume_backoff_seconds(self, failures: int) -> float:
+        """Exponential backoff for retries, capped; 0 keeps tests fast."""
+
+        interval = self.resume_retry_interval_seconds
+        if failures <= 0 or interval <= 0:
+            return interval
+        return min(
+            interval * (2 ** min(failures - 1, _RESUME_BACKOFF_MAX_SHIFT)),
+            _RESUME_BACKOFF_CAP_SECONDS,
+        )
+
+    def notify_terminal_task(self, task: TaskRecord) -> None:
+        """Stop supervising a Task that a user cancelled or terminalized.
+
+        The provider task may already be paid for, but a cancelled Task must
+        not gain a late artifact; the durable ledger still names the billed
+        id for manual retrieval.
+        """
+
+        job = self._resume_jobs.pop(task.task_id, None)
+        if job is not None and not job.done():
+            logger.info(
+                "cancelling image resume supervision | task=%s status=%s",
+                task.task_id,
+                task.status.value,
+            )
+            job.cancel()
+
+    async def drain_resume_jobs(self) -> None:
+        """Await the background resume jobs (used by startup and tests)."""
+
+        while True:
+            jobs = [
+                job for job in self._resume_jobs.values() if not job.done()
+            ]
+            if not jobs:
+                return
+            await asyncio.gather(*jobs, return_exceptions=True)
+
+    async def shutdown(self) -> None:
+        """Cancel background resume jobs; durable state stays resumable."""
+
+        jobs = list(self._resume_jobs.values())
+        self._resume_jobs.clear()
+        for job in jobs:
+            job.cancel()
+        if jobs:
+            await asyncio.gather(*jobs, return_exceptions=True)
 
     @staticmethod
     def _ids(project_id: str, key: str) -> dict[str, str]:
@@ -1316,6 +1691,10 @@ class FileImageExecutionService:
                 "slotId": resolved.slot_id,
                 "artifactVersionId": ids["artifact_version_id"],
                 "fileId": ids["file_id"],
+                # Frozen publish inputs, so an interrupted provider task can
+                # be resumed and published after a restart without
+                # re-resolving (and possibly re-billing) anything.
+                "requestSnapshot": _publish_snapshot(resolved),
             },
         )
         try:
@@ -1536,6 +1915,191 @@ class FileImageExecutionService:
             "artifactVersion": artifact.model_dump(mode="json"),
             "outputRef": f"artifact-version:{artifact.version_id}",
         }
+
+    async def resume_provider_task(
+        self,
+        task: TaskRecord,
+        *,
+        poll_interval_seconds: float = 3.0,
+        poll_budget_seconds: float = 120.0,
+    ) -> str:
+        """Resume an interrupted asynchronous provider task, then publish.
+
+        Only tasks whose provider work is a *server-side* job can be
+        resumed: the accepted (billed) id lives in the paying Task's durable
+        ledger, so a restart continues polling, downloads the result and
+        publishes it through the normal commit boundary instead of throwing
+        the paid output away.
+
+        Returns ``"published"`` / ``"failed"`` / ``"pending"``; ``pending``
+        leaves the Task active so the next recovery pass resumes again.
+        """
+
+        from models.provider_tasks import read_provider_tasks
+
+        entries = [
+            entry
+            for entry in read_provider_tasks(task.task_id, task.project_id)
+            if str(entry.get("kind") or "") == "image_translate"
+            and entry.get("providerTaskId")
+        ]
+        if not entries:
+            return "unsupported"
+        snapshot = task.metadata.get("requestSnapshot")
+        if not isinstance(snapshot, Mapping):
+            return "unsupported"
+        provider_task_id = str(entries[-1]["providerTaskId"])
+        from models.image import poll_image_translate_task
+
+        deadline = asyncio.get_running_loop().time() + poll_budget_seconds
+        while True:
+            result = await poll_image_translate_task(provider_task_id)
+            status = str(result.get("status") or "")
+            if status in {"SUCCEEDED", "FAILED"}:
+                break
+            if asyncio.get_running_loop().time() >= deadline:
+                logger.info(
+                    "image translate task still running after restart; "
+                    "will resume again | task=%s provider_task=%s",
+                    task.task_id,
+                    provider_task_id,
+                )
+                return "pending"
+            await asyncio.sleep(poll_interval_seconds)
+
+        ids = self._ids(
+            task.project_id,
+            str(task.idempotency_key or task.task_id),
+        )
+        if status == "FAILED":
+            await self._fail_if_running(
+                task.project_id,
+                ids,
+                "IMAGE_PROVIDER_FAILED",
+                message=(
+                    "resumed image translate task failed: "
+                    f"{result.get('error')} (provider_task={provider_task_id})"
+                ),
+            )
+            return "failed"
+
+        translated_url = str(result.get("image_url") or "")
+        if not translated_url:
+            await self._fail_if_running(
+                task.project_id,
+                ids,
+                "IMAGE_PROVIDER_FAILED",
+                message=(
+                    "resumed image translate task succeeded without an image "
+                    f"url (provider_task={provider_task_id})"
+                ),
+            )
+            return "failed"
+        return await self._publish_resumed_output(
+            task=task,
+            ids=ids,
+            snapshot=snapshot,
+            translated_url=translated_url,
+            model_name=str(entries[-1].get("model") or "qwen-mt-image"),
+            provider_task_id=provider_task_id,
+        )
+
+    async def _publish_resumed_output(
+        self,
+        *,
+        task: TaskRecord,
+        ids: Mapping[str, str],
+        snapshot: Mapping[str, Any],
+        translated_url: str,
+        model_name: str,
+        provider_task_id: str,
+    ) -> str:
+        """Download and publish a resumed result under the same boundary.
+
+        Mirrors the in-process commit path: a Task cancelled before or during
+        publication never gains an artifact, and a late result is
+        quarantined instead of left unreferenced.
+        """
+
+        # Re-read the Task first: it may have been cancelled while this job
+        # was queued, and a cancelled Task must not gain a published file.
+        try:
+            current = await asyncio.to_thread(
+                self.executions.get_task,
+                task.project_id,
+                task.task_id,
+            )
+        except RecordNotFoundError:
+            return "cancelled"
+        if current.status is not TaskStatus.RUNNING:
+            logger.info(
+                "resumed image task is no longer running (%s); skipping "
+                "publication | task=%s provider_task=%s",
+                current.status.value,
+                task.task_id,
+                provider_task_id,
+            )
+            return "cancelled"
+        base = await asyncio.to_thread(
+            self.services.projects.read,
+            task.project_id,
+        )
+        resolved = _resolved_from_publish_snapshot(snapshot)
+        with media_task_scope(task.task_id, project_id=task.project_id):
+            from models.image.base import download_remote_image
+
+            generated_url = await download_remote_image(
+                translated_url,
+                model_name,
+            )
+            published_result = await self._materialize_and_publish(
+                base=base,
+                resolved=resolved,
+                task=task,
+                ids=ids,
+                output={"url": generated_url, "media_type": "image/png"},
+            )
+        # Record the immutable result on the Task, then converge it exactly
+        # like the in-process path does, so the Task reaches SUCCEEDED and
+        # the Project commit becomes visible.
+        try:
+            task = await asyncio.to_thread(
+                self.executions.transition_task,
+                task.project_id,
+                task.task_id,
+                expected_status=TaskStatus.RUNNING,
+                status=TaskStatus.RUNNING,
+                updates={
+                    "progress": 0.9,
+                    "result": published_result,
+                    "output_refs": [
+                        f"artifact-version:{ids['artifact_version_id']}",
+                    ],
+                },
+            )
+        except ExecutionStateConflict:
+            latest = await asyncio.to_thread(
+                self.executions.get_task,
+                task.project_id,
+                task.task_id,
+            )
+            if latest.status is not TaskStatus.CANCELLED:
+                raise
+            await self._quarantine(
+                task=latest,
+                ids=ids,
+                reason="TASK_CANCELLED_BEFORE_IMPORT",
+                result=published_result,
+                run_status=SpecialistRunStatus.CANCELLED,
+            )
+            return "cancelled"
+        await self._converge(task=task, ids=ids, replayed=True)
+        logger.info(
+            "resumed image translate task published | task=%s provider_task=%s",
+            task.task_id,
+            provider_task_id,
+        )
+        return "published"
 
     async def _converge(
         self,
@@ -1971,6 +2535,47 @@ class FileImageExecutionService:
         )
 
 
+_image_registry_lock = threading.RLock()
+_image_registry: dict[Path, FileImageExecutionService] = {}
+
+
+def file_image_execution_service(
+    services: CreatorFileServices,
+    *,
+    provider: ImageProvider | None = None,
+) -> FileImageExecutionService:
+    """One image worker per data root, so its supervisor jobs are shared.
+
+    Background polling of accepted (billed) provider tasks lives on the
+    instance, so tool calls, HTTP routes and startup recovery must all reach
+    the same object; a caller passing its own provider (tests) gets an
+    unregistered instance instead.
+    """
+
+    if provider is not None:
+        return FileImageExecutionService(services, provider=provider)
+    root = services.root.resolve()
+    with _image_registry_lock:
+        worker = _image_registry.get(root)
+        if worker is None:
+            worker = FileImageExecutionService(services)
+            _image_registry[root] = worker
+        return worker
+
+
+async def shutdown_file_image_execution_services() -> None:
+    """Cancel supervisors; the durable ledger keeps tasks resumable."""
+
+    with _image_registry_lock:
+        workers = list(_image_registry.values())
+        _image_registry.clear()
+    if workers:
+        await asyncio.gather(
+            *(worker.shutdown() for worker in workers),
+            return_exceptions=True,
+        )
+
+
 async def execute_file_image_command(
     services: CreatorFileServices,
     *,
@@ -1987,7 +2592,7 @@ async def execute_file_image_command(
     # Wallet fuse: every dispatch path (specialist delegation, work-graph
     # scheduler, manual retry) funnels through here.
     ensure_media_call_budget(services, project_id)
-    worker = FileImageExecutionService(services, provider=provider)
+    worker = file_image_execution_service(services, provider=provider)
     return await worker.execute(
         project_id=project_id,
         command=command,
@@ -2004,4 +2609,6 @@ __all__ = [
     "FileImageExecutionService",
     "ImageProvider",
     "execute_file_image_command",
+    "file_image_execution_service",
+    "shutdown_file_image_execution_services",
 ]

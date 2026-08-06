@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { GlobalOutlined } from "@ant-design/icons";
+import { GlobalOutlined, SoundOutlined, UserOutlined } from "@ant-design/icons";
 import { getModelConfig } from "@/api/creator";
 import type { ModelConfigData, ModelConfigItem } from "@/contracts/creator";
 import modelLlmIcon from "@/assets/design/model-llm.svg";
@@ -10,7 +10,15 @@ import modelImageIcon from "@/assets/design/model-image.svg";
 import modelVideoIcon from "@/assets/design/model-video.svg";
 import ModelConfigModal, { supportsQwenNativeSearch } from "./ModelConfigModal";
 
-type ModelType = "llm" | "vlm" | "grounding" | "asr" | "image" | "video";
+type ModelType =
+  | "llm"
+  | "vlm"
+  | "grounding"
+  | "asr"
+  | "tts"
+  | "s2v"
+  | "image"
+  | "video";
 type ModelStatus = "on" | "off" | "none";
 
 const READY_COLOR = "#14B8A6";
@@ -22,11 +30,30 @@ const BADGE_META: {
   type: ModelType;
   icon: string | null;
   labelKey: string;
+  // Rendered when no masked SVG glyph exists for the type.
+  fallbackIcon?: React.ComponentType<{ style?: React.CSSProperties }>;
 }[] = [
   { type: "llm", icon: modelLlmIcon, labelKey: "modelBadges.textModel" },
   { type: "vlm", icon: modelVlmIcon, labelKey: "modelBadges.visionModel" },
-  { type: "grounding", icon: null, labelKey: "Grounding" },
+  {
+    type: "grounding",
+    icon: null,
+    labelKey: "Grounding",
+    fallbackIcon: GlobalOutlined,
+  },
   { type: "asr", icon: modelAsrIcon, labelKey: "modelBadges.asrModel" },
+  {
+    type: "tts",
+    icon: null,
+    labelKey: "modelBadges.ttsModel",
+    fallbackIcon: SoundOutlined,
+  },
+  {
+    type: "s2v",
+    icon: null,
+    labelKey: "modelBadges.s2vModel",
+    fallbackIcon: UserOutlined,
+  },
   { type: "image", icon: modelImageIcon, labelKey: "modelBadges.imageModel" },
   { type: "video", icon: modelVideoIcon, labelKey: "modelBadges.videoModel" },
 ];
@@ -161,9 +188,9 @@ export default function ModelBadges() {
                     WebkitMaskRepeat: "no-repeat",
                   }}
                 />
-              ) : (
-                <GlobalOutlined style={{ fontSize: 18, color: tint }} />
-              )}
+              ) : meta.fallbackIcon ? (
+                <meta.fallbackIcon style={{ fontSize: 18, color: tint }} />
+              ) : null}
             </span>
           );
         })}

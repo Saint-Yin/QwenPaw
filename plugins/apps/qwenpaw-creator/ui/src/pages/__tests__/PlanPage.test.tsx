@@ -268,7 +268,7 @@ describe("PlanPage Timeline/Element frontend", () => {
     ).toBeInTheDocument();
     expect(
       container.querySelector("[data-timeline-point-candidates]")?.textContent,
-    ).toContain("该时刻有");
+    ).toContain("项内容");
     expect(
       container.querySelector("[data-timeline-point-candidates]")?.textContent,
     ).toContain("5");

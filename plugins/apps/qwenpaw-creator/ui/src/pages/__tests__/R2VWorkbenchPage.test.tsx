@@ -91,8 +91,13 @@ describe("R2V Workbench page", () => {
     const { container } = renderWorkbench();
 
     expect(
-      screen.getByText("视频方案 / 午饭名场面 / 制作工作台"),
+      screen.getByText(/视频方案 \/ 午饭名场面 \/ 制作工作台/),
     ).toBeInTheDocument();
+    // The legacy fixture has no generation_mode, so the badge reads as the
+    // historical r2v default.
+    expect(
+      container.querySelector('[data-generation-mode="r2v"]'),
+    ).toHaveTextContent("参考生视频");
     expect(screen.getByText("Shot 列表（1）")).toBeInTheDocument();
     expect(screen.getByDisplayValue("橘猫隔窗看向午饭")).toBeInTheDocument();
     expect(screen.getByDisplayValue("暖色餐厅窗外的橘猫")).toBeInTheDocument();
@@ -120,6 +125,40 @@ describe("R2V Workbench page", () => {
     expect(useCreatorInteractionStore.getState().selectedRef).toBe(
       "element:r2v-window",
     );
+  });
+
+  it("presents an s2v element as the digital-human workbench, not r2v", () => {
+    const project = cloneProject();
+    const element =
+      project.timelines.items["timeline:main"].elements_by_id["r2v-window"];
+    element.creation = {
+      type: "s2v",
+      intent: "口播开场",
+      character_ref: "cat",
+      portrait_version_id: "sb-window-v1",
+      script: "大家好，欢迎收看。",
+      audio_version_id: null,
+      recipe: null,
+    };
+    seedProject(project);
+
+    const { container } = renderWorkbench();
+
+    expect(
+      container.querySelector('[data-mode-workbench="s2v"]'),
+    ).toBeInTheDocument();
+    expect(
+      container.querySelector('[data-generation-mode="s2v"]'),
+    ).toHaveTextContent("数字人口播");
+    // The s2v surface models exactly the provider inputs…
+    expect(screen.getByText("人物图（s2v 参考）")).toBeInTheDocument();
+    expect(screen.getByText("台词")).toBeInTheDocument();
+    expect(screen.getByText("驱动音频")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("大家好，欢迎收看。")).toBeInTheDocument();
+    // …and none of the r2v shot/storyboard machinery.
+    expect(screen.queryByText(/Shot 列表/)).toBeNull();
+    expect(screen.queryByText("分镜Prompt与分镜图")).toBeNull();
+    expect(screen.queryByText("资产绑定")).toBeNull();
   });
 
   it("shows the runtime-resolved video model instead of creation.recipe.model", async () => {
@@ -238,10 +277,12 @@ describe("R2V Workbench page", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "进入 R2V 工作台" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /进入制作工作台（参考生视频）/ }),
+    );
     await waitFor(() =>
       expect(
-        screen.getByText("视频方案 / 午饭名场面 / 制作工作台"),
+        screen.getByText(/视频方案 \/ 午饭名场面 \/ 制作工作台/),
       ).toBeInTheDocument(),
     );
   });

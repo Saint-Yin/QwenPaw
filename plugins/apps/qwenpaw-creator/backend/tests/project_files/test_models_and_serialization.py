@@ -20,6 +20,9 @@ from services.project_files import (
     project_file_bytes,
 )
 from services.project_files.models import (
+    I2VCreation,
+    S2VCreation,
+    T2VCreation,
     ElementLocation,
     EntityCollection,
     R2VCreation,
@@ -126,7 +129,7 @@ def test_project_new_has_complete_valid_defaults_and_utc_time():
         now=datetime(2026, 7, 15, 16, 0, tzinfo=timezone.utc),
     )
 
-    assert project.schema_version == 5
+    assert project.schema_version == 6
     assert project.generation == 0
     assert project.created_at.tzinfo == timezone.utc
     assert project.timelines.order == ["timeline:main"]
@@ -170,6 +173,39 @@ def _variant_project() -> Project:
         ),
     )
     return Project.model_validate(project.model_dump(mode="json"))
+
+
+def test_video_creation_types_model_only_what_their_provider_consumes():
+    """t2v/i2v/s2v are their own creation types: no shots, no storyboard
+    fields, and the s2v model carries exactly portrait + script + audio."""
+
+    t2v = T2VCreation(video_prompt="海浪拍打礁石")
+    assert t2v.type == "t2v"
+    assert "shots" not in T2VCreation.model_fields
+    assert "storyboard_prompt" not in T2VCreation.model_fields
+
+    i2v = I2VCreation(first_frame_version_id="artifact-version-1")
+    assert i2v.type == "i2v"
+    assert "video_reference_version_ids" not in I2VCreation.model_fields
+
+    s2v = S2VCreation(
+        character_ref="char:host",
+        portrait_version_id="artifact-version-2",
+        script="大家好，欢迎收看。",
+        audio_version_id="asset-version-3",
+    )
+    assert s2v.type == "s2v"
+    assert set(S2VCreation.model_fields) == {
+        "type",
+        "intent",
+        "character_ref",
+        "portrait_version_id",
+        "script",
+        "audio_version_id",
+        "recipe",
+    }
+    with pytest.raises(ValidationError):
+        S2VCreation(shots={"items": {}, "order": []})
 
 
 def test_r2v_variant_binding_must_target_a_referenced_entity_and_variant():
@@ -319,10 +355,12 @@ def test_legacy_document_etag_survives_in_memory_schema_migration():
     )
     raw["schema_version"] = 3
     del raw["visual"]["entities"]["items"]["char:hero"]["required_variant_ids"]
+    # Legacy documents predate the character voice field entirely.
+    del raw["visual"]["entities"]["items"]["char:hero"]["voice"]
 
     migrated = load_project_document(raw)
 
-    assert migrated.schema_version == 5
+    assert migrated.schema_version == 6
     assert migrated.visual.entities.items[
         "char:hero"
     ].required_variant_ids == ["variant:peak"]

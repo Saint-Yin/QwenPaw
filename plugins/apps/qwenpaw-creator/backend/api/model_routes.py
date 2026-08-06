@@ -28,6 +28,7 @@ from schemas.models import (
     EmbeddingConfig,
     ExecutionAuthorizationConfig,
     GroundingConfig,
+    ImageConfig,
     LlmConfig,
     ModelConfigData,
     ModelConfigItem,
@@ -96,6 +97,8 @@ _SECTIONS = (
     "vlm",
     "grounding",
     "asr",
+    "tts",
+    "s2v",
     "embedding",
     "image",
     "video",
@@ -152,6 +155,19 @@ _ENV_MAPPING: dict[str, dict[str, tuple[str, ...]]] = {
         "api_key": ("ASR_API_KEY",),
         "model_name": ("ASR_MODEL_NAME",),
     },
+    "tts": {
+        "base_url": ("TTS_BASE_URL",),
+        "api_key": ("TTS_API_KEY",),
+        "model_name": ("TTS_MODEL_NAME",),
+        "voice": ("TTS_VOICE",),
+        "vc_model_name": ("TTS_VC_MODEL_NAME",),
+    },
+    "s2v": {
+        "base_url": ("S2V_BASE_URL",),
+        "api_key": ("S2V_API_KEY",),
+        "model_name": ("S2V_MODEL_NAME",),
+        "detect_model_name": ("S2V_DETECT_MODEL_NAME",),
+    },
     "embedding": {
         "base_url": ("EMBEDDING_BASE_URL",),
         "api_key": ("EMBEDDING_API_KEY",),
@@ -173,6 +189,7 @@ _ENV_MAPPING: dict[str, dict[str, tuple[str, ...]]] = {
             "OPENAI_IMAGE_MODEL_NAME",
             "IMAGE_MODEL_NAME",
         ),
+        "translate_model": ("IMAGE_TRANSLATE_MODEL_NAME",),
     },
     "video": {
         "base_url": ("VIDEO_BASE_URL",),
@@ -232,16 +249,16 @@ def _defaults() -> ModelConfigData:
             protocol="DashScope Fun-ASR",
             reuse_llm_key=True,
         ),
+        image=ImageConfig(
+            enabled=False,
+            protocol="OpenAI 协议",
+        ),
         embedding=EmbeddingConfig(
             enabled=False,
             model_name="qwen3-vl-embedding",
             base_url="https://dashscope.aliyuncs.com/api/v1",
             protocol="DashScope（百炼）",
             reuse_vlm_key=True,
-        ),
-        image=ModelConfigItem(
-            enabled=False,
-            protocol="OpenAI 协议",
         ),
         video=ModelConfigItem(
             enabled=False,
@@ -687,8 +704,18 @@ def request_tool_configs() -> dict[str, dict[str, Any]]:
                     "reuse_llm_key": item.reuse_llm_key,
                 },
             )
+        if section == "tts":
+            tool_config.update(
+                {
+                    "voice": item.voice,
+                    "vc_model_name": item.vc_model_name,
+                    "reuse_llm_key": item.reuse_llm_key,
+                },
+            )
         if section == "image" and "dashscope" in item.protocol.casefold():
             tool_config["_image_backend"] = "DASHSCOPE"
+        if section == "image" and item.translate_model:
+            tool_config["translate_model"] = item.translate_model
         if section == "video":
             tool_config["_video_backend"] = (
                 "seedance2"
@@ -844,7 +871,7 @@ async def _validate_section_connectivity(
         return
 
     api_key = item.get("api_key", "")
-    if section == "asr" and item.get("reuse_llm_key") and not api_key:
+    if section in ("asr", "tts") and item.get("reuse_llm_key") and not api_key:
         api_key = config.get("llm", {}).get("api_key", "")
     if section == "embedding" and item.get("reuse_vlm_key") and not api_key:
         api_key = config.get("vlm", {}).get("api_key", "") or config.get(
@@ -921,13 +948,62 @@ async def get_resolved_models() -> dict[str, Any]:
 
     Unlike ``/models/config`` (persisted-only), this reflects request-scoped
     host tool config, environment overrides and defaults — i.e. the value
-    ``get_video_model_name()`` returns at submission time.  Read-only.
+    ``get_video_model_name()`` returns at submission time.  ``byMode``
+    carries the per-mode derived names (a configured ``wan2.7-r2v`` submits
+    as ``wan2.7-t2v`` for a t2v element), and ``s2v`` names the digital-human
+    model, so mode workbenches can show the model their element will bill
+    against.  Read-only.
     """
+    from models.video_capabilities import (
+        effective_video_model_name,
+        video_backend_key,
+    )
+
+    video_model = model_config.get_video_model_name()
+    backend_key = video_backend_key(video_model)
     return {
         "video": {
             "provider": model_config.get_video_backend(),
-            "model": model_config.get_video_model_name(),
+            "model": video_model,
+            "byMode": {
+                mode: effective_video_model_name(
+                    video_model,
+                    mode,
+                    backend_key,
+                )
+                for mode in ("r2v", "t2v", "i2v", "video_edit")
+            },
         },
+        "s2v": {
+            "model": model_config.get_s2v_model_name(),
+        },
+    }
+
+
+@router.get("/tts-capabilities")
+async def get_tts_capabilities() -> dict[str, Any]:
+    """Speech models this build supports, and what each of them can do.
+
+    The UI renders its model choices from this list so the two never disagree
+    about which models exist, which have system voices, and which companion
+    models a created voice binds to (users never name those).
+    """
+
+    from models.tts_capabilities import DEFAULT_TTS_MODEL, supported_models
+
+    return {
+        "default": DEFAULT_TTS_MODEL,
+        "models": [
+            {
+                "model": item.model,
+                "label": item.label,
+                "family": item.family,
+                "transport": item.transport,
+                "systemVoices": list(item.system_voices),
+                "supportsDesign": item.supports_design,
+            }
+            for item in supported_models()
+        ],
     }
 
 
@@ -1244,6 +1320,45 @@ def _probe_payload(
         if provider == "whisper":
             return _openai_model_probe(body, headers)
         return _dashscope_policy_probe(body, headers)
+    if body.type == "tts":
+        # The upload-policy probe accepts any model string, so it cannot catch a
+        # mistyped model name. Synthesizing one character costs a fraction of a
+        # cent and actually validates the model/voice pair. Models without
+        # system voices cannot synthesize at all until a character voice
+        # exists, so for those verify the credential against the voice-listing
+        # surface instead.
+        from models.tts_capabilities import require_capability
+
+        parsed = urlparse(body.base_url)
+        capability = require_capability(body.model_name)
+        if not capability.has_system_voices:
+            action = (
+                "list_voice" if capability.family == "cosyvoice" else "list"
+            )
+            management = (
+                "voice-enrollment"
+                if capability.family == "cosyvoice"
+                else "qwen-voice-enrollment"
+            )
+            return (
+                f"{parsed.scheme}://{parsed.netloc}"
+                "/api/v1/services/audio/tts/customization",
+                headers,
+                {"model": management, "input": {"action": action}},
+            )
+        return (
+            f"{parsed.scheme}://{parsed.netloc}"
+            "/api/v1/services/aigc/multimodal-generation/generation",
+            headers,
+            {
+                "model": body.model_name,
+                "input": {
+                    "text": "嗨",
+                    "voice": body.voice or capability.system_voices[0],
+                },
+                "parameters": {},
+            },
+        )
     if body.type == "embedding":
         # Minimal real embedding request: the one-token spend is the only
         # reliable probe on the native multimodal-embedding endpoint.
@@ -1305,7 +1420,11 @@ async def test_model_connection(
     loaded = await asyncio.to_thread(load_model_config)
     item = getattr(loaded, body.type)
     fallback_api_key = item.api_key
-    if body.type == "asr" and item.reuse_llm_key and not fallback_api_key:
+    if (
+        body.type in ("asr", "tts", "s2v")
+        and getattr(item, "reuse_llm_key", False)
+        and not fallback_api_key
+    ):
         fallback_api_key = loaded.llm.api_key
     request_api_key = "" if body.api_key == SECRET_MASK else body.api_key
     selected = body.model_copy(
@@ -1315,6 +1434,7 @@ async def test_model_connection(
             "model_name": body.model_name or item.model_name,
             "protocol": body.protocol or item.protocol,
             "provider": body.provider or getattr(item, "provider", None),
+            "voice": body.voice or getattr(item, "voice", ""),
         },
     )
     if (
@@ -1471,6 +1591,7 @@ async def get_real_api_key(section: str) -> dict[str, str]:
         "llm",
         "vlm",
         "asr",
+        "tts",
         "embedding",
         "image",
         "video",

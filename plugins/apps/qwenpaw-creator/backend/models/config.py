@@ -34,6 +34,8 @@ CREATOR_VIDEO_CONFIG_TOOL = "creator_video_model"
 CREATOR_VLM_CONFIG_TOOL = "creator_vlm_model"
 CREATOR_GROUNDING_CONFIG_TOOL = "creator_web_grounding"
 CREATOR_ASR_CONFIG_TOOL = "creator_asr_model"
+CREATOR_TTS_CONFIG_TOOL = "creator_tts_model"
+CREATOR_S2V_CONFIG_TOOL = "creator_s2v_model"
 CREATOR_EMBEDDING_CONFIG_TOOL = "creator_embedding_model"
 CREATOR_OSS_CONFIG_TOOL = "creator_media_oss"
 EXECUTION_AUTHORIZATION_REQUIRED = "required"
@@ -49,6 +51,8 @@ CREATOR_CONFIG_TOOLS = (
     CREATOR_VLM_CONFIG_TOOL,
     CREATOR_GROUNDING_CONFIG_TOOL,
     CREATOR_ASR_CONFIG_TOOL,
+    CREATOR_TTS_CONFIG_TOOL,
+    CREATOR_S2V_CONFIG_TOOL,
     CREATOR_EMBEDDING_CONFIG_TOOL,
     CREATOR_OSS_CONFIG_TOOL,
 )
@@ -440,6 +444,8 @@ def _map_tool_to_section(tool_name: str) -> str:
         CREATOR_VLM_CONFIG_TOOL: "vlm",
         CREATOR_GROUNDING_CONFIG_TOOL: "grounding",
         CREATOR_ASR_CONFIG_TOOL: "asr",
+        CREATOR_TTS_CONFIG_TOOL: "tts",
+        CREATOR_S2V_CONFIG_TOOL: "s2v",
         CREATOR_EMBEDDING_CONFIG_TOOL: "embedding",
         CREATOR_IMAGE_CONFIG_TOOL: "image",
         CREATOR_VIDEO_CONFIG_TOOL: "video",
@@ -522,6 +528,36 @@ ASR_LANGUAGE = os.environ.get("ASR_LANGUAGE", "")
 ASR_TIMEOUT_SECONDS = _positive_int_env("ASR_TIMEOUT_SECONDS", 1800)
 
 
+# ── TTS Model (DashScope Qwen3-TTS) ─────────────────────────────────────────
+TTS_BASE_URL = os.environ.get(
+    "TTS_BASE_URL",
+    "https://dashscope.aliyuncs.com/api/v1",
+)
+TTS_API_KEY = os.environ.get("TTS_API_KEY", "")
+TTS_MODEL_NAME = os.environ.get("TTS_MODEL_NAME", "qwen3-tts-flash")
+TTS_VOICE = os.environ.get("TTS_VOICE", "Cherry")
+# Voice-cloned synthesis requires a dedicated VC model; enrollment binds the
+# custom voice to this model and synthesis with a voice_id must reuse it.
+TTS_VC_MODEL_NAME = os.environ.get(
+    "TTS_VC_MODEL_NAME",
+    "qwen3-tts-vc-2026-01-22",
+)
+TTS_TIMEOUT_SECONDS = _positive_int_env("TTS_TIMEOUT_SECONDS", 300)
+
+
+# ── S2V Digital-Human Model (DashScope Wan2.2-S2V) ─────────────────────────
+S2V_BASE_URL = os.environ.get(
+    "S2V_BASE_URL",
+    "https://dashscope.aliyuncs.com/api/v1",
+)
+S2V_API_KEY = os.environ.get("S2V_API_KEY", "")
+S2V_MODEL_NAME = os.environ.get("S2V_MODEL_NAME", "wan2.2-s2v")
+# The face-detect companion is free and always runs before submission.
+S2V_DETECT_MODEL_NAME = os.environ.get(
+    "S2V_DETECT_MODEL_NAME",
+    "wan2.2-s2v-detect",
+)
+S2V_TIMEOUT_SECONDS = _positive_int_env("S2V_TIMEOUT_SECONDS", 120)
 # ── Embedding Model (DashScope native multimodal-embedding) ─────────────────
 EMBEDDING_BASE_URL = os.environ.get(
     "EMBEDDING_BASE_URL",
@@ -1037,6 +1073,179 @@ def is_asr_enabled() -> bool:
     }
 
 
+def get_tts_api_key() -> str:
+    configured = _explicit_configured_value(
+        CREATOR_TTS_CONFIG_TOOL,
+        "api_key",
+        ("TTS_API_KEY",),
+    )
+    if configured:
+        return configured
+    # Speech synthesis runs on the same DashScope credential as the text
+    # model, so reuse it by default instead of asking for the key twice.
+    section = _get_user_config().get("tts", {})
+    reuse = not isinstance(section, dict) or section.get(
+        "reuse_llm_key",
+        True,
+    )
+    return get_text_api_key() if reuse else ""
+
+
+def get_tts_base_url() -> str:
+    return _configured_value(
+        CREATOR_TTS_CONFIG_TOOL,
+        ("base_url", "endpoint"),
+        "TTS_BASE_URL",
+        TTS_BASE_URL,
+    )
+
+
+def get_tts_model_name() -> str:
+    return _configured_value(
+        CREATOR_TTS_CONFIG_TOOL,
+        "model",
+        "TTS_MODEL_NAME",
+        TTS_MODEL_NAME,
+    )
+
+
+def get_tts_voice() -> str:
+    return _configured_value(
+        CREATOR_TTS_CONFIG_TOOL,
+        "voice",
+        "TTS_VOICE",
+        TTS_VOICE,
+    )
+
+
+def get_tts_vc_model_name() -> str:
+    """Model that cloned voices bind to, derived from the synthesis model.
+
+    Voice cloning/design run on companion models the user should never have to
+    name: the capability table maps each synthesis model to its own, so the
+    configuration surface stays "key + model".
+    """
+
+    from models.tts_capabilities import require_capability
+
+    override = _configured_value(
+        CREATOR_TTS_CONFIG_TOOL,
+        "vc_model",
+        "TTS_VC_MODEL_NAME",
+        "",
+    )
+    if override:
+        return override
+    return require_capability(get_tts_model_name()).clone_model()
+
+
+def get_tts_vd_model_name() -> str:
+    """Model that designed voices bind to, derived the same way."""
+
+    from models.tts_capabilities import require_capability
+
+    return require_capability(get_tts_model_name()).design_model()
+
+
+def tts_has_system_voices() -> bool:
+    """False when the configured model can only speak with created voices."""
+
+    from models.tts_capabilities import require_capability
+
+    return require_capability(get_tts_model_name()).has_system_voices
+
+
+def get_tts_timeout_seconds() -> int:
+    return _configured_int(
+        CREATOR_TTS_CONFIG_TOOL,
+        "timeout_seconds",
+        "TTS_TIMEOUT_SECONDS",
+        TTS_TIMEOUT_SECONDS,
+    )
+
+
+def is_tts_configured() -> bool:
+    """True when TTS synthesis can run: an API key is resolvable.
+
+    Gates the TTS specialist tools and the TTS prompt sections, so an
+    unconfigured deployment exposes neither.
+    """
+
+    return bool(get_tts_api_key())
+
+
+def get_s2v_api_key() -> str:
+    configured = _explicit_configured_value(
+        CREATOR_S2V_CONFIG_TOOL,
+        "api_key",
+        ("S2V_API_KEY",),
+    )
+    if configured:
+        return configured
+    # wan2.2-s2v runs on the same DashScope credential as the text model,
+    # so reuse it by default instead of asking for the key twice.
+    section = _get_user_config().get("s2v", {})
+    reuse = not isinstance(section, dict) or section.get(
+        "reuse_llm_key",
+        True,
+    )
+    return get_text_api_key() if reuse else ""
+
+
+def get_s2v_base_url() -> str:
+    return _configured_value(
+        CREATOR_S2V_CONFIG_TOOL,
+        ("base_url", "endpoint"),
+        "S2V_BASE_URL",
+        S2V_BASE_URL,
+    )
+
+
+def get_s2v_model_name() -> str:
+    return _configured_value(
+        CREATOR_S2V_CONFIG_TOOL,
+        "model",
+        "S2V_MODEL_NAME",
+        S2V_MODEL_NAME,
+    )
+
+
+def get_s2v_detect_model_name() -> str:
+    """Free face-detect companion model.
+
+    Both spellings are accepted: the plugin-host tool config uses
+    ``detect_model`` (plugin.json field name) while the persisted Creator
+    config and the frontend contract use ``detect_model_name``
+    (``S2vConfig`` field name).
+    """
+
+    return _configured_value(
+        CREATOR_S2V_CONFIG_TOOL,
+        ("detect_model", "detect_model_name"),
+        "S2V_DETECT_MODEL_NAME",
+        S2V_DETECT_MODEL_NAME,
+    )
+
+
+def get_s2v_timeout_seconds() -> int:
+    return _configured_int(
+        CREATOR_S2V_CONFIG_TOOL,
+        "timeout_seconds",
+        "S2V_TIMEOUT_SECONDS",
+        S2V_TIMEOUT_SECONDS,
+    )
+
+
+def is_s2v_configured() -> bool:
+    """True when the digital-human provider can run: a key is resolvable.
+
+    Gates the s2v specialist tool the same way ``is_tts_configured`` gates
+    the TTS tools, so an unconfigured deployment never exposes it.
+    """
+
+    return bool(get_s2v_api_key())
+
+
 def _bool_env(name: str, default: bool) -> bool:
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -1098,6 +1307,21 @@ def get_image_model_name() -> str:
 def get_image_concurrency() -> int:
     """Return the image generation concurrency limit for the active provider."""
     return _image_provider().concurrency
+
+
+def get_image_translate_model_name() -> str:
+    """Model used by image_generation mode=translate (Bailian qwen-mt-image).
+
+    Optional field on the image config tree; no dedicated tree is needed
+    because translation always rides the DashScope image credential.
+    """
+
+    return _configured_value(
+        CREATOR_IMAGE_CONFIG_TOOL,
+        "translate_model",
+        "IMAGE_TRANSLATE_MODEL_NAME",
+        "qwen-mt-image",
+    )
 
 
 def get_video_api_key() -> str:

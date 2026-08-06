@@ -50,7 +50,7 @@ def test_registered_migration_runs_before_strict_project_validation() -> None:
         PROJECT_MIGRATIONS.pop(0, None)
         PROJECT_MIGRATIONS.pop(1, None)
 
-    assert project.schema_version == 5
+    assert project.schema_version == 6
     assert project.name == "Project"
     assert project.timelines.order == ["timeline:main"]
 
@@ -91,7 +91,7 @@ def test_overlay_kind_is_dropped_when_migrating_from_v2() -> None:
 
     project = load_project_json(json.dumps(raw))
 
-    assert project.schema_version == 5
+    assert project.schema_version == 6
     element = project.timelines.items["timeline:main"].elements_by_id[
         "overlay-1"
     ]
@@ -334,7 +334,7 @@ def test_unregistered_or_future_schema_fails_closed() -> None:
     with pytest.raises(CanonicalJsonError):
         load_project_json(json.dumps(raw))
 
-    raw["schema_version"] = 6
+    raw["schema_version"] = 7
     with pytest.raises(CanonicalJsonError):
         load_project_json(json.dumps(raw))
 
@@ -390,7 +390,7 @@ def test_v3_migration_declares_existing_variants_as_required() -> None:
     migrated = migrate_project_document(raw)
 
     # The chain continues through v4 -> v5 (overlay_kind removal).
-    assert migrated["schema_version"] == 5
+    assert migrated["schema_version"] == 6
     assert migrated["visual"]["entities"]["items"]["char:hero"][
         "required_variant_ids"
     ] == ["variant:peak", "variant:fallen"]
@@ -557,3 +557,99 @@ def test_v2_variant_selections_and_bindings_migrate_deterministically() -> (
         "elements_by_id"
     ]["ep02"]["creation"]
     assert rival_creation["visual_variant_refs"] == {}
+
+
+def test_v5_mode_tagged_r2v_creations_split_into_their_own_types() -> None:
+    """v4 expressed t2v/s2v as r2v + generation_mode; v5 gives each mode its
+    own creation carrying only provider inputs. The s2v "storyboard" (its
+    portrait frame) becomes the declared portrait and the slot mapping is
+    dropped; plain r2v elements only lose the tag."""
+
+    from services.project_files.migrations import _migrate_v5_to_v6
+
+    document = {
+        "schema_version": 5,
+        "assets": {
+            "artifact_slots_by_id": {
+                "slot:talk-sb": {"selected_version_id": "artifact-version-p1"},
+            },
+        },
+        "timelines": {
+            "items": {
+                "timeline:main": {
+                    "elements_by_id": {
+                        "el:talk": {
+                            "creation": {
+                                "type": "r2v",
+                                "generation_mode": "s2v",
+                                "intent": "口播开场",
+                                "character_refs": ["char:host"],
+                                "video_prompt": "unused",
+                                "recipe": None,
+                            },
+                            "outputs": {
+                                "storyboard": {"slot_id": "slot:talk-sb"},
+                                "main": {"slot_id": "slot:talk-main"},
+                            },
+                        },
+                        "el:shot2": {
+                            "creation": {
+                                "type": "r2v",
+                                "generation_mode": "t2v",
+                                "intent": "灵感回归",
+                                "narrative": "举起相机",
+                                "continuity": "",
+                                "video_prompt": "海边举起相机",
+                                "recipe": None,
+                            },
+                            "outputs": {},
+                        },
+                        "el:shot1": {
+                            "creation": {
+                                "type": "r2v",
+                                "generation_mode": "r2v",
+                                "intent": "海边沉思",
+                            },
+                            "outputs": {},
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    migrated = _migrate_v5_to_v6(document)
+
+    talk = migrated["timelines"]["items"]["timeline:main"]["elements_by_id"][
+        "el:talk"
+    ]
+    assert talk["creation"] == {
+        "type": "s2v",
+        "intent": "口播开场",
+        "character_ref": "char:host",
+        "portrait_version_id": "artifact-version-p1",
+        "script": "",
+        "audio_version_id": None,
+        "recipe": None,
+    }
+    assert "storyboard" not in talk["outputs"]
+    assert talk["outputs"]["main"] == {"slot_id": "slot:talk-main"}
+
+    shot2 = migrated["timelines"]["items"]["timeline:main"]["elements_by_id"][
+        "el:shot2"
+    ]["creation"]
+    assert shot2 == {
+        "type": "t2v",
+        "intent": "灵感回归",
+        "narrative": "举起相机",
+        "continuity": "",
+        "video_prompt": "海边举起相机",
+        "recipe": None,
+    }
+
+    shot1 = migrated["timelines"]["items"]["timeline:main"]["elements_by_id"][
+        "el:shot1"
+    ]["creation"]
+    assert shot1["type"] == "r2v"
+    assert "generation_mode" not in shot1
+    assert migrated["schema_version"] == 6

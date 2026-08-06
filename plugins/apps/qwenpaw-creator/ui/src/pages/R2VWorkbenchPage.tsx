@@ -18,6 +18,7 @@ import {
   getAssetVersionMediaUrl,
   getResolvedModels,
 } from "@/api/creator";
+import type { ResolvedModels } from "@/api/creator/models";
 import { projectJsonPointer } from "@/lib/projectJsonPointer";
 import { useProjectDraft } from "@/lib/useProjectDraft";
 import { visualVariantLabel } from "@/lib/visualVariants";
@@ -32,6 +33,8 @@ import type {
   ProjectDocument,
   TaskView,
   TimelineElementDocument,
+  VideoCreationDocument,
+  VideoGenerationMode,
 } from "@/contracts/creator";
 import { useTranslation } from "react-i18next";
 
@@ -44,6 +47,31 @@ const FIELD_LABEL_KEYS: Record<ReferenceField, string> = {
   characters: "r2v.fieldLabels.characters",
   props: "r2v.fieldLabels.props",
   sources: "r2v.fieldLabels.sources",
+};
+
+// Mode-specific workbench copy: the page serves every video generation
+// mode, so its title, hints and reference surfaces must not read as
+// reference-to-video when the element declares something else.
+export const GENERATION_MODE_META: Record<
+  VideoGenerationMode,
+  { labelKey: string; subtitleKey: string }
+> = {
+  r2v: {
+    labelKey: "r2v.modeLabel.r2v",
+    subtitleKey: "r2v.modeSubtitle.r2v",
+  },
+  t2v: {
+    labelKey: "r2v.modeLabel.t2v",
+    subtitleKey: "r2v.modeSubtitle.t2v",
+  },
+  i2v: {
+    labelKey: "r2v.modeLabel.i2v",
+    subtitleKey: "r2v.modeSubtitle.i2v",
+  },
+  s2v: {
+    labelKey: "r2v.modeLabel.s2v",
+    subtitleKey: "r2v.modeSubtitle.s2v",
+  },
 };
 
 function Panel({
@@ -74,6 +102,7 @@ function PromptTextArea({
   field,
   path,
   disabled = false,
+  placeholder,
   onChange,
 }: {
   label: string;
@@ -81,6 +110,7 @@ function PromptTextArea({
   field: string;
   path: string;
   disabled?: boolean;
+  placeholder?: string;
   onChange: (value: string) => void;
 }) {
   const { t } = useTranslation();
@@ -98,7 +128,7 @@ function PromptTextArea({
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         autoSize={{ minRows: 2, maxRows: 10 }}
-        placeholder={t("r2v.generateAndEdit", { label })}
+        placeholder={placeholder ?? t("r2v.generateAndEdit", { label })}
         className="!rounded-lg !border-[var(--color-border)] !bg-[var(--color-bg-secondary)] !text-xs"
       />
       <InlineReviewDiff pointer={path} />
@@ -194,10 +224,20 @@ export default function R2VWorkbenchPage() {
     ],
   );
   const element = elementDraft.value;
-  const creation = element?.creation.type === "r2v" ? element.creation : null;
+  // Every generated-video creation type owns this workbench route; the
+  // narrowed creation drives which mode surface renders below.
+  const creation =
+    element &&
+    (element.creation.type === "r2v" ||
+      element.creation.type === "t2v" ||
+      element.creation.type === "i2v" ||
+      element.creation.type === "s2v")
+      ? (element.creation as VideoCreationDocument)
+      : null;
+  const generationMode: VideoGenerationMode = creation?.type ?? "r2v";
   const [viewedSbId, setViewedSbId] = useState<string | null>(null);
   const [viewedVideoId, setViewedVideoId] = useState<string | null>(null);
-  const [resolvedVideoModel, setResolvedVideoModel] = useState<string | null>(
+  const [resolvedModels, setResolvedModels] = useState<ResolvedModels | null>(
     null,
   );
 
@@ -219,7 +259,7 @@ export default function R2VWorkbenchPage() {
     let cancelled = false;
     getResolvedModels()
       .then((resolved) => {
-        if (!cancelled) setResolvedVideoModel(resolved.video.model || null);
+        if (!cancelled) setResolvedModels(resolved);
       })
       .catch(() => {
         /* best-effort: fall back to recipe.model below */
@@ -304,6 +344,7 @@ export default function R2VWorkbenchPage() {
   }
 
   const elementLabel = element.label || element.element_id;
+  const modeMeta = GENERATION_MODE_META[generationMode];
   const elementPointer = (...segments: Array<string | number>) =>
     projectJsonPointer(
       "timelines",
@@ -324,20 +365,22 @@ export default function R2VWorkbenchPage() {
     });
   const applyDraft = async () => {
     if (!elementDraft.operations.length) return;
-    const invalidShot = creation.shots.order
-      .map((shotId) => creation.shots.items[shotId])
-      .find(
-        (shot) =>
-          !shot ||
-          !shot.description.trim() ||
-          !shot.camera?.trim() ||
-          !shot.framing?.trim() ||
-          shot.duration_seconds == null ||
-          shot.duration_seconds <= 0,
-      );
-    if (invalidShot) {
-      message.error(t("r2v.eachShotNeeds"));
-      return;
+    if (creation.type === "r2v") {
+      const invalidShot = creation.shots.order
+        .map((shotId) => creation.shots.items[shotId])
+        .find(
+          (shot) =>
+            !shot ||
+            !shot.description.trim() ||
+            !shot.camera?.trim() ||
+            !shot.framing?.trim() ||
+            shot.duration_seconds == null ||
+            shot.duration_seconds <= 0,
+        );
+      if (invalidShot) {
+        message.error("每个 Shot 都需要描述、运镜、景别和有效时长");
+        return;
+      }
     }
     try {
       const response = await patchProject(id, elementDraft.operations);
@@ -432,6 +475,322 @@ export default function R2VWorkbenchPage() {
   })();
 
   const spanSeconds = element.span.duration_tick / timeline.ticks_per_second;
+
+  // ── Mode-specific workbenches ─────────────────────────────────────────
+  // t2v/i2v/s2v carry none of the shot/storyboard/reference machinery, so
+  // they render their own surface built from exactly the provider inputs.
+  if (creation.type !== "r2v") {
+    const modeCreation = creation;
+    const imageOptions = [
+      ...Object.values(project.assets.artifact_versions_by_id)
+        .filter(
+          (version) =>
+            project.assets.files_by_id[version.file_id]?.media_type.startsWith(
+              "image/",
+            ),
+        )
+        .map((version) => ({
+          value: version.version_id,
+          label: version.name || version.version_id,
+          url: getArtifactVersionMediaUrl(version.version_id),
+        })),
+      ...Object.values(project.assets.source_versions_by_id)
+        .filter((version) => version.media_kind === "image")
+        .map((version) => ({
+          value: version.version_id,
+          label: version.name || version.version_id,
+          url: getAssetVersionMediaUrl(version.version_id),
+        })),
+    ];
+    const audioOptions = [
+      ...Object.values(project.assets.source_versions_by_id)
+        .filter((version) => version.media_kind === "audio")
+        .map((version) => ({
+          value: version.version_id,
+          label: version.name || version.version_id,
+          url: getAssetVersionMediaUrl(version.version_id),
+        })),
+      ...Object.values(project.assets.artifact_versions_by_id)
+        .filter(
+          (version) =>
+            project.assets.files_by_id[version.file_id]?.media_type.startsWith(
+              "audio/",
+            ),
+        )
+        .map((version) => ({
+          value: version.version_id,
+          label: version.name || version.version_id,
+          url: getArtifactVersionMediaUrl(version.version_id),
+        })),
+    ];
+    const imageUrlOf = (versionId: string | null) =>
+      imageOptions.find((option) => option.value === versionId)?.url ?? null;
+    const audioUrlOf = (versionId: string | null) =>
+      audioOptions.find((option) => option.value === versionId)?.url ?? null;
+    const updateModeField = (field: string, value: string | null) =>
+      updateElement((draft) => {
+        (draft.creation as unknown as Record<string, unknown>)[field] = value;
+      });
+    const modeModel =
+      (modeCreation.type === "s2v"
+        ? resolvedModels?.s2v?.model
+        : resolvedModels?.video?.byMode?.[modeCreation.type] ??
+          resolvedModels?.video?.model) ??
+      modeCreation.recipe?.model ??
+      "—";
+    const imagePicker = (
+      value: string | null,
+      field: string,
+      placeholder: string,
+      alt: string,
+    ) => (
+      <div className="space-y-2">
+        <Select
+          size="small"
+          className="!w-full"
+          placeholder={placeholder}
+          value={value}
+          disabled={patching}
+          options={imageOptions}
+          onChange={(next) => updateModeField(field, next ?? null)}
+          allowClear
+        />
+        {imageUrlOf(value) ? (
+          <img
+            src={imageUrlOf(value)!}
+            alt={alt}
+            className="max-h-64 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] object-contain"
+          />
+        ) : (
+          <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] text-xs text-[var(--color-text-tertiary)]">
+            {t("r2v.notSelected")}
+          </div>
+        )}
+      </div>
+    );
+
+    return (
+      <div
+        data-mode-workbench={modeCreation.type}
+        className="flex h-full flex-col overflow-hidden bg-[var(--color-bg-layout)]"
+      >
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]/60 px-5 py-3 backdrop-blur">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={backToPlan}
+              className="icon-button shrink-0"
+              aria-label="返回视频方案"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+            </button>
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
+                {t("r2v.title", { element: elementLabel })}
+                <span
+                  data-generation-mode={modeCreation.type}
+                  className="ml-2 inline-block rounded-full border border-[var(--color-border-secondary)] px-2 py-[1px] align-middle text-[10px] font-medium text-[var(--color-text-secondary)]"
+                >
+                  {t(GENERATION_MODE_META[modeCreation.type].labelKey)}
+                </span>
+              </h2>
+              <p className="mt-0.5 truncate text-xs text-[var(--color-text-secondary)]">
+                {t(GENERATION_MODE_META[modeCreation.type].subtitleKey)}
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="small"
+              disabled={!elementDraft.dirty || patching}
+              onClick={elementDraft.discard}
+              className="!h-[22px] !px-2 !font-[inherit] !text-[11px] !font-semibold !leading-[20px]"
+            >
+              放弃修改
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              loading={patching}
+              disabled={
+                !elementDraft.dirty || elementDraft.conflictPaths.length > 0
+              }
+              onClick={() => void applyDraft()}
+              className="!h-[22px] !px-2 !font-[inherit] !text-[11px] !font-semibold !leading-[20px]"
+            >
+              {elementDraft.dirty
+                ? `应用修改（${elementDraft.dirtyCount}）`
+                : "应用修改"}
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid min-h-0 flex-1 gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="min-h-0 space-y-3 overflow-y-auto pr-1">
+            {modeCreation.type === "s2v" ? (
+              <>
+                <Panel title={t("r2v.s2vPortrait")}>
+                  {imagePicker(
+                    modeCreation.portrait_version_id,
+                    "portrait_version_id",
+                    t("r2v.s2vPortraitPlaceholder"),
+                    t("r2v.s2vPortrait"),
+                  )}
+                </Panel>
+                <Panel title={t("r2v.s2vScript")}>
+                  <PromptTextArea
+                    label={t("r2v.s2vScriptLabel")}
+                    placeholder={t("r2v.s2vScriptPlaceholder")}
+                    value={modeCreation.script}
+                    field="script"
+                    path={elementPointer("creation", "script")}
+                    disabled={patching}
+                    onChange={(value) => updateModeField("script", value)}
+                  />
+                </Panel>
+                <Panel title={t("r2v.s2vAudio")}>
+                  <div className="space-y-2">
+                    <Select
+                      size="small"
+                      className="!w-full"
+                      placeholder={t("r2v.s2vAudioPlaceholder")}
+                      value={modeCreation.audio_version_id}
+                      disabled={patching}
+                      options={audioOptions}
+                      onChange={(value) =>
+                        updateModeField("audio_version_id", value ?? null)
+                      }
+                      allowClear
+                    />
+                    {audioUrlOf(modeCreation.audio_version_id) ? (
+                      <audio
+                        controls
+                        preload="metadata"
+                        src={audioUrlOf(modeCreation.audio_version_id)!}
+                        className="h-10 w-full"
+                      />
+                    ) : (
+                      <div className="flex h-10 items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] text-xs text-[var(--color-text-tertiary)]">
+                        {t("r2v.notSelected")}
+                      </div>
+                    )}
+                  </div>
+                </Panel>
+              </>
+            ) : (
+              <>
+                {modeCreation.type === "i2v" && (
+                  <Panel title={t("r2v.i2vFirstFrame")}>
+                    {imagePicker(
+                      modeCreation.first_frame_version_id,
+                      "first_frame_version_id",
+                      t("r2v.i2vFirstFramePlaceholder"),
+                      t("r2v.i2vFirstFrame"),
+                    )}
+                  </Panel>
+                )}
+                <Panel title={t("r2v.videoPrompt")}>
+                  <PromptTextArea
+                    label={t("r2v.videoPromptLabel")}
+                    placeholder={t("r2v.videoPromptPlaceholder")}
+                    value={modeCreation.video_prompt}
+                    field="video_prompt"
+                    path={elementPointer("creation", "video_prompt")}
+                    disabled={patching}
+                    onChange={(value) => updateModeField("video_prompt", value)}
+                  />
+                </Panel>
+              </>
+            )}
+          </div>
+
+          <div className="min-h-0 space-y-3 overflow-y-auto pr-1">
+            <Panel
+              title={t("r2v.videoResult")}
+              badge={
+                <ArtifactVersionChips
+                  versions={videoVersions}
+                  currentId={videoSlot?.selected_version_id}
+                  viewingId={effectiveVideoId}
+                  onView={setViewedVideoId}
+                />
+              }
+            >
+              <div className="space-y-2">
+                {videoUrl ? (
+                  <video
+                    src={videoUrl}
+                    controls
+                    className="max-h-72 w-full rounded-lg border border-[var(--color-border)] bg-black"
+                  />
+                ) : (
+                  <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] text-xs text-[var(--color-text-tertiary)]">
+                    {t("r2v.noVideoResult")}
+                  </div>
+                )}
+                {videoTask && (videoGenerating || videoFailed) && (
+                  <p
+                    className={`text-[11px] ${
+                      videoFailed
+                        ? "text-[var(--color-error)]"
+                        : "text-[var(--color-text-tertiary)]"
+                    }`}
+                  >
+                    {videoTaskMessage}
+                  </p>
+                )}
+                {viewedVideo &&
+                  videoSlot &&
+                  viewedVideo.version_id !== videoSlot.selected_version_id && (
+                    <Button
+                      size="small"
+                      type="primary"
+                      disabled={elementDraft.dirty || patching}
+                      onClick={() =>
+                        void setCurrentVersion(videoSlot, viewedVideo)
+                      }
+                      className="!text-[11px]"
+                    >
+                      {t("r2v.setAsCurrent")}
+                    </Button>
+                  )}
+              </div>
+            </Panel>
+
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: t("r2v.duration"), value: `${spanSeconds}s` },
+                {
+                  label: t("r2v.frameSize"),
+                  value: project.settings.aspect_ratio,
+                },
+                {
+                  label: t("r2v.modelLabel"),
+                  value: modeModel,
+                },
+              ].map((cell) => (
+                <div
+                  key={cell.label}
+                  className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] p-3 text-center"
+                >
+                  <p className="text-[10px] text-[var(--color-text-tertiary)]">
+                    {cell.label}
+                  </p>
+                  <p
+                    title={cell.value}
+                    className="mt-1 truncate text-xs font-semibold text-[var(--color-text-primary)]"
+                  >
+                    {cell.value}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const totalDuration = creation.shots.order.length
     ? creation.shots.order.reduce(
         (total, shotId) =>
@@ -764,9 +1123,15 @@ export default function R2VWorkbenchPage() {
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
               {t("r2v.title", { element: elementLabel })}
+              <span
+                data-generation-mode={generationMode}
+                className="ml-2 inline-block rounded-full border border-[var(--color-border-secondary)] px-2 py-[1px] align-middle text-[10px] font-medium text-[var(--color-text-secondary)]"
+              >
+                {t(modeMeta.labelKey)}
+              </span>
             </h2>
             <p className="mt-0.5 truncate text-xs text-[var(--color-text-secondary)]">
-              {t("r2v.subtitle")}
+              {t(modeMeta.subtitleKey)}
             </p>
           </div>
         </div>
@@ -1025,7 +1390,11 @@ export default function R2VWorkbenchPage() {
               },
               {
                 label: t("r2v.modelLabel"),
-                value: resolvedVideoModel ?? creation.recipe?.model ?? "R2V",
+                value:
+                  resolvedModels?.video?.byMode?.r2v ??
+                  resolvedModels?.video?.model ??
+                  creation.recipe?.model ??
+                  "R2V",
               },
             ].map((cell) => (
               <div

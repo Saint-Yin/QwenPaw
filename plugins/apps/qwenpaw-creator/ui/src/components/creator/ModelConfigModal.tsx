@@ -17,8 +17,10 @@ import {
   DownOutlined,
   EyeOutlined,
   PictureOutlined,
+  UserOutlined,
   VideoCameraOutlined,
   AudioOutlined,
+  SoundOutlined,
   NodeIndexOutlined,
   GlobalOutlined,
   ReloadOutlined,
@@ -32,8 +34,9 @@ import {
   getHostProviders,
   getHostProviderApiKey,
   getRealApiKey,
+  getTtsCapabilities,
 } from "@/api/creator";
-import type { HostProviderInfo } from "@/api/creator";
+import type { HostProviderInfo, TtsCapabilities } from "@/api/creator";
 import type {
   GroundingConfig,
   ModelConfigData,
@@ -84,13 +87,16 @@ const ASR_PROTOCOLS = [
   "DashScope Qwen3-ASR",
   "OpenAI Whisper",
 ];
+const TTS_PROTOCOLS = ["DashScope（百炼）"];
+const S2V_PROTOCOLS = ["DashScope（百炼）"];
 const EMBEDDING_PROTOCOLS = ["DashScope（百炼）"];
 const IMAGE_PROTOCOLS = ["OpenAI 协议", "DashScope（百炼）"];
 const VIDEO_PROTOCOLS = ["DashScope（百炼）", "Volcano Engine（火山引擎）"];
 
+// Presets seed a default endpoint when the user picks a protocol/model;
+// the URL always stays editable for self-hosted or proxied deployments.
 interface ProtocolPreset {
   base_url: string;
-  freeze_url: boolean;
   models: string[];
   base_url_options?: { label: string; value: string }[];
 }
@@ -117,25 +123,37 @@ const PROTOCOL_TO_PROVIDER_ID: Record<string, string> = {
 const ASR_PRESETS: Record<string, ProtocolPreset> = {
   "DashScope Fun-ASR": {
     base_url: "https://dashscope.aliyuncs.com/api/v1",
-    freeze_url: true,
     models: ["fun-asr"],
   },
   "DashScope Qwen3-ASR": {
     base_url: "https://dashscope.aliyuncs.com/api/v1",
-    freeze_url: true,
     models: ["qwen3-asr-flash"],
   },
   "OpenAI Whisper": {
     base_url: "https://api.openai.com/v1",
-    freeze_url: true,
     models: ["whisper-1"],
+  },
+};
+
+const TTS_PRESETS: Record<string, ProtocolPreset> = {
+  "DashScope（百炼）": {
+    base_url: "https://dashscope.aliyuncs.com/api/v1",
+    // Filled from the backend capability table so the UI never offers a model
+    // this build cannot drive.
+    models: [],
+  },
+};
+
+const S2V_PRESETS: Record<string, ProtocolPreset> = {
+  "DashScope（百炼）": {
+    base_url: "https://dashscope.aliyuncs.com/api/v1",
+    models: ["wan2.2-s2v"],
   },
 };
 
 const EMBEDDING_PRESETS: Record<string, ProtocolPreset> = {
   "DashScope（百炼）": {
     base_url: "https://dashscope.aliyuncs.com/api/v1",
-    freeze_url: true,
     models: ["qwen3-vl-embedding"],
   },
 };
@@ -143,7 +161,6 @@ const EMBEDDING_PRESETS: Record<string, ProtocolPreset> = {
 const IMAGE_PRESETS: Record<string, ProtocolPreset> = {
   "DashScope（百炼）": {
     base_url: "https://dashscope.aliyuncs.com/api/v1",
-    freeze_url: true,
     models: [
       "wan2.7-image-pro",
       "wan2.7-image",
@@ -164,7 +181,6 @@ const IMAGE_PRESETS: Record<string, ProtocolPreset> = {
   },
   "OpenAI 协议": {
     base_url: "https://api.openai.com/v1",
-    freeze_url: true,
     models: ["gpt-image-2"],
   },
 };
@@ -172,7 +188,6 @@ const IMAGE_PRESETS: Record<string, ProtocolPreset> = {
 const VIDEO_PRESETS: Record<string, ProtocolPreset> = {
   "DashScope（百炼）": {
     base_url: "https://dashscope.aliyuncs.com/api/v1",
-    freeze_url: true,
     models: [
       "wan2.7-r2v",
       "wan2.6-r2v-flash",
@@ -182,13 +197,31 @@ const VIDEO_PRESETS: Record<string, ProtocolPreset> = {
   },
   "Volcano Engine（火山引擎）": {
     base_url: "https://ark.cn-beijing.volces.com",
-    freeze_url: true,
     models: ["doubao-seedance-2.0-pro", "doubao-seedance-2.0-lite"],
   },
 };
 
-type ModelType = "llm" | "vlm" | "asr" | "embedding" | "image" | "video";
+type ModelType =
+  | "llm"
+  | "vlm"
+  | "asr"
+  | "tts"
+  | "s2v"
+  | "embedding"
+  | "image"
+  | "video";
 type TabType = ModelType | "grounding";
+
+// Sections whose endpoint comes from a fixed protocol preset rather than
+// from user input.
+const PRESETS_BY_TYPE: Record<string, Record<string, ProtocolPreset>> = {
+  asr: ASR_PRESETS,
+  tts: TTS_PRESETS,
+  s2v: S2V_PRESETS,
+  image: IMAGE_PRESETS,
+  video: VIDEO_PRESETS,
+};
+const PRESET_SEEDED_TYPES: ModelType[] = ["asr", "tts", "s2v"];
 const DEFAULT_CONFIG: ModelConfigData = {
   llm: {
     enabled: true,
@@ -239,6 +272,27 @@ const DEFAULT_CONFIG: ModelConfigData = {
     language: "",
     reuse_llm_key: true,
   },
+  tts: {
+    enabled: false,
+    model_name: "qwen3-tts-flash",
+    api_key: "",
+    base_url: "https://dashscope.aliyuncs.com/api/v1",
+    protocol: "DashScope（百炼）",
+    custom_protocol: "",
+    voice: "Cherry",
+    vc_model_name: "qwen3-tts-vc-2026-01-22",
+    reuse_llm_key: true,
+  },
+  s2v: {
+    enabled: false,
+    model_name: "wan2.2-s2v",
+    api_key: "",
+    base_url: "https://dashscope.aliyuncs.com/api/v1",
+    protocol: "DashScope（百炼）",
+    custom_protocol: "",
+    detect_model_name: "",
+    reuse_llm_key: true,
+  },
   embedding: {
     enabled: false,
     model_name: "qwen3-vl-embedding",
@@ -255,6 +309,7 @@ const DEFAULT_CONFIG: ModelConfigData = {
     base_url: "",
     protocol: "OpenAI 协议",
     custom_protocol: "",
+    translate_model: "",
   },
   video: {
     enabled: false,
@@ -429,6 +484,26 @@ const CARD_META: {
     required: false,
   },
   {
+    type: "tts",
+    labelKey: "modelConfig.tts",
+    icon: (
+      <SoundOutlined
+        style={{ color: "var(--color-text-tertiary)", fontSize: 16 }}
+      />
+    ),
+    required: false,
+  },
+  {
+    type: "s2v",
+    labelKey: "modelConfig.s2v",
+    icon: (
+      <UserOutlined
+        style={{ color: "var(--color-text-tertiary)", fontSize: 16 }}
+      />
+    ),
+    required: false,
+  },
+  {
     type: "embedding",
     labelKey: "modelConfig.embedding",
     icon: (
@@ -517,9 +592,24 @@ export default function ModelConfigModal({ open, onClose }: Props) {
   const [saving, setSaving] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [hostProviders, setHostProviders] = useState<HostProviderInfo[]>([]);
+  const [ttsCapabilities, setTtsCapabilities] =
+    useState<TtsCapabilities | null>(null);
+  // What the user actually typed in a model-name dropdown. Filtering by the
+  // field value would hide every other model once one is configured, so the
+  // full catalog shows on open and narrows only while typing.
+  const [modelSearch, setModelSearch] = useState<Record<string, string>>({});
+  // A stale or partial response must not break the whole modal, so the list is
+  // normalized once and every consumer reads this instead of the raw payload.
+  const ttsModels = ttsCapabilities?.models ?? [];
+  const ttsCapability = ttsModels.find(
+    (item) => item.model === config.tts.model_name,
+  );
 
   useEffect(() => {
     getHostProviders().then(setHostProviders);
+    getTtsCapabilities()
+      .then(setTtsCapabilities)
+      .catch(() => setTtsCapabilities(null));
   }, []);
 
   // Resolve the real API key (for connection tests).
@@ -580,12 +670,28 @@ export default function ModelConfigModal({ open, onClose }: Props) {
         merged.vlm.protocol = VLM_PROTOCOLS[0];
       if (!ASR_PROTOCOLS.includes(merged.asr.protocol))
         merged.asr.protocol = ASR_PROTOCOLS[0];
+      if (!TTS_PROTOCOLS.includes(merged.tts.protocol))
+        merged.tts.protocol = TTS_PROTOCOLS[0];
+      if (!S2V_PROTOCOLS.includes(merged.s2v.protocol))
+        merged.s2v.protocol = S2V_PROTOCOLS[0];
       if (!EMBEDDING_PROTOCOLS.includes(merged.embedding.protocol))
         merged.embedding.protocol = EMBEDDING_PROTOCOLS[0];
       if (!IMAGE_PROTOCOLS.includes(merged.image.protocol))
         merged.image.protocol = IMAGE_PROTOCOLS[0];
       if (!VIDEO_PROTOCOLS.includes(merged.video.protocol))
         merged.video.protocol = VIDEO_PROTOCOLS[0];
+      // A never-configured section arrives with empty base_url/model, and a
+      // frozen preset URL cannot be typed in. Sections with a single
+      // protocol (TTS/S2V) would therefore be unsavable, because switching
+      // protocol — the only thing that applies a preset — is impossible.
+      PRESET_SEEDED_TYPES.forEach((type) => {
+        const item = merged[type] as ModelConfigItem;
+        const preset = PRESETS_BY_TYPE[type][item.protocol];
+        if (!preset) return;
+        if (!item.base_url) item.base_url = preset.base_url;
+        if (!item.model_name && preset.models.length === 1)
+          item.model_name = preset.models[0];
+      });
       const initialTested: Record<string, boolean> = {};
       CARD_META.forEach((meta) => {
         if (meta.type === "grounding") return;
@@ -628,6 +734,40 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     (type: ModelType, field: string, value: unknown) => {
       setConfig((prev) => {
         const updated = { ...prev, [type]: { ...prev[type], [field]: value } };
+        if (type === "tts" && field === "model_name") {
+          // Speech models disagree about voices: those without system voices
+          // reject any preset name, and the valid names differ per family, so
+          // realign the default voice in the same update.
+          const capability = ttsModels.find((item) => item.model === value);
+          const voices = capability?.systemVoices ?? [];
+          const keep = voices.includes(prev.tts.voice) ? prev.tts.voice : "";
+          updated.tts = {
+            ...updated.tts,
+            voice: keep || voices[0] || "",
+          };
+        }
+        if (field === "model_name" && typeof value === "string" && value) {
+          // Picking a preset model implies its provider endpoint: realign
+          // protocol and Base URL so choosing e.g. a Seedance model from a
+          // DashScope section never submits against the wrong gateway.
+          const presets = PRESETS_BY_TYPE[type];
+          const owner =
+            presets &&
+            Object.entries(presets).find(([, preset]) =>
+              preset.models.includes(value),
+            );
+          if (owner) {
+            const [presetProtocol, preset] = owner;
+            const item = updated[type] as ModelConfigItem;
+            if (item.protocol !== presetProtocol || !item.base_url) {
+              (updated as Record<ModelType, ModelConfigItem>)[type] = {
+                ...item,
+                protocol: presetProtocol,
+                base_url: preset.base_url,
+              };
+            }
+          }
+        }
         if (type === "llm" && prev.vlm.use_llm) {
           updated.vlm = { ...updated.vlm, use_llm: false, enabled: false };
         }
@@ -655,7 +795,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
         }
       }
     },
-    [config.grounding.search_reuse_llm],
+    [config.grounding.search_reuse_llm, ttsModels],
   );
 
   const updateGrounding = useCallback(
@@ -821,7 +961,9 @@ export default function ModelConfigModal({ open, onClose }: Props) {
         item = config.llm;
       }
       const hasKey =
-        type === "asr" && config.asr.reuse_llm_key
+        (type === "asr" && config.asr.reuse_llm_key) ||
+        (type === "tts" && config.tts.reuse_llm_key) ||
+        (type === "s2v" && config.s2v.reuse_llm_key)
           ? hasUsableApiKey(config.llm)
           : type === "embedding" && config.embedding.reuse_vlm_key
           ? hasUsableApiKey(config.vlm.use_llm ? config.llm : config.vlm) ||
@@ -836,8 +978,12 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       try {
         // Resolve the real API key (the frontend only stores the mask).
         let testApiKey: string;
-        if (type === "asr" && config.asr.reuse_llm_key) {
-          // ASR reuses the LLM API key.
+        if (
+          (type === "asr" && config.asr.reuse_llm_key) ||
+          (type === "tts" && config.tts.reuse_llm_key) ||
+          (type === "s2v" && config.s2v.reuse_llm_key)
+        ) {
+          // ASR/TTS/S2V can reuse the LLM API key (same DashScope credential).
           testApiKey = await resolveRealApiKey("llm", config.llm);
         } else if (type === "embedding" && config.embedding.reuse_vlm_key) {
           // Embedding reuses the VLM key (which may itself reuse the LLM).
@@ -861,6 +1007,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
           model_name: item.model_name,
           protocol: item.protocol,
           provider: type === "asr" ? config.asr.provider : undefined,
+          voice: type === "tts" ? config.tts.voice : undefined,
         });
         if (data.ok) {
           message.success(t("modelConfig.connectionTestSuccess"));
@@ -975,6 +1122,8 @@ export default function ModelConfigModal({ open, onClose }: Props) {
         "vlm",
         "grounding",
         "asr",
+        "tts",
+        "s2v",
         "embedding",
         "image",
         "video",
@@ -1025,6 +1174,10 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       ? VLM_PROTOCOLS
       : type === "asr"
       ? ASR_PROTOCOLS
+      : type === "tts"
+      ? TTS_PROTOCOLS
+      : type === "s2v"
+      ? S2V_PROTOCOLS
       : type === "embedding"
       ? EMBEDDING_PROTOCOLS
       : type === "image"
@@ -1042,7 +1195,6 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       if (!provider) return null;
       return {
         base_url: provider.base_url,
-        freeze_url: provider.freeze_url,
         models: [
           ...provider.models.map((m) => m.id),
           ...provider.extra_models.map((m) => m.id),
@@ -1051,6 +1203,16 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       };
     }
     if (type === "asr") return ASR_PRESETS[protocol] || null;
+    if (type === "s2v") return S2V_PRESETS[protocol] || null;
+    if (type === "tts") {
+      const preset = TTS_PRESETS[protocol];
+      if (!preset) return null;
+      // Supported speech models come from the backend capability table.
+      return {
+        ...preset,
+        models: ttsModels.map((item) => item.model),
+      };
+    }
     if (type === "embedding") return EMBEDDING_PRESETS[protocol] || null;
     if (type === "image") return IMAGE_PRESETS[protocol] || null;
     if (type === "video") return VIDEO_PRESETS[protocol] || null;
@@ -1070,6 +1232,14 @@ export default function ModelConfigModal({ open, onClose }: Props) {
         ...provider.models.map((m) => ({ value: m.id, label: m.id })),
         ...provider.extra_models.map((m) => ({ value: m.id, label: m.id })),
       ];
+    }
+    if (type === "tts") {
+      // Label each speech model with what it can do, so the choice between
+      // "has system voices" and "must design a voice first" is visible.
+      return ttsModels.map((item) => ({
+        value: item.model,
+        label: item.label,
+      }));
     }
     const preset = getPresetForType(type, protocol);
     if (!preset?.models.length) return [];
@@ -1130,7 +1300,6 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     const preset = getPresetForType(type, item.protocol);
     const modelOptions = getModelOptions(type, item.protocol);
     const hasPresetModels = modelOptions.length > 0;
-    const urlDisabled = preset?.freeze_url || false;
     const hasBaseUrlOptions = (preset?.base_url_options?.length ?? 0) > 0;
 
     return (
@@ -1148,14 +1317,19 @@ export default function ModelConfigModal({ open, onClose }: Props) {
               <AutoComplete
                 value={item.model_name}
                 onChange={(v) => updateItem(type, "model_name", v)}
-                options={modelOptions}
-                filterOption={(inputValue, option) =>
-                  (option?.label as string)
-                    ?.toLowerCase()
-                    .includes(inputValue.toLowerCase()) ||
-                  (option?.value as string)
-                    ?.toLowerCase()
-                    .includes(inputValue.toLowerCase())
+                options={modelOptions.filter((option) => {
+                  const typed = (modelSearch[type] ?? "").toLowerCase();
+                  if (!typed) return true;
+                  return (
+                    option.label.toLowerCase().includes(typed) ||
+                    option.value.toLowerCase().includes(typed)
+                  );
+                })}
+                onSearch={(typed) =>
+                  setModelSearch((prev) => ({ ...prev, [type]: typed }))
+                }
+                onFocus={() =>
+                  setModelSearch((prev) => ({ ...prev, [type]: "" }))
                 }
                 placeholder={t("modelConfig.selectOrInputModel")}
               />
@@ -1184,7 +1358,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
           <div>
             <label className="field-label">Base URL</label>
             {hasBaseUrlOptions ? (
-              <Select
+              <AutoComplete
                 value={item.base_url}
                 onChange={(v) => updateItem(type, "base_url", v)}
                 options={preset!.base_url_options!.map((opt) => ({
@@ -1197,7 +1371,6 @@ export default function ModelConfigModal({ open, onClose }: Props) {
               <Input
                 placeholder="https://api.example.com"
                 value={item.base_url}
-                disabled={urlDisabled}
                 onChange={(e) => updateItem(type, "base_url", e.target.value)}
               />
             )}
@@ -1241,6 +1414,132 @@ export default function ModelConfigModal({ open, onClose }: Props) {
             />
           </div>
         )}
+        {type === "tts" && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "0 16px",
+            }}
+          >
+            <div style={{ gridColumn: "1 / -1", marginBottom: 4 }}>
+              <Checkbox
+                checked={config.tts.reuse_llm_key}
+                onChange={(e) =>
+                  updateItem("tts", "reuse_llm_key", e.target.checked)
+                }
+              >
+                复用 LLM API Key
+              </Checkbox>
+            </div>
+            {(ttsCapability?.systemVoices.length ?? 0) > 0 && (
+              <div>
+                <label className="field-label">默认旁白音色</label>
+                <AutoComplete
+                  value={config.tts.voice}
+                  onChange={(v) => updateItem("tts", "voice", v)}
+                  options={(ttsCapability?.systemVoices ?? []).map((v) => ({
+                    value: v,
+                    label: v,
+                  }))}
+                  placeholder="如 Cherry"
+                />
+              </div>
+            )}
+            <p
+              style={{
+                gridColumn: "1 / -1",
+                margin: "2px 0 0",
+                fontSize: 11,
+                lineHeight: 1.6,
+                color: "var(--color-text-tertiary)",
+              }}
+            >
+              {ttsCapability && ttsCapability.systemVoices.length === 0
+                ? "该模型没有系统音色：Agent 会先根据角色设定设计专属音色，再用它合成台词与旁白。"
+                : "开启后可为成片生成旁白，并为角色设计或复刻专属音色；默认音色用于旁白，角色已绑定的音色优先生效。"}
+              {"复刻/设计所用的配套模型由后端自动选择，无需配置。"}
+            </p>
+          </div>
+        )}
+        {type === "s2v" && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "0 16px",
+            }}
+          >
+            <div style={{ gridColumn: "1 / -1", marginBottom: 4 }}>
+              <Checkbox
+                checked={config.s2v.reuse_llm_key}
+                onChange={(e) =>
+                  updateItem("s2v", "reuse_llm_key", e.target.checked)
+                }
+              >
+                复用 LLM API Key
+              </Checkbox>
+            </div>
+            <div>
+              <label className="field-label">人像检测模型（可选）</label>
+              <Input
+                placeholder="wan2.2-s2v-detect"
+                value={config.s2v.detect_model_name}
+                onChange={(e) =>
+                  updateItem("s2v", "detect_model_name", e.target.value)
+                }
+              />
+            </div>
+            <p
+              style={{
+                gridColumn: "1 / -1",
+                margin: "2px 0 0",
+                fontSize: 11,
+                lineHeight: 1.6,
+                color: "var(--color-text-tertiary)",
+              }}
+            >
+              用一张角色人像图 + 一段音频生成对口型说话视频（wan2.2-s2v）；
+              提交前会先跑免费的人像检测，未通过不产生费用。检测模型留空时
+              使用默认的 wan2.2-s2v-detect。
+            </p>
+          </div>
+        )}
+        {type === "image" &&
+          (item.protocol.toLowerCase().includes("dashscope") ||
+            item.protocol.includes("百炼")) && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "0 16px",
+              }}
+            >
+              <div>
+                <label className="field-label">图内文字翻译模型（可选）</label>
+                <Input
+                  placeholder="qwen-mt-image"
+                  value={config.image.translate_model}
+                  onChange={(e) =>
+                    updateItem("image", "translate_model", e.target.value)
+                  }
+                />
+              </div>
+              <p
+                style={{
+                  gridColumn: "1 / -1",
+                  margin: "2px 0 0",
+                  fontSize: 11,
+                  lineHeight: 1.6,
+                  color: "var(--color-text-tertiary)",
+                }}
+              >
+                image_generation 的 translate
+                模式用此模型翻译图内文字并保留排版； 留空时使用默认的
+                qwen-mt-image，与图像模型共用同一个 API Key。
+              </p>
+            </div>
+          )}
         {type === "embedding" && (
           <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
             <Checkbox

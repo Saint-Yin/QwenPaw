@@ -200,6 +200,85 @@ def test_creation_checkpoints_mode_round_trips_through_assembly(
     assert reloaded.creation_checkpoints.mode == "skip"
 
 
+def test_tts_section_survives_unrelated_config_mutations(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """TTS credentials must not be dropped by an unrelated config write.
+
+    ``mutate_model_config`` rewrites the whole file from the assembled
+    sections, so a section missing from the contract would be erased and the
+    deployment would silently lose speech synthesis.
+    """
+
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path.resolve()))
+    config_path = (tmp_path / "config" / "model_config.json").resolve()
+    monkeypatch.setenv("CREATOR_MODEL_CONFIG_PATH", str(config_path))
+    payload = _config()
+    payload["tts"] = {
+        "enabled": True,
+        "api_key": "sk-tts",
+        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "model_name": "qwen3-tts-flash",
+        "voice": "Cherry",
+    }
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = model_routes.load_model_config(include_environment=False)
+    assert loaded.tts.model_name == "qwen3-tts-flash"
+    assert loaded.tts.voice == "Cherry"
+
+    model_routes.mutate_model_config(lambda config: config)
+
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+    assert persisted["tts"]["model_name"] == "qwen3-tts-flash"
+    assert persisted["tts"]["voice"] == "Cherry"
+    reloaded = model_routes.load_model_config(include_environment=False)
+    assert reloaded.tts.api_key == "sk-tts"
+
+
+def test_real_api_key_supports_every_speech_section(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """``tts`` must resolve like ``asr``: the UI fetches the real key for a
+    connection test whenever the section stores its own credential."""
+
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path.resolve()))
+    config_path = (tmp_path / "config" / "model_config.json").resolve()
+    monkeypatch.setenv("CREATOR_MODEL_CONFIG_PATH", str(config_path))
+    payload = _config()
+    payload["tts"] = {
+        "enabled": True,
+        "api_key": "sk-tts-own",
+        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "model_name": "qwen3-tts-flash",
+        "voice": "Cherry",
+    }
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    app = FastAPI()
+    app.add_exception_handler(CreatorError, creator_error_handler)
+    app.include_router(router)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            tts = await client.get("/models/real-api-key/tts")
+            bogus = await client.get("/models/real-api-key/bogus")
+        return tts, bogus
+
+    tts, bogus = asyncio.run(scenario())
+    assert tts.status_code == 200
+    assert tts.json() == {"api_key": "sk-tts-own"}
+    assert bogus.status_code == 422
+
+
 def test_permission_mode_patch_is_atomic(tmp_path, monkeypatch) -> None:
     """One PATCH persists all three ladder fields in a single transaction.
 

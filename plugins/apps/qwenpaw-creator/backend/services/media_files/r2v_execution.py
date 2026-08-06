@@ -61,14 +61,18 @@ from services.project_files.facade import CreatorFileServices
 from services.project_files.models import (
     ArtifactSlot,
     ArtifactVersion,
+    I2VCreation,
     IndexedFile,
     Project,
     R2VCreation,
+    S2VCreation,
+    T2VCreation,
 )
 from services.media_files.call_budget import ensure_media_call_budget
 from services.media_files.element_adapter import (
     bind_candidate_output,
     find_timeline_element,
+    reconcile_candidate_span,
     selected_element_output,
     target_element_id,
 )
@@ -161,10 +165,25 @@ class R2VProvider(Protocol):
         resolution: str,
         watermark: bool,
         generate_audio: bool,
+        mode: str = "r2v",
+        first_frame_url: str | None = None,
+        video_url: str | None = None,
     ) -> str:
         ...
 
     async def poll(self, provider_task_id: str) -> Mapping[str, Any]:
+        ...
+
+    async def submit_s2v(
+        self,
+        *,
+        image_url: str,
+        audio_url: str,
+        resolution: str,
+    ) -> str:
+        ...
+
+    async def poll_s2v(self, provider_task_id: str) -> Mapping[str, Any]:
         ...
 
 
@@ -186,6 +205,9 @@ class ExistingR2VProvider:
         resolution: str,
         watermark: bool,
         generate_audio: bool,
+        mode: str = "r2v",
+        first_frame_url: str | None = None,
+        video_url: str | None = None,
     ) -> str:
         from models.video_model import submit_video_task
 
@@ -197,12 +219,35 @@ class ExistingR2VProvider:
             resolution=resolution,
             watermark=watermark,
             generate_audio=generate_audio,
+            mode=mode,
+            first_frame_url=first_frame_url,
+            video_url=video_url,
         )
 
     async def poll(self, provider_task_id: str) -> Mapping[str, Any]:
         from models.video_model import check_task_status
 
         return await check_task_status(provider_task_id)
+
+    async def submit_s2v(
+        self,
+        *,
+        image_url: str,
+        audio_url: str,
+        resolution: str,
+    ) -> str:
+        from models.s2v_model import submit_s2v_task
+
+        return await submit_s2v_task(
+            image_url=image_url,
+            audio_url=audio_url,
+            resolution=resolution,
+        )
+
+    async def poll_s2v(self, provider_task_id: str) -> Mapping[str, Any]:
+        from models.s2v_model import check_s2v_task_status
+
+        return await check_s2v_task_status(provider_task_id)
 
 
 class R2VTaskState(StrictModel):
@@ -289,6 +334,19 @@ class _ResolvedR2V:
     slot_id: str
     slot_kind: str
     owner_ref: str
+    mode: str = "r2v"
+    first_frame_version_id: str = ""
+    first_frame_url: str = ""
+    video_version_id: str = ""
+    video_url: str = ""
+    # "video" (default) drives the configured video model; "s2v" drives the
+    # wan2.2-s2v digital-human provider through the same durable machinery.
+    provider: str = "video"
+    s2v_image_version_id: str = ""
+    s2v_image_url: str = ""
+    s2v_audio_version_id: str = ""
+    s2v_audio_url: str = ""
+    s2v_resolution: str = ""
 
 
 def _stable_id(prefix: str, project_id: str, key: str) -> str:
@@ -476,6 +534,214 @@ def _resolve_reference_versions(
     return urls, checksums, provenance, read_set
 
 
+def _resolve_single_media_version(
+    *,
+    project: Project,
+    project_root: Path,
+    version_id: str,
+    media_prefix: str,
+    label: str,
+) -> tuple[str, str, str, dict[str, Any]]:
+    """Resolve one exact version id into ``(url, checksum, ref, read_entry)``.
+
+    Same integrity rules as ``_resolve_reference_versions`` but with a
+    caller-selected media kind, so i2v first frames stay images and
+    video_edit inputs stay videos.
+    """
+
+    source = project.assets.source_versions_by_id.get(version_id)
+    artifact = project.assets.artifact_versions_by_id.get(version_id)
+    version = source or artifact
+    if version is None:
+        raise NotFoundError(f"{label} version 不存在: {version_id}")
+    remote_url = public_source_url(source) if source is not None else None
+    if remote_url is not None:
+        if not version.media_type.casefold().startswith(media_prefix):
+            raise ValidationError(
+                f"{label} 必须是 {media_prefix}* 媒体: {version_id}",
+            )
+        ref = f"asset-version:{version_id}"
+        return (
+            remote_url,
+            version.checksum,
+            ref,
+            {
+                "ref": ref,
+                "versionId": version_id,
+                "fileId": None,
+                "checksum": version.checksum,
+                "sourceUrl": remote_url,
+            },
+        )
+    indexed = project.assets.files_by_id.get(version.file_id)
+    if indexed is None:
+        raise StorageIntegrityError(
+            f"{label} 缺少 IndexedFile: {version_id}",
+        )
+    if indexed.sha256 != version.checksum:
+        raise StorageIntegrityError(
+            f"{label} checksum/index 不一致: {version_id}",
+        )
+    if not indexed.media_type.casefold().startswith(media_prefix):
+        raise ValidationError(
+            f"{label} 必须是 {media_prefix}* 媒体: {version_id}",
+        )
+    inspection = AssetFileStore(project_root).inspect(indexed)
+    if not inspection.available:
+        raise StorageIntegrityError(
+            f"{label} 文件不可用: {version_id} ({inspection.status.value})",
+        )
+    ref = (
+        f"asset-version:{version_id}"
+        if source is not None
+        else f"artifact-version:{version_id}"
+    )
+    return (
+        _indexed_path(project_root, indexed).resolve().as_uri(),
+        version.checksum,
+        ref,
+        {
+            "ref": ref,
+            "versionId": version_id,
+            "fileId": indexed.file_id,
+            "checksum": version.checksum,
+        },
+    )
+
+
+def media_version_duration_seconds(
+    project: Project,
+    version_id: str,
+) -> float | None:
+    """Recorded duration of one exact source/artifact version, when known."""
+
+    version = project.assets.source_versions_by_id.get(
+        version_id,
+    ) or project.assets.artifact_versions_by_id.get(version_id)
+    return None if version is None else version.duration_seconds
+
+
+def _probed_media_duration_seconds(
+    project: Project,
+    project_root: Path,
+    version_id: str,
+) -> float | None:
+    """Probe the indexed local file of one version for its real duration.
+
+    Older assets (and anything imported before duration probing) carry no
+    recorded duration, so the file itself is the fallback source of truth.
+    """
+
+    version = project.assets.source_versions_by_id.get(
+        version_id,
+    ) or project.assets.artifact_versions_by_id.get(version_id)
+    if version is None or version.file_id is None:
+        return None
+    indexed = project.assets.files_by_id.get(version.file_id)
+    if indexed is None:
+        return None
+    path = _indexed_path(project_root, indexed)
+    if not path.is_file():
+        return None
+    from services.runtime_files.media_probe import MediaProbeError, probe_media
+
+    try:
+        probe = probe_media(os.fspath(path))
+    except (MediaProbeError, OSError, ValueError):
+        return None
+    duration = getattr(probe, "duration_seconds", None)
+    return float(duration) if duration else None
+
+
+def effective_video_duration_seconds(
+    project: Project,
+    project_root: Path,
+    version_id: str,
+) -> float | None:
+    """The duration a billed request will really be charged for.
+
+    Single resolver for authorization and execution: the recorded metadata
+    first, then a probe of the indexed local file for assets that carry
+    none. Returning None means the length is genuinely unknown.
+    """
+
+    recorded = media_version_duration_seconds(project, version_id)
+    if recorded is not None:
+        return recorded
+    return _probed_media_duration_seconds(project, project_root, version_id)
+
+
+def _assert_video_edit_input_duration(
+    project: Project,
+    project_root: Path,
+    version_id: str,
+) -> None:
+    """Fail before a billed submission when the input length is unusable.
+
+    video_edit takes its duration from the input video (3-60s, with the
+    provider keeping only the first 15s), and the tool's durationSeconds is
+    not sent for this mode, so the input itself is the only thing to check.
+    An unknown duration is never waved through: the local file is probed,
+    and a still-unknown length is rejected rather than billed blindly.
+    """
+
+    duration = effective_video_duration_seconds(
+        project,
+        project_root,
+        version_id,
+    )
+    from models.video_capabilities import (
+        HAPPYHORSE_VIDEO_EDIT_KEPT_SECONDS,
+        HAPPYHORSE_VIDEO_EDIT_MAX_INPUT_SECONDS,
+        HAPPYHORSE_VIDEO_EDIT_MIN_INPUT_SECONDS,
+    )
+
+    if duration is None:
+        raise ValidationError(
+            f"无法确定 videoRef 的时长，而 video_edit 输入必须在 "
+            f"{HAPPYHORSE_VIDEO_EDIT_MIN_INPUT_SECONDS}–"
+            f"{HAPPYHORSE_VIDEO_EDIT_MAX_INPUT_SECONDS} 秒之间：该版本既未记录"
+            " duration_seconds，本地文件也探测不到（缺失、不可读或无 "
+            "ffprobe/ffmpeg）。请重新引入该视频以补齐元数据后重试",
+        )
+    if (
+        duration < HAPPYHORSE_VIDEO_EDIT_MIN_INPUT_SECONDS
+        or duration > HAPPYHORSE_VIDEO_EDIT_MAX_INPUT_SECONDS
+    ):
+        raise ValidationError(
+            f"video_edit 输入视频时长必须在 "
+            f"{HAPPYHORSE_VIDEO_EDIT_MIN_INPUT_SECONDS}–"
+            f"{HAPPYHORSE_VIDEO_EDIT_MAX_INPUT_SECONDS} 秒之间，"
+            f"当前 videoRef 为 {duration:.2f} 秒；超过 "
+            f"{HAPPYHORSE_VIDEO_EDIT_KEPT_SECONDS} 秒时上游只取前 "
+            f"{HAPPYHORSE_VIDEO_EDIT_KEPT_SECONDS} 秒",
+        )
+
+
+def _validated_request_mode(arguments: Mapping[str, Any]) -> str:
+    """Normalize the requested mode against the runtime capability matrix."""
+
+    from models import config as model_config
+    from models.video_capabilities import (
+        validate_video_mode,
+        video_backend_key,
+    )
+
+    model_name = model_config.get_video_model_name()
+    backend_key = video_backend_key(
+        model_name,
+        model_config.get_video_backend(),
+    )
+    try:
+        return validate_video_mode(
+            backend_key,
+            model_name,
+            str(arguments.get("mode") or "r2v"),
+        )
+    except ValueError as error:
+        raise ValidationError(str(error)) from error
+
+
 def _resolve_request(
     *,
     snapshot: ProjectSnapshot,
@@ -487,23 +753,65 @@ def _resolve_request(
     element_id = _target_element_id(target_ref)
     timeline, element = find_timeline_element(project, element_id)
     creation = element.creation
-    if not isinstance(creation, R2VCreation):
-        raise ValidationError("仅 R2V Element 可以生成 R2V 视频")
-    selected_storyboard = selected_element_output(
-        project,
-        element,
-        "storyboard",
-    )
-    storyboard_id = (
-        selected_storyboard[1] if selected_storyboard is not None else None
-    )
-    if not storyboard_id:
-        raise ValidationError("R2V Element 尚未选择 storyboard ArtifactVersion")
-    storyboard = project.assets.artifact_versions_by_id.get(storyboard_id)
-    if storyboard is None:
-        raise StorageIntegrityError("selected storyboard ArtifactVersion 不存在")
-    if storyboard.owner_ref != f"element:{element_id}":
-        raise StorageIntegrityError("selected storyboard 不属于目标 Element")
+    mode = _validated_request_mode(arguments)
+    # Each creation type declares exactly one generation mode; the request
+    # mode must match it so a t2v element can never be submitted as r2v.
+    creation_by_mode = {
+        "r2v": R2VCreation,
+        "video_edit": R2VCreation,
+        "t2v": T2VCreation,
+        "i2v": I2VCreation,
+    }
+    expected = creation_by_mode.get(mode)
+    if expected is None or not isinstance(creation, expected):
+        raise ValidationError(
+            f"mode={mode} 与目标 Element 的 creation.type={creation.type} 不匹配；"
+            "生成模式由 Element 的 creation 类型声明，不可在提交时替换",
+        )
+    first_frame_ref = str(arguments.get("firstFrameRef") or "").strip()
+    if mode == "i2v" and not first_frame_ref:
+        # The declared first frame on the element is the default input.
+        first_frame_ref = str(
+            getattr(creation, "first_frame_version_id", None) or "",
+        ).strip()
+    video_ref = str(arguments.get("videoRef") or "").strip()
+    if mode == "i2v" and not first_frame_ref:
+        raise ValidationError(
+            "i2v 模式必须提供 firstFrameRef（exact 图片 version id）或在 "
+            "creation.first_frame_version_id 声明首帧",
+        )
+    if mode == "video_edit" and not video_ref:
+        raise ValidationError(
+            "video_edit 模式必须提供 videoRef（exact 视频 version id）",
+        )
+    if first_frame_ref and mode != "i2v":
+        raise ValidationError("firstFrameRef 仅用于 i2v 模式")
+    if video_ref and mode != "video_edit":
+        raise ValidationError("videoRef 仅用于 video_edit 模式")
+
+    storyboard_id: str | None = None
+    if mode == "r2v":
+        # Only r2v consumes the storyboard + reference stack; the other
+        # modes take their exact inputs from firstFrameRef / videoRef.
+        selected_storyboard = selected_element_output(
+            project,
+            element,
+            "storyboard",
+        )
+        storyboard_id = (
+            selected_storyboard[1] if selected_storyboard is not None else None
+        )
+        if not storyboard_id:
+            raise ValidationError(
+                "R2V Element 尚未选择 storyboard ArtifactVersion",
+            )
+        storyboard = project.assets.artifact_versions_by_id.get(storyboard_id)
+        if storyboard is None:
+            raise StorageIntegrityError(
+                "selected storyboard ArtifactVersion 不存在",
+            )
+        if storyboard.owner_ref != f"element:{element_id}":
+            raise StorageIntegrityError("selected storyboard 不属于目标 Element")
 
     prompt = str(arguments.get("prompt") or creation.video_prompt).strip()
     if not prompt:
@@ -529,23 +837,56 @@ def _resolve_request(
     if not isinstance(watermark, bool) or not isinstance(generate_audio, bool):
         raise ValidationError("R2V watermark/generateAudio 必须是 boolean")
 
-    version_ids = tuple(
-        dict.fromkeys(
-            [
-                storyboard_id,
-                *resolve_r2v_visual_reference_version_ids(
-                    project,
-                    creation,
-                    creation.video_reference_version_ids,
-                ),
-            ],
-        ),
-    )
-    urls, checksums, provenance, read_set = _resolve_reference_versions(
-        project=project,
-        project_root=project_root,
-        version_ids=version_ids,
-    )
+    if mode == "r2v":
+        version_ids = tuple(
+            dict.fromkeys(
+                [
+                    storyboard_id,
+                    *resolve_r2v_visual_reference_version_ids(
+                        project,
+                        creation,
+                        creation.video_reference_version_ids,
+                    ),
+                ],
+            ),
+        )
+        urls, checksums, provenance, read_set = _resolve_reference_versions(
+            project=project,
+            project_root=project_root,
+            version_ids=version_ids,
+        )
+    else:
+        version_ids = ()
+        urls, checksums, provenance, read_set = [], [], [], []
+
+    first_frame_url = ""
+    video_url = ""
+    if mode == "i2v":
+        first_frame_url, checksum, ref, entry = _resolve_single_media_version(
+            project=project,
+            project_root=project_root,
+            version_id=first_frame_ref,
+            media_prefix="image/",
+            label="firstFrameRef",
+        )
+        version_ids = (first_frame_ref,)
+        checksums = [checksum]
+        provenance = [ref]
+        read_set = [entry]
+    elif mode == "video_edit":
+        video_url, checksum, ref, entry = _resolve_single_media_version(
+            project=project,
+            project_root=project_root,
+            version_id=video_ref,
+            media_prefix="video/",
+            label="videoRef",
+        )
+        _assert_video_edit_input_duration(project, project_root, video_ref)
+        version_ids = (video_ref,)
+        checksums = [checksum]
+        provenance = [ref]
+        read_set = [entry]
+
     return _ResolvedR2V(
         target_ref=target_ref,
         element_id=element_id,
@@ -564,6 +905,118 @@ def _resolve_request(
         slot_id=f"element:{element_id}:main",
         slot_kind="element_video",
         owner_ref=f"element:{element_id}",
+        mode=mode,
+        first_frame_version_id=first_frame_ref if mode == "i2v" else "",
+        first_frame_url=first_frame_url,
+        video_version_id=video_ref if mode == "video_edit" else "",
+        video_url=video_url,
+    )
+
+
+def _resolve_s2v_request(
+    *,
+    snapshot: ProjectSnapshot,
+    project_root: Path,
+    target_ref: str,
+    arguments: Mapping[str, Any],
+) -> _ResolvedR2V:
+    """Resolve one s2v_generation call onto the R2V durable machinery.
+
+    The digital-human video publishes into the same element main slot as an
+    r2v render; inputs are exact versions (character image + TTS audio).
+    """
+
+    from models.s2v_model import normalize_s2v_resolution
+
+    project = snapshot.project
+    element_id = _target_element_id(target_ref)
+    _, element = find_timeline_element(project, element_id)
+    creation = element.creation
+    if not isinstance(creation, S2VCreation):
+        raise ValidationError(
+            "仅 creation.type=s2v 的 Element 可以生成数字人视频",
+        )
+    # Explicit refs win; the element's declared portrait/audio are the
+    # defaults so the tool call carries no redundant arguments.
+    image_ref = str(
+        arguments.get("characterImageRef")
+        or creation.portrait_version_id
+        or "",
+    ).strip()
+    audio_ref = str(
+        arguments.get("audioAssetRef") or creation.audio_version_id or "",
+    ).strip()
+    if not image_ref:
+        raise ValidationError(
+            "s2v_generation 需要人像图：传 characterImageRef 或在 "
+            "creation.portrait_version_id 声明（exact 图片 version id）",
+        )
+    if not audio_ref:
+        raise ValidationError(
+            "s2v_generation 需要驱动音频：传 audioAssetRef 或在 "
+            "creation.audio_version_id 声明（可直接使用 tts_generation "
+            "产出的 version）",
+        )
+    resolution = normalize_s2v_resolution(
+        str(arguments.get("resolution") or "480P"),
+    )
+    (
+        image_url,
+        image_checksum,
+        image_prov,
+        image_entry,
+    ) = _resolve_single_media_version(
+        project=project,
+        project_root=project_root,
+        version_id=image_ref,
+        media_prefix="image/",
+        label="characterImageRef",
+    )
+    (
+        audio_url,
+        audio_checksum,
+        audio_prov,
+        audio_entry,
+    ) = _resolve_single_media_version(
+        project=project,
+        project_root=project_root,
+        version_id=audio_ref,
+        media_prefix="audio/",
+        label="audioAssetRef",
+    )
+    # Task duration metadata follows the (header-corrected) audio duration
+    # recorded on the TTS source version; the provider derives the real one.
+    audio_version = project.assets.source_versions_by_id.get(audio_ref)
+    audio_duration = (
+        audio_version.duration_seconds
+        if audio_version is not None and audio_version.duration_seconds
+        else 5.0
+    )
+    duration_seconds = max(1, min(60, round(audio_duration)))
+    return _ResolvedR2V(
+        target_ref=target_ref,
+        element_id=element_id,
+        element_label=element.label,
+        prompt=f"数字人口型合成：{element.label or element_id}",
+        ratio=project.settings.aspect_ratio,
+        duration_seconds=duration_seconds,
+        resolution=resolution,
+        watermark=False,
+        generate_audio=True,
+        reference_version_ids=(image_ref, audio_ref),
+        reference_urls=(),
+        reference_checksums=(image_checksum, audio_checksum),
+        provenance_refs=(image_prov, audio_prov),
+        read_set=(image_entry, audio_entry),
+        slot_id=f"element:{element_id}:main",
+        slot_kind="element_video",
+        owner_ref=f"element:{element_id}",
+        provider="s2v",
+        s2v_image_version_id=image_ref,
+        s2v_image_url=image_url,
+        s2v_audio_version_id=audio_ref,
+        s2v_audio_url=audio_url,
+        s2v_resolution=resolution,
     )
 
 
@@ -997,6 +1450,7 @@ class FileR2VExecutionService:
         idempotency_key: str,
         expected_object_versions: Sequence[str] = (),
         start: bool = True,
+        s2v: bool = False,
     ) -> FileR2VDispatch:
         command_hash = _fingerprint(
             {
@@ -1099,7 +1553,7 @@ class FileR2VExecutionService:
         if conflicts:
             raise ConflictError("R2V 命令目标已被其他写者修改")
         resolved = await asyncio.to_thread(
-            _resolve_request,
+            _resolve_s2v_request if s2v else _resolve_request,
             snapshot=base,
             project_root=self.services.projects.project_root(project_id),
             target_ref=target_ref,
@@ -1143,7 +1597,7 @@ class FileR2VExecutionService:
         resolved: _ResolvedR2V,
         stable: Mapping[str, str],
     ) -> dict[str, Any]:
-        return {
+        payload = {
             "targetRef": resolved.target_ref,
             "elementId": resolved.element_id,
             "elementLabel": resolved.element_label,
@@ -1167,6 +1621,30 @@ class FileR2VExecutionService:
             "artifactVersionId": stable["artifact_version_id"],
             "transactionId": stable["transaction_id"],
         }
+        if resolved.mode != "r2v":
+            # Only non-default modes join the frozen request so legacy r2v
+            # tasks keep their fingerprint identity across the upgrade.
+            payload.update(
+                {
+                    "mode": resolved.mode,
+                    "firstFrameVersionId": resolved.first_frame_version_id,
+                    "firstFrameUrl": resolved.first_frame_url,
+                    "videoVersionId": resolved.video_version_id,
+                    "videoUrl": resolved.video_url,
+                },
+            )
+        if resolved.provider == "s2v":
+            payload.update(
+                {
+                    "provider": "s2v",
+                    "s2vImageVersionId": resolved.s2v_image_version_id,
+                    "s2vImageUrl": resolved.s2v_image_url,
+                    "s2vAudioVersionId": resolved.s2v_audio_version_id,
+                    "s2vAudioUrl": resolved.s2v_audio_url,
+                    "s2vResolution": resolved.s2v_resolution,
+                },
+            )
+        return payload
 
     async def _admit(
         self,
@@ -2036,6 +2514,32 @@ class FileR2VExecutionService:
                     task.task_id,
                     project_id=task.project_id,
                 ):
+                    if str(request.get("provider") or "") == "s2v":
+                        return await self.provider.submit_s2v(
+                            image_url=str(request["s2vImageUrl"]),
+                            audio_url=str(request["s2vAudioUrl"]),
+                            resolution=str(
+                                request.get("s2vResolution") or "480P",
+                            ),
+                        )
+                    request_mode = str(request.get("mode") or "r2v")
+                    extra_arguments: dict[str, Any] = {}
+                    if request_mode != "r2v":
+                        # Passed only for explicit modes so injected test
+                        # providers with the legacy signature keep working.
+                        extra_arguments = {
+                            "mode": request_mode,
+                            "first_frame_url": (
+                                str(request["firstFrameUrl"])
+                                if request.get("firstFrameUrl")
+                                else None
+                            ),
+                            "video_url": (
+                                str(request["videoUrl"])
+                                if request.get("videoUrl")
+                                else None
+                            ),
+                        }
                     return await self.provider.submit(
                         prompt=str(request["prompt"]),
                         reference_image_urls=tuple(request["referenceUrls"]),
@@ -2044,6 +2548,7 @@ class FileR2VExecutionService:
                         resolution=str(request["resolution"]),
                         watermark=bool(request["watermark"]),
                         generate_audio=bool(request["generateAudio"]),
+                        **extra_arguments,
                     )
 
             provider_task_id = await asyncio.wait_for(
@@ -2419,6 +2924,10 @@ class FileR2VExecutionService:
                     task.task_id,
                     project_id=task.project_id,
                 ):
+                    if str(claim.request.get("provider") or "") == "s2v":
+                        return await self.provider.poll_s2v(
+                            claim.provider_task_id,
+                        )
                     return await self.provider.poll(claim.provider_task_id)
 
             raw = await asyncio.wait_for(
@@ -3645,6 +4154,14 @@ class FileR2VExecutionService:
             slot_id=artifact.slot_id,
             select_for_render=True,
         )
+        # The provider decides the real footage length (s2v follows its
+        # driving audio); align the timeline with what was actually billed
+        # and delivered instead of freezing the last frame to pad the plan.
+        reconcile_candidate_span(
+            candidate,
+            element_id=element_id,
+            actual_duration_seconds=artifact.duration_seconds,
+        )
 
     async def _quarantine(
         self,
@@ -3928,6 +4445,46 @@ class FileR2VExecutionService:
             await asyncio.gather(*workers, return_exceptions=True)
 
 
+def _has_accepted_provider_task(task_id: str, project_id: str) -> bool:
+    """Whether a billed provider task was accepted for this Creator Task."""
+
+    try:
+        from models.provider_tasks import read_provider_tasks
+
+        return any(
+            entry.get("providerTaskId")
+            for entry in read_provider_tasks(task_id, project_id)
+        )
+    except Exception:  # noqa: BLE001 - absence of a ledger is not an error
+        return False
+
+
+def _accepted_provider_tasks_note(task_id: str, project_id: str) -> str:
+    """Name any billed provider task an interrupted Task already paid for.
+
+    Asynchronous provider submissions (e.g. qwen-mt-image translation) are
+    billed on acceptance and their result stays retrievable for 24h, so a
+    terminalized Task must say which ids to fetch instead of losing them.
+    """
+
+    from models.provider_tasks import read_provider_tasks
+
+    try:
+        entries = read_provider_tasks(task_id, project_id)
+    except Exception:  # noqa: BLE001 - bookkeeping must not break recovery
+        return ""
+    if not entries:
+        return ""
+    described = ", ".join(
+        f"{entry.get('model', '?')}:{entry.get('providerTaskId', '?')}"
+        for entry in entries
+    )
+    return (
+        "; already accepted (billed) provider tasks whose results stay "
+        f"retrievable for 24h: {described}"
+    )
+
+
 async def recover_interrupted_image_tasks(
     services: CreatorFileServices,
 ) -> int:
@@ -3938,9 +4495,9 @@ async def recover_interrupted_image_tasks(
     accepted the request before the process died.
     """
 
-    from .image_execution import FileImageExecutionService
+    from .image_execution import file_image_execution_service
 
-    worker = FileImageExecutionService(services)
+    worker = file_image_execution_service(services)
     executions = worker.executions
     recovered = 0
     for project_id in services.projects.discover_project_ids():
@@ -3972,6 +4529,15 @@ async def recover_interrupted_image_tasks(
                 recovered += 1
                 continue
             if task.status is TaskStatus.RUNNING:
+                # A server-side provider job (qwen-mt-image translation) is
+                # billed on acceptance and its id is durable, so hand it to
+                # the background poller rather than discarding a paid result
+                # or blocking startup on it. Only the one-shot synchronous
+                # calls stay fail-closed below.
+                if _has_accepted_provider_task(task.task_id, project_id):
+                    worker.schedule_resume(task)
+                    recovered += 1
+                    continue
                 await worker._fail_if_running(  # noqa: SLF001
                     project_id,
                     stable,
@@ -3979,6 +4545,10 @@ async def recover_interrupted_image_tasks(
                     message=(
                         "image provider call was interrupted; refusing automatic "
                         "non-idempotent resubmission"
+                        + _accepted_provider_tasks_note(
+                            task.task_id,
+                            project_id,
+                        )
                     ),
                 )
             else:
@@ -4090,6 +4660,9 @@ async def shutdown_file_media_execution_services() -> None:
             *(service.shutdown() for service in services),
             return_exceptions=True,
         )
+    from .image_execution import shutdown_file_image_execution_services
+
+    await shutdown_file_image_execution_services()
 
 
 def clear_file_media_execution_registry_for_tests() -> None:
@@ -4125,6 +4698,63 @@ async def execute_file_r2v_command(
     )
 
 
+async def execute_file_s2v_command(
+    services: CreatorFileServices,
+    *,
+    project_id: str,
+    target_ref: str,
+    arguments: Mapping[str, Any],
+    idempotency_key: str,
+    expected_object_versions: Sequence[str] = (),
+) -> FileR2VDispatch:
+    """Digital-human (wan2.2-s2v) dispatch through the R2V durable poller."""
+
+    return await file_r2v_execution_service(services).dispatch(
+        project_id=project_id,
+        target_ref=target_ref,
+        arguments=arguments,
+        idempotency_key=idempotency_key,
+        expected_object_versions=expected_object_versions,
+        s2v=True,
+    )
+
+
+async def preflight_s2v_face_detect(
+    services: CreatorFileServices,
+    *,
+    project_id: str,
+    arguments: Mapping[str, Any],
+) -> None:
+    """Free wan2.2-s2v-detect gate that runs before execution authorization.
+
+    A failed portrait check raises a readable ``ValidationError`` so the
+    agent can pick another image without any authorization being created.
+    """
+
+    from models.s2v_model import detect_face
+
+    image_ref = str(arguments.get("characterImageRef") or "").strip()
+    if not image_ref:
+        raise ValidationError(
+            "s2v_generation 需要 characterImageRef（exact 人像图 version id）",
+        )
+    snapshot = await asyncio.to_thread(services.projects.read, project_id)
+    image_url, _, _, _ = _resolve_single_media_version(
+        project=snapshot.project,
+        project_root=services.projects.project_root(project_id),
+        version_id=image_ref,
+        media_prefix="image/",
+        label="characterImageRef",
+    )
+    result = await detect_face(image_url)
+    if not result.passed:
+        raise ValidationError(
+            f"数字人人像检测未通过（免费 detect，未创建执行授权）："
+            f"{result.reason or '未知原因'}。常见原因：多人/侧脸/模糊/遮挡/"
+            "风格不支持；请换一张单人、正脸、清晰的角色图后重试",
+        )
+
+
 __all__ = [
     "ExistingR2VProvider",
     "FileR2VDispatch",
@@ -4133,7 +4763,10 @@ __all__ = [
     "R2VTaskState",
     "clear_file_media_execution_registry_for_tests",
     "execute_file_r2v_command",
+    "execute_file_s2v_command",
     "file_r2v_execution_service",
+    "media_version_duration_seconds",
+    "preflight_s2v_face_detect",
     "recover_interrupted_image_tasks",
     "shutdown_file_media_execution_services",
     "start_file_media_execution_services",

@@ -32,7 +32,7 @@ from pydantic import (
 )
 
 
-CURRENT_PROJECT_SCHEMA_VERSION = 5
+CURRENT_PROJECT_SCHEMA_VERSION = 6
 DEFAULT_TIMELINE_ID = "timeline:main"
 DEFAULT_TIMELINE_TICKS_PER_SECOND = 1_000
 SHA256_PATTERN = r"^[a-f0-9]{64}$"
@@ -467,6 +467,22 @@ class VisualVariant(StrictModel):
     consistency_tags: list[str] = Field(default_factory=list)
 
 
+class CharacterVoice(StrictModel):
+    """An enrolled (cloned) voice bound to one character VisualEntity.
+
+    Optional enhancement: characters work without a voice.  Once enrolled the
+    binding travels with the entity; re-enrolling replaces it.  The record
+    keeps the full rebuild inputs so a lapsed cloud voice can be re-enrolled.
+    """
+
+    voice_id: str = Field(min_length=1)
+    target_model: str = Field(min_length=1)
+    preferred_name: str = ""
+    sample_source_version_id: EntityId | None = None
+    enrollment_key: str = ""
+    created_at: UtcDateTime
+
+
 class VisualEntity(StrictModel):
     entity_id: EntityId
     kind: Literal["character", "scene", "prop"]
@@ -478,6 +494,14 @@ class VisualEntity(StrictModel):
         default_factory=EntityCollection,
     )
     selected_artifact_version_id: EntityId | None = None
+    voice: CharacterVoice | None = None
+
+    @model_validator(mode="after")
+    def _validate_voice_owner(self) -> VisualEntity:
+        if self.voice is not None and self.kind != "character":
+            raise ValueError("only character entities can bind a voice")
+        return self
+
     # The identity master: new variants reference this variant's selected
     # artifact first so the character does not drift across costumes and
     # stages.
@@ -777,6 +801,59 @@ class R2VCreation(StrictModel):
         return self
 
 
+class T2VCreation(StrictModel):
+    """Pure text-to-video creative facts.
+
+    The provider consumes nothing but the prompt, so the model carries only
+    the narrative planning facts that produce it — no shots, storyboard or
+    reference stacks.
+    """
+
+    type: Literal["t2v"] = "t2v"
+    intent: str = ""
+    narrative: str = ""
+    continuity: str = ""
+    video_prompt: str = ""
+    recipe: GenerationRecipe | None = None
+
+
+class I2VCreation(StrictModel):
+    """First-frame-to-video creative facts.
+
+    The provider consumes exactly one first-frame image plus the prompt;
+    the frame is an exact version reference, not a storyboard pipeline.
+    """
+
+    type: Literal["i2v"] = "i2v"
+    intent: str = ""
+    narrative: str = ""
+    continuity: str = ""
+    first_frame_version_id: EntityId | None = None
+    video_prompt: str = ""
+    recipe: GenerationRecipe | None = None
+
+
+class S2VCreation(StrictModel):
+    """Digital-human (speech-to-video) creative facts.
+
+    wan2.2-s2v consumes a portrait image and a driving audio track; the
+    script is the necessary intermediate that produces that audio via TTS.
+    Nothing else reaches the provider, so nothing else is modelled.
+    """
+
+    type: Literal["s2v"] = "s2v"
+    intent: str = ""
+    # Visual entity whose portrait (and enrolled voice) drives the clip.
+    character_ref: EntityId | None = None
+    # Exact image version used as the s2v reference portrait.
+    portrait_version_id: EntityId | None = None
+    # Spoken lines; TTS turns them into the driving audio below.
+    script: str = ""
+    # Exact audio version that drives the lip-sync.
+    audio_version_id: EntityId | None = None
+    recipe: GenerationRecipe | None = None
+
+
 class EditCreation(StrictModel):
     """Creative facts for one selected source range.
 
@@ -963,6 +1040,13 @@ class AudioCreation(StrictModel):
 
     type: Literal["audio"] = "audio"
     source_asset_version_id: EntityId
+    # TTS-produced narration keeps its script here: editing the script and
+    # applying the change re-synthesizes the audio. Uploaded/footage audio
+    # leaves it empty.
+    script: str = ""
+    # Synthesis speed multiplier; only the CosyVoice family honours it,
+    # other models keep the default 1.0.
+    speech_rate: float = Field(default=1.0, ge=0.5, le=2.0)
     gain_db: float = 0.0
     pan: float = Field(default=0.0, ge=-1, le=1)
 
@@ -976,6 +1060,9 @@ class AudioCreation(StrictModel):
 
 ElementCreation = Annotated[
     R2VCreation
+    | T2VCreation
+    | I2VCreation
+    | S2VCreation
     | EditCreation
     | OverlayCreation
     | MotionClipCreation
@@ -1099,7 +1186,7 @@ class Timeline(StrictModel):
 
 
 class Project(StrictModel):
-    schema_version: Literal[5] = CURRENT_PROJECT_SCHEMA_VERSION
+    schema_version: Literal[6] = CURRENT_PROJECT_SCHEMA_VERSION
     project_id: EntityId
     generation: int = Field(default=0, ge=0)
     created_at: UtcDateTime
@@ -1318,6 +1405,15 @@ class Project(StrictModel):
                     artifact_versions,
                     entity.selected_artifact_version_id,
                     "selected visual artifact",
+                )
+            if (
+                entity.voice is not None
+                and entity.voice.sample_source_version_id is not None
+            ):
+                _require_key(
+                    source_versions,
+                    entity.voice.sample_source_version_id,
+                    "character voice sample version",
                 )
 
         _require_collection_identity(
@@ -1786,6 +1882,7 @@ __all__ = [
     "DEFAULT_TIMELINE_TICKS_PER_SECOND",
     "ArtifactVersionRenderSource",
     "AudioCreation",
+    "CharacterVoice",
     "ArtifactSlot",
     "ArtifactVersion",
     "AssetIndex",

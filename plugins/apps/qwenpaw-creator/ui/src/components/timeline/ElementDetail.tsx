@@ -17,7 +17,10 @@ import type {
   TimelineDocument,
   TimelineElementDocument,
 } from "@/contracts/creator";
-import { getArtifactVersionMediaUrl } from "@/api/creator";
+import {
+  getArtifactVersionMediaUrl,
+  getAssetVersionMediaUrl,
+} from "@/api/creator";
 import {
   TRANSITION_KIND_LABEL,
   resolveElementOutputs,
@@ -733,20 +736,205 @@ export default function ElementDetail({
               </p>
             </div>
           )}
-          {creation.type === "audio" && (
-            <div className="rounded-lg bg-[var(--color-bg-secondary)] p-3 text-xs text-[var(--color-text-secondary)]">
-              {t("elementDetail.audioSource")}
-              {project.assets.source_versions_by_id[
-                creation.source_asset_version_id
-              ]?.name || t("elementDetail.currentAudio")}
-              <br />
-              {t("elementDetail.volume")} {creation.gain_db} dB ·{" "}
-              {t("elementDetail.pan")} {creation.pan}
-            </div>
-          )}
+          {creation.type === "audio" &&
+            (() => {
+              const audioVersion =
+                project.assets.source_versions_by_id[
+                  creation.source_asset_version_id
+                ];
+              const audioMeta = (audioVersion?.metadata ?? {}) as Record<
+                string,
+                unknown
+              >;
+              const textPreview = String(audioMeta.textPreview ?? "");
+              const voiceName = String(audioMeta.voice ?? "");
+              const ttsModel = String(audioMeta.model ?? "");
+              // Streaming WAV headers can claim absurd durations (hours); hide
+              // anything implausible instead of showing a broken number.
+              const plausibleDuration =
+                audioVersion?.duration_seconds != null &&
+                audioVersion.duration_seconds > 0 &&
+                audioVersion.duration_seconds < 4 * 3600
+                  ? audioVersion.duration_seconds
+                  : null;
+              const spanSec = sec(
+                element.span.duration_tick,
+                timeline.ticks_per_second,
+              );
+              // Synthesized narration has no explicit duration knob on the
+              // provider: length follows the script, so the editable script
+              // shows its time budget and overruns are flagged here.
+              const overBudget =
+                plausibleDuration != null && plausibleDuration > spanSec + 0.05;
+              const scriptText = creation.script || textPreview;
+              // Only the CosyVoice family exposes a numeric speed knob;
+              // qwen-tts length is controlled through the script alone.
+              const supportsSpeechRate =
+                ttsModel.startsWith("cosyvoice") ||
+                ttsModel.includes("qwen-audio");
+              return (
+                <div className="space-y-3">
+                  <div className="rounded-lg bg-[var(--color-bg-secondary)] p-3 text-xs text-[var(--color-text-secondary)]">
+                    <div className="flex items-center justify-between gap-2">
+                      <b className="text-[var(--color-text-primary)]">
+                        {audioVersion?.name || "音频素材"}
+                      </b>
+                      <span
+                        className={`text-[10px] ${
+                          overBudget
+                            ? "font-semibold text-[var(--color-warning)]"
+                            : "text-[var(--color-text-tertiary)]"
+                        }`}
+                      >
+                        {plausibleDuration != null
+                          ? t("elementDetail.audioBudget", {
+                              actual: plausibleDuration.toFixed(1),
+                              budget: spanSec,
+                            })
+                          : "时长以试听为准"}
+                      </span>
+                    </div>
+                    {overBudget && (
+                      <p className="mt-1 text-[10px] text-[var(--color-warning)]">
+                        {t("elementDetail.audioOverBudget")}
+                      </p>
+                    )}
+                    {scriptText && (
+                      <div
+                        data-creator-field={`element:${element.element_id}/creation/script`}
+                        data-creator-path={pointer("creation", "script")}
+                        className="mt-1.5 space-y-1"
+                      >
+                        <Input.TextArea
+                          value={scriptText}
+                          autoSize={{ minRows: 2, maxRows: 6 }}
+                          disabled={applying}
+                          onChange={(event) =>
+                            onChange((draft) => {
+                              if (draft.creation.type === "audio")
+                                draft.creation.script = event.target.value;
+                            })
+                          }
+                          className="!text-xs"
+                        />
+                        <InlineReviewDiff
+                          pointer={pointer("creation", "script")}
+                        />
+                        {supportsSpeechRate && (
+                          <label
+                            data-creator-field={`element:${element.element_id}/creation/speech_rate`}
+                            data-creator-path={pointer(
+                              "creation",
+                              "speech_rate",
+                            )}
+                            className="flex items-center gap-2"
+                          >
+                            <span className="text-[10px] text-[var(--color-text-tertiary)]">
+                              {t("elementDetail.speechRate")}
+                            </span>
+                            <InputNumber
+                              size="small"
+                              value={creation.speech_rate ?? 1.0}
+                              min={0.5}
+                              max={2}
+                              step={0.1}
+                              disabled={applying}
+                              className="!w-20"
+                              onChange={(value) =>
+                                onChange((draft) => {
+                                  if (draft.creation.type === "audio")
+                                    draft.creation.speech_rate =
+                                      typeof value === "number" ? value : 1.0;
+                                })
+                              }
+                            />
+                            <InlineReviewDiff
+                              pointer={pointer("creation", "speech_rate")}
+                            />
+                          </label>
+                        )}
+                        <p className="text-[10px] text-[var(--color-text-tertiary)]">
+                          {t("elementDetail.ttsScriptHint")}
+                        </p>
+                      </div>
+                    )}
+                    {(voiceName || ttsModel) && (
+                      <p className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">
+                        {voiceName && `音色 ${voiceName}`}
+                        {voiceName && ttsModel && " · "}
+                        {ttsModel && `模型 ${ttsModel}`}
+                      </p>
+                    )}
+                    {audioVersion && (
+                      <audio
+                        src={getAssetVersionMediaUrl(audioVersion.version_id)}
+                        controls
+                        preload="metadata"
+                        className="mt-2 h-8 w-full"
+                      />
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label
+                      data-creator-field={`element:${element.element_id}/creation/gain_db`}
+                      data-creator-path={pointer("creation", "gain_db")}
+                      className="block"
+                    >
+                      <FieldLabel>音量增益（dB）</FieldLabel>
+                      <InputNumber
+                        value={creation.gain_db}
+                        step={1}
+                        min={-30}
+                        max={12}
+                        disabled={applying}
+                        className="w-full"
+                        onChange={(value) =>
+                          onChange((draft) => {
+                            if (draft.creation.type === "audio")
+                              draft.creation.gain_db = Number(value ?? 0);
+                          })
+                        }
+                      />
+                      <InlineReviewDiff
+                        pointer={pointer("creation", "gain_db")}
+                      />
+                    </label>
+                    <label
+                      data-creator-field={`element:${element.element_id}/creation/pan`}
+                      data-creator-path={pointer("creation", "pan")}
+                      className="block"
+                    >
+                      <FieldLabel>声像（-1 左 – 1 右）</FieldLabel>
+                      <InputNumber
+                        value={creation.pan}
+                        step={0.1}
+                        min={-1}
+                        max={1}
+                        disabled={applying}
+                        className="w-full"
+                        onChange={(value) =>
+                          onChange((draft) => {
+                            if (draft.creation.type === "audio")
+                              draft.creation.pan = Number(value ?? 0);
+                          })
+                        }
+                      />
+                      <InlineReviewDiff pointer={pointer("creation", "pan")} />
+                    </label>
+                  </div>
+                  <p className="text-[10px] leading-4 text-[var(--color-text-tertiary)]">
+                    合成时该音频按 span
+                    混入成片；旁白播放区间内会自动压低画面原声，避免互相干扰。
+                  </p>
+                </div>
+              );
+            })()}
         </section>
 
-        {creation.type === "r2v" && (
+        {(creation.type === "r2v" ||
+          creation.type === "t2v" ||
+          creation.type === "i2v" ||
+          creation.type === "s2v") && (
           <section className="rounded-xl border border-[var(--color-border)] p-3">
             <h4 className="mb-3 flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-primary)]">
               <Film className="h-3.5 w-3.5 text-[var(--color-accent)]" />
@@ -811,7 +999,10 @@ export default function ElementDetail({
         )}
       </div>
 
-      {creation.type === "r2v" && (
+      {(creation.type === "r2v" ||
+        creation.type === "t2v" ||
+        creation.type === "i2v" ||
+        creation.type === "s2v") && (
         <footer className="flex shrink-0 items-center justify-end border-t border-[var(--color-border)] bg-[var(--color-bg-primary)] px-4 py-3">
           <Button
             type="primary"
@@ -819,7 +1010,9 @@ export default function ElementDetail({
             disabled={dirtyCount > 0 || applying}
             onClick={() => onOpenWorkbench(element)}
           >
-            {t("elementDetail.enterR2VWorkbench")}
+            {t("elementDetail.enterWorkbench", {
+              mode: t(`r2v.modeLabel.${creation.type}`),
+            })}
           </Button>
         </footer>
       )}

@@ -190,6 +190,9 @@ export function classifyElementTrack(
   const { creation } = element;
   switch (creation.type) {
     case "r2v":
+    case "t2v":
+    case "i2v":
+    case "s2v":
       return "ai";
     case "edit":
       return "clip";
@@ -430,7 +433,11 @@ export function elementCreationSummary(
 ): string {
   switch (creation.type) {
     case "r2v":
+    case "t2v":
+    case "i2v":
       return creation.narrative || creation.intent || creation.video_prompt;
+    case "s2v":
+      return creation.script || creation.intent;
     case "edit":
       return creation.intent || creation.reason;
     case "overlay":
@@ -463,6 +470,21 @@ export const ELEMENT_TYPE_META: Record<
 > = {
   r2v: {
     label: "timeline.elementTypes.r2v",
+    color: "#ff7f16",
+    soft: "rgba(255,127,22,.12)",
+  },
+  t2v: {
+    label: "timeline.elementTypes.t2v",
+    color: "#ff7f16",
+    soft: "rgba(255,127,22,.12)",
+  },
+  i2v: {
+    label: "timeline.elementTypes.i2v",
+    color: "#ff7f16",
+    soft: "rgba(255,127,22,.12)",
+  },
+  s2v: {
+    label: "timeline.elementTypes.s2v",
     color: "#ff7f16",
     soft: "rgba(255,127,22,.12)",
   },

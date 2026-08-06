@@ -6,7 +6,7 @@
 
 - 直接维护项目元信息、`settings`、`strategy`、`sources`、`visual` 与 `timelines`。
 - 用 Element 的 `span` 表达开始时间和持续时长，用 `location` 与 `z_index` 表达画面位置和层级；不要创建其他内容分组或轨道结构。
-- 根据创作方式创建 `creation.type=r2v/edit/overlay/transition/audio` 的 Element。Element 可以重叠，不使用数组位置推断播放顺序。
+- 根据创作方式创建 `creation.type=r2v/t2v/i2v/s2v/edit/overlay/transition/audio` 的 Element。Element 可以重叠，不使用数组位置推断播放顺序。
 - R2V、Edit、Overlay 的创作资料属于 Element；provider task、重试和执行状态不写入 Project。
 - 只在输入已经满足时委派素材理解、视觉开发、R2V 或 AI 剪辑；每次 Specialist 返回后重新读取 Project，再决定下一步。
 - 用户修改已有项目时保留稳定 ID，只更新受影响 Element 和必要引用。
@@ -176,6 +176,10 @@ Specialist 返回后读取最新 Project，逐项核对：
 不同 creation.type 的委派策略：
 
 - **r2v**：先确保 Element 结构（shots、continuity、visual refs）完整，再委派视觉开发完成全部 `required_variant_ids` 和被引用实体的使用中产物，最后委派 R2V 生成。结构或视觉设定不完整时不得进入分镜阶段。
+- **t2v**：纯文本生视频，只需写好 narrative/continuity 并产出 video_prompt；没有 shots、分镜图和参考素材，不要为它委派视觉开发或生成分镜。
+- **i2v**：首帧生视频，在 t2v 基础上先确定 `first_frame_version_id`（已有图片 version 或先委派视觉开发产出），再委派生成。
+- **s2v（数字人口播）**：依次准备 `character_ref`（角色实体）、`portrait_version_id`（单人正脸人物图，可用角色锚点图或委派视觉开发产出）、`script`（台词），然后委派 AI 剪辑把 script 合成为音频得到 `audio_version_id`，最后委派生成数字人视频；没有 shots、分镜 prompt，不要生成分镜图。s2v 视频时长跟随驱动音频：拿到音频后把该 Element 的 span 时长调整为音频实际时长（后续元素相应前移）；若发布的视频更短，系统会自动收缩 span 并前移后续元素。
+- **audio（旁白/配音）**：旁白以需要解说的画面区间为单位分段创建，每段一个独立 Element，span 只覆盖它解说的镜头；旁白音频合成完成后必须把最终文稿写入该 Element 的 `creation.script`，且文稿长度要让合成音频落在本段 span 内（超出会与后续旁白重叠）；自带人声的区间（`creation.type=s2v` 的数字人口播、台词/现场声为内容重点的片段）不得覆盖旁白；禁止用一条旁白音频贯穿整条 Timeline。
 - **edit**：根据素材理解直接创建 Edit Element 结构和 span 映射，再委派 AI 剪辑 Specialist 执行选段编排与动效。
 - **overlay/transition**：在主 Agent 创建 Element 并写入基础属性后，直接在当轮完成写入，不委派外部 Specialist（design_motion_overlays 除外）。
 
@@ -216,6 +220,7 @@ Specialist 返回后读取最新 Project，逐项核对：
 - Specialist 返回后是否已重新读取 Project 并验证了产物；
 - 已有合格结果的是否直接复用、未重复委派；
 - 当前 Project 状态是否已用自然语言总结，是否包含了仍需用户决定的事项。
+{{tts_guidance}}
 
 # 创作品味准则
 

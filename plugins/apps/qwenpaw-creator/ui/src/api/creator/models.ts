@@ -47,7 +47,13 @@ export function getModelConfig(): Promise<ModelConfigData> {
 }
 
 export interface ResolvedModels {
-  video: { provider: string; model: string };
+  video: {
+    provider: string;
+    model: string;
+    /** Per-mode derived names — what a t2v/i2v element actually bills. */
+    byMode?: Record<string, string>;
+  };
+  s2v?: { model: string };
 }
 
 /**
@@ -57,6 +63,29 @@ export interface ResolvedModels {
  */
 export function getResolvedModels(): Promise<ResolvedModels> {
   return creatorRequest("/models/resolved");
+}
+
+export interface TtsModelCapability {
+  model: string;
+  label: string;
+  family: "qwen-tts" | "cosyvoice";
+  transport: "http" | "websocket";
+  systemVoices: string[];
+  supportsDesign: boolean;
+}
+
+export interface TtsCapabilities {
+  default: string;
+  models: TtsModelCapability[];
+}
+
+/**
+ * Speech models this backend build supports. The configuration UI renders its
+ * choices from here so it never offers a model the backend cannot drive, and
+ * so it knows which models need a designed voice before they can speak.
+ */
+export function getTtsCapabilities(): Promise<TtsCapabilities> {
+  return creatorRequest("/models/tts-capabilities");
 }
 
 export function saveModelConfig(

@@ -253,7 +253,9 @@
     "secondary": "Secondary",
     "serperSearch": "Serper (Google) Search",
     "configuredSkipChannel": "Not configured, will skip this channel",
-    "serperApiKeyOptional": "Serper API Key (Optional)"
+    "serperApiKeyOptional": "Serper API Key (Optional)",
+    "tts": "TTS Model",
+    "s2v": "Digital Human Model"
   },
   "modelBadges": {
     "textModel": "Text Model",
@@ -265,7 +267,9 @@
     "configuredNotEnabled": "Configured but not enabled",
     "notConfigured": "Not configured",
     "modelConfig": "Model Config",
-    "badgeTitle": "{{name}}: {{status}}"
+    "badgeTitle": "{{name}}: {{status}}",
+    "ttsModel": "TTS Model",
+    "s2vModel": "Digital Human Model"
   },
   "assets": {
     "title": "Assets & Products",
@@ -383,7 +387,9 @@
     "finalCut": "Final Cut",
     "download": "Download",
     "composeNow": "Final Cut",
-    "composeTooltip": "Click to compose final cut"
+    "composeTooltip": "Click to compose final cut",
+    "ttsRegenerateQueued": "Script saved; the assistant is re-synthesizing this narration",
+    "ttsRegenerateMessage": "I changed the narration script of timeline element element:{{elementId}} ({{label}}) to:\n\"{{text}}\"\nPlease re-synthesize it at speech rate {{speechRate}} (pass speechRate to tts_generation; CosyVoice family only, ignore the rate when the current model does not support it), register the new audio version and point the element's source_asset_version_id at it; the synthesized audio must fit the segment budget of {{budgetSeconds}} seconds (trim the script and sync it back to creation.script if needed), and adjust the element duration if it changes."
   },
   "r2v": {
     "title": "Video Plan / {{element}} / Production Workbench",
@@ -454,7 +460,32 @@
       "characters": "Characters",
       "props": "Props",
       "sources": "Sources"
-    }
+    },
+    "modeLabel": {
+      "r2v": "Reference to Video",
+      "t2v": "Text to Video",
+      "i2v": "Image to Video",
+      "s2v": "Digital Human"
+    },
+    "modeSubtitle": {
+      "r2v": "AI-generated frame sub-interface, inheriting storyboards, reference assets and artifact versions.",
+      "t2v": "Pure text generation: the video is driven by the prompt alone, no reference material is submitted.",
+      "i2v": "First-frame generation: motion starts from the chosen frame; the aspect follows it.",
+      "s2v": "Digital human: a portrait plus driving audio produce a lip-synced clip; a free face check runs before submission."
+    },
+    "s2vPortrait": "Portrait (s2v reference)",
+    "s2vPortraitPlaceholder": "Pick a single front-facing portrait version",
+    "s2vScript": "Script",
+    "s2vScriptLabel": "Script text",
+    "s2vScriptPlaceholder": "Write the lines; the agent turns them into the driving audio via TTS",
+    "s2vAudio": "Driving audio",
+    "s2vAudioPlaceholder": "Pick the driving audio version (TTS output of the script)",
+    "i2vFirstFrame": "First frame (i2v reference)",
+    "i2vFirstFramePlaceholder": "Pick the first-frame image version",
+    "videoPromptLabel": "Prompt text",
+    "videoPromptPlaceholder": "Describe the video: subject, motion, scene, camera and quality",
+    "noVideoResult": "No generated result yet.",
+    "notSelected": "Not selected yet"
   },
   "elementDetail": {
     "selectElement": "Select a timeline element",
@@ -519,7 +550,12 @@
       "easeIn": "Ease In",
       "easeOut": "Ease Out",
       "easeInOut": "Ease In-Out"
-    }
+    },
+    "enterWorkbench": "Open Production Workbench ({{mode}})",
+    "audioBudget": "{{actual}}s of {{budget}}s budget",
+    "audioOverBudget": "Audio exceeds this segment and will overlap what follows; trim the script and apply to re-synthesize",
+    "ttsScriptHint": "Edit the script and hit Apply Changes; the assistant re-synthesizes this narration",
+    "speechRate": "Speed"
   },
   "agent": {
     "assistant": "Creative Assistant",
@@ -845,6 +881,9 @@
     },
     "elementTypes": {
       "r2v": "AI Visual",
+      "t2v": "Text to Video",
+      "i2v": "Image to Video",
+      "s2v": "Digital Human",
       "edit": "Clip Edit",
       "transition": "Transition",
       "audio": "Audio"
@@ -853,7 +892,8 @@
     "rulerScrub": "Click or drag to position playhead",
     "compactOverviewAriaLabel": "Compact timeline overview; click any moment to see concurrent content",
     "editBufferTooltip": "Your manual edits from the workbench have been applied; these changes will be synced to the Agent with your next message so it can assess dependency adjustments",
-    "pendingEditCount": "{{count}} manual edits will sync with Agent on next message"
+    "pendingEditCount": "{{count}} manual edits will sync with Agent on next message",
+    "itemsAtMomentBadge": "{{count}} items at this moment"
   },
   "elementList": {
     "disabled": "Disabled",

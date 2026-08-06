@@ -29,7 +29,12 @@ from domain.enums import (
     SpecialistRunStatus,
     TaskStatus,
 )
-from domain.errors import ConflictError, CreatorError, ReviewPendingError
+from domain.errors import (
+    ConflictError,
+    CreatorError,
+    ReviewPendingError,
+    ValidationError,
+)
 from models.config import (
     CREATION_CHECKPOINT_REQUIRED,
     EXECUTION_AUTHORIZATION_ALLOW_ALL,
@@ -160,6 +165,10 @@ from .subagents import (
 )
 
 logger = setup_logger("creator.agent_runtime")
+
+# Arguments the provider prices on: they must still match the approved scope
+# at invocation time, or the user would pay for terms they never saw.
+_BILLING_SENSITIVE_ARGUMENTS = ("durationSeconds", "resolution", "mode")
 
 GROUND_PROMPT_CONTEXT_TOOL_NAME = "ground_prompt_context"
 OBJECT_GROUNDING_TOOL_NAME = "ground_image_objects"
@@ -3658,6 +3667,25 @@ class FileCreatorAgentRuntime:
                 role=role,
                 tools=tools,
             )
+        if spec is not None and spec.name == "s2v_generation":
+            # Free wan2.2-s2v-detect gate: an unsuitable portrait must fail
+            # with a readable error before the billed submission — and, in
+            # required-authorization mode, before any execution
+            # authorization is created (the detect call itself is free).
+            from services.media_files.r2v_execution import (
+                preflight_s2v_face_detect,
+            )
+
+            inner_arguments = arguments.get("arguments")
+            await preflight_s2v_face_detect(
+                self.services,
+                project_id=project_id,
+                arguments=(
+                    inner_arguments
+                    if isinstance(inner_arguments, Mapping)
+                    else {}
+                ),
+            )
         if (
             spec is not None
             and spec.requires_execution_authorization
@@ -3683,7 +3711,14 @@ class FileCreatorAgentRuntime:
                 project_id,
                 authorization_id,
             )
-            active_provider, active_model = _execution_provider_model(spec)
+            active_provider, active_model = _execution_provider_model(
+                spec,
+                (
+                    arguments.get("arguments")
+                    if isinstance(arguments.get("arguments"), Mapping)
+                    else {}
+                ),
+            )
             if (
                 active_provider != authorization.requested_provider
                 or active_model != authorization.requested_model
@@ -3692,6 +3727,41 @@ class FileCreatorAgentRuntime:
                     "execution model configuration changed after authorization; "
                     "request a new authorization",
                 )
+            # The billing terms must still be the approved ones: a video_edit
+            # input whose duration only became probeable while the user was
+            # deciding would otherwise be billed on a length nobody approved.
+            approved_parameters = (
+                authorization.scope.get("parameters")
+                if isinstance(authorization.scope, Mapping)
+                else None
+            )
+            if isinstance(approved_parameters, Mapping):
+                active_billing = await self._billing_arguments(
+                    spec,
+                    project_id=project_id,
+                    tool_arguments=(
+                        dict(arguments.get("arguments"))
+                        if isinstance(arguments.get("arguments"), Mapping)
+                        else {}
+                    ),
+                )
+                drifted = [
+                    key
+                    for key in _BILLING_SENSITIVE_ARGUMENTS
+                    if key in active_billing
+                    and approved_parameters.get(key) != active_billing[key]
+                ]
+                if drifted:
+                    raise FileAgentRuntimeError(
+                        "billing terms changed after authorization "
+                        f"({', '.join(drifted)}): "
+                        + ", ".join(
+                            f"{key} {approved_parameters.get(key)!r} -> "
+                            f"{active_billing[key]!r}"
+                            for key in drifted
+                        )
+                        + "; request a new authorization",
+                    )
 
         waiting_runtime = bool(spec and spec.long_running)
         if waiting_runtime:
@@ -4042,6 +4112,76 @@ class FileCreatorAgentRuntime:
         )
         return authorization
 
+    async def _billing_arguments(
+        self,
+        spec: SpecialistToolSpec,
+        *,
+        project_id: str,
+        tool_arguments: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Tool arguments adjusted so the estimate matches what is billed.
+
+        ``video_edit`` ignores the tool's ``durationSeconds``: the provider
+        bills the input video's own length (truncated to its documented
+        keep-window), so the estimate reads that duration from the exact
+        version instead of the requested one.
+        """
+
+        arguments = dict(tool_arguments)
+        if spec.provider_kind != "video":
+            return arguments
+        if str(arguments.get("mode") or "").strip().casefold() != "video_edit":
+            return arguments
+        video_ref = str(arguments.get("videoRef") or "").strip()
+        if not video_ref:
+            return arguments
+        from models.video_capabilities import (
+            HAPPYHORSE_VIDEO_EDIT_KEPT_SECONDS,
+        )
+        from services.media_files.r2v_execution import (
+            effective_video_duration_seconds,
+        )
+
+        try:
+            snapshot = await asyncio.to_thread(
+                self.services.projects.read,
+                project_id,
+            )
+            # Same resolver execution uses, so a probed-only asset is priced
+            # and authorized on the duration it will actually be billed for.
+            duration = await asyncio.to_thread(
+                effective_video_duration_seconds,
+                snapshot.project,
+                self.services.projects.project_root(project_id),
+                video_ref,
+            )
+        # Expected resolution failures (missing version, unreadable
+        # metadata) fall back to "unknown duration", which surfaces as a
+        # readable ValidationError below. Programming errors must propagate
+        # instead of masquerading as a bad user request.
+        except (CreatorError, ValueError, OSError) as error:
+            logger.warning(
+                "could not resolve the video_edit input duration | "
+                "project=%s ref=%s: %s",
+                project_id,
+                video_ref,
+                error,
+            )
+            duration = None
+        if not duration:
+            # Never offer an approvable price for terms we cannot verify:
+            # execution rejects an unknown video_edit length anyway, so fail
+            # here instead of authorizing the unverified requested duration.
+            raise ValidationError(
+                "无法确定 videoRef 的时长，video_edit 按输入视频计费，"
+                "因此无法给出可批准的费用；请重新引入该视频以补齐元数据后重试",
+            )
+        arguments["durationSeconds"] = min(
+            HAPPYHORSE_VIDEO_EDIT_KEPT_SECONDS,
+            max(1, round(duration)),
+        )
+        return arguments
+
     async def _await_execution_authorization(
         self,
         *,
@@ -4071,8 +4211,22 @@ class FileCreatorAgentRuntime:
             ).hex
         )
         target_ref = str(arguments.get("targetRef") or "project:unknown")
-        provider, model = _execution_provider_model(spec)
         tool_arguments = dict(arguments.get("arguments") or {})
+        provider, model = _execution_provider_model(spec, tool_arguments)
+        # What the provider will actually bill: video_edit follows its input
+        # video, not the requested durationSeconds. The user must approve
+        # those effective terms, so summary and scope both read them
+        # (upstream dropped the local price estimate entirely).
+        billing_arguments = await self._billing_arguments(
+            spec,
+            project_id=project_id,
+            tool_arguments=tool_arguments,
+        )
+        adjusted_parameters = {
+            key: value
+            for key, value in billing_arguments.items()
+            if tool_arguments.get(key) != value
+        }
         record = ExecutionAuthorizationRecord(
             authorization_id=authorization_id,
             project_id=project_id,
@@ -4087,12 +4241,20 @@ class FileCreatorAgentRuntime:
                 target_ref=target_ref,
                 provider=provider,
                 model=model,
-                tool_arguments=tool_arguments,
+                tool_arguments=billing_arguments,
             ),
             scope={
                 "operation": spec.name,
                 "targetRefs": [target_ref],
-                "parameters": tool_arguments,
+                "parameters": billing_arguments,
+                # Keep the literal tool request when it differs, so the
+                # approval record shows both what was asked and what is
+                # billed.
+                **(
+                    {"requestedParameters": tool_arguments}
+                    if adjusted_parameters
+                    else {}
+                ),
                 "promptPreview": _prompt_preview(tool_arguments, limit=200),
             },
             requested_provider=provider,
@@ -5745,21 +5907,62 @@ def _specialist_tool_invocation_id(
     )
 
 
-def _execution_provider_model(spec: SpecialistToolSpec) -> tuple[str, str]:
-    """Snapshot model identity for an approval without loading a provider."""
+def _execution_provider_model(
+    spec: SpecialistToolSpec,
+    tool_arguments: Mapping[str, Any] | None = None,
+) -> tuple[str, str]:
+    """Snapshot the model an approval actually authorizes.
 
+    The identity must be the *effective* model, not just the configured
+    one: image translate runs on ``translate_model`` and the video modes run
+    on names derived from the configured base, so pricing and the
+    post-approval identity check would otherwise cover a different model
+    than the one submitted.
+    """
+
+    arguments = tool_arguments or {}
+    mode = str(arguments.get("mode") or "").strip().casefold()
     if spec.provider_kind == "image":
         from models.image import get_image_backend
 
+        if mode == "translate":
+            from models.config import get_image_translate_model_name
+
+            return "dashscope", get_image_translate_model_name()
         return get_image_backend().casefold(), get_image_model_name()
     if spec.provider_kind == "video":
-        return get_video_backend(), get_video_model_name()
+        from models.video_capabilities import (
+            effective_video_model_name,
+            video_backend_key,
+        )
+
+        backend = get_video_backend()
+        configured = get_video_model_name()
+        # Same rule as the submit path, so the approval can never name a
+        # different model than the billed request (HappyHorse derives even
+        # for the default r2v).
+        return backend, effective_video_model_name(
+            configured,
+            mode,
+            video_backend_key(configured, backend),
+        )
+    if spec.provider_kind == "tts":
+        from models.config import get_tts_model_name
+
+        return "dashscope", get_tts_model_name()
+    if spec.provider_kind == "s2v":
+        from models.config import get_s2v_model_name
+
+        return "dashscope", get_s2v_model_name()
     return str(spec.provider_kind or "creator-tool"), "configured"
 
 
 _AUTHORIZATION_OPERATION_LABELS = {
     "image_generation": "生成图片",
     "r2v_generation": "生成视频",
+    "s2v_generation": "生成数字人视频",
+    "tts_generation": "生成语音",
+    "create_character_voice": "复刻角色音色",
 }
 
 
@@ -5791,9 +5994,16 @@ def _authorization_summary(
         ratio = str(tool_arguments.get("aspectRatio") or "16:9")
         parts.append(f"画幅 {ratio}")
     elif spec.provider_kind == "video":
+        mode = str(tool_arguments.get("mode") or "r2v").strip().casefold()
         duration = tool_arguments.get("durationSeconds")
         if duration:
-            parts.append(f"{duration}秒")
+            # video_edit follows its input video, so name the source of the
+            # number the price is computed from.
+            parts.append(
+                f"{duration}秒（按输入视频计费）"
+                if mode == "video_edit"
+                else f"{duration}秒",
+            )
         resolution = tool_arguments.get("resolution")
         if resolution:
             parts.append(str(resolution).upper())

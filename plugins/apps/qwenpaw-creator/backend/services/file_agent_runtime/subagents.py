@@ -15,6 +15,7 @@ from domain.enums import SpecialistRole
 from models import config as model_config
 from models.video_capabilities import video_model_prompt_guidance
 from services.file_agent_runtime.prompts import render_file_agent_prompt
+from services.file_agent_runtime.prompts import tts_guidance
 from services.project_files.models import Project
 from services.project_files.schema_prompt import build_project_schema_prompt
 
@@ -59,6 +60,16 @@ _ROLE_PROMPT_IDS = {
 # UI displays them as visual-entity:<id>, so models keep deriving targetRefs
 # in those spellings. They map onto exactly one canonical asset ref.
 _VISUAL_ENTITY_ALIAS_KINDS = frozenset({"char", "scene", "prop"})
+
+# TTS guidance is built per render from the configured model's
+# capabilities (see prompts.tts_guidance): a model without system voices
+# turns designing a character voice from an option into a prerequisite.
+_TTS_GUIDANCE_ROLES = frozenset(
+    {
+        SpecialistRole.VISUAL_DEVELOPMENT,
+        SpecialistRole.AI_EDITING_DIRECTOR,
+    },
+)
 
 
 def _normalize_asset_target_ref(target_ref: str) -> str:
@@ -212,6 +223,13 @@ def specialist_system_prompt(
         "workspace_schema": workspace_schema
         or build_project_schema_prompt().text,
     }
+    if role in _TTS_GUIDANCE_ROLES:
+        # Guidance depends on the configured model's capabilities and on the
+        # project scenario, so it is built per render rather than templated.
+        values["tts_guidance"] = tts_guidance.specialist_guidance(
+            role,
+            project.scenario if project is not None else "general",
+        )
     if role is SpecialistRole.SOURCE_INTELLIGENCE:
         # Memory usage rules are injected only when the delegated asset
         # actually has a built graph memory for its current intelligence.

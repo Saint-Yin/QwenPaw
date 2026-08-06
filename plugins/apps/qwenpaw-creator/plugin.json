@@ -273,6 +273,15 @@
             "placeholder": "gpt-image-2"
           },
           {
+            "name": "translate_model",
+            "label": "Image Translate Model",
+            "type": "text",
+            "required": false,
+            "default": "qwen-mt-image",
+            "placeholder": "qwen-mt-image",
+            "help": "Optional in-image text translation model (DashScope provider only). Environment fallback: IMAGE_TRANSLATE_MODEL_NAME."
+          },
+          {
             "name": "quality",
             "label": "Image Quality",
             "type": "select",
@@ -302,6 +311,30 @@
           {"name": "base_url", "label": "ASR Base URL", "type": "text", "required": true, "default": "https://dashscope.aliyuncs.com/api/v1"},
           {"name": "model", "label": "ASR Model", "type": "text", "required": true, "default": "fun-asr"},
           {"name": "language", "label": "Language", "type": "text", "required": false}
+        ]
+      },
+      {
+        "name": "creator_tts_model",
+        "description": "QwenPaw Creator text-to-speech configuration for narration and character voices",
+        "icon": "🔊",
+        "requires_config": false,
+        "config_fields": [
+          {"name": "api_key", "label": "TTS API Key", "type": "password", "required": false, "placeholder": "sk-...", "help": "Optional capability. TTS tools appear only when a key is configured. Environment fallback: TTS_API_KEY."},
+          {"name": "base_url", "label": "TTS Base URL", "type": "text", "required": false, "default": "https://dashscope.aliyuncs.com/api/v1"},
+          {"name": "model", "label": "TTS Model", "type": "text", "required": false, "default": "qwen3-tts-flash"},
+          {"name": "voice", "label": "Default Voice", "type": "select", "required": false, "default": "Cherry", "options": ["Cherry", "Serena", "Ethan", "Chelsie", "Dylan", "Sunny", "Jada", "Nofish"], "help": "System voice used when a request does not pick one. Custom enrolled voices are selected per character."}
+        ]
+      },
+      {
+        "name": "creator_s2v_model",
+        "description": "QwenPaw Creator digital-human lip-sync (Wan2.2-S2V) configuration",
+        "icon": "🧍",
+        "requires_config": false,
+        "config_fields": [
+          {"name": "api_key", "label": "S2V API Key", "type": "password", "required": false, "placeholder": "sk-...", "help": "Optional capability. The s2v_generation tool appears only when a key is resolvable. Environment fallback: S2V_API_KEY."},
+          {"name": "base_url", "label": "S2V Base URL", "type": "text", "required": false, "default": "https://dashscope.aliyuncs.com/api/v1"},
+          {"name": "model", "label": "S2V Model", "type": "text", "required": false, "default": "wan2.2-s2v"},
+          {"name": "detect_model", "label": "Face Detect Model", "type": "text", "required": false, "default": "wan2.2-s2v-detect", "help": "Free portrait suitability check that always runs before the billed submission."}
         ]
       },
       {
