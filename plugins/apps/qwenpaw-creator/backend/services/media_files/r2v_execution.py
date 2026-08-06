@@ -65,6 +65,7 @@ from services.project_files.models import (
     Project,
     R2VCreation,
 )
+from services.media_files.call_budget import ensure_media_call_budget
 from services.media_files.element_adapter import (
     bind_candidate_output,
     find_timeline_element,
@@ -4078,6 +4079,9 @@ async def execute_file_r2v_command(
     idempotency_key: str,
     expected_object_versions: Sequence[str] = (),
 ) -> FileR2VDispatch:
+    # Wallet fuse: every dispatch path (specialist delegation, work-graph
+    # scheduler, manual retry) funnels through here.
+    ensure_media_call_budget(services, project_id)
     return await file_r2v_execution_service(services).dispatch(
         project_id=project_id,
         target_ref=target_ref,
