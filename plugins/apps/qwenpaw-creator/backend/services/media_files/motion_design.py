@@ -93,6 +93,12 @@ from utils.logger import setup_logger
 
 logger = setup_logger("services.media_files.motion_design")
 
+
+def _log_safe(value: object) -> str:
+    """Neutralise CR/LF so user-provided values cannot forge log lines."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")
+
+
 _MAX_SEGMENTS = 24
 _MAX_CONCURRENT_DESIGNS = 3
 _MAX_DESIGN_ATTEMPTS = 2
@@ -1822,11 +1828,15 @@ async def design_motion_overlays(
     logger.info(
         "motion design committed: project=%s decorations=%d styled=%d "
         "segments=%s overlays=%s",
-        project_id,
+        _log_safe(project_id),
         len(designed),
         len(styled),
-        [(item["elementId"], item["status"]) for item in segment_results],
-        [(item["elementId"], item["status"]) for item in text_results],
+        _log_safe(
+            [(item["elementId"], item["status"]) for item in segment_results],
+        ),
+        _log_safe(
+            [(item["elementId"], item["status"]) for item in text_results],
+        ),
     )
     return {
         "ok": True,
