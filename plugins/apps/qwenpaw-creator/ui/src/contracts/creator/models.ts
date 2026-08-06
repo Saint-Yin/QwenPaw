@@ -55,9 +55,11 @@ export interface ModelConfigData {
     // Optional in-image text translation model (mode=translate), DashScope
     // provider only; empty means the backend default qwen-mt-image.
     translate_model: string;
+    // Reuse the DashScope text-model credential by default (like tts/s2v).
+    reuse_llm_key: boolean;
   };
   embedding: ModelConfigItem & { reuse_vlm_key: boolean };
-  video: ModelConfigItem;
+  video: ModelConfigItem & { reuse_llm_key: boolean };
   oss: OssConfig;
   executionAuthorization: {
     mode: "required" | "allow_all";
@@ -67,6 +69,13 @@ export interface ModelConfigData {
   };
   mediaReview: {
     mode: "required" | "auto_approve";
+  };
+  // Advisory self-review tiers (run_review sync/media + render_review).
+  // Explicit CREATOR_*_REVIEW_ENABLED env switches still override at runtime.
+  selfReview: {
+    sync_enabled: boolean;
+    media_enabled: boolean;
+    render_enabled: boolean;
   };
 }
 

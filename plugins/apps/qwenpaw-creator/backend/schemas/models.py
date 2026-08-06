@@ -55,6 +55,15 @@ class ImageConfig(ModelConfigItem):
     """
 
     translate_model: str = ""
+    # Bailian image generation runs on the same DashScope credential as the
+    # text model; reuse it by default like tts/s2v instead of asking twice.
+    reuse_llm_key: bool = True
+
+
+class VideoConfig(ModelConfigItem):
+    """Video generation configuration (family model, per-mode derivation)."""
+
+    reuse_llm_key: bool = True
 
 
 class S2vConfig(ModelConfigItem):
@@ -168,6 +177,23 @@ class MediaReviewConfig(StrictModel):
     mode: Literal["required", "auto_approve"] = "required"
 
 
+class SelfReviewConfig(StrictModel):
+    """Advisory model-driven review tiers along the creation pipeline.
+
+    Mirrors the three independent review modules: ``sync_enabled`` reviews
+    low-cost text artifacts before costly generation (run_review sync),
+    ``media_enabled`` reviews each generated image/video artifact
+    (run_review media), and ``render_enabled`` runs the final-cut
+    six-dimension review (render_review). An explicitly set
+    ``CREATOR_*_REVIEW_ENABLED`` environment switch still overrides the
+    persisted value so existing deployments keep their behaviour.
+    """
+
+    sync_enabled: bool = False
+    media_enabled: bool = False
+    render_enabled: bool = False
+
+
 class OssConfig(StrictModel):
     """QwenPaw Creator media OSS configuration stored in model_config.json."""
 
@@ -189,7 +215,7 @@ class ModelConfigData(StrictModel):
     s2v: S2vConfig = Field(default_factory=S2vConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     image: ImageConfig
-    video: ModelConfigItem
+    video: VideoConfig
     oss: OssConfig = Field(default_factory=OssConfig)
     execution_authorization: ExecutionAuthorizationConfig = Field(
         default_factory=ExecutionAuthorizationConfig,
@@ -202,6 +228,10 @@ class ModelConfigData(StrictModel):
     media_review: MediaReviewConfig = Field(
         default_factory=MediaReviewConfig,
         alias="mediaReview",
+    )
+    self_review: SelfReviewConfig = Field(
+        default_factory=SelfReviewConfig,
+        alias="selfReview",
     )
 
 
