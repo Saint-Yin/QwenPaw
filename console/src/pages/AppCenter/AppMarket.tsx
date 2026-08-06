@@ -59,8 +59,8 @@ const OFFICIAL_APP_EMOJIS: Record<string, string> = {
 // prefix). Falls back to the upstream locales for everything else.
 const OFFICIAL_APP_DESCRIPTIONS: Record<string, Record<string, string>> = {
   "@agentscope/qwenpaw-creator": {
-    zh: "Agentic 视频创作平台：从创意生成或编辑已有素材，AI Agent 协同完成规划、生成、剪辑与合成。",
-    en: "An agentic video creation platform: generate from an idea or edit existing footage, with AI Agents collaborating on planning, generation, editing, and composition.",
+    zh: "Agentic 视频创作平台。从一句创意生成短剧，或将已有素材剪成成片：编剧、导演、视觉、动效、剪辑等 Agent 协同完成策划、生成、剪辑与合成；项目中所见皆可选中交给 Agent 精准修改，每个关键决定都由你确认。",
+    en: "An agentic video creation platform. Start from an idea or existing footage: an Agent team of screenwriting, directing, visual, motion, and editing Specialists handles planning, generation, editing, and composition; select anything in the project and hand it to the Agent for a precise change, with every key decision staying in your hands.",
   },
   "@zhijianma/agent-kanban": {
     zh: "一个看板应用：创建任务并分配给智能体，由指定智能体自动执行，并实时查看其输出流。",

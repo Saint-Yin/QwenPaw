@@ -3,10 +3,10 @@
   "name": "QwenPaw Creator",
   "version": "1.0.1",
   "type": "app",
-  "description": "An agentic video creation platform: generate from an idea or edit existing footage, with AI Agents collaborating on planning, generation, editing, and composition.",
+  "description": "An agentic video creation platform. Start from an idea or existing footage: an Agent team of screenwriting, directing, visual, motion, and editing Specialists handles planning, generation, editing, and composition; select anything in the project and hand it to the Agent for a precise change, with every key decision staying in your hands.",
   "description_i18n": {
-    "zh-CN": "Agentic 视频创作平台：从创意生成或编辑已有素材，AI Agent 协同完成规划、生成、剪辑与合成。",
-    "en-US": "An agentic video creation platform: generate from an idea or edit existing footage, with AI Agents collaborating on planning, generation, editing, and composition."
+    "zh-CN": "Agentic 视频创作平台。从一句创意生成短剧，或将已有素材剪成成片：编剧、导演、视觉、动效、剪辑等 Agent 协同完成策划、生成、剪辑与合成；项目中所见皆可选中交给 Agent 精准修改，每个关键决定都由你确认。",
+    "en-US": "An agentic video creation platform. Start from an idea or existing footage: an Agent team of screenwriting, directing, visual, motion, and editing Specialists handles planning, generation, editing, and composition; select anything in the project and hand it to the Agent for a precise change, with every key decision staying in your hands."
   },
   "author": "QwenPaw Creator Team",
   "entry": {
