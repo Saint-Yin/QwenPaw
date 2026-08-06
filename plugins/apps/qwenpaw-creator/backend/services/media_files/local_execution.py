@@ -94,6 +94,7 @@ from services.media_files.review_admission import (
     assert_media_review_admission,
     media_review_policy,
 )
+from services.render_review.review import schedule_render_review
 from services.project_files.remote_cache import (
     public_source_url,
     resolve_remote_cache,
@@ -3601,8 +3602,8 @@ class FileLocalMediaExecutionService:
 
         self._closed = True
 
-    @staticmethod
     def _result_from_task(
+        self,
         task: TaskRecord,
         *,
         replayed: bool,
@@ -3619,6 +3620,16 @@ class FileLocalMediaExecutionService:
             raise StorageIntegrityError(
                 "SUCCEEDED 本地媒体 Task 缺少可重放结果",
             ) from exc
+        # Self-review hook: every successful convergence (fresh render,
+        # idempotent replay, fingerprint reuse and crash recovery) flows
+        # through this single point. Scheduling is advisory and idempotent:
+        # the switch, the command filter and already-reviewed dedup all live
+        # on the review side.
+        schedule_render_review(
+            self.services,
+            project_id=task.project_id,
+            published_result=result,
+        )
         return FileLocalMediaExecutionResult(
             task_id=task.task_id,
             run_id=str(task.run_id or ""),

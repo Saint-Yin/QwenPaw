@@ -966,6 +966,40 @@ def is_asr_enabled() -> bool:
     }
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    return raw.casefold() in {"1", "true", "yes", "on"}
+
+
+# Code-level master switch for the render self-review module (WT4). Not
+# exposed through plugin.json, schemas or the frontend contract.
+SELF_REVIEW_ENABLED = _bool_env("CREATOR_SELF_REVIEW_ENABLED", False)
+
+
+def is_self_review_enabled() -> bool:
+    """Read the switch live so tests and restarts pick up env changes."""
+    return _bool_env("CREATOR_SELF_REVIEW_ENABLED", False)
+
+
+# Code-level switches for the in-run review bypass (run_review). Advisory
+# only, independent from the final-render self review above; neither is
+# exposed through plugin.json, schemas or the frontend contract.
+SYNC_REVIEW_ENABLED = _bool_env("CREATOR_SYNC_REVIEW_ENABLED", False)
+MEDIA_REVIEW_ENABLED = _bool_env("CREATOR_MEDIA_REVIEW_ENABLED", False)
+
+
+def is_sync_review_enabled() -> bool:
+    """In-run synchronous review of low-cost text/motion artifacts."""
+    return _bool_env("CREATOR_SYNC_REVIEW_ENABLED", False)
+
+
+def is_media_review_enabled() -> bool:
+    """Async bypass review of generated image/video artifacts."""
+    return _bool_env("CREATOR_MEDIA_REVIEW_ENABLED", False)
+
+
 def _image_provider():
     """Return the active image provider instance (lazy import avoids cycles).
 
