@@ -34,6 +34,7 @@ from services.media_files.call_budget import (
     MediaCallBudgetExhausted,
     ensure_media_call_budget,
 )
+from services.media_files.transient_errors import is_transient_error_message
 from services.file_agent_runtime.work_graph import (
     WorkGraph,
     WorkNode,
@@ -54,20 +55,22 @@ _IDLE_EXIT_SECONDS = 300.0
 # failures (safety rejections, validation) stay locked until inputs change.
 _TRANSIENT_RETRY_LIMIT = 2
 
+# Scheduler-only transient markers; the shared media-side classifier
+# (is_transient_error_message) supplies the common ones (connection,
+# timeout, service unavailable, bad file descriptor, status 5xx, ...).
 _TRANSIENT_ERROR_MARKERS = (
-    "timed out",
-    "timeout",
     "rate limit",
     "429",
     "status 5",
-    "connection",
     "temporarily",
 )
 
 
 def _is_transient_dispatch_error(exc: Exception) -> bool:
     text = str(exc).lower()
-    return any(marker in text for marker in _TRANSIENT_ERROR_MARKERS)
+    return is_transient_error_message(text) or any(
+        marker in text for marker in _TRANSIENT_ERROR_MARKERS
+    )
 
 
 _R2V_COMMANDS = {CreatorCommandType.GENERATE_R2V_VIDEO.value}
@@ -129,12 +132,14 @@ class WorkGraphScheduler:
     async def _project_loop(self, project_id: str) -> None:
         event = self._wakes.setdefault(project_id, asyncio.Event())
         while True:
+            # asyncio.timeout instead of wait_for: the pre-3.12 wait_for
+            # could swallow an external cancellation that raced a completed
+            # inner wait, leaving a zombie loop that ignored its cancel and
+            # kept a 300s timer alive (observed as a CI teardown hang).
             try:
-                await asyncio.wait_for(
-                    event.wait(),
-                    timeout=_IDLE_EXIT_SECONDS,
-                )
-            except asyncio.TimeoutError:
+                async with asyncio.timeout(_IDLE_EXIT_SECONDS):
+                    await event.wait()
+            except TimeoutError:
                 if not self._inflight.get(project_id):
                     return
                 continue
