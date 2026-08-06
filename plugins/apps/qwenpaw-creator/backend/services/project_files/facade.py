@@ -43,6 +43,11 @@ from .store import ProjectSnapshot, ProjectStore
 logger = logging.getLogger(__name__)
 
 
+def _log_safe(value: object) -> str:
+    """Neutralise CR/LF so user-provided values cannot forge log lines."""
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")
+
+
 @dataclass(slots=True)
 class CreatorFileServices:
     root: Path
@@ -293,8 +298,8 @@ class CreatorFileServices:
             except Exception:
                 logger.exception(
                     "auto-continue video failed for %s in Project %s",
-                    target_ref,
-                    project_id,
+                    _log_safe(target_ref),
+                    _log_safe(project_id),
                 )
                 continue
             continued.append(target_ref)

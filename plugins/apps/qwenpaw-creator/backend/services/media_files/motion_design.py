@@ -1311,6 +1311,10 @@ async def design_motion_overlays(
         reason: str,
         card_index: int = 0,
     ) -> dict[str, Any]:
+        # The reason string flows into design notes and the fallback
+        # status payload that downstream observers log; neutralise CR/LF
+        # so exception text cannot forge log lines.
+        reason = reason.replace("\r", "\\r").replace("\n", "\\n")
         creation = overlay.creation
         assert isinstance(creation, OverlayCreation)
         emotion = (

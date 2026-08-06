@@ -1536,8 +1536,8 @@ class FileR2VExecutionService:
             logger.info(
                 "r2v dispatch attached to in-flight duplicate: "
                 "project=%s task=%s target=%s",
-                project_id,
-                in_flight.task_id,
+                _log_safe(project_id),
+                _log_safe(in_flight.task_id),
                 _log_safe(target_ref),
             )
             if start and in_flight.status not in _TERMINAL_TASKS:
@@ -2427,9 +2427,9 @@ class FileR2VExecutionService:
             # through runtime task.json files.
             logger.error(
                 "r2v supervisor failed: project=%s task=%s error=%s",
-                project_id,
-                task_id,
-                error,
+                _log_safe(project_id),
+                _log_safe(task_id),
+                _log_safe(error),
                 exc_info=True,
             )
             try:
@@ -2448,8 +2448,8 @@ class FileR2VExecutionService:
                 logger.exception(
                     "r2v supervisor failure could not be persisted: "
                     "project=%s task=%s",
-                    project_id,
-                    task_id,
+                    _log_safe(project_id),
+                    _log_safe(task_id),
                 )
 
     async def _submit(self, task: TaskRecord, state: R2VTaskState) -> bool:
