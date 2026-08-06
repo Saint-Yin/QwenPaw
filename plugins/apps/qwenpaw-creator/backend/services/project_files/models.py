@@ -31,7 +31,7 @@ from pydantic import (
 )
 
 
-CURRENT_PROJECT_SCHEMA_VERSION = 2
+CURRENT_PROJECT_SCHEMA_VERSION = 4
 DEFAULT_TIMELINE_ID = "timeline:main"
 DEFAULT_TIMELINE_TICKS_PER_SECOND = 1_000
 SHA256_PATTERN = r"^[a-f0-9]{64}$"
@@ -234,6 +234,20 @@ class ArtifactSlot(StrictModel):
         return value
 
 
+# Every ArtifactSlot kind the media pipelines actually write. Slots are
+# Runtime write-back records: a kind outside this set (or an empty slot)
+# can only come from a hand-written jq_project transform fabricating a
+# result, which later collides with the real pipeline write-back.
+ARTIFACT_SLOT_KINDS = frozenset(
+    {
+        "element_video",
+        "final_video",
+        "r2v_storyboard_image",
+        "visual_asset_image",
+    },
+)
+
+
 class ArtifactVersion(StrictModel):
     version_id: EntityId
     slot_id: EntityId
@@ -367,6 +381,20 @@ class AssetIndex(StrictModel):
                 )
 
         for slot in self.artifact_slots_by_id.values():
+            if slot.kind not in ARTIFACT_SLOT_KINDS:
+                raise ValueError(
+                    f"artifact slot {slot.slot_id} has unknown kind "
+                    f"{slot.kind!r}; artifact slots are written back by "
+                    "the media pipeline and must not be authored via "
+                    "jq_project",
+                )
+            if not slot.version_ids:
+                raise ValueError(
+                    f"artifact slot {slot.slot_id} has no artifact "
+                    "versions; artifact slots are written back by the "
+                    "media pipeline and must not be authored via "
+                    "jq_project",
+                )
             for version_id in slot.version_ids:
                 version = _require_key(
                     self.artifact_versions_by_id,
@@ -413,6 +441,7 @@ class VisualVariant(StrictModel):
     generated_artifact_version_ids: list[EntityId] = Field(
         default_factory=list,
     )
+    selected_artifact_version_id: EntityId | None = None
 
 
 class VisualEntity(StrictModel):
@@ -421,10 +450,27 @@ class VisualEntity(StrictModel):
     name: str = Field(min_length=1)
     description: str = ""
     continuity: str = ""
+    required_variant_ids: list[EntityId]
     variants: EntityCollection[VisualVariant] = Field(
         default_factory=EntityCollection,
     )
     selected_artifact_version_id: EntityId | None = None
+
+    @model_validator(mode="after")
+    def _validate_required_variants(self) -> VisualEntity:
+        if len(self.required_variant_ids) != len(
+            set(self.required_variant_ids),
+        ):
+            raise ValueError("required_variant_ids cannot contain duplicates")
+        undeclared = set(self.variants.order) - set(
+            self.required_variant_ids,
+        )
+        if undeclared:
+            raise ValueError(
+                "visual variants must be declared in required_variant_ids: "
+                + ", ".join(sorted(undeclared)),
+            )
+        return self
 
 
 class VisualDevelopment(StrictModel):
@@ -612,6 +658,9 @@ class R2VCreation(StrictModel):
     character_refs: list[EntityId] = Field(default_factory=list)
     scene_ref: EntityId | None = None
     prop_refs: list[EntityId] = Field(default_factory=list)
+    visual_variant_refs: dict[EntityId, EntityId] = Field(
+        default_factory=dict,
+    )
     shots: EntityCollection[Shot] = Field(default_factory=EntityCollection)
     recipe: GenerationRecipe | None = None
     storyboard_prompt: str = ""
@@ -914,7 +963,7 @@ class Timeline(StrictModel):
 
 
 class Project(StrictModel):
-    schema_version: Literal[2] = CURRENT_PROJECT_SCHEMA_VERSION
+    schema_version: Literal[4] = CURRENT_PROJECT_SCHEMA_VERSION
     project_id: EntityId
     generation: int = Field(default=0, ge=0)
     created_at: UtcDateTime
@@ -1092,6 +1141,42 @@ class Project(StrictModel):
                     variant.generated_artifact_version_ids,
                     "visual artifact",
                 )
+                if variant.selected_artifact_version_id is not None:
+                    selected_variant_artifact = _require_key(
+                        artifact_versions,
+                        variant.selected_artifact_version_id,
+                        "selected visual variant artifact",
+                    )
+                    if (
+                        variant.selected_artifact_version_id
+                        not in variant.generated_artifact_version_ids
+                    ):
+                        raise ValueError(
+                            "selected visual variant artifact must be a "
+                            "generated version of that variant",
+                        )
+                    artifact_variant_id = (
+                        selected_variant_artifact.metadata.get(
+                            "variantId",
+                        )
+                    )
+                    if (
+                        isinstance(artifact_variant_id, str)
+                        and artifact_variant_id
+                        and artifact_variant_id != variant.variant_id
+                    ):
+                        raise ValueError(
+                            "selected visual variant artifact belongs to "
+                            "another variant",
+                        )
+            if (
+                len(entity.variants.order) > 1
+                and entity.selected_artifact_version_id is not None
+            ):
+                raise ValueError(
+                    "multi-Variant visual entities cannot use the legacy "
+                    "entity-level selected artifact",
+                )
             if entity.selected_artifact_version_id is not None:
                 _require_key(
                     artifact_versions,
@@ -1131,6 +1216,11 @@ class Project(StrictModel):
                     "video reference",
                 )
                 _validate_visual_refs(creation, visual_ids)
+                _validate_visual_variant_refs(
+                    creation,
+                    self.visual.entities.items,
+                    element_id=element_id,
+                )
                 for shot in creation.shots.items.values():
                     _validate_visual_refs(shot, visual_ids)
             elif isinstance(creation, EditCreation):
@@ -1407,6 +1497,36 @@ def _validate_visual_refs(
     _require_all_ids(known["prop"], value.prop_refs, "prop")
     if value.scene_ref is not None and value.scene_ref not in known["scene"]:
         raise ValueError(f"scene references missing id {value.scene_ref}")
+
+
+def _validate_visual_variant_refs(
+    value: R2VCreation,
+    entities: dict[str, VisualEntity],
+    *,
+    element_id: str,
+) -> None:
+    referenced = {
+        *value.character_refs,
+        *value.prop_refs,
+        *([value.scene_ref] if value.scene_ref is not None else []),
+    }
+    for entity_id, variant_id in value.visual_variant_refs.items():
+        if entity_id not in referenced:
+            raise ValueError(
+                f"element {element_id}: visual variant binding targets "
+                f"unreferenced entity {entity_id}; add it to this "
+                "creation's character_refs/prop_refs/scene_ref in the "
+                "same commit, or remove the visual_variant_refs entry",
+            )
+        entity = entities[entity_id]
+        if (
+            variant_id not in entity.variants.items
+            or variant_id not in entity.variants.order
+        ):
+            raise ValueError(
+                f"element {element_id}: visual variant binding references "
+                f"missing variant {variant_id}",
+            )
 
 
 __all__ = [

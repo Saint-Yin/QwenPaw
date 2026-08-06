@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from copy import deepcopy
+import json
 from typing import Any, Mapping
 import threading
 
@@ -21,6 +22,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -31,9 +33,11 @@ from services.runtime_files.models import (
 )
 
 from .assets import AssetFileStore
+from .candidate_normalization import normalize_project_candidate
 from .commit import PROTECTED_EXACT_POINTERS, ProjectCommitBoundary
 from .jq_transform import JqProjectTransformer
 from .models import Project, TimelineElement
+from .patch_ops import PatchOpError, apply_patch_ops
 from .schema_prompt import ProjectSchemaPrompt, build_project_schema_prompt
 from .store import ProjectSnapshot, ProjectStore
 
@@ -41,6 +45,7 @@ from .store import ProjectSnapshot, ProjectStore
 READ_PROJECT_TOOL_NAME = "read_project"
 READ_PROJECT_FILE_TOOL_NAME = "read_project_file"
 JQ_PROJECT_TOOL_NAME = "jq_project"
+PATCH_PROJECT_TOOL_NAME = "patch_project"
 ELEMENTS_AT_TOOL_NAME = "elements_at"
 _DEFAULT_TEXT_PAGE_BYTES = 64 * 1024
 _MAX_TEXT_PAGE_BYTES = 256 * 1024
@@ -48,6 +53,19 @@ _MAX_TEXT_PAGE_BYTES = 256 * 1024
 
 class AgentProjectToolError(RuntimeError):
     """Base error for the Project tool boundary."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "PROJECT_TOOL_ERROR",
+        retryable: bool = False,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+        self.details = dict(details or {})
 
 
 class UnknownAgentProjectTool(AgentProjectToolError):
@@ -102,6 +120,28 @@ class ElementsAtToolInput(_ToolModel):
     timeline_id: str = Field(alias="timelineId", min_length=1)
     tick: int = Field(ge=0)
     include_disabled: bool = Field(default=False, alias="includeDisabled")
+
+
+class PatchProjectToolInput(_ToolModel):
+    project_id: str = Field(alias="projectId", min_length=1)
+    # Each op is validated by ``apply_patch_ops`` so failures carry the
+    # exact op index instead of an opaque pydantic location.
+    ops: list[dict[str, Any]] = Field(min_length=1)
+
+    @field_validator("ops", mode="before")
+    @classmethod
+    def _decode_stringified_ops(cls, value: Any) -> Any:
+        # Field trip 2026-08-05: the model double-encoded ops as a JSON
+        # string on its very first call. When the string parses to a list
+        # the decode is lossless, so refusing it only costs a retry turn.
+        if isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+            except json.JSONDecodeError:
+                return value
+            if isinstance(decoded, list):
+                return decoded
+        return value
 
 
 class AgentProjectToolContext(_ToolModel):
@@ -189,6 +229,13 @@ class AgentProjectFileResult(_ToolModel):
 class AgentProjectCommitResult(AgentProjectSnapshotResult):
     transaction_id: str = Field(alias="transactionId", min_length=1)
     changed_pointers: list[str] = Field(alias="changedPointers")
+    # Redundant identity echoes stripped before validation; see
+    # ``candidate_normalization``. Tells the model what was removed so the
+    # habit is not silently reinforced.
+    normalized_pointers: list[str] = Field(
+        default_factory=list,
+        alias="normalizedPointers",
+    )
     review_id: str | None = Field(default=None, alias="reviewId")
 
 
@@ -249,6 +296,8 @@ AGENT_PROJECT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "绝不能在 program 中给这些保护字段赋值；updated_at 由 Runtime 自动维护。"
             "不要以 `$jsonArgs | ...` 开始变换；输入 Project `.` 必须始终作为输出根对象。"
             "批量内容通过 jsonArgs 传入，program 只负责结构化赋值。"
+            "jsonArgs 中的 object 已经是 jq object，应直接赋值或合并；"
+            "仅当输入确实是 [{key,value}] 数组时才使用 from_entries。"
             "若单次参数体量极大（如数十个 Element），可拆分为少量几次调用以降低 JSON 出错风险。"
             "动态加法表达式在绑定 jq 变量前必须加括号，例如 "
             '("source:" + $logicalId) as $sourceKey；对象字段值中的运算也必须加括号。'
@@ -281,11 +330,78 @@ AGENT_PROJECT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                         "通过 --argjson 传入的结构化 JSON；新增多项时间线内容时应把对象集合放这里，"
                         "避免在 program 中拼接大段 JSON。program 可使用 "
                         "$jsonArgs.elements，也兼容按 key 使用 $elements。"
+                        "object 参数已经是 jq object，不要再对它使用 from_entries。"
                     ),
                     "additionalProperties": True,
                 },
             },
             "required": ["projectId", "program"],
+            "additionalProperties": False,
+        },
+    },
+    PATCH_PROJECT_TOOL_NAME: {
+        "description": (
+            "用一组小而扁平的操作列表修改 Project，适用于 90% 的日常写入"
+            "（新建/更新实体、Element、改字段）；需要计算的复杂变换才用 "
+            "jq_project。每个 op 独立且浅（value 嵌套勿超 2 层）："
+            'add/replace/remove 用 RFC 6901 path（如 "/timelines/items/'
+            'timeline:main/elements_by_id/elem:x"，数组末尾用 "-"）；'
+            "upsert_entity 用于 EntityCollection（如 visual.entities 或某实体的 "
+            "variants），Runtime 自动同步 items 与 order。创建带 shots 的 "
+            "Element 时先用一个 op 建骨架（shots 空集合），再逐个 op 补 shot。"
+            "整个 ops 列表原子提交：全部成功或全部不生效，失败时报告出错的 "
+            "op 序号与 path。禁止触碰 Runtime 保护字段与媒体写回区。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "projectId": {"type": "string", "minLength": 1},
+                "ops": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "op": {
+                                "type": "string",
+                                "enum": [
+                                    "add",
+                                    "replace",
+                                    "remove",
+                                    "upsert_entity",
+                                ],
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": (
+                                    "add/replace/remove 的 RFC 6901 目标路径"
+                                ),
+                            },
+                            "value": {
+                                "description": (
+                                    "add/replace/upsert_entity 的写入值；" "保持浅嵌套"
+                                ),
+                            },
+                            "collection": {
+                                "type": "string",
+                                "description": (
+                                    "upsert_entity 目标 EntityCollection 的路径"
+                                ),
+                            },
+                            "id": {
+                                "type": "string",
+                                "description": (
+                                    "upsert_entity 写入的实体 key，须与 value "
+                                    "内的身份字段一致"
+                                ),
+                            },
+                        },
+                        "required": ["op"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["projectId", "ops"],
             "additionalProperties": False,
         },
     },
@@ -396,7 +512,68 @@ _PROJECT_SCHEMA_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
         "overlay_kind=motion 或 media 的 Overlay 必须携带非空 prompt",
     ),
 )
+# Root-level model validators surface with an empty ``loc``, so path-prefix
+# hints never match them; these hints key on the error message instead.
+# More specific needles must come first.
+_PROJECT_SCHEMA_MESSAGE_HINTS: tuple[tuple[str, str], ...] = (
+    (
+        "visual variant binding references missing variant",
+        "绑定的 variantId 必须已存在于该实体的 variants.items 中；"
+        "先创建 Variant（并在 required_variant_ids 声明）再在 Element 中绑定，"
+        "或检查 variant id 拼写",
+    ),
+    (
+        "visual variant binding",
+        "visual_variant_refs 的每个 entityId 必须同时出现在同一 creation 的 "
+        "character_refs/prop_refs/scene_ref 中；先把实体加入引用列表"
+        "（或移除该绑定）再提交",
+    ),
+    (
+        "must not be authored via jq_project",
+        "artifact_slots_by_id 与 elements outputs 是媒体管线的写回区，"
+        "禁止用 jq_project 手写或补全；视频/分镜产物只能通过委派对应的"
+        "生成 Director 产生，生成完成后 Runtime 会自动写回",
+    ),
+)
 _MAX_SCHEMA_ERROR_LINES = 8
+
+# Fields that live on TimelineElement itself. A bracket slip in a large
+# nested payload routinely drops them inside ``creation`` instead, which
+# surfaces as several "Field required" errors that never name the real
+# mistake.
+_ELEMENT_LEVEL_FIELDS = frozenset(
+    {
+        "element_id",
+        "span",
+        "label",
+        "location",
+        "outputs",
+        "render_source",
+        "z_index",
+        "enabled",
+    },
+)
+
+
+def _misnested_element_field_hint(item: Mapping[str, Any]) -> str:
+    """Name the bracket-misplacement when element fields sit in creation."""
+
+    if item.get("type") != "missing":
+        return ""
+    loc = item.get("loc") or ()
+    if not loc or str(loc[-1]) not in _ELEMENT_LEVEL_FIELDS:
+        return ""
+    parent = item.get("input")
+    if not isinstance(parent, Mapping):
+        return ""
+    creation = parent.get("creation")
+    if isinstance(creation, Mapping) and str(loc[-1]) in creation:
+        return (
+            "花括号层级错位：该 element 级字段被误嵌进了 creation 内部。"
+            "请把 element_id/span/label 等字段提到与 creation 同级，"
+            "creation 内只保留 type 及创作字段"
+        )
+    return ""
 
 
 def _translate_project_schema_error(error: ValidationError) -> str:
@@ -407,6 +584,7 @@ def _translate_project_schema_error(error: ValidationError) -> str:
     for item in items[:_MAX_SCHEMA_ERROR_LINES]:
         loc = tuple(str(part) for part in item.get("loc", ()))
         path = ".".join(loc) or "$"
+        message = str(item.get("msg", "invalid"))
         hint = ""
         for prefix, text in _PROJECT_SCHEMA_HINTS:
             if loc[: len(prefix)] == prefix or any(
@@ -416,12 +594,20 @@ def _translate_project_schema_error(error: ValidationError) -> str:
                 hint = f"（{text}）"
                 break
         else:
-            if item.get("type") == "extra_forbidden":
-                hint = (
-                    "（该字段不在 Project Schema 中，"
-                    "请对照 system prompt 里的 PROJECT_JSON_SCHEMA）"
-                )
-        lines.append(f"- {path}: {item.get('msg', 'invalid')}{hint}")
+            for needle, text in _PROJECT_SCHEMA_MESSAGE_HINTS:
+                if needle in message:
+                    hint = f"（{text}）"
+                    break
+            else:
+                misnested = _misnested_element_field_hint(item)
+                if misnested:
+                    hint = f"（{misnested}）"
+                elif item.get("type") == "extra_forbidden":
+                    hint = (
+                        "（该字段不在 Project Schema 中，"
+                        "请对照 system prompt 里的 PROJECT_JSON_SCHEMA）"
+                    )
+        lines.append(f"- {path}: {message}{hint}")
     if len(items) > _MAX_SCHEMA_ERROR_LINES:
         lines.append(f"- ...另有 {len(items) - _MAX_SCHEMA_ERROR_LINES} 处错误")
     return (
@@ -596,6 +782,7 @@ class AgentProjectTools:
             string_args=request.string_args,
             json_args=request.json_args,
         )
+        normalized_pointers = normalize_project_candidate(candidate)
         base_data = base.project.model_dump(mode="json")
         changed_protected = [
             pointer
@@ -608,6 +795,8 @@ class AgentProjectTools:
                 "当前输出缺失或改变了 "
                 + ", ".join(changed_protected)
                 + "。不要以 `| $child` 或嵌套路径选择结束 jq program。",
+                code="JQ_RESULT_NOT_PROJECT_ROOT",
+                details={"changedProtectedPointers": changed_protected},
             )
         result = self.commits.commit(
             base=base,
@@ -624,6 +813,48 @@ class AgentProjectTools:
                 for change in result.changeset.changes
                 if change.json_pointer is not None
             ],
+            normalizedPointers=normalized_pointers,
+            reviewId=result.review.review_id
+            if result.review is not None
+            else None,
+        )
+
+    def patch_project(
+        self,
+        *,
+        project_id: str,
+        ops: list[Mapping[str, Any]],
+    ) -> AgentProjectCommitResult:
+        """Apply a flat operation list and commit through the same boundary.
+
+        The candidate is derived deterministically from the last observed
+        base plus *ops*, so bracket depth never travels through the model.
+        Everything downstream — protected pointers, schema validation,
+        normalization, three-way merge and review — is the identical
+        pipeline jq_project uses.
+        """
+
+        request = PatchProjectToolInput(projectId=project_id, ops=list(ops))
+        base = self._base(request.project_id)
+        candidate = base.project.model_dump(mode="json")
+        apply_patch_ops(candidate, request.ops)
+        normalized_pointers = normalize_project_candidate(candidate)
+        result = self.commits.commit(
+            base=base,
+            candidate=candidate,
+            **self.context.commit_metadata(),
+        )
+        self._remember(result.snapshot)
+        snapshot = self._snapshot_result(result.snapshot)
+        return AgentProjectCommitResult(
+            **snapshot.model_dump(mode="python"),
+            transactionId=result.transaction_id,
+            changedPointers=[
+                change.json_pointer
+                for change in result.changeset.changes
+                if change.json_pointer is not None
+            ],
+            normalizedPointers=normalized_pointers,
             reviewId=result.review.review_id
             if result.review is not None
             else None,
@@ -682,7 +913,17 @@ class AgentProjectTools:
                 translated = _translate_jq_input_error(arguments, exc)
                 if translated is None:
                     raise
-                raise AgentProjectToolError(translated) from exc
+                raise AgentProjectToolError(
+                    translated,
+                    code="JQ_ARGUMENTS_MALFORMED",
+                    details={
+                        "validationErrors": exc.errors(
+                            include_context=False,
+                            include_input=False,
+                            include_url=False,
+                        ),
+                    },
+                ) from exc
             try:
                 result = self.jq_project(
                     project_id=request.project_id,
@@ -693,6 +934,56 @@ class AgentProjectTools:
             except ValidationError as exc:
                 raise AgentProjectToolError(
                     _translate_project_schema_error(exc),
+                    code="JQ_PROJECT_SCHEMA_INVALID",
+                    details={
+                        "validationErrors": exc.errors(
+                            include_context=False,
+                            include_input=False,
+                            include_url=False,
+                        ),
+                    },
+                ) from exc
+        elif tool_name == PATCH_PROJECT_TOOL_NAME:
+            try:
+                request = PatchProjectToolInput.model_validate(
+                    dict(arguments),
+                )
+            except ValidationError as exc:
+                raise AgentProjectToolError(
+                    "patch_project 参数无效：ops 必须是操作对象数组（如 "
+                    '[{"op": "replace", "path": "/name", "value": "..."}]），'
+                    "不能是字符串或单个对象。",
+                    code="PATCH_PROJECT_INPUT_INVALID",
+                    details={
+                        "validationErrors": exc.errors(
+                            include_context=False,
+                            include_input=False,
+                            include_url=False,
+                        ),
+                    },
+                ) from exc
+            try:
+                result = self.patch_project(
+                    project_id=request.project_id,
+                    ops=request.ops,
+                )
+            except PatchOpError as exc:
+                raise AgentProjectToolError(
+                    f"patch_project 操作无效，项目未被修改：{exc}。"
+                    "请修正该 op 后重发整个 ops 列表。",
+                    code="PATCH_OPS_INVALID",
+                ) from exc
+            except ValidationError as exc:
+                raise AgentProjectToolError(
+                    _translate_project_schema_error(exc),
+                    code="PATCH_PROJECT_SCHEMA_INVALID",
+                    details={
+                        "validationErrors": exc.errors(
+                            include_context=False,
+                            include_input=False,
+                            include_url=False,
+                        ),
+                    },
                 ) from exc
         elif tool_name == ELEMENTS_AT_TOOL_NAME:
             request = ElementsAtToolInput.model_validate(dict(arguments))

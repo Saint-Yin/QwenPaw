@@ -19,11 +19,16 @@ import {
   playbackLayersInWindow,
   transitionOpacityAtTick,
 } from "@/selectors/elementPlaybackSelectors";
-import { resolveElementVisualMeta } from "@/selectors/timelineElementSelectors";
+import {
+  overlayContentKind,
+  resolveElementVisualMeta,
+} from "@/selectors/timelineElementSelectors";
 import {
   InterviewSummaryBox,
   PetOsBubble,
 } from "@/components/timeline/OverlayCopyLayer";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 
 interface TimelineLivePreviewProps {
   project: ProjectDocument;
@@ -88,20 +93,30 @@ function mediaTargetSeconds(
   const localSeconds =
     Math.max(0, playheadTick - layer.element.span.start_tick) / ticksPerSecond;
   let offset = localSeconds * media.playbackRate;
-  const windowSeconds =
+
+  const sourceWindowSeconds =
     media.sourceOutSeconds != null
       ? media.sourceOutSeconds - media.sourceInSeconds
       : media.durationSeconds;
-  if (media.loop && windowSeconds && windowSeconds > 0) {
-    offset %= windowSeconds;
+  const effectiveWindowSeconds = Math.min(
+    sourceWindowSeconds ?? Infinity,
+    media.durationSeconds ?? Infinity,
+  );
+
+  if (media.loop && effectiveWindowSeconds && effectiveWindowSeconds > 0) {
+    offset %= effectiveWindowSeconds;
+  } else if (effectiveWindowSeconds && offset > effectiveWindowSeconds) {
+    offset = Math.max(0, effectiveWindowSeconds - 0.033);
   }
+
   return media.sourceInSeconds + offset;
 }
 
 function PlaceholderLayer({ layer }: { layer: ElementPlayback }) {
+  const { t } = useTranslation();
   const { element, status } = layer;
   const meta = resolveElementVisualMeta(element);
-  const label = ELEMENT_PLAYBACK_STATUS_LABEL[status];
+  const label = i18n.t(ELEMENT_PLAYBACK_STATUS_LABEL[status]);
   const fullFrame = isFullFrame(element.location);
   const StatusIcon =
     status === "generating" ? Loader2 : status === "queued" ? Clock3 : ImageOff;
@@ -127,7 +142,8 @@ function PlaceholderLayer({ layer }: { layer: ElementPlayback }) {
           className="rounded-full px-2.5 py-0.5 text-[11px] font-semibold"
           style={{ color: meta.color, background: `${meta.color}26` }}
         >
-          {meta.label} · {status === "generating" ? "画面生成中…" : label}
+          {meta.label} ·{" "}
+          {status === "generating" ? t("livePreview.generating") : label}
         </span>
         {status === "generating" && (
           <div className="agent-working-shimmer mt-1 h-1 w-32 rounded-full bg-white/15" />
@@ -173,7 +189,7 @@ function TextOverlayLayer({
       className="absolute"
       style={locationBoxStyle(element.location)}
     >
-      {element.creation.overlay_kind === "pet_os" ? (
+      {element.creation.overlay_kind !== "interview_summary" ? (
         <PetOsBubble
           text={element.creation.text}
           vibe={element.creation.vibe}
@@ -259,12 +275,13 @@ function MotionOverlayLayer({
   onVisualReadyChange: (visualKey: string, ready: boolean) => void;
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const { t } = useTranslation();
   const { element } = layer;
   const motion =
     element.creation.type === "overlay" ? element.creation.motion : null;
   const isTextOverlay =
     element.creation.type === "overlay" &&
-    ["pet_os", "interview_summary"].includes(element.creation.overlay_kind);
+    overlayContentKind(element.creation) === "copy";
   const localTimeMs =
     (Math.max(0, playheadTick - element.span.start_tick) / ticksPerSecond) *
     1000;
@@ -302,7 +319,7 @@ function MotionOverlayLayer({
       ref={iframeRef}
       data-live-motion-overlay={element.element_id}
       srcDoc={motionPreviewDocument(motion.html, isTextOverlay)}
-      title={element.label || "动态动效"}
+      title={element.label || t("livePreview.motionEffect")}
       // No scripts allowed; allow-same-origin exists only so the parent page
       // can sync the CSS animation timeline.
       sandbox="allow-same-origin"
@@ -339,6 +356,7 @@ export default function TimelineLivePreview({
   onPlayheadChange,
   onPlayingChange,
 }: TimelineLivePreviewProps) {
+  const { t } = useTranslation();
   const ticksPerSecond = timeline.ticks_per_second || 1;
   const mediaRefs = useRef(new Map<string, HTMLVideoElement>());
   const imageRefs = useRef(new Map<string, HTMLImageElement>());
@@ -462,12 +480,35 @@ export default function TimelineLivePreview({
       if (!media) return;
       const target = mediaTargetSeconds(layer, playheadTick, ticksPerSecond);
       const visible = visibleIds.has(layer.element.element_id);
+
+      // Check if playhead is beyond source material duration
+      const sourceWindowSeconds =
+        layer.media.sourceOutSeconds != null
+          ? layer.media.sourceOutSeconds - layer.media.sourceInSeconds
+          : layer.media.durationSeconds;
+      const effectiveWindowSeconds = Math.min(
+        sourceWindowSeconds ?? Infinity,
+        layer.media.durationSeconds ?? Infinity,
+      );
+      const localSeconds =
+        Math.max(0, playheadTick - layer.element.span.start_tick) /
+        ticksPerSecond;
+      const isBeyondSource = localSeconds > effectiveWindowSeconds;
+
       if (media.playbackRate !== layer.media.playbackRate) {
         media.playbackRate = layer.media.playbackRate;
       }
-      if (!visible || !playing) {
+
+      if (!visible || !playing || isBeyondSource) {
+        // Pause when beyond source duration, out of view, or not playing
         if (!media.paused) media.pause();
-        if (
+        if (visible && isBeyondSource && Number.isFinite(media.duration)) {
+          // Freeze on last frame when beyond source
+          media.currentTime = Math.min(
+            media.duration,
+            effectiveWindowSeconds - 0.033,
+          );
+        } else if (
           !playing &&
           visible &&
           Math.abs(media.currentTime - target) > DRIFT_TOLERANCE_SECONDS
@@ -524,7 +565,10 @@ export default function TimelineLivePreview({
 
   const anyVisible = visibleIds.size > 0;
   const semanticIncompleteLayers = useMemo(
-    () => visibleLayers.filter((layer) => layer.status !== "ready"),
+    () =>
+      visibleLayers.filter(
+        (layer) => layer.status !== "ready" && layer.status !== "stale",
+      ),
     [visibleLayers],
   );
   const visualIncompleteLayers = useMemo(
@@ -598,7 +642,7 @@ export default function TimelineLivePreview({
       >
         {!anyVisible && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-white/55">
-            该时刻还没有画面内容
+            {t("livePreview.noContentYet")}
           </div>
         )}
         {layers.map((layer) => {
@@ -709,13 +753,13 @@ export default function TimelineLivePreview({
             <Loader2 className="h-7 w-7 animate-spin text-white/75" />
             <span className="text-sm font-semibold text-white/90">
               {semanticIncompleteLayers.length > 0
-                ? "该时间点尚未渲染完成"
-                : "正在定位画面"}
+                ? t("livePreview.notRenderedYet")
+                : t("livePreview.locating")}
             </span>
             <span className="max-w-md text-xs leading-5 text-white/60">
               {semanticIncompleteLayers.length > 0
-                ? `${incompleteLayerCount} 个图层仍在生成、排队或等待重新渲染，完整画面就绪后才能预览。`
-                : "已渲染内容加载寻帧中，画面就绪后立即显示，无需重新渲染。"}
+                ? `${incompleteLayerCount} ${t("livePreview.layersGenerating")}`
+                : t("livePreview.loadingFrame")}
             </span>
           </div>
         )}

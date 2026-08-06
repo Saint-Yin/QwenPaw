@@ -20,6 +20,7 @@ import {
 } from "@/api/creator";
 import { projectJsonPointer } from "@/lib/projectJsonPointer";
 import { useProjectDraft } from "@/lib/useProjectDraft";
+import { visualVariantLabel } from "@/lib/visualVariants";
 import PageSkeleton from "@/components/PageSkeleton";
 import PageLoadError from "@/components/PageLoadError";
 import InlineReviewDiff from "@/components/agent/InlineReviewDiff";
@@ -32,16 +33,17 @@ import type {
   TaskView,
   TimelineElementDocument,
 } from "@/contracts/creator";
+import { useTranslation } from "react-i18next";
 
 const { TextArea } = Input;
 
 type ReferenceField = "scene" | "characters" | "props" | "sources";
 
-const FIELD_LABEL: Record<ReferenceField, string> = {
-  scene: "场景",
-  characters: "角色",
-  props: "道具",
-  sources: "素材",
+const FIELD_LABEL_KEYS: Record<ReferenceField, string> = {
+  scene: "r2v.fieldLabels.scene",
+  characters: "r2v.fieldLabels.characters",
+  props: "r2v.fieldLabels.props",
+  sources: "r2v.fieldLabels.sources",
 };
 
 function Panel({
@@ -81,6 +83,7 @@ function PromptTextArea({
   disabled?: boolean;
   onChange: (value: string) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       data-creator-field={field}
@@ -95,7 +98,7 @@ function PromptTextArea({
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         autoSize={{ minRows: 2, maxRows: 10 }}
-        placeholder={`生成${label}后可在此编辑…`}
+        placeholder={t("r2v.generateAndEdit", { label })}
         className="!rounded-lg !border-[var(--color-border)] !bg-[var(--color-bg-secondary)] !text-xs"
       />
       <InlineReviewDiff pointer={path} />
@@ -130,6 +133,11 @@ function visualEntityName(project: ProjectDocument, ref: string): string {
   return project.visual.entities.items[entityId]?.name ?? ref;
 }
 
+/** Normalize either a UI-prefixed ref or a canonical bare ID to an entity ID. */
+function normalizeVisualEntityId(ref: string): string {
+  return ref.replace(/^visual-entity:/, "");
+}
+
 function referenceVersionName(
   project: ProjectDocument,
   versionId: string,
@@ -142,6 +150,7 @@ function referenceVersionName(
 }
 
 export default function R2VWorkbenchPage() {
+  const { t } = useTranslation();
   const { id = "", elementId = "" } = useParams();
   const query = useSearchParams();
   const reviewMode = query.get("review") === "1";
@@ -252,11 +261,11 @@ export default function R2VWorkbenchPage() {
       return;
     }
     Modal.confirm({
-      title: "还有未应用的修改",
-      content: "返回方案会放弃当前 R2V 页面草稿。",
-      okText: "放弃并返回",
+      title: t("r2v.unsavedChangesTitle"),
+      content: t("r2v.unsavedChangesDesc"),
+      okText: t("r2v.discardAndBack"),
       okButtonProps: { danger: true },
-      cancelText: "继续编辑",
+      cancelText: t("r2v.continueEditing"),
       onOk: () => {
         elementDraft.discard();
         navigateBack();
@@ -268,7 +277,7 @@ export default function R2VWorkbenchPage() {
     if (syncStatus === "invalid" || syncStatus === "not_found") {
       return (
         <PageLoadError
-          message={syncError || "Project 无法读取"}
+          message={syncError || t("assets.projectReadError")}
           retry={() => void pollOnce(id)}
         />
       );
@@ -280,16 +289,14 @@ export default function R2VWorkbenchPage() {
       <div className="flex h-full items-center justify-center bg-[var(--color-bg-layout)] px-6">
         <div className="max-w-sm text-center">
           <p className="text-sm font-semibold text-[var(--color-text-primary)]">
-            {element
-              ? "该时间线内容不是 AI 生成画面，没有独立工作台"
-              : "时间线中找不到这项内容"}
+            {element ? t("r2v.notAIGenerated") : t("r2v.elementNotFound")}
           </p>
           <button
             type="button"
             onClick={() => navigate(planPath, true)}
             className="mt-4 rounded border border-[var(--color-border)] bg-white px-3 py-1.5 text-sm font-medium text-[var(--color-text-primary)] hover:bg-[var(--color-bg-secondary)]"
           >
-            返回方案
+            {t("r2v.backToPlan")}
           </button>
         </div>
       </div>
@@ -329,19 +336,19 @@ export default function R2VWorkbenchPage() {
           shot.duration_seconds <= 0,
       );
     if (invalidShot) {
-      message.error("每个 Shot 都需要描述、运镜、景别和有效时长");
+      message.error(t("r2v.eachShotNeeds"));
       return;
     }
     try {
       const response = await patchProject(id, elementDraft.operations);
       elementDraft.markApplied();
       if (response.editImpact?.regenerationRequired) {
-        message.success("修改已应用；旧生成结果已标记为基于旧方案");
+        message.success(t("r2v.applySuccess"));
       } else {
-        message.success("修改已应用");
+        message.success(t("r2v.applySuccessShort"));
       }
     } catch (error) {
-      message.error(`应用修改失败：${(error as Error).message}`);
+      message.error(t("r2v.applyFailed", { detail: (error as Error).message }));
     }
   };
 
@@ -414,12 +421,14 @@ export default function R2VWorkbenchPage() {
     ["FAILED", "CANCELLED", "QUARANTINED"].includes(videoTask.status);
   const videoTaskMessage = (() => {
     if (!videoTask) return "";
-    if (videoGenerating) return "任务已提交，等待最新状态";
+    if (videoGenerating) return t("r2v.taskSubmitted");
     const detail =
       videoTask.error?.message ||
       videoTask.error?.detail ||
       videoTask.error?.code;
-    return typeof detail === "string" && detail ? detail : "视频生成失败";
+    return typeof detail === "string" && detail
+      ? detail
+      : t("r2v.videoGenFailed");
   })();
 
   const spanSeconds = element.span.duration_tick / timeline.ticks_per_second;
@@ -472,17 +481,24 @@ export default function R2VWorkbenchPage() {
       ? `visual-entity:${entityId}`
       : ref;
   };
-  const entityThumbVersionId = (entityId: string): string | null => {
+  const entityThumbVersionId = (
+    entityRef: string,
+    entityId: string,
+  ): string | null => {
     const entity = project.visual.entities.items[entityId];
     if (!entity) return null;
-    if (entity.selected_artifact_version_id)
-      return entity.selected_artifact_version_id;
-    for (const variantId of [...entity.variants.order].reverse()) {
-      const generated =
-        entity.variants.items[variantId]?.generated_artifact_version_ids ?? [];
-      if (generated.length) return generated[generated.length - 1];
+    const variantId =
+      creation.visual_variant_refs[entityRef] ??
+      creation.visual_variant_refs[entityId] ??
+      (entity.variants.order.length === 1 ? entity.variants.order[0] : null);
+    if (variantId) {
+      return (
+        entity.variants.items[variantId]?.selected_artifact_version_id ?? null
+      );
     }
-    return null;
+    return entity.variants.order.length === 0
+      ? entity.selected_artifact_version_id
+      : null;
   };
   const versionMediaKind = (versionId: string): "image" | "video" | null => {
     const artifact = project.assets.artifact_versions_by_id[versionId];
@@ -524,7 +540,7 @@ export default function R2VWorkbenchPage() {
   const refThumbInfo = (ref: string): RefThumb | null => {
     const entityId = ref.replace(/^visual-entity:/, "");
     if (project.visual.entities.items[entityId]) {
-      const versionId = entityThumbVersionId(entityId);
+      const versionId = entityThumbVersionId(ref, entityId);
       return versionId
         ? { kind: "image", url: getArtifactVersionMediaUrl(versionId) }
         : null;
@@ -643,6 +659,69 @@ export default function R2VWorkbenchPage() {
       draft.creation.storyboard_reference_version_ids = next;
       draft.creation.video_reference_version_ids = next;
     });
+  const changeEntityReferences = (
+    field: "scene" | "characters" | "props",
+    nextRefs: string[],
+  ) =>
+    updateElement((draft) => {
+      if (draft.creation.type !== "r2v") return;
+      const nextEntityIds = nextRefs.map(normalizeVisualEntityId);
+      const previousEntityIds =
+        field === "scene"
+          ? draft.creation.scene_ref
+            ? [normalizeVisualEntityId(draft.creation.scene_ref)]
+            : []
+          : field === "characters"
+          ? draft.creation.character_refs.map(normalizeVisualEntityId)
+          : draft.creation.prop_refs.map(normalizeVisualEntityId);
+      for (const entityId of previousEntityIds) {
+        if (nextEntityIds.includes(entityId)) continue;
+        // Schema v3 persists bare entity IDs. Also clean prefixed keys from
+        // pre-validation UI drafts so they cannot survive a reference edit.
+        delete draft.creation.visual_variant_refs[entityId];
+        delete draft.creation.visual_variant_refs[`visual-entity:${entityId}`];
+      }
+      if (field === "scene") {
+        draft.creation.scene_ref = nextEntityIds[0] ?? null;
+      } else if (field === "characters") {
+        draft.creation.character_refs = nextEntityIds;
+      } else {
+        draft.creation.prop_refs = nextEntityIds;
+      }
+      for (const entityId of nextEntityIds) {
+        const entity = project.visual.entities.items[entityId];
+        if (
+          entity?.variants.order.length === 1 &&
+          !draft.creation.visual_variant_refs[entityId]
+        ) {
+          draft.creation.visual_variant_refs[entityId] =
+            entity.variants.order[0];
+        }
+      }
+    });
+  const referencedVisualEntities = [
+    creation.scene_ref,
+    ...creation.character_refs,
+    ...creation.prop_refs,
+  ]
+    .filter((ref): ref is string => Boolean(ref))
+    .map(normalizeVisualEntityId)
+    .filter((entityId, index, all) => all.indexOf(entityId) === index)
+    .map((entityId) => project.visual.entities.items[entityId])
+    .filter((entity) => Boolean(entity));
+  const changeVariantBinding = (
+    entityId: string,
+    variantId: string | undefined,
+  ) =>
+    updateElement((draft) => {
+      if (draft.creation.type !== "r2v") return;
+      delete draft.creation.visual_variant_refs[`visual-entity:${entityId}`];
+      if (variantId) {
+        draft.creation.visual_variant_refs[entityId] = variantId;
+      } else {
+        delete draft.creation.visual_variant_refs[entityId];
+      }
+    });
 
   const addShot = () => {
     const shotId = `shot-${Date.now()}`;
@@ -651,8 +730,8 @@ export default function R2VWorkbenchPage() {
       draft.creation.shots.items[shotId] = {
         shot_id: shotId,
         description: "",
-        camera: "⊙ 静止",
-        framing: "中景",
+        camera: t("r2v.defaultCamera"),
+        framing: t("r2v.defaultFraming"),
         duration_seconds: 3,
       };
       draft.creation.shots.order.push(shotId);
@@ -678,16 +757,16 @@ export default function R2VWorkbenchPage() {
             type="button"
             onClick={backToPlan}
             className="icon-button shrink-0"
-            aria-label="返回视频方案"
+            aria-label={t("nav.backToPlan")}
           >
             <ArrowLeft className="h-3.5 w-3.5" />
           </button>
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
-              {`视频方案 / ${elementLabel} / 制作工作台`}
+              {t("r2v.title", { element: elementLabel })}
             </h2>
             <p className="mt-0.5 truncate text-xs text-[var(--color-text-secondary)]">
-              AI 生成画面子界面，继承分镜、引用资产和产物版本。
+              {t("r2v.subtitle")}
             </p>
           </div>
         </div>
@@ -698,7 +777,7 @@ export default function R2VWorkbenchPage() {
             onClick={elementDraft.discard}
             className="!h-[22px] !px-2 !font-[inherit] !text-[11px] !font-semibold !leading-[20px]"
           >
-            放弃修改
+            {t("r2v.discardChanges")}
           </Button>
           <Button
             size="small"
@@ -711,8 +790,8 @@ export default function R2VWorkbenchPage() {
             className="!h-[22px] !px-2 !font-[inherit] !text-[11px] !font-semibold !leading-[20px]"
           >
             {elementDraft.dirty
-              ? `应用修改（${elementDraft.dirtyCount}）`
-              : "应用修改"}
+              ? t("r2v.applyChangesCount", { count: elementDraft.dirtyCount })
+              : t("r2v.applyChanges")}
           </Button>
         </div>
       </div>
@@ -722,11 +801,11 @@ export default function R2VWorkbenchPage() {
           type="warning"
           showIcon
           banner
-          message="部分字段在编辑期间被其他操作更新"
-          description="本地草稿已保留。确认使用本地值覆盖最新数据后再应用。"
+          message={t("r2v.conflictTitle")}
+          description={t("r2v.conflictDesc")}
           action={
             <Button size="small" onClick={elementDraft.acceptConflicts}>
-              使用我的修改
+              {t("r2v.useMyChanges")}
             </Button>
           }
         />
@@ -735,7 +814,7 @@ export default function R2VWorkbenchPage() {
       <div className="grid min-h-0 flex-1 gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-h-0 space-y-3 overflow-y-auto pr-1">
           <Panel
-            title={`Shot 列表（${creation.shots.order.length}）`}
+            title={t("r2v.shotList", { count: creation.shots.order.length })}
             badge={
               <span
                 className={`flex items-center gap-1 text-[11px] font-medium ${
@@ -745,7 +824,10 @@ export default function R2VWorkbenchPage() {
                 }`}
               >
                 {overLimit && <AlertTriangle className="h-3 w-3" />}
-                合计 {totalDuration}s / 区间 {spanSeconds}s
+                {t("r2v.totalDuration", {
+                  total: totalDuration,
+                  span: spanSeconds,
+                })}
               </span>
             }
           >
@@ -769,7 +851,7 @@ export default function R2VWorkbenchPage() {
           </Panel>
 
           <Panel
-            title="分镜Prompt与分镜图"
+            title={t("r2v.storyboardPromptAndImage")}
             badge={
               <ArtifactVersionChips
                 versions={storyboardVersions}
@@ -786,7 +868,7 @@ export default function R2VWorkbenchPage() {
                   storyboardSlot.selected_version_id && (
                   <div className="flex items-center justify-between rounded-lg border border-[var(--color-warning)]/25 bg-[var(--color-warning-soft)] px-2.5 py-1.5">
                     <span className="text-[11px] text-[var(--color-warning)]">
-                      可切换为当前分镜版本
+                      {t("r2v.switchToStoryboard")}
                     </span>
                     <Button
                       size="small"
@@ -797,12 +879,12 @@ export default function R2VWorkbenchPage() {
                       }
                       className="!text-[11px]"
                     >
-                      设为当前
+                      {t("r2v.setAsCurrent")}
                     </Button>
                   </div>
                 )}
               <PromptTextArea
-                label="分镜图 Prompt"
+                label={t("r2v.storyboardPrompt")}
                 value={creation.storyboard_prompt}
                 field={`element:${element.element_id}/creation/storyboard_prompt`}
                 path={elementPointer("creation", "storyboard_prompt")}
@@ -822,22 +904,22 @@ export default function R2VWorkbenchPage() {
                 >
                   <img
                     src={storyboardUrl}
-                    alt="分镜图"
+                    alt={t("lib.storyboard")}
                     className="w-full rounded-lg border border-[var(--color-border)]"
                   />
                 </div>
               ) : (
                 <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] text-xs text-[var(--color-text-tertiary)]">
-                  尚无分镜图
+                  {t("r2v.noStoryboard")}
                 </div>
               )}
               {viewedStoryboard?.stale && (
                 <p className="text-[10px] text-[var(--color-warning)]">
-                  该分镜图基于旧版方案，需要重新生成。
+                  {t("r2v.storyboardStale")}
                 </p>
               )}
               <PromptTextArea
-                label="视频 Prompt"
+                label={t("r2v.videoPrompt")}
                 value={creation.video_prompt}
                 field={`element:${element.element_id}/creation/video_prompt`}
                 path={elementPointer("creation", "video_prompt")}
@@ -855,7 +937,7 @@ export default function R2VWorkbenchPage() {
 
         <aside className="min-h-0 space-y-3 overflow-y-auto pr-1">
           <Panel
-            title="视频结果"
+            title={t("r2v.videoResult")}
             badge={
               <ArtifactVersionChips
                 versions={videoVersions}
@@ -884,7 +966,7 @@ export default function R2VWorkbenchPage() {
                   {videoGenerating ? (
                     <>
                       <span className="font-medium text-[var(--color-warning)]">
-                        R2V 任务生成中…
+                        {t("r2v.r2vGenerating")}
                       </span>
                       <span>{videoTaskMessage}</span>
                       <Button
@@ -894,7 +976,7 @@ export default function R2VWorkbenchPage() {
                         }
                         className="!text-[11px]"
                       >
-                        手动刷新
+                        {t("r2v.manualRefresh")}
                       </Button>
                     </>
                   ) : videoFailed ? (
@@ -902,7 +984,7 @@ export default function R2VWorkbenchPage() {
                       {videoTaskMessage}
                     </span>
                   ) : (
-                    "尚未生成视频"
+                    t("r2v.noVideoYet")
                   )}
                 </div>
               )}
@@ -911,7 +993,7 @@ export default function R2VWorkbenchPage() {
                 viewedVideo.version_id !== videoSlot.selected_version_id && (
                   <div className="flex items-center justify-between rounded-lg border border-[var(--color-warning)]/25 bg-[var(--color-warning-soft)] px-2.5 py-1.5">
                     <span className="text-[11px] text-[var(--color-warning)]">
-                      可切换为当前视频版本
+                      {t("r2v.switchToVideo")}
                     </span>
                     <Button
                       size="small"
@@ -922,13 +1004,13 @@ export default function R2VWorkbenchPage() {
                       }
                       className="!text-[11px]"
                     >
-                      设为当前
+                      {t("r2v.setAsCurrent")}
                     </Button>
                   </div>
                 )}
               {viewedVideo?.stale && (
                 <p className="text-[10px] text-[var(--color-warning)]">
-                  该结果基于旧版方案，需要重新生成。
+                  {t("r2v.videoStale")}
                 </p>
               )}
             </div>
@@ -936,10 +1018,13 @@ export default function R2VWorkbenchPage() {
 
           <div className="grid grid-cols-3 gap-2">
             {[
-              { label: "时长", value: `${totalDuration}s` },
-              { label: "画幅", value: project.settings.aspect_ratio },
+              { label: t("r2v.duration"), value: `${totalDuration}s` },
               {
-                label: "模型",
+                label: t("r2v.frameSize"),
+                value: project.settings.aspect_ratio,
+              },
+              {
+                label: t("r2v.modelLabel"),
                 value: resolvedVideoModel ?? creation.recipe?.model ?? "R2V",
               },
             ].map((cell) => (
@@ -960,10 +1045,10 @@ export default function R2VWorkbenchPage() {
             ))}
           </div>
 
-          <Panel title={`输入引用（${inputRefs.length}）`}>
+          <Panel title={t("r2v.inputRefs", { count: inputRefs.length })}>
             {inputRefs.length === 0 ? (
               <p className="text-xs text-[var(--color-text-tertiary)]">
-                暂无引用资产。
+                {t("r2v.noRefs")}
               </p>
             ) : (
               <div className="space-y-1.5">
@@ -978,7 +1063,7 @@ export default function R2VWorkbenchPage() {
                       className="flex w-full items-center gap-2 rounded-lg bg-[var(--color-bg-secondary)]/60 px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--color-bg-secondary)]"
                     >
                       <span className="shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-1.5 py-px text-[10px] text-[var(--color-text-tertiary)]">
-                        {FIELD_LABEL[item.field]}
+                        {t(FIELD_LABEL_KEYS[item.field])}
                       </span>
                       <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--color-accent)]">
                         @{item.name}
@@ -1007,7 +1092,7 @@ export default function R2VWorkbenchPage() {
                           )
                         ) : (
                           <span className="text-xs">
-                            尚未生成可预览的图像，生成后这里会显示缩略图
+                            {t("r2v.noPreviewYet")}
                           </span>
                         )
                       }
@@ -1020,11 +1105,11 @@ export default function R2VWorkbenchPage() {
             )}
           </Panel>
 
-          <Panel title="资产绑定">
+          <Panel title={t("r2v.assetBinding")}>
             <div className="space-y-3">
               <div>
                 <p className="mb-1 text-[11px] font-medium text-[var(--color-text-tertiary)]">
-                  场景
+                  {t("r2v.sceneLabel")}
                 </p>
                 <Select
                   size="small"
@@ -1032,19 +1117,16 @@ export default function R2VWorkbenchPage() {
                   value={normalizeEntityRef(creation.scene_ref)}
                   disabled={patching}
                   onChange={(value) =>
-                    updateElement((draft) => {
-                      if (draft.creation.type === "r2v")
-                        draft.creation.scene_ref = value ?? null;
-                    })
+                    changeEntityReferences("scene", value ? [value] : [])
                   }
                   allowClear
-                  placeholder="选择场景"
+                  placeholder={t("r2v.selectScene")}
                   options={sceneOptions}
                 />
               </div>
               <div>
                 <p className="mb-1 text-[11px] font-medium text-[var(--color-text-tertiary)]">
-                  角色
+                  {t("r2v.charactersLabel")}
                 </p>
                 <Select
                   size="small"
@@ -1055,18 +1137,15 @@ export default function R2VWorkbenchPage() {
                   )}
                   disabled={patching}
                   onChange={(value) =>
-                    updateElement((draft) => {
-                      if (draft.creation.type === "r2v")
-                        draft.creation.character_refs = value;
-                    })
+                    changeEntityReferences("characters", value)
                   }
-                  placeholder="选择角色"
+                  placeholder={t("r2v.selectCharacters")}
                   options={characterOptions}
                 />
               </div>
               <div>
                 <p className="mb-1 text-[11px] font-medium text-[var(--color-text-tertiary)]">
-                  道具
+                  {t("r2v.propsLabel")}
                 </p>
                 <Select
                   size="small"
@@ -1076,19 +1155,66 @@ export default function R2VWorkbenchPage() {
                     (ref) => normalizeEntityRef(ref) ?? ref,
                   )}
                   disabled={patching}
-                  onChange={(value) =>
-                    updateElement((draft) => {
-                      if (draft.creation.type === "r2v")
-                        draft.creation.prop_refs = value;
-                    })
-                  }
-                  placeholder="选择道具"
+                  onChange={(value) => changeEntityReferences("props", value)}
+                  placeholder={t("r2v.selectProps")}
                   options={propOptions}
                 />
               </div>
+              {referencedVisualEntities.length > 0 && (
+                <div className="border-t border-[var(--color-border)] pt-3">
+                  <p className="mb-2 text-[11px] font-medium text-[var(--color-text-tertiary)]">
+                    {t("r2v.visualVariant")}
+                  </p>
+                  <div className="space-y-2">
+                    {referencedVisualEntities.map((entity) => {
+                      const entityId = entity.entity_id;
+                      const selectedVariantId =
+                        creation.visual_variant_refs[entityId] ??
+                        creation.visual_variant_refs[
+                          `visual-entity:${entityId}`
+                        ] ??
+                        (entity.variants.order.length === 1
+                          ? entity.variants.order[0]
+                          : undefined);
+                      return (
+                        <div key={entityId} className="flex items-center gap-2">
+                          <span className="w-20 shrink-0 truncate text-[11px] text-[var(--color-text-secondary)]">
+                            {entity.name || entityId}
+                          </span>
+                          <Select
+                            size="small"
+                            className="min-w-0 flex-1"
+                            aria-label={`${entity.name || entityId} Variant`}
+                            value={selectedVariantId}
+                            disabled={patching}
+                            allowClear={entity.variants.order.length > 1}
+                            placeholder={
+                              entity.variants.order.length
+                                ? t("r2v.selectVariant")
+                                : t("r2v.noVariantDefined")
+                            }
+                            onChange={(variantId) =>
+                              changeVariantBinding(entityId, variantId)
+                            }
+                            options={entity.variants.order.map((variantId) => {
+                              const variant = entity.variants.items[variantId];
+                              return {
+                                value: variantId,
+                                label: variant
+                                  ? visualVariantLabel(variant)
+                                  : variantId,
+                              };
+                            })}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <div>
                 <p className="mb-1 text-[11px] font-medium text-[var(--color-text-tertiary)]">
-                  素材
+                  {t("r2v.materialsLabel")}
                 </p>
                 <Select
                   size="small"
@@ -1097,7 +1223,7 @@ export default function R2VWorkbenchPage() {
                   value={materialVersionIds}
                   disabled={patching}
                   onChange={changeMaterialReferences}
-                  placeholder="选择素材"
+                  placeholder={t("r2v.selectMaterials")}
                   options={materialOptions}
                 />
               </div>

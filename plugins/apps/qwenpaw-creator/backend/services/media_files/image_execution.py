@@ -64,7 +64,21 @@ from services.media_files.element_adapter import (
     selected_element_output,
     target_element_id,
 )
-from services.media_files.review_admission import assert_media_review_admission
+from services.media_files.review_admission import (
+    assert_media_review_admission,
+    media_review_policy,
+)
+from services.media_files.transient_errors import (
+    MAX_TRANSIENT_RETRY_SLOTS,
+    is_transient_task_error,
+    transient_retry_slot_key,
+)
+from services.media_files.visual_reference_resolution import (
+    resolve_r2v_visual_reference_version_ids,
+)
+from services.media_files.visual_design_readiness import (
+    assert_visual_design_ready_for_storyboards,
+)
 from services.project_files.remote_cache import public_source_url
 from services.project_files.store import ProjectSnapshot
 from services.runtime_files.atomic_store import (
@@ -89,6 +103,7 @@ from services.runtime_files.safe_remote_download import (
 )
 
 # pylint: disable=no-name-in-module
+from utils.exceptions import ModelError
 from utils.paths import media_path_from_url, media_task_scope
 
 # pylint: enable=no-name-in-module
@@ -195,6 +210,73 @@ def _fingerprint(value: Mapping[str, Any]) -> str:
     return f"sha256:{hashlib.sha256(canonical_json_bytes(value)).hexdigest()}"
 
 
+# Deterministic provider-side content refusals. Field data (2026-08-05,
+# 22 consecutive 400s): the model *narrates* removing the person-photo
+# references while resending the identical ref list every call, so the
+# refusal must name the refs it saw and repeat-offender calls are blocked
+# locally instead of burning provider quota.
+_SAFETY_REJECTION_MARKERS = (
+    "rejected by the safety system",
+    "content policy",
+    "content_policy",
+)
+
+
+def _is_safety_rejection_message(message: str) -> bool:
+    folded = message.casefold()
+    return any(marker in folded for marker in _SAFETY_REJECTION_MARKERS)
+
+
+def _resolved_reference_ids(resolved: _ResolvedRequest) -> tuple[str, ...]:
+    return tuple(resolved.reference_version_ids) + tuple(
+        resolved.reference_image_urls,
+    )
+
+
+def _safety_rejection_note(resolved: _ResolvedRequest) -> str:
+    refs = _resolved_reference_ids(resolved)
+    if refs:
+        listed = ", ".join(refs[:6])
+        return (
+            f"本次调用携带了图片参考 [{listed}]。safety 拒绝通常由含真人照片的"
+            "参考图触发：在移除这些参考（置空 referenceVersionIds 改用纯文本，"
+            "或改用已生成的风格化 artifact-version id）之前，仅修改 prompt 的"
+            "重试不会成功。"
+        )
+    return (
+        "本次调用未携带参考图，拒绝来自 prompt 文本本身：请移除对真实人物的"
+        "可识别描述（姓名、球队/机构名、可定位的真实事件），改用虚构化的"
+        "外貌与气质描述。"
+    )
+
+
+def _terminated_task_conflict(
+    task: Any,
+    *,
+    exhausted_retries: bool = False,
+) -> ConflictError:
+    """Name the original failure and the exact way out of the replay wall.
+
+    Identical arguments always map to the same durable slot, so a bare
+    "task terminated" message traps the model in a resend loop: it cannot
+    know that only changed arguments (or a fixed cause) produce a new task.
+    """
+
+    status = task.status.value if task is not None else "FAILED"
+    reason = ""
+    error = getattr(task, "error", None)
+    if isinstance(error, Mapping) and error.get("message"):
+        reason = f"；原失败原因：{str(error['message'])[:200]}"
+    if exhausted_retries:
+        advice = "瞬态重试槽位已用尽，说明故障持续存在。请停止重发相同请求，向用户报告故障或稍后再试。"
+    else:
+        advice = (
+            "相同 arguments 的重发将始终返回此错误；若需重试，请先修正失败原因"
+            "并调整 arguments（如更换参考图或修改 prompt 措辞）以生成新任务。"
+        )
+    return ConflictError(f"图片 Task 已终止: {status}{reason}。{advice}")
+
+
 def _plain_sha256(value: str) -> str:
     normalized = value.strip().lower().removeprefix("sha256:")
     if not re.fullmatch(r"[a-f0-9]{64}", normalized):
@@ -269,6 +351,13 @@ def _variant_for(
     if index < 0 or index >= len(entity.variants.order):
         raise ValidationError("promptIndex 超出视觉变体范围")
     return entity.variants.items[entity.variants.order[index]]
+
+
+def _variant_display_name(variant_id: str) -> str:
+    for prefix in ("visual-variant:", "variant:", "var:"):
+        if variant_id.startswith(prefix):
+            return variant_id.removeprefix(prefix)
+    return variant_id
 
 
 def _validate_public_remote_url(
@@ -409,6 +498,7 @@ def _resolve_request(
         creation = element.creation
         if not isinstance(creation, R2VCreation):
             raise ValidationError("仅 R2V Element 可以生成分镜图")
+        assert_visual_design_ready_for_storyboards(project)
         prompt = explicit_prompt or creation.storyboard_prompt.strip()
         if not prompt:
             shot_text = "；".join(
@@ -427,10 +517,16 @@ def _resolve_request(
             )
         if not prompt:
             raise ValidationError("生成分镜图需要 storyboard prompt")
-        version_ids = [
-            *creation.storyboard_reference_version_ids,
-            *explicit_version_ids,
-        ]
+        version_ids = list(
+            resolve_r2v_visual_reference_version_ids(
+                project,
+                creation,
+                [
+                    *creation.storyboard_reference_version_ids,
+                    *explicit_version_ids,
+                ],
+            ),
+        )
         resolved = _ResolvedRequest(
             command=command,
             target_ref=target_ref,
@@ -480,15 +576,20 @@ def _resolve_request(
             reference_version_ids=tuple(dict.fromkeys(version_ids)),
             reference_checksums=(),
             read_set=(),
-            slot_id=f"asset:{entity_id}:image",
+            # ArtifactSlot IDs are opaque. Entity and Variant IDs may already
+            # contain colons, so consumers must not parse this by splitting.
+            slot_id=(
+                f"asset:{entity_id}:variant:{variant.variant_id}:image"
+                if variant
+                else f"asset:{entity_id}:image"
+            ),
             slot_kind="visual_asset_image",
             owner_ref=f"asset:{entity_id}",
-            # Stage variants of one entity share the slot; without the
-            # variant id in the name the UI reference picker shows
-            # indistinguishable duplicate titles.
+            # Include the Variant in both the slot and title so independently
+            # versioned looks remain distinguishable in history and pickers.
             artifact_name=(
-                f"{entity.name}"
-                f"（{variant.variant_id.removeprefix('var:')}）视觉图"
+                f"{entity.name}（{_variant_display_name(variant.variant_id)}）"
+                "视觉图"
                 if variant
                 else f"{entity.name} 视觉图"
             ),
@@ -733,6 +834,10 @@ class FileImageExecutionService:
         self.provider = provider or ExistingImageProvider()
         self.executions = ProjectExecutionStore(services.root)
         self.max_output_bytes = max_output_bytes
+        # (project_id, target_ref) -> reference ids of the last safety-
+        # rejected call. Process-local: worth losing on restart, priceless
+        # for cutting off same-refs resend loops within a session.
+        self._safety_rejected_refs: dict[tuple[str, str], frozenset[str]] = {}
 
     async def execute(
         self,
@@ -755,15 +860,24 @@ class FileImageExecutionService:
                 "arguments": dict(arguments),
             },
         )
-        try:
-            existing_task = await asyncio.to_thread(
-                self.executions.get_task,
-                project_id,
-                ids["task_id"],
-            )
-        except RecordNotFoundError:
-            existing_task = None
-        if existing_task is not None:
+        # Identical retries reuse the same durable slot, so a transient
+        # provider failure (network, timeout, 5xx) would otherwise become a
+        # permanent ConflictError wall for this run. Probe a bounded number
+        # of derived retry slots for transient failures only; deterministic
+        # rejections (safety refusals, validation) keep the terminal wall.
+        existing_task = None
+        for attempt in range(MAX_TRANSIENT_RETRY_SLOTS + 1):
+            slot_key = transient_retry_slot_key(idempotency_key, attempt)
+            ids = self._ids(project_id, slot_key)
+            try:
+                existing_task = await asyncio.to_thread(
+                    self.executions.get_task,
+                    project_id,
+                    ids["task_id"],
+                )
+            except RecordNotFoundError:
+                existing_task = None
+                break
             self._assert_command_replay(
                 existing_task,
                 command=command_value,
@@ -772,14 +886,6 @@ class FileImageExecutionService:
             )
             if existing_task.status is TaskStatus.SUCCEEDED:
                 return self._result_from_task(existing_task, replayed=True)
-            if existing_task.status in {
-                TaskStatus.FAILED,
-                TaskStatus.CANCELLED,
-                TaskStatus.QUARANTINED,
-            }:
-                raise ConflictError(
-                    f"图片 Task 已终止: {existing_task.status.value}",
-                )
             if existing_task.status is TaskStatus.RUNNING:
                 if existing_task.result is None:
                     raise ConflictError("图片 Task 已由另一个执行者领取")
@@ -788,6 +894,16 @@ class FileImageExecutionService:
                     ids=ids,
                     replayed=True,
                 )
+            if existing_task.status is TaskStatus.FAILED and (
+                is_transient_task_error(existing_task.error)
+            ):
+                continue
+            raise _terminated_task_conflict(existing_task)
+        else:
+            raise _terminated_task_conflict(
+                existing_task,
+                exhausted_retries=True,
+            )
 
         base = await asyncio.to_thread(self.services.projects.read, project_id)
         conflicts = [
@@ -845,7 +961,7 @@ class FileImageExecutionService:
             TaskStatus.CANCELLED,
             TaskStatus.QUARANTINED,
         }:
-            raise ConflictError(f"图片 Task 已终止: {task.status.value}")
+            raise _terminated_task_conflict(task)
 
         if task.status is TaskStatus.RUNNING and task.result is not None:
             return await self._converge(
@@ -866,6 +982,7 @@ class FileImageExecutionService:
         try:
             # No Project/Runtime lock spans this await.  The ContextVar only
             # scopes compatibility scratch emitted by the existing provider.
+            self._block_known_safety_refs(project_id, resolved)
             with media_task_scope(task.task_id, project_id=project_id):
                 provider_output = await self.provider.generate(
                     prompt=resolved.prompt,
@@ -937,13 +1054,57 @@ class FileImageExecutionService:
             )
             raise
         except Exception as exc:
+            message = str(exc)
+            if _is_safety_rejection_message(message):
+                self._note_safety_rejection(project_id, resolved)
+                message = f"{message} {_safety_rejection_note(resolved)}"
+                exc = ModelError(
+                    message,
+                    model_name=getattr(exc, "model_name", ""),
+                    retryable=False,
+                )
             await self._fail_if_running(
                 project_id,
                 ids,
                 "IMAGE_GENERATION_FAILED",
-                message=str(exc),
+                message=message,
             )
-            raise
+            raise exc
+
+    def _block_known_safety_refs(
+        self,
+        project_id: str,
+        resolved: _ResolvedRequest,
+    ) -> None:
+        """Refuse locally when a safety-rejected ref set is resent verbatim.
+
+        The provider's answer is deterministic for the same references, so
+        replaying them with a reworded prompt only burns quota and turns.
+        """
+
+        refs = frozenset(_resolved_reference_ids(resolved))
+        if not refs:
+            return
+        rejected = self._safety_rejected_refs.get(
+            (project_id, resolved.target_ref),
+        )
+        if rejected is not None and refs == rejected:
+            raise ConflictError(
+                "已本地拦截：上一次 safety 拒绝时携带的是完全相同的图片参考 "
+                f"[{', '.join(sorted(refs)[:6])}]。"
+                + _safety_rejection_note(resolved),
+            )
+
+    def _note_safety_rejection(
+        self,
+        project_id: str,
+        resolved: _ResolvedRequest,
+    ) -> None:
+        refs = frozenset(_resolved_reference_ids(resolved))
+        if refs:
+            self._safety_rejected_refs[
+                (project_id, resolved.target_ref)
+            ] = refs
 
     @staticmethod
     def _ids(project_id: str, key: str) -> dict[str, str]:
@@ -1312,20 +1473,25 @@ class FileImageExecutionService:
                 else:
                     candidate = current.project.model_dump(mode="json")
                     self._apply_result(candidate, result)
-                    # Generated images (storyboards and character art) must
-                    # always be reviewed before they are treated as accepted.
+                    # Generated images (storyboards and character art) are
+                    # reviewed before acceptance unless the operator opted
+                    # into unattended auto-approval; an AUTO_FIX round must
+                    # not carry a ReviewBoundary.
+                    review_policy = media_review_policy()
                     review_boundary = (
                         self.services.commits.runtime_review_boundary(
                             task.project_id,
                             run_id=str(task.run_id),
                             request_id=latest.caused_by_request_id,
                         )
+                        if review_policy is ReviewPolicy.REQUIRE_REVIEW
+                        else None
                     )
                     commit = self.services.commits.commit(
                         base=current,
                         candidate=candidate,
                         origin=ChangeOrigin.RUNTIME_TASK,
-                        review_policy=ReviewPolicy.REQUIRE_REVIEW,
+                        review_policy=review_policy,
                         review_boundary=review_boundary,
                         caused_by_request_id=latest.caused_by_request_id,
                         round_id=ids["round_id"],
@@ -1424,9 +1590,8 @@ class FileImageExecutionService:
             existing_file != indexed
             or existing_version != artifact
             or slot is None
+            or slot.selected_version_id != artifact.version_id
         ):
-            return False
-        if slot.selected_version_id != artifact.version_id:
             return False
         command = str(result.get("commandType") or "")
         target_ref = str(result.get("targetRef") or "")
@@ -1440,10 +1605,18 @@ class FileImageExecutionService:
             return selected is not None and selected[1] == artifact.version_id
         entity_id = _target_id(target_ref, "asset")
         entity = project.visual.entities.items.get(entity_id)
-        return (
-            entity is not None
-            and entity.selected_artifact_version_id == artifact.version_id
-        )
+        if entity is None:
+            return False
+        variant_id = result.get("variantId")
+        selected_version_id = entity.selected_artifact_version_id
+        if variant_id:
+            variant = entity.variants.items.get(str(variant_id))
+            selected_version_id = (
+                variant.selected_artifact_version_id
+                if variant is not None
+                else None
+            )
+        return selected_version_id == artifact.version_id
 
     @staticmethod
     def _apply_result(
@@ -1469,12 +1642,16 @@ class FileImageExecutionService:
         versions[artifact.version_id] = artifact_json
         raw_slot = slots.get(artifact.slot_id)
         if raw_slot is None:
+            variant_id = result.get("variantId")
             slot = ArtifactSlot(
                 slot_id=artifact.slot_id,
                 kind=artifact.kind,
                 owner_ref=artifact.owner_ref,
                 version_ids=[artifact.version_id],
                 selected_version_id=artifact.version_id,
+                metadata=(
+                    {"variantId": str(variant_id)} if variant_id else {}
+                ),
             )
             slots[artifact.slot_id] = slot.model_dump(mode="json")
         else:
@@ -1503,7 +1680,6 @@ class FileImageExecutionService:
             entity = candidate["visual"]["entities"]["items"].get(entity_id)
             if entity is None:
                 raise ConflictError("视觉 Asset 已不存在")
-            entity["selected_artifact_version_id"] = artifact.version_id
             variant_id = result.get("variantId")
             if variant_id:
                 variant = entity["variants"]["items"].get(str(variant_id))
@@ -1516,6 +1692,13 @@ class FileImageExecutionService:
                     variant["generated_artifact_version_ids"].append(
                         artifact.version_id,
                     )
+                variant["selected_artifact_version_id"] = artifact.version_id
+                if len(entity["variants"]["order"]) == 1:
+                    entity[
+                        "selected_artifact_version_id"
+                    ] = artifact.version_id
+            else:
+                entity["selected_artifact_version_id"] = artifact.version_id
 
     async def _quarantine(
         self,

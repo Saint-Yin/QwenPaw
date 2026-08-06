@@ -35,6 +35,8 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from pydantic import Field
 
+import httpx
+
 from domain.enums import (
     CreatorCommandType,
     SpecialistRole,
@@ -69,7 +71,19 @@ from services.media_files.element_adapter import (
     selected_element_output,
     target_element_id,
 )
-from services.media_files.review_admission import assert_media_review_admission
+from services.media_files.review_admission import (
+    assert_media_review_admission,
+    media_review_policy,
+)
+from services.media_files.transient_errors import (
+    MAX_TRANSIENT_RETRY_SLOTS,
+    is_transient_error_message,
+    is_transient_task_error,
+    transient_retry_slot_key,
+)
+from services.media_files.visual_reference_resolution import (
+    resolve_r2v_visual_reference_version_ids,
+)
 from services.project_files.remote_cache import public_source_url
 from services.project_files.store import ProjectSnapshot
 from services.runtime_files.atomic_store import (
@@ -104,6 +118,7 @@ _SUBMIT_TIMEOUT_SECONDS = 180.0
 _SUBMIT_CLAIM_SECONDS = 600.0
 _MATERIALIZE_TIMEOUT_SECONDS = 180.0
 _MATERIALIZE_CLAIM_SECONDS = 300.0
+_MATERIALIZE_RETRY_DELAYS = (2.0, 5.0, 10.0)
 _TERMINAL_RECOVERY_POLL_SECONDS = 1.0
 _ACTIVE_PHASES = frozenset(
     {
@@ -319,6 +334,34 @@ def _fingerprint(value: Mapping[str, Any]) -> str:
     return f"sha256:{hashlib.sha256(canonical_json_bytes(value)).hexdigest()}"
 
 
+def _failed_task_conflict(
+    task: TaskRecord | None,
+    *,
+    exhausted_retries: bool = False,
+) -> ConflictError:
+    """Name the original failure and the exact way out of the replay wall."""
+
+    status = task.status.value if task is not None else "FAILED"
+    reason = ""
+    error = getattr(task, "error", None)
+    if isinstance(error, Mapping) and error.get("message"):
+        reason = f"；原失败原因：{str(error['message'])[:200]}"
+    if exhausted_retries:
+        advice = "瞬态重试槽位已用尽，说明故障持续存在。请停止重发相同请求，向用户报告故障或稍后再试。"
+    else:
+        advice = (
+            "相同 arguments 的重发将始终返回此错误；若需重试，请先修正失败原因"
+            "并调整 arguments（如更换分镜图或修改 prompt 措辞）以生成新任务。"
+        )
+    return ConflictError(f"R2V Task 已终止: {status}{reason}。{advice}")
+
+
+def _is_transient_materialize_error(error: BaseException) -> bool:
+    if isinstance(error, httpx.TransportError):
+        return True
+    return is_transient_error_message(str(error))
+
+
 def _json_mapping(value: Any, *, label: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ValidationError(f"{label} 必须是 JSON object")
@@ -468,10 +511,7 @@ def _resolve_request(
             "R2V reference 只能来自 project.json 的 exact version 列表",
         )
     duration_seconds = _duration(
-        arguments.get(
-            "durationSeconds",
-            element.span.duration_tick / timeline.ticks_per_second,
-        ),
+        element.span.duration_tick / timeline.ticks_per_second,
     )
     ratio = str(
         arguments.get("ratio") or project.settings.aspect_ratio,
@@ -489,7 +529,14 @@ def _resolve_request(
 
     version_ids = tuple(
         dict.fromkeys(
-            [storyboard_id, *creation.video_reference_version_ids],
+            [
+                storyboard_id,
+                *resolve_r2v_visual_reference_version_ids(
+                    project,
+                    creation,
+                    creation.video_reference_version_ids,
+                ),
+            ],
         ),
     )
     urls, checksums, provenance, read_set = _resolve_reference_versions(
@@ -567,6 +614,7 @@ class FileR2VExecutionService:
         submit_claim_seconds: float = _SUBMIT_CLAIM_SECONDS,
         materialize_timeout_seconds: float = _MATERIALIZE_TIMEOUT_SECONDS,
         materialize_claim_seconds: float = _MATERIALIZE_CLAIM_SECONDS,
+        materialize_retry_delays: Sequence[float] = _MATERIALIZE_RETRY_DELAYS,
         max_output_bytes: int = _MAX_VIDEO_BYTES,
         clock: Callable[[], float] | None = None,
     ) -> None:
@@ -607,6 +655,9 @@ class FileR2VExecutionService:
         self.submit_claim_seconds = float(submit_claim_seconds)
         self.materialize_timeout_seconds = float(materialize_timeout_seconds)
         self.materialize_claim_seconds = float(materialize_claim_seconds)
+        self.materialize_retry_delays = tuple(
+            float(delay) for delay in materialize_retry_delays
+        )
         self.max_output_bytes = int(max_output_bytes)
         self.clock = clock or time.time
         self.owner_id = f"r2v-supervisor-{uuid4().hex}"
@@ -945,7 +996,6 @@ class FileR2VExecutionService:
         expected_object_versions: Sequence[str] = (),
         start: bool = True,
     ) -> FileR2VDispatch:
-        stable = _ids(project_id, idempotency_key)
         command_hash = _fingerprint(
             {
                 "command": CreatorCommandType.GENERATE_R2V_VIDEO.value,
@@ -953,16 +1003,30 @@ class FileR2VExecutionService:
                 "arguments": dict(arguments),
             },
         )
-        try:
-            existing = await asyncio.to_thread(
-                self.executions.get_task,
-                project_id,
-                stable["task_id"],
-            )
-        except RecordNotFoundError:
-            existing = None
-        if existing is not None:
+        # Identical retries reuse the same durable slot, so a transient
+        # provider failure would otherwise replay the FAILED task forever.
+        # Probe a bounded number of derived retry slots for transient
+        # failures only; deterministic failures keep the terminal wall.
+        stable = _ids(project_id, idempotency_key)
+        existing: TaskRecord | None = None
+        for attempt in range(MAX_TRANSIENT_RETRY_SLOTS + 1):
+            slot_key = transient_retry_slot_key(idempotency_key, attempt)
+            stable = _ids(project_id, slot_key)
+            try:
+                existing = await asyncio.to_thread(
+                    self.executions.get_task,
+                    project_id,
+                    stable["task_id"],
+                )
+            except RecordNotFoundError:
+                existing = None
+                idempotency_key = slot_key
+                break
             self._assert_replay(existing, target_ref, command_hash)
+            if existing.status is TaskStatus.FAILED:
+                if is_transient_task_error(existing.error):
+                    continue
+                raise _failed_task_conflict(existing)
             run = await asyncio.to_thread(
                 self.executions.get_run,
                 project_id,
@@ -978,6 +1042,8 @@ class FileR2VExecutionService:
             if start and existing.status not in _TERMINAL_TASKS:
                 self.start_task(project_id, existing.task_id)
             return self._dispatch_result(existing, stable, replayed=True)
+        else:
+            raise _failed_task_conflict(existing, exhausted_retries=True)
 
         try:
             orphan_run = await asyncio.to_thread(
@@ -997,6 +1063,30 @@ class FileR2VExecutionService:
             if start and recovered.status not in _TERMINAL_TASKS:
                 self.start_task(project_id, recovered.task_id)
             return self._dispatch_result(recovered, stable, replayed=True)
+
+        # Two independent tool calls may legally submit the same command:
+        # an interrupted director gets re-delegated after the next review
+        # approval while its first submission is still generating. Their
+        # stable ids differ (derived from the tool-call id), so the replay
+        # checks above cannot see the first submission — attach to any
+        # live task carrying the same command hash instead of paying the
+        # provider for an identical video twice.
+        in_flight = await asyncio.to_thread(
+            self._find_in_flight_duplicate,
+            project_id,
+            command_hash,
+        )
+        if in_flight is not None:
+            logger.info(
+                "r2v dispatch attached to in-flight duplicate: "
+                "project=%s task=%s target=%s",
+                project_id,
+                in_flight.task_id,
+                _log_safe(target_ref),
+            )
+            if start and in_flight.status not in _TERMINAL_TASKS:
+                self.start_task(project_id, in_flight.task_id)
+            return self._dispatch_result(in_flight, stable, replayed=True)
 
         base = await asyncio.to_thread(self.services.projects.read, project_id)
         conflicts = [
@@ -1207,6 +1297,28 @@ class FileR2VExecutionService:
             or run.metadata.get("commandRequestHash") != command_hash
         ):
             raise ConflictError("Idempotency-Key 已用于不同的 R2V Run")
+
+    def _find_in_flight_duplicate(
+        self,
+        project_id: str,
+        command_hash: str,
+    ) -> TaskRecord | None:
+        """Return a live R2V Task already generating this exact command.
+
+        The command hash covers command type, target and arguments but not
+        the caller's idempotency key, so it identifies "the same video"
+        across independent submissions.
+        """
+
+        for task in self.executions.list_tasks(project_id):
+            if (
+                task.kind is TaskKind.R2V_GENERATION
+                and task.status not in _TERMINAL_TASKS
+                and str(task.metadata.get("commandRequestHash") or "")
+                == command_hash
+            ):
+                return task
+        return None
 
     @staticmethod
     def _dispatch_result(
@@ -1775,6 +1887,7 @@ class FileR2VExecutionService:
                         message=str(
                             detail.get("message") or "R2V state failed",
                         ),
+                        retryable=bool(detail.get("retryable")),
                     )
                     return
                 if state.phase == "CANCELLED":
@@ -1838,6 +1951,7 @@ class FileR2VExecutionService:
                     task,
                     code="R2V_SUPERVISOR_FAILED",
                     message=str(error),
+                    retryable=_is_transient_materialize_error(error),
                 )
             except BaseException:
                 pass
@@ -2720,6 +2834,47 @@ class FileR2VExecutionService:
         }
         return indexed, published
 
+    async def _materialize_video_with_retry(
+        self,
+        task: TaskRecord,
+        claim: R2VTaskState,
+    ) -> MaterializedVideo:
+        """Download the provider result with bounded transient retries.
+
+        The provider already finished the expensive generation; a flaky
+        download must not terminalize the Task and waste that result.
+        """
+
+        delays = self.materialize_retry_delays
+        for attempt in range(len(delays) + 1):
+            try:
+                return await materialize_r2v_video(
+                    claim.provider_result,
+                    project_root=self.services.projects.project_root(
+                        task.project_id,
+                    ),
+                    project_id=task.project_id,
+                    task_id=task.task_id,
+                    max_bytes=self.max_output_bytes,
+                    total_timeout_seconds=self.materialize_timeout_seconds,
+                )
+            except Exception as error:
+                if attempt >= len(delays) or not (
+                    _is_transient_materialize_error(error)
+                ):
+                    raise
+                logger.warning(
+                    "r2v materialize transient failure, retrying: "
+                    "project=%s task=%s attempt=%d error=%s",
+                    task.project_id,
+                    task.task_id,
+                    attempt + 1,
+                    _log_safe(str(error)),
+                )
+                await asyncio.sleep(delays[attempt])
+                await self._require_live_materialize_claim(task, claim)
+        raise StorageIntegrityError("unreachable materialize retry state")
+
     async def _persist_materialized_result(
         self,
         task: TaskRecord,
@@ -3060,15 +3215,9 @@ class FileR2VExecutionService:
                 )
 
             if materialized is None:
-                materialized = await materialize_r2v_video(
-                    claim.provider_result,
-                    project_root=self.services.projects.project_root(
-                        task.project_id,
-                    ),
-                    project_id=task.project_id,
-                    task_id=task.task_id,
-                    max_bytes=self.max_output_bytes,
-                    total_timeout_seconds=self.materialize_timeout_seconds,
+                materialized = await self._materialize_video_with_retry(
+                    task,
+                    claim,
                 )
             await self._require_live_materialize_claim(task, claim)
             indexed, published = self._build_materialized_publication(
@@ -3232,7 +3381,11 @@ class FileR2VExecutionService:
             dict.fromkeys(
                 [
                     storyboard_id,
-                    *element.creation.video_reference_version_ids,
+                    *resolve_r2v_visual_reference_version_ids(
+                        project,
+                        element.creation,
+                        element.creation.video_reference_version_ids,
+                    ),
                 ],
             ),
         )
@@ -3272,20 +3425,24 @@ class FileR2VExecutionService:
                         return "STALE", latest, current
                     candidate = current.project.model_dump(mode="json")
                     self._apply_result(candidate, result)
-                    # Generated video must always be reviewed before it is
-                    # treated as accepted: gate this commit behind a review.
+                    # Generated video is reviewed before acceptance unless
+                    # the operator opted into unattended auto-approval; an
+                    # AUTO_FIX round must not carry a ReviewBoundary.
+                    review_policy = media_review_policy()
                     review_boundary = (
                         self.services.commits.runtime_review_boundary(
                             task.project_id,
                             run_id=str(task.run_id),
                             request_id=latest.caused_by_request_id,
                         )
+                        if review_policy is ReviewPolicy.REQUIRE_REVIEW
+                        else None
                     )
                     commit = self.services.commits.commit(
                         base=current,
                         candidate=candidate,
                         origin=ChangeOrigin.RUNTIME_TASK,
-                        review_policy=ReviewPolicy.REQUIRE_REVIEW,
+                        review_policy=review_policy,
                         review_boundary=review_boundary,
                         caused_by_request_id=latest.caused_by_request_id,
                         round_id=stable["round_id"],
@@ -3532,8 +3689,13 @@ class FileR2VExecutionService:
         *,
         code: str,
         message: str,
+        retryable: bool = False,
     ) -> None:
-        error = {"code": code, "message": message[:2000], "retryable": False}
+        error = {
+            "code": code,
+            "message": message[:2000],
+            "retryable": retryable,
+        }
         stable = _ids(
             task.project_id,
             str(task.idempotency_key or task.task_id),
