@@ -49,7 +49,7 @@ import type {
 } from "@/contracts/creator";
 import ModelSetupGuide from "@/components/onboarding/ModelSetupGuide";
 
-const LLM_PROTOCOLS = [
+export const LLM_PROTOCOLS = [
   "Anthropic Claude",
   "DashScope（百炼）",
   "Aliyun Token Plan",
@@ -68,7 +68,7 @@ const LLM_PROTOCOLS = [
   "小米 MiMo",
   "自定义",
 ];
-const VLM_PROTOCOLS = [
+export const VLM_PROTOCOLS = [
   "Anthropic Claude",
   "DashScope（百炼）",
   "Aliyun Token Plan",
@@ -87,16 +87,46 @@ const VLM_PROTOCOLS = [
   "小米 MiMo",
   "自定义",
 ];
-const ASR_PROTOCOLS = [
+export const ASR_PROTOCOLS = [
   "DashScope Fun-ASR",
   "DashScope Qwen3-ASR",
   "OpenAI Whisper",
 ];
-const TTS_PROTOCOLS = ["DashScope（百炼）"];
-const S2V_PROTOCOLS = ["DashScope（百炼）"];
-const EMBEDDING_PROTOCOLS = ["DashScope（百炼）"];
-const IMAGE_PROTOCOLS = ["OpenAI 协议", "DashScope（百炼）"];
-const VIDEO_PROTOCOLS = ["DashScope（百炼）", "Volcano Engine（火山引擎）"];
+export const TTS_PROTOCOLS = ["DashScope（百炼）"];
+export const S2V_PROTOCOLS = ["DashScope（百炼）"];
+export const EMBEDDING_PROTOCOLS = ["DashScope（百炼）"];
+export const IMAGE_PROTOCOLS = ["OpenAI 协议", "DashScope（百炼）"];
+export const VIDEO_PROTOCOLS = [
+  "DashScope（百炼）",
+  "Volcano Engine（火山引擎）",
+];
+
+// Display-only labels for the protocol dropdowns: the stored protocol
+// strings double as backend match keys (substring checks in the host),
+// so only the rendered label translates while the value stays verbatim.
+// Unknown/custom protocols fall back to their raw value.
+export const PROTOCOL_LABEL_KEYS: Record<string, string> = {
+  "Anthropic Claude": "modelConfig.protocols.anthropicClaude",
+  "DashScope（百炼）": "modelConfig.protocols.dashscope",
+  "Aliyun Token Plan": "modelConfig.protocols.aliyunTokenPlan",
+  "Aliyun Coding Plan": "modelConfig.protocols.aliyunCodingPlan",
+  DeepSeek: "modelConfig.protocols.deepseek",
+  "Google Gemini": "modelConfig.protocols.googleGemini",
+  "OpenAI 协议": "modelConfig.protocols.openai",
+  "Azure OpenAI": "modelConfig.protocols.azureOpenai",
+  MiniMax: "modelConfig.protocols.minimax",
+  "Kimi（月之暗面）": "modelConfig.protocols.kimi",
+  "智谱 AI": "modelConfig.protocols.zhipu",
+  "SiliconFlow（硅基流动）": "modelConfig.protocols.siliconflow",
+  "ModelScope（魔搭）": "modelConfig.protocols.modelscope",
+  百度千帆: "modelConfig.protocols.qianfan",
+  "Volcano Engine（火山引擎）": "modelConfig.protocols.volcengine",
+  "小米 MiMo": "modelConfig.protocols.xiaomiMimo",
+  自定义: "modelConfig.protocols.custom",
+  "DashScope Fun-ASR": "modelConfig.protocols.dashscopeFunAsr",
+  "DashScope Qwen3-ASR": "modelConfig.protocols.dashscopeQwen3Asr",
+  "OpenAI Whisper": "modelConfig.protocols.openaiWhisper",
+};
 
 // Default endpoints for LLM/VLM protocols when the host provider registry
 // is unavailable (standalone deployments). Values are copied verbatim from
@@ -711,6 +741,10 @@ const CARD_META: {
 
 export default function ModelConfigModal({ open, onClose }: Props) {
   const { t } = useTranslation();
+  const protocolLabel = (protocol: string): string => {
+    const key = PROTOCOL_LABEL_KEYS[protocol];
+    return key ? t(key) : protocol;
+  };
   const [config, setConfig] = useState<ModelConfigData>(DEFAULT_CONFIG);
   const snapshotRef = useRef<ModelConfigData | null>(null);
   // Latest-wins serialization for the permission slider: a drag across
@@ -1290,6 +1324,28 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     [config, updateItem],
   );
 
+  // Enabling a model runs the connectivity probe first and only switches
+  // the card on after a passing test, so an enabled card is never left in
+  // the red "untested" state; a failed or incomplete probe keeps it off.
+  const handleEnableToggle = useCallback(
+    async (type: ModelType, checked: boolean): Promise<void> => {
+      if (type === "vlm") {
+        await handleVlmToggle(checked);
+        return;
+      }
+      if (!checked) {
+        updateItem(type, "enabled", false);
+        setTested((prev) => ({ ...prev, [type]: false }));
+        return;
+      }
+      // handleTest itself validates the fields (warning toast when
+      // incomplete) and only enables the card after a passing probe, so no
+      // pre-check is needed here.
+      await handleTest(type);
+    },
+    [handleTest, handleVlmToggle, updateItem],
+  );
+
   const handleGroundingTest = useCallback(async (): Promise<boolean> => {
     const item = groundingValidationModel(config);
     if (!item.base_url || !hasUsableApiKey(item) || !item.model_name) {
@@ -1625,7 +1681,10 @@ export default function ModelConfigModal({ open, onClose }: Props) {
             <Select
               value={item.protocol}
               onChange={(v) => handleProtocolChange(type, v)}
-              options={protocolsFor(type).map((p) => ({ value: p, label: p }))}
+              options={protocolsFor(type).map((p) => ({
+                value: p,
+                label: protocolLabel(p),
+              }))}
             />
             {item.protocol === "自定义" && (
               <Input
@@ -1760,12 +1819,14 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                   updateItem("tts", "reuse_llm_key", e.target.checked)
                 }
               >
-                复用 LLM API Key
+                {t("modelConfig.reuseLlmApiKey")}
               </Checkbox>
             </div>
             {(ttsCapability?.systemVoices.length ?? 0) > 0 && (
               <div>
-                <label className="field-label">默认旁白音色</label>
+                <label className="field-label">
+                  {t("modelConfig.ttsNarratorVoice")}
+                </label>
                 <AutoComplete
                   value={config.tts.voice}
                   onChange={(v) => updateItem("tts", "voice", v)}
@@ -1773,7 +1834,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                     value: v,
                     label: v,
                   }))}
-                  placeholder="如 Cherry"
+                  placeholder={t("modelConfig.ttsVoicePlaceholder")}
                 />
               </div>
             )}
@@ -1787,9 +1848,9 @@ export default function ModelConfigModal({ open, onClose }: Props) {
               }}
             >
               {ttsCapability && ttsCapability.systemVoices.length === 0
-                ? "该模型没有系统音色：Agent 会先根据角色设定设计专属音色，再用它合成台词与旁白。"
-                : "开启后可为成片生成旁白，并为角色设计或复刻专属音色；默认音色用于旁白，角色已绑定的音色优先生效。"}
-              {"复刻/设计所用的配套模型由后端自动选择，无需配置。"}
+                ? t("modelConfig.ttsNoSystemVoicesNote")
+                : t("modelConfig.ttsSystemVoicesNote")}
+              {t("modelConfig.ttsCloneModelAutoNote")}
             </p>
           </div>
         )}
@@ -1808,11 +1869,13 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                   updateItem("s2v", "reuse_llm_key", e.target.checked)
                 }
               >
-                复用 LLM API Key
+                {t("modelConfig.reuseLlmApiKey")}
               </Checkbox>
             </div>
             <div>
-              <label className="field-label">人像检测模型（可选）</label>
+              <label className="field-label">
+                {t("modelConfig.s2vDetectModelLabel")}
+              </label>
               <Input
                 placeholder="wan2.2-s2v-detect"
                 value={config.s2v.detect_model_name}
@@ -1830,9 +1893,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                 color: "var(--color-text-tertiary)",
               }}
             >
-              用一张角色人像图 + 一段音频生成对口型说话视频（wan2.2-s2v）；
-              提交前会先跑免费的人像检测，未通过不产生费用。检测模型留空时
-              使用默认的 wan2.2-s2v-detect。
+              {t("modelConfig.s2vDetectNote")}
             </p>
           </div>
         )}
@@ -1844,7 +1905,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                 updateItem("embedding", "reuse_vlm_key", e.target.checked)
               }
             >
-              复用 VLM API Key
+              {t("modelConfig.reuseVlmApiKey")}
             </Checkbox>
             <span
               style={{
@@ -1852,7 +1913,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                 color: "var(--color-text-tertiary)",
               }}
             >
-              用于长素材层次记忆的节点向量化与语义检索
+              {t("modelConfig.embeddingReuseNote")}
             </span>
           </div>
         )}
@@ -1873,23 +1934,26 @@ export default function ModelConfigModal({ open, onClose }: Props) {
   const toggleControl = (type: ModelType) => {
     if (type === "llm") return null;
     const item = config[type] as ModelConfigItem;
-    const testing = type === "vlm" && testingVlmMultimodal;
+    const meta = CARD_META.find((card) => card.type === type);
+    const busy =
+      (type === "vlm" && testingVlmMultimodal === true) ||
+      testing[type] === true;
     return (
       <>
         <label className="desktop-toggle" onClick={(e) => e.stopPropagation()}>
           <input
             type="checkbox"
+            aria-label={meta ? t(meta.labelKey) : type}
             checked={item.enabled}
-            disabled={testing}
+            disabled={busy}
             onChange={(e) => {
-              if (type === "vlm") handleVlmToggle(e.target.checked);
-              else updateItem(type, "enabled", e.target.checked);
+              void handleEnableToggle(type, e.target.checked);
             }}
           />
           <div className="track" />
           <div className="thumb" />
         </label>
-        {testing && (
+        {busy && (
           <span
             style={{
               fontSize: 11,
@@ -1897,7 +1961,9 @@ export default function ModelConfigModal({ open, onClose }: Props) {
               whiteSpace: "nowrap",
             }}
           >
-            {t("modelConfig.multimodalTesting")}
+            {type === "vlm"
+              ? t("modelConfig.multimodalTesting")
+              : t("modelConfig.connectionTesting")}
           </span>
         )}
       </>
@@ -2070,7 +2136,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
             <div style={{ fontSize: 13, fontWeight: 600 }}>
               {t("modelConfig.search")}
             </div>
-            {/* 优先级链：Tavily 优先，Qwen 原生搜索回退 */}
+            {/* Priority chain: Tavily first, Qwen native search fallback. */}
             <div
               style={{
                 border: "1px solid var(--color-border)",
@@ -2375,7 +2441,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                           options={[
                             {
                               value: "DashScope（百炼）",
-                              label: "Qwen / DashScope（百炼）",
+                              label: t("modelConfig.searchAdapterDashScope"),
                             },
                           ]}
                         />
@@ -2493,7 +2559,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                     onChange={(value) => updateGrounding("protocol", value)}
                     options={VLM_PROTOCOLS.map((protocol) => ({
                       value: protocol,
-                      label: protocol,
+                      label: protocolLabel(protocol),
                     }))}
                   />
                 </div>
