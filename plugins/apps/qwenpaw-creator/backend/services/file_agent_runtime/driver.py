@@ -5035,16 +5035,34 @@ class FileCreatorAgentRuntime:
             # reached this point before releasing active_run_id.  Other
             # QwenPaw processes can then observe the same stop and cannot
             # immediately relaunch the cancelled request.
+            #
+            # Snapshot read (shared lock): the full get_project_session
+            # recovery replays the whole event stream under the exclusive
+            # Runtime lock and loses that race against steady polling on
+            # large sessions.  An error escaping this block would abort the
+            # terminal writes below, leaving the Session INTERRUPT_REQUESTED
+            # while reconcile reclaimed the pointer and relaunched the
+            # unconsumed request — the dock showed 「正在停止」 forever.
             try:
                 current_session = await asyncio.to_thread(
-                    self.sessions.get_project_session,
+                    self.sessions.get_project_session_snapshot,
                     project_id,
                 )
+                consume_through_seq = current_session.last_message_seq
+            except Exception:  # pylint: disable=broad-except
+                logger.exception(
+                    "interrupt cleanup could not read the session head; "
+                    "consuming the stopped request only: project=%s run=%s",
+                    project_id,
+                    run_id,
+                )
+                consume_through_seq = message.message_seq
+            try:
                 await asyncio.to_thread(
                     self.sessions.mark_messages_consumed,
                     project_id,
                     session_id,
-                    through_seq=current_session.last_message_seq,
+                    through_seq=consume_through_seq,
                     goal_id=goal_id,
                 )
             except SessionStateConflict:
