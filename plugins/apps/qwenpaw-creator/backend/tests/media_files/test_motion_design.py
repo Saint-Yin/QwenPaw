@@ -27,6 +27,8 @@ from services.media_files.motion_design import (
 )
 from services.media_files.motion_overlay import (
     MotionDocumentProbe,
+    MotionLayerPrep,
+    PreparedMotionLayer,
     _alpha_plane_stats,
 )
 from services.media_files.motion_templates import (
@@ -107,6 +109,20 @@ class TestValidatedDesignTextMode:
         assert not isinstance(design, str)
         motion, _location, _concept = design
         assert motion.loop is False
+
+    def test_scene_mode_allows_visible_text(self) -> None:
+        """Full-canvas motion clips may carry copy (teaching panels,
+        title cards); only decorations must stay text-free."""
+
+        raw = {**self._BASE, "needed": True, "html": _HTML}
+        with pytest.raises(ValidationError, match="不允许包含任何可见文字"):
+            _validated_design(raw, default_loop=False)
+        design = _validated_design(
+            raw,
+            allow_visible_text=True,
+            default_loop=False,
+        )
+        assert not isinstance(design, str)
 
     def test_extra_visible_text_is_rejected(self) -> None:
         raw = {
@@ -589,6 +605,25 @@ class TestSelectDecorationIds:
         assert selected <= {element.element_id for element in elements}
 
 
+def _layer_prep(tmp_path) -> MotionLayerPrep:
+    """A minimal prepared layer for mocking the capture stage."""
+
+    return MotionLayerPrep(
+        layer=PreparedMotionLayer(
+            frames_dir=tmp_path,
+            frame_count=1,
+            effective_fps=24.0,
+            appear_at=0.0,
+            duration=1.0,
+            left=0,
+            top=0,
+            opacity=1.0,
+            period_mode=False,
+            managed_exit=False,
+        ),
+    )
+
+
 class TestApplyOverlayStyledRouting:
     def _runner(
         self,
@@ -650,8 +685,12 @@ class TestApplyOverlayStyledRouting:
     ) -> None:
         calls: list[str] = []
 
-        def fake_motion(**kwargs):
-            calls.append("motion")
+        def fake_prepare(**kwargs):
+            calls.append("prepare")
+            return _layer_prep(tmp_path)
+
+        def fake_composite(**kwargs):
+            calls.append("burn")
             kwargs["output_path"].write_bytes(b"styled")
             return OverlayRenderResult(success=True)
 
@@ -661,8 +700,13 @@ class TestApplyOverlayStyledRouting:
 
         monkeypatch.setattr(
             local_execution_module,
-            "render_motion_overlay",
-            fake_motion,
+            "prepare_motion_layer",
+            fake_prepare,
+        )
+        monkeypatch.setattr(
+            local_execution_module,
+            "composite_motion_layers",
+            fake_composite,
         )
         monkeypatch.setattr(
             local_execution_module,
@@ -676,7 +720,7 @@ class TestApplyOverlayStyledRouting:
         )
         warnings = runner._apply_overlay(item, segment)
         assert not warnings
-        assert calls == ["motion"]
+        assert calls == ["prepare", "burn"]
         assert segment.read_bytes() == b"styled"
 
     def test_motion_failure_falls_back_with_warning(
@@ -686,9 +730,9 @@ class TestApplyOverlayStyledRouting:
     ) -> None:
         calls: list[str] = []
 
-        def fake_motion(**kwargs):
-            calls.append("motion")
-            return OverlayRenderResult(success=False, error="capture crashed")
+        def fake_prepare(**kwargs):
+            calls.append("prepare")
+            return MotionLayerPrep(error="capture crashed")
 
         def fake_pet_os(**kwargs):
             calls.append("pet_os")
@@ -697,8 +741,8 @@ class TestApplyOverlayStyledRouting:
 
         monkeypatch.setattr(
             local_execution_module,
-            "render_motion_overlay",
-            fake_motion,
+            "prepare_motion_layer",
+            fake_prepare,
         )
         monkeypatch.setattr(
             local_execution_module,
@@ -714,7 +758,7 @@ class TestApplyOverlayStyledRouting:
         assert len(warnings) == 1
         assert "回退固定样式" in warnings[0]
         assert "capture crashed" in warnings[0]
-        assert calls == ["motion", "motion", "pet_os"]
+        assert calls == ["prepare", "prepare", "pet_os"]
         assert segment.read_bytes() == b"bubble"
 
     def test_without_motion_uses_fixed_template(
@@ -758,10 +802,14 @@ class TestApplyOverlayStyledRouting:
         safe_motion_locations: list[dict] = []
         safe_motion_html: list[str] = []
 
-        def fake_motion(**kwargs):
-            calls.append("motion")
+        def fake_prepare(**kwargs):
+            calls.append("prepare")
             safe_motion_locations.append(kwargs["location"])
             safe_motion_html.append(kwargs["html"])
+            return _layer_prep(tmp_path)
+
+        def fake_composite(**kwargs):
+            calls.append("burn")
             kwargs["output_path"].write_bytes(b"safe motion")
             return OverlayRenderResult(success=True)
 
@@ -772,8 +820,13 @@ class TestApplyOverlayStyledRouting:
 
         monkeypatch.setattr(
             local_execution_module,
-            "render_motion_overlay",
-            fake_motion,
+            "prepare_motion_layer",
+            fake_prepare,
+        )
+        monkeypatch.setattr(
+            local_execution_module,
+            "composite_motion_layers",
+            fake_composite,
         )
         monkeypatch.setattr(
             local_execution_module,
@@ -796,7 +849,7 @@ class TestApplyOverlayStyledRouting:
 
         warnings = runner._apply_overlay(item, segment)
 
-        assert calls == ["motion"]
+        assert calls == ["prepare", "burn"]
         assert segment.read_bytes() == b"safe motion"
         assert len(warnings) == 1
         assert "未通过合成安全检查" in warnings[0]
@@ -814,3 +867,216 @@ class TestApplyOverlayStyledRouting:
             },
         ]
         assert 'data-motion-motif="caption_card"' in safe_motion_html[0]
+
+
+class TestUniformCaptionStyle:
+    def test_bad_caption_style_is_rejected_before_any_read(self) -> None:
+        with pytest.raises(ValidationError, match="captionStyle"):
+            asyncio.run(
+                motion_design.design_motion_overlays(
+                    object(),
+                    project_id="p1",
+                    target_ref="timeline:main",
+                    arguments={"captionStyle": "rainbow"},
+                    idempotency_key="k1",
+                ),
+            )
+
+    def test_uniform_blueprint_renders_identically_across_cards(self) -> None:
+        """Uniform narration captions share one deterministic skeleton:
+        two cards differ only by their words, never by style."""
+
+        from services.media_files.motion_blueprints import (
+            render_caption_blueprint,
+        )
+
+        blueprint = motion_design._UNIFORM_CAPTION_BLUEPRINT
+        intensity = motion_design._UNIFORM_CAPTION_INTENSITY
+        first, _ = render_caption_blueprint(
+            blueprint,
+            "第一句旁白。",
+            intensity=intensity,
+        )
+        again, _ = render_caption_blueprint(
+            blueprint,
+            "第一句旁白。",
+            intensity=intensity,
+        )
+        assert first == again  # deterministic, no per-card variation
+        second, _ = render_caption_blueprint(
+            blueprint,
+            "第二句旁白。",
+            intensity=intensity,
+        )
+        assert first.replace("第一句旁白。", "") == second.replace(
+            "第二句旁白。",
+            "",
+        )
+
+    def test_uniform_blueprint_font_size_ignores_text_length(self) -> None:
+        """The static capsule keeps one fixed font size: a long sentence
+        wraps instead of shrinking, so short and long captions share the
+        exact same style skeleton (the hyperframes caption-bar contract)."""
+
+        from services.media_files.motion_blueprints import (
+            render_caption_blueprint,
+        )
+
+        blueprint = motion_design._UNIFORM_CAPTION_BLUEPRINT
+        intensity = motion_design._UNIFORM_CAPTION_INTENSITY
+        short_text = "所以x等于3。"
+        long_text = "这道题要求我们解一元一次方程，6乘以括号x加2，等于30。"
+        short_doc, _ = render_caption_blueprint(
+            blueprint,
+            short_text,
+            intensity=intensity,
+        )
+        long_doc, _ = render_caption_blueprint(
+            blueprint,
+            long_text,
+            intensity=intensity,
+        )
+        # Style skeleton (all CSS, including font-size) is byte-identical
+        # across very different text lengths -- only the words differ.
+        assert short_doc.replace(short_text, "") == long_doc.replace(
+            long_text,
+            "",
+        )
+        # No adaptive vw/text-length term ever reaches the font size.
+        assert "font-size:24vh" in short_doc
+        # No per-card entrance choreography beyond the single card fade.
+        for performance in ("letterSpacing", "scaleY", "stagger"):
+            assert performance not in short_doc
+        # Compose probes reject documents whose t=0 frame is fully
+        # transparent, so the fade must start from partial visibility.
+        assert "autoAlpha:0}" not in short_doc
+        assert "autoAlpha:.35" in short_doc
+        # Captions hand over back-to-back: a managed exit fade would
+        # double-expose neighbouring cards, so the exit is a hard cut.
+        assert 'data-motion-exit="none"' in short_doc
+
+
+class TestSegmentCache:
+    """Finished-segment cache: identity coverage and round trip."""
+
+    def _spec(self, tmp_path):
+        from domain.enums import CreatorCommandType
+        from services.media_files.local_execution import (
+            LocalMediaExecutionSpec,
+        )
+
+        return LocalMediaExecutionSpec(
+            command=CreatorCommandType.COMPOSE_FINAL_VIDEO,
+            target_ref="timeline:main",
+            task_id="task-1",
+            work_dir=tmp_path,
+            output_path=tmp_path / "out.mp4",
+            inputs=(),
+            transitions=(),
+            audio_plan="",
+            expected_duration_seconds=None,
+            canvas_size=(1280, 720),
+        )
+
+    def _item(self, tmp_path, *, checksum="a" * 64, overlays=()):
+        segment = tmp_path / "src.mp4"
+        segment.write_bytes(b"src")
+        return LocalMediaInput(
+            version_id="ver-1",
+            file_id=None,
+            checksum=checksum,
+            media_type="video/mp4",
+            path=segment,
+            source_ref="element:clip-1",
+            start_seconds=0.0,
+            end_seconds=4.0,
+            overlays=tuple(overlays),
+        )
+
+    def test_key_tracks_burned_layer_checksum_not_html(
+        self,
+        tmp_path,
+    ) -> None:
+        runner = FfmpegLocalMediaRunner(executable="ffmpeg")
+        spec = self._spec(tmp_path)
+
+        def overlay(checksum: str, html: str) -> dict:
+            return {
+                "kind": "pet_os",
+                "text": "第一句",
+                "vibe": "chill",
+                "appear_at": 0.0,
+                "duration": 2.0,
+                "motion": {
+                    "format": "html_js",
+                    "html": html,
+                    "checksum": checksum,
+                    "fps": 24,
+                    "loop": False,
+                },
+                "location": None,
+                "element_id": "overlay-1",
+            }
+
+        base = runner._segment_cache_key(
+            spec,
+            self._item(tmp_path, overlays=[overlay("c1", "<html>a")]),
+            segment_duration=4.0,
+            freeze_duration=0.0,
+        )
+        # Identical content with a different (never-fingerprinted) html
+        # body: hydration state must not split the cache.
+        same = runner._segment_cache_key(
+            spec,
+            self._item(tmp_path, overlays=[overlay("c1", "<html>b")]),
+            segment_duration=4.0,
+            freeze_duration=0.0,
+        )
+        changed = runner._segment_cache_key(
+            spec,
+            self._item(tmp_path, overlays=[overlay("c2", "<html>a")]),
+            segment_duration=4.0,
+            freeze_duration=0.0,
+        )
+        assert base == same
+        assert base != changed
+        # Canvas geometry always reaches the key.
+        other_canvas = self._spec(tmp_path)
+        object.__setattr__(other_canvas, "canvas_size", (1920, 1080))
+        assert base != runner._segment_cache_key(
+            other_canvas,
+            self._item(tmp_path, overlays=[overlay("c1", "<html>a")]),
+            segment_duration=4.0,
+            freeze_duration=0.0,
+        )
+        # No stable source checksum -> never cached.
+        assert (
+            runner._segment_cache_key(
+                spec,
+                self._item(tmp_path, checksum=""),
+                segment_duration=4.0,
+                freeze_duration=0.0,
+            )
+            is None
+        )
+
+    def test_store_and_restore_round_trip(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        runner = FfmpegLocalMediaRunner(executable="ffmpeg")
+        monkeypatch.setattr(
+            FfmpegLocalMediaRunner,
+            "_segment_cache_root",
+            staticmethod(lambda: tmp_path / "cache"),
+        )
+        (tmp_path / "cache").mkdir()
+        rendered = tmp_path / "rendered.mp4"
+        rendered.write_bytes(b"finished segment")
+        runner._store_cached_segment("k" * 64, rendered, ["warn-1"])
+        restored = tmp_path / "restored.mp4"
+        warnings = runner._restore_cached_segment("k" * 64, restored)
+        assert warnings == ("warn-1",)
+        assert restored.read_bytes() == b"finished segment"
+        assert runner._restore_cached_segment("m" * 64, restored) is None

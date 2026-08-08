@@ -624,6 +624,28 @@ _MOTION_DESIGN_ARGUMENTS = _arguments_schema(
             "maximum": 8,
             "description": "装饰动效名额上限（默认 3）。装饰是锦上添花，只在少数关键片段出现；0 表示只做文字 Overlay 样式、不加装饰。",
         },
+        "captionStyle": {
+            "type": "string",
+            "enum": ["varied", "uniform"],
+            "description": (
+                "字幕卡样式策略：varied（默认）逐卡生成式设计、蓝图轮换，"
+                "适合宠物 OS/综艺台词卡；uniform 全片用同一固定模板确定性"
+                "渲染（只换文字，样式逐卡一致），适合教学/解说/纪录片式"
+                "旁白字幕；uniform 是全片字幕策略，覆盖所有文字 Overlay，不受 "
+                "elementIds 限定。"
+            ),
+        },
+        "sceneStyle": {
+            "type": "string",
+            "enum": ["generative", "edu_steps"],
+            "description": (
+                "全画幅 motion_clip 场景的设计策略：generative（默认）由模型"
+                "自由生成 HTML；edu_steps 用确定性教学推导卡模板（满屏版式、"
+                "步骤徽章/上一步/推导行/结果高亮固定骨架），模型只填内容文案，"
+                "全片风格绝对一致且文案强制中文；数学/物理等分步讲解视频必须用 "
+                "edu_steps。"
+            ),
+        },
     },
     (),
 )

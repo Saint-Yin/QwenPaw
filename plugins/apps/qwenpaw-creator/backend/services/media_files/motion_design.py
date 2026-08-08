@@ -46,6 +46,7 @@ from services.media_files.motion_blueprints import (
     blueprint_catalog_text,
     render_caption_blueprint,
     render_decoration_blueprint,
+    render_scene_blueprint,
 )
 from services.media_files.motion_engine import (
     referenced_vendor_filenames,
@@ -101,6 +102,10 @@ def _log_safe(value: object) -> str:
 
 _MAX_SEGMENTS = 24
 _MAX_CONCURRENT_DESIGNS = 3
+# Uniform narration captions: one fixed blueprint and intensity shared by
+# every card in the film, so subtitles stay visually identical throughout.
+_UNIFORM_CAPTION_BLUEPRINT = "static_capsule"
+_UNIFORM_CAPTION_INTENSITY = 0.5
 _MAX_DESIGN_ATTEMPTS = 2
 _TEXT_CARD_DESIGN_ATTEMPTS = 3
 _TEXT_CARD_MIN_COVERAGE = 0.3
@@ -463,6 +468,7 @@ def _validated_design(
     raw: Mapping[str, Any],
     *,
     required_text: str | None = None,
+    allow_visible_text: bool = False,
     default_loop: bool = True,
     canvas_size: tuple[int, int] | None = None,
 ) -> tuple[MotionGraphic, ElementLocation, str] | str:
@@ -470,6 +476,9 @@ def _validated_design(
 
     ``required_text`` switches to text-card mode: the design is always
     needed and the given text must appear verbatim in the document.
+    ``allow_visible_text`` marks full-canvas scene documents (motion
+    clips): they may carry copy when the creative intent asks for it,
+    unlike decorations which must stay text-free.
     """
 
     if required_text is None:
@@ -596,14 +605,18 @@ def _validated_design(
     visible = unescape(
         re.sub(r"\s+", "", re.sub(r"<[^>]+>", " ", body)),
     )
-    if required_text is None and visible:
+    if required_text is None and not allow_visible_text and visible:
         raise ValidationError(
             "装饰动效不允许包含任何可见文字；请改用纯 CSS 图形表达，不要生成对话气泡或标题卡",
         )
-    if required_text is None and re.search(
-        r"\bcontent\s*:\s*(['\"])(?!\s*\1).+?\1",
-        html,
-        re.IGNORECASE | re.DOTALL,
+    if (
+        required_text is None
+        and not allow_visible_text
+        and re.search(
+            r"\bcontent\s*:\s*(['\"])(?!\s*\1).+?\1",
+            html,
+            re.IGNORECASE | re.DOTALL,
+        )
     ):
         raise ValidationError(
             "装饰动效不允许通过 CSS content 生成可见文字或符号；请用 CSS 几何图形表达",
@@ -621,6 +634,7 @@ def _validated_design(
             )
     elif (
         not uses_blueprint
+        and not allow_visible_text
         and doc_format != "html_js"
         and motif not in SUPPORTED_MOTIFS
     ):
@@ -820,6 +834,7 @@ async def _design_document(
     frame_paths: list[Path],
     canvas_size: tuple[int, int],
     required_text: str | None = None,
+    allow_visible_text: bool = False,
     default_loop: bool = True,
     min_coverage: float = 0.0,
     max_edge_contact: float = 1.0,
@@ -857,6 +872,7 @@ async def _design_document(
             design = _validated_design(
                 parsed,
                 required_text=required_text,
+                allow_visible_text=allow_visible_text,
                 default_loop=default_loop,
                 canvas_size=canvas_size,
             )
@@ -1204,6 +1220,12 @@ async def design_motion_overlays(
         except (TypeError, ValueError) as exc:
             raise ValidationError("maxDecorations 必须是整数") from exc
         budget = min(max(budget, 0), _MAX_DECORATION_BUDGET)
+    caption_style = str(arguments.get("captionStyle") or "varied").strip()
+    if caption_style not in {"varied", "uniform"}:
+        raise ValidationError("captionStyle 必须是 varied 或 uniform")
+    scene_style = str(arguments.get("sceneStyle") or "generative").strip()
+    if scene_style not in {"generative", "edu_steps"}:
+        raise ValidationError("sceneStyle 必须是 generative 或 edu_steps")
 
     snapshot: ProjectSnapshot = await asyncio.to_thread(
         services.projects.read,
@@ -1257,12 +1279,83 @@ async def design_motion_overlays(
     clip_styled: dict[str, MotionGraphic] = {}
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_DESIGNS)
 
+    async def design_edu_step_card(
+        element: TimelineElement,
+        clip_index: int,
+    ) -> dict[str, Any]:
+        """Fill the deterministic teaching-card blueprint for one segment.
+
+        The caption-blueprint philosophy applied to the scene picture:
+        layout, palette, fixed Chinese labels and choreography live in
+        code; the model only supplies content slots, so per-segment
+        style drift (and English UI copy) is structurally impossible.
+        """
+
+        creation = element.creation
+        assert isinstance(creation, MotionClipCreation)
+        entry = {"elementId": element.element_id}
+        intent = creation.prompt or creation.intent or ""
+        task_text = (
+            f"这是教学视频的第 {clip_index + 1} 段画面。创意意图：{intent}\n"
+            "把它转成一张推导卡的内容，只输出一个 JSON 对象，字段：\n"
+            'badge（步骤徽章，如"步骤一"或"题目"）、title（本段标题，如"去括号"）、'
+            "previous（可选，上一步公式）、operation（可选，本步操作说明）、"
+            "lines（推导行列表，每行一个等式或说明）、result（可选，本段结果公式）。\n"
+            "硬性要求：除变量字母和数学函数名外全部使用中文；公式用普通字符（如 6(x-1)=24）；"
+            "每个字段都要简短，lines 不超过 3 行。"
+        )
+        last_error = "教学卡内容生成失败"
+        async with semaphore:
+            for _attempt in range(_TEXT_CARD_DESIGN_ATTEMPTS):
+                try:
+                    answer = await vlm_model.chat_completion(
+                        [{"type": "text", "text": task_text}],
+                        system_prompt=(
+                            "你是数学教学视频的内容编辑，只输出一个 JSON 对象，" "不输出任何其他文字。"
+                        ),
+                        temperature=0.3,
+                        max_tokens=800,
+                    )
+                    content = _parse_design_json(answer)
+                    html, _hf = render_scene_blueprint(
+                        "edu_step_card",
+                        content,
+                    )
+                except (ValidationError, ValueError) as exc:
+                    last_error = str(exc)
+                    task_text += f"\n上一次输出被拒绝：{last_error}。请修正后重新只输出 JSON。"
+                    continue
+                except Exception as exc:  # noqa: BLE001 - model transport
+                    return {**entry, "status": "failed", "error": str(exc)}
+                clip_styled[element.element_id] = MotionGraphic(
+                    format="html_js",
+                    html=html,
+                    fps=24,
+                    loop=False,
+                    design_notes=f"教学推导卡蓝图 edu_step_card：{content.get('title') or intent}",
+                    motif="custom",
+                    theme="soft_journal",
+                    variant="sticker",
+                    emotion="chill",
+                    entrance="fade",
+                    exit="none",
+                    intensity=0.5,
+                )
+                return {
+                    **entry,
+                    "status": "designed",
+                    "concept": f"edu_step_card: {content.get('title') or ''}",
+                }
+        return {**entry, "status": "failed", "error": last_error}
+
     async def design_motion_clip(
         element: TimelineElement,
         clip_index: int,
     ) -> dict[str, Any]:
         """Design one full-canvas pure motion segment picture."""
 
+        if scene_style == "edu_steps":
+            return await design_edu_step_card(element, clip_index)
         creation = element.creation
         assert isinstance(creation, MotionClipCreation)
         entry = {"elementId": element.element_id}
@@ -1294,6 +1387,10 @@ async def design_motion_overlays(
                     frame_paths=[],
                     canvas_size=canvas_size,
                     default_loop=False,
+                    # A scene document may carry copy (title cards, teaching
+                    # panels) when the creative intent asks for it; only
+                    # decorations must stay text-free.
+                    allow_visible_text=True,
                     # The document IS the picture: it must flood the whole
                     # viewport (a "card" with margins or rounded corners
                     # fails this gate), while edge contact is its normal
@@ -1411,6 +1508,97 @@ async def design_motion_overlays(
             "concept": concept,
             "fallbackReason": reason,
         }
+
+    def uniform_text_style(overlay: TimelineElement) -> dict[str, Any]:
+        """Style one caption with the film-wide uniform template.
+
+        Narration captions (tutorials, explainers, documentary voice-over)
+        must look identical from the first card to the last — only the
+        words change — so the uniform mode renders every card from one
+        fixed blueprint deterministically and never asks the design model
+        for a per-card look.
+        """
+
+        creation = overlay.creation
+        assert isinstance(creation, OverlayCreation)
+        entry: dict[str, Any] = {
+            "elementId": overlay.element_id,
+            "overlayKind": "caption",
+        }
+        # Uniform mode expresses a film-wide caption policy, so every
+        # caption is covered even when the caller scoped elementIds to
+        # its motion clips; re-styling is prevented by the already_styled
+        # guard, never by the request filter.
+        if creation.motion is not None:
+            return {**entry, "status": "already_styled"}
+        emotion = (
+            creation.vibe if creation.vibe in SUPPORTED_EMOTIONS else "chill"
+        )
+        location = overlay.location or ElementLocation(
+            x=0.50,
+            y=0.88,
+            width=0.80,
+            height=0.14,
+            anchor_x=0.5,
+            anchor_y=0.5,
+        )
+        try:
+            _validate_caption_location(location, creation.text, canvas_size)
+        except ValidationError:
+            location = ElementLocation(
+                x=0.50,
+                y=0.88,
+                width=0.80,
+                height=0.18,
+                anchor_x=0.5,
+                anchor_y=0.5,
+            )
+        concept = f"全片统一解说字幕卡 {_UNIFORM_CAPTION_BLUEPRINT}"
+        try:
+            blueprint_html, _hf = render_caption_blueprint(
+                _UNIFORM_CAPTION_BLUEPRINT,
+                creation.text,
+                palette=_THEME_BLUEPRINT_PALETTES.get(theme),
+                intensity=_UNIFORM_CAPTION_INTENSITY,
+            )
+            motion = MotionGraphic(
+                format="html_js",
+                html=blueprint_html,
+                fps=24,
+                loop=False,
+                design_notes=concept,
+                motif="caption_card",
+                theme=theme,
+                variant="sticker",
+                emotion=emotion,
+                entrance="pop",
+                exit="soft_fade",
+                intensity=_UNIFORM_CAPTION_INTENSITY,
+            )
+        except ValueError:
+            concept = "全片统一解说字幕卡（固定模板）"
+            motion = MotionGraphic(
+                html=render_caption_template(
+                    creation.text,
+                    theme=theme,
+                    emotion=emotion,
+                    box_width=location.width,
+                    box_height=location.height,
+                ),
+                fps=24,
+                loop=False,
+                design_notes=concept,
+                motif="caption_card",
+                template_version=MOTION_TEMPLATE_VERSION,
+                theme=theme,
+                variant="sticker",
+                emotion=emotion,
+                entrance="pop",
+                exit="soft_fade",
+                intensity=_UNIFORM_CAPTION_INTENSITY,
+            )
+        styled[overlay.element_id] = (motion, location)
+        return {**entry, "status": "designed", "concept": concept}
 
     async def window_frames(
         render_source: SourceVersionRenderSource,
@@ -1721,7 +1909,9 @@ async def design_motion_overlays(
                 style_text_overlay(overlay, card_index)
                 for card_index, overlay in enumerate(text_overlays)
             ),
-        ),
+        )
+        if caption_style == "varied"
+        else [uniform_text_style(overlay) for overlay in text_overlays],
     )
     clip_results = list(
         await asyncio.gather(

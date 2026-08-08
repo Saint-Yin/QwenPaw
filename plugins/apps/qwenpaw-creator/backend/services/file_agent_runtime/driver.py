@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+import contextlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
@@ -103,6 +104,15 @@ from services.runtime_files.atomic_store import atomic_replace_bytes
 from services.media_files.call_budget import (
     MediaCallBudgetExhausted,
     ensure_media_call_budget,
+)
+from services.external_skills import (
+    EXTERNAL_SKILL_TOOL_NAMES,
+    VIEW_SKILL_TOOL_NAME,
+    LoadedSkill,
+    external_skill_tool_manifests,
+    load_skills as load_external_skills,
+    render_external_skills_context,
+    view_skill as view_external_skill,
 )
 from services.observability import trace_event, traced_async
 from services.source_analysis import SourceAgentToolContext
@@ -558,11 +568,15 @@ def _object_grounding_tool_manifest() -> dict[str, Any]:
     }
 
 
-def _creator_agent_tool_manifest() -> list[dict[str, Any]]:
+def _creator_agent_tool_manifest(
+    external_skills: list[LoadedSkill] | None = None,
+) -> list[dict[str, Any]]:
     manifest = [*agent_project_tool_manifest()]
     if get_web_grounding_enabled():
         manifest.append(_ground_prompt_context_tool_manifest())
     manifest.append(_object_grounding_tool_manifest())
+    if external_skills:
+        manifest.extend(external_skill_tool_manifests(external_skills))
     manifest.append(delegate_tool_manifest())
     return manifest
 
@@ -1244,6 +1258,15 @@ class FileCreatorAgentRuntime:
                 return None
         elif run.status not in TERMINAL_AGENT_RUN_STATUSES:
             return None
+        elif (
+            datetime.now(UTC) - run.updated_at
+        ).total_seconds() < self._ORPHAN_RUN_GRACE_SECONDS:
+            # A run that just reached its terminal status is almost always
+            # a live owner between its final transition and its own
+            # clear_active_run — stealing the lease in that window fails
+            # the owner's cleanup for nothing. True crash leftovers stay
+            # stuck far longer than the grace period.
+            return None
         try:
             return await asyncio.to_thread(
                 self.sessions.clear_active_run,
@@ -1501,7 +1524,7 @@ class FileCreatorAgentRuntime:
             self.sessions.get_project_session_snapshot,
             project_id,
         )
-        goal = await self._goal_for_message(session, message)
+        goal, goal_created = await self._goal_for_message(session, message)
         snapshot = await asyncio.to_thread(
             self.services.projects.read,
             project_id,
@@ -1525,14 +1548,56 @@ class FileCreatorAgentRuntime:
             input_etag=snapshot.etag,
         )
         await asyncio.to_thread(self.runs.create, record)
-        await asyncio.to_thread(
-            self.sessions.activate_run,
-            project_id,
-            session.session_id,
-            goal_id=goal.goal_id,
-            run_id=run_id,
-            status=CreatorSessionStatus.RUNNING,
-        )
+        try:
+            await asyncio.to_thread(
+                self.sessions.activate_run,
+                project_id,
+                session.session_id,
+                goal_id=goal.goal_id,
+                run_id=run_id,
+                status=CreatorSessionStatus.RUNNING,
+            )
+        except SessionStateConflict as exc:
+            # A concurrent dispatcher (another process sharing this runtime
+            # root, or a stale coordinator surviving a hot reinstall) won
+            # the durable lease first. Without compensation the loser
+            # leaks a QUEUED run forever and, when it also minted a fresh
+            # Goal, leaves that Goal ACTIVE with no run that could ever
+            # settle it — the Session then looks busy indefinitely.
+            logger.warning(
+                "duplicate admission lost the session lease: project=%s "
+                "run=%s goal=%s: %s",
+                project_id,
+                run_id,
+                goal.goal_id,
+                exc,
+            )
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(
+                    self.runs.transition,
+                    project_id,
+                    run_id,
+                    expected_status=AgentRunStatus.QUEUED,
+                    status=AgentRunStatus.CANCELLED,
+                    updates={
+                        "error": {
+                            "code": "DUPLICATE_ADMISSION",
+                            "message": (
+                                "a concurrent dispatcher already owns this "
+                                "Session; duplicate run cancelled"
+                            ),
+                        },
+                    },
+                )
+            if goal_created:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(
+                        self.sessions.set_goal_status,
+                        project_id,
+                        goal.goal_id,
+                        CreatorGoalStatus.CANCELLED,
+                    )
+            return
         await asyncio.to_thread(
             self.sessions.set_goal_status,
             project_id,
@@ -1613,17 +1678,32 @@ class FileCreatorAgentRuntime:
                     else CreatorGoalStatus.COMPLETED
                 ),
             )
-            await asyncio.to_thread(
-                self.sessions.clear_active_run,
-                project_id,
-                session.session_id,
-                expected_run_id=run_id,
-                status=(
-                    CreatorSessionStatus.PENDING_REVIEW
-                    if needs_review
-                    else CreatorSessionStatus.IDLE
-                ),
-            )
+            try:
+                await asyncio.to_thread(
+                    self.sessions.clear_active_run,
+                    project_id,
+                    session.session_id,
+                    expected_run_id=run_id,
+                    status=(
+                        CreatorSessionStatus.PENDING_REVIEW
+                        if needs_review
+                        else CreatorSessionStatus.IDLE
+                    ),
+                )
+            except SessionStateConflict as exc:
+                # A sibling reconciler (another process on this runtime
+                # root) already observed the terminal run record and
+                # released the session first. The outcome is equivalent —
+                # the run succeeded and the lease is free — so failing the
+                # whole run here would flip a finished Goal to FAILED over
+                # a no-op.
+                logger.warning(
+                    "session lease already released after success: "
+                    "project=%s run=%s: %s",
+                    project_id,
+                    run_id,
+                    exc,
+                )
             await self._event(
                 project_id,
                 session.session_id,
@@ -1801,7 +1881,10 @@ class FileCreatorAgentRuntime:
         request: CreatorMessageRecord,
         tools: AgentProjectTools,
     ) -> _LoopResult:
-        tool_manifest = _creator_agent_tool_manifest()
+        # External skills never break the run: loading is isolated and a
+        # broken configuration only yields an empty toolset/context block.
+        external_skills = load_external_skills()
+        tool_manifest = _creator_agent_tool_manifest(external_skills)
         conversation_records = await asyncio.to_thread(
             self.sessions.list_messages,
             project_id,
@@ -1821,6 +1904,9 @@ class FileCreatorAgentRuntime:
                 "content": render_creator_system_prompt(
                     project_id=project_id,
                     workspace_schema=tools.schema_prompt.text,
+                    external_skills=render_external_skills_context(
+                        external_skills,
+                    ),
                 ),
             },
             {
@@ -1853,7 +1939,13 @@ class FileCreatorAgentRuntime:
             self.max_model_turns,
             element_count,
         )
-        for _turn_number in range(1, turn_budget + 1):
+        # The element-scaled budget is used as-is: skills provide domain
+        # knowledge through the viewer and deliverables flow through the
+        # native pipeline, so no per-tool budget extension exists anymore.
+        effective_max_turns = turn_budget
+        turn_number = 0
+        while turn_number < effective_max_turns:
+            turn_number += 1
             self._assert_epoch(project_id, run_id, epoch)
             _compact_wire_project_snapshots(messages)
             assistant_message_id = f"message-{uuid4().hex}"
@@ -2088,8 +2180,12 @@ class FileCreatorAgentRuntime:
                         # retain their existing recovery behavior.
                         malformed_jq_attempts = 0
                         malformed_jq_fingerprints.clear()
+                    # External skill tools take their Project identity from
+                    # the runtime, never from the model, so a stray projectId
+                    # echo from the model must not kill the whole run.
                     if (
                         call.name != DELEGATE_TOOL_NAME
+                        and call.name not in EXTERNAL_SKILL_TOOL_NAMES
                         and call.arguments.get("projectId") != project_id
                     ):
                         raise FileAgentRuntimeError(
@@ -2114,6 +2210,11 @@ class FileCreatorAgentRuntime:
                     elif call.name == OBJECT_GROUNDING_TOOL_NAME:
                         result = await self._run_object_grounding(
                             request=request,
+                            arguments=call.arguments,
+                        )
+                    elif call.name in EXTERNAL_SKILL_TOOL_NAMES:
+                        result = await self._run_external_skill_tool(
+                            name=call.name,
                             arguments=call.arguments,
                         )
                     else:
@@ -2227,7 +2328,7 @@ class FileCreatorAgentRuntime:
                         "another model turn",
                     )
         raise AgentModelError(
-            f"Creator Agent exceeded {turn_budget} model turns",
+            f"Creator Agent exceeded {effective_max_turns} model turns",
         )
 
     async def _run_ground_prompt_context(
@@ -2769,6 +2870,30 @@ class FileCreatorAgentRuntime:
             "promoted": promoted,
             "issues": issues,
         }
+
+    async def _run_external_skill_tool(
+        self,
+        *,
+        name: str,
+        arguments: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Serve one skill viewer call from the main Agent.
+
+        Skill failures surface as regular tool errors through the generic
+        handler; they never abort the run or the session.
+        """
+
+        skill_name = str(arguments.get("skill") or "").strip()
+        if not skill_name:
+            raise FileAgentRuntimeError(f"{name} requires skill")
+        if name != VIEW_SKILL_TOOL_NAME:
+            raise FileAgentRuntimeError(
+                f"unhandled external skill tool: {name}",
+            )
+        return await asyncio.to_thread(
+            view_external_skill,
+            skill_name=skill_name,
+        )
 
     async def _run_subagent(
         self,
@@ -4643,6 +4768,8 @@ class FileCreatorAgentRuntime:
         session: Any,
         message: CreatorMessageRecord,
     ):
+        """Resolve the Goal owning this message; returns (goal, created)."""
+
         if session.active_goal_id is not None:
             try:
                 goal = await asyncio.to_thread(
@@ -4664,8 +4791,8 @@ class FileCreatorAgentRuntime:
                 goal is not None
                 and goal.status is not CreatorGoalStatus.COMPLETED
             ):
-                return goal
-        return await asyncio.to_thread(
+                return goal, False
+        created = await asyncio.to_thread(
             self.sessions.create_goal,
             message.project_id,
             session.session_id,
@@ -4675,6 +4802,7 @@ class FileCreatorAgentRuntime:
             goal_id=f"goal-{uuid4().hex}",
             metadata={"source": "file_agent_runtime"},
         )
+        return created, True
 
     MAINLINE_RESUME_SOURCE = "mainline_resume"
     YOLO_RESUME_SOURCE = "yolo_auto_resume"
