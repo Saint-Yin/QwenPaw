@@ -751,7 +751,7 @@ def test_model_config_save_tolerates_windows_like_private_file_surface(
     )
     real_open = os.open
 
-    def windows_like_open(target, flags, mode=0o777, *args, **kwargs):
+    def windows_like_open(target, flags, mode=0o600, *args, **kwargs):
         if Path(target).is_dir():
             raise PermissionError(errno.EACCES, "Permission denied", target)
         return real_open(target, flags, mode, *args, **kwargs)
