@@ -365,7 +365,7 @@ def get_media_review_mode() -> str:
 
 DEFAULT_MAINLINE_MAX_MODEL_TURNS = 24
 DEFAULT_SPECIALIST_MAX_MODEL_TURNS = 16
-DEFAULT_MEDIA_PARALLELISM = 3
+DEFAULT_MEDIA_PARALLELISM = 5
 DEFAULT_MEDIA_CALL_BUDGET = 200
 
 
@@ -617,7 +617,6 @@ VIDEO_BASE_URL = os.environ.get(
 )
 VIDEO_API_KEY = os.environ.get("VIDEO_API_KEY", "")
 VIDEO_MODEL_NAME = os.environ.get("VIDEO_MODEL_NAME", "wan2.7-r2v")
-VIDEO_CONCURRENCY = _positive_int_env("VIDEO_CONCURRENCY", 1)
 
 
 # ── Dynamic request-scoped getters ───────────────────────────────────────────
@@ -1300,11 +1299,12 @@ def _bool_env(name: str, default: bool) -> bool:
     return raw.casefold() in {"1", "true", "yes", "on"}
 
 
-# Startup snapshots of the env-only review switches, kept for historical
-# imports. Runtime decisions go through the ``is_*_review_enabled()``
-# functions below, which also honour the persisted ``self_review`` section
-# of model_config.json when the environment variable is not explicitly set.
-SELF_REVIEW_ENABLED = _bool_env("CREATOR_SELF_REVIEW_ENABLED", False)
+# Review tiers resolve at decision time through the ``is_*_review_enabled()``
+# functions below: an explicitly set environment variable wins (CI and
+# emergency override), otherwise the persisted ``self_review`` section of
+# model_config.json (settings center) decides. The former module-level
+# startup snapshots were removed: nothing imported them, and a stale
+# snapshot diverging from the runtime getters was a latent trap.
 
 
 def _review_tier_enabled(env_name: str, config_key: str) -> bool:
@@ -1332,9 +1332,27 @@ def is_self_review_enabled() -> bool:
     )
 
 
-# Startup snapshots of the in-run review switches (see note above).
-SYNC_REVIEW_ENABLED = _bool_env("CREATOR_SYNC_REVIEW_ENABLED", False)
-MEDIA_REVIEW_ENABLED = _bool_env("CREATOR_MEDIA_REVIEW_ENABLED", False)
+_REVIEW_TIER_ENV_VARS = (
+    "CREATOR_SYNC_REVIEW_ENABLED",
+    "CREATOR_MEDIA_REVIEW_ENABLED",
+    "CREATOR_SELF_REVIEW_ENABLED",
+)
+
+
+def forced_review_env_overrides() -> dict[str, str]:
+    """Review tier env vars that are explicitly set and shadow the UI.
+
+    The settings center owns these switches when the environment stays
+    silent; an explicitly set variable takes full control, which is easy
+    to forget (field incident: review ran with the UI toggled off).
+    Startup logs this map so the override is loud instead of a ghost.
+    """
+
+    return {
+        name: os.environ[name].strip()
+        for name in _REVIEW_TIER_ENV_VARS
+        if os.environ.get(name, "").strip()
+    }
 
 
 def is_sync_review_enabled() -> bool:
@@ -1438,6 +1456,23 @@ def get_video_model_name() -> str:
         "model",
         "VIDEO_MODEL_NAME",
         VIDEO_MODEL_NAME,
+    )
+
+
+def get_video_concurrency() -> int:
+    """Semaphore cap for model_slot("video").
+
+    Defaults to the scheduler's dispatch cap so the provider semaphore
+    never silently serializes renders behind a parallel-looking work
+    graph (same coupling as the image providers); explicit env/config
+    still wins.
+    """
+
+    return _configured_int(
+        CREATOR_VIDEO_CONFIG_TOOL,
+        "concurrency",
+        "VIDEO_CONCURRENCY",
+        get_media_parallelism(),
     )
 
 
