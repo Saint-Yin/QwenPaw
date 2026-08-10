@@ -1070,6 +1070,31 @@ def _accepted_provider_task_hint(task_id: str, project_id: str) -> str:
     return f" (billed provider task(s): {', '.join(ids)})"
 
 
+# Only ledger kinds with a working resume implementation may keep a Task
+# RUNNING after a local failure: the supervisor polls exactly these to a
+# terminal state. An accepted-but-unresumable job (async image generation
+# today) must terminalize instead — resume_provider_task() reports it
+# "unsupported", so deferring it would strand the paid Task in RUNNING
+# forever with nothing left to finish it.
+RESUMABLE_PROVIDER_TASK_KINDS = frozenset({"image_translate"})
+
+
+def resumable_provider_entries(
+    task_id: str,
+    project_id: str,
+) -> list[dict[str, Any]]:
+    """The provider-task ledger entries the resume supervisor can poll."""
+
+    from models.provider_tasks import read_provider_tasks
+
+    return [
+        entry
+        for entry in read_provider_tasks(task_id, project_id)
+        if str(entry.get("kind") or "") in RESUMABLE_PROVIDER_TASK_KINDS
+        and entry.get("providerTaskId")
+    ]
+
+
 def _publish_snapshot(resolved: _ResolvedRequest) -> dict[str, Any]:
     """The subset of a resolved request needed to publish its output."""
 
@@ -1391,6 +1416,13 @@ class FileImageExecutionService:
                     project_id,
                     ids,
                     "IMAGE_GENERATION_FAILED",
+                    message=(
+                        "IMAGE_GENERATION_FAILED"
+                        + _accepted_provider_task_hint(
+                            ids["task_id"],
+                            project_id,
+                        )
+                    ),
                 )
             raise
         except Exception as exc:
@@ -1413,7 +1445,8 @@ class FileImageExecutionService:
                 project_id,
                 ids,
                 "IMAGE_GENERATION_FAILED",
-                message=message,
+                message=message
+                + _accepted_provider_task_hint(ids["task_id"], project_id),
             )
             raise exc
 
@@ -1463,16 +1496,15 @@ class FileImageExecutionService:
         budget that expired, a dropped connection — must not terminalize the
         Task: the paid result still exists upstream, so the Task stays
         RUNNING and the background poller finishes it.
+
+        Only ledger kinds the supervisor can actually resume qualify. An
+        accepted job of any other kind must fail closed at the call site
+        (with the billed id named) instead of staying RUNNING behind a
+        supervisor that would drop it as "unsupported".
         """
 
-        from models.provider_tasks import read_provider_tasks
-
         try:
-            accepted = [
-                entry
-                for entry in read_provider_tasks(ids["task_id"], project_id)
-                if entry.get("providerTaskId")
-            ]
+            accepted = resumable_provider_entries(ids["task_id"], project_id)
         except Exception:  # noqa: BLE001 - bookkeeping must not mask errors
             return False
         if not accepted:
@@ -1986,14 +2018,7 @@ class FileImageExecutionService:
         leaves the Task active so the next recovery pass resumes again.
         """
 
-        from models.provider_tasks import read_provider_tasks
-
-        entries = [
-            entry
-            for entry in read_provider_tasks(task.task_id, task.project_id)
-            if str(entry.get("kind") or "") == "image_translate"
-            and entry.get("providerTaskId")
-        ]
+        entries = resumable_provider_entries(task.task_id, task.project_id)
         if not entries:
             return "unsupported"
         snapshot = task.metadata.get("requestSnapshot")

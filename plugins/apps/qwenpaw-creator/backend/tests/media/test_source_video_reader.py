@@ -247,3 +247,105 @@ def test_schedule_persists_frames_and_refs(tmp_path, monkeypatch) -> None:
         ),
     )
     assert replay.task_id == task.task_id
+
+
+# ── restart/shutdown lifecycle (review: orphaned RUNNING tasks) ───────────
+
+
+class _LifecycleExecutions(_FakeExecutions):
+    """Extends the fake with failure capture and seeded records."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: list = []
+
+    def seed(self, task_id: str, status: TaskStatus) -> SimpleNamespace:
+        record = SimpleNamespace(
+            task_id=task_id,
+            status=status,
+            kind=TaskKind.READ_SOURCE_VIDEO,
+            metadata={
+                "targetRef": "asset:asset-1",
+                "assetVersionId": "version-1",
+                "budget": "normal",
+                "fps": 0,
+                "startMs": None,
+                "endMs": None,
+                "maxFrames": 16,
+                "localPath": "clip.mp4",
+            },
+            last_attempt_seq=1 if status is TaskStatus.RUNNING else 0,
+        )
+        self.tasks[task_id] = record
+        return record
+
+    def append_attempt(self, project_id, task_id, **kwargs):
+        if kwargs["status"].name != "RUNNING" and kwargs.get("error"):
+            self.failures.append(kwargs["error"])
+        return super().append_attempt(project_id, task_id, **kwargs)
+
+    def transition_task(self, project_id, task_id, **kwargs):
+        record = self.tasks[task_id]
+        record.status = kwargs["status"]
+        updates = kwargs.get("updates") or {}
+        if updates.get("error"):
+            self.failures.append(updates["error"])
+        return record
+
+    def list_tasks(self, project_id):
+        return list(self.tasks.values())
+
+
+def test_replay_fails_closed_on_an_orphaned_running_task(tmp_path) -> None:
+    """The review's case: replay must not return a RUNNING record that no
+    live worker owns — nothing would ever finish it."""
+
+    service = _service(tmp_path)
+    executions = _LifecycleExecutions()
+    service.executions = executions
+    task_id = source_video_reader._stable_id(
+        "readvideo",
+        "project-1",
+        "call-1",
+    )
+    executions.seed(task_id, TaskStatus.RUNNING)
+
+    replay = asyncio.run(
+        service.schedule_read_source_video(
+            project_id="project-1",
+            logical_asset_id="asset-1",
+            idempotency_key="call-1",
+        ),
+    )
+
+    assert replay.status is TaskStatus.FAILED
+    assert executions.failures
+    assert "process restarted" in executions.failures[0]["message"]
+
+
+def test_startup_recovery_terminalizes_orphaned_tasks(tmp_path) -> None:
+    """Restart recovery fails QUEUED/RUNNING read tasks closed."""
+
+    service = _service(tmp_path)
+    executions = _LifecycleExecutions()
+    service.executions = executions
+    executions.seed("task-running", TaskStatus.RUNNING)
+    executions.seed("task-queued", TaskStatus.QUEUED)
+    executions.seed("task-done", TaskStatus.SUCCEEDED)
+    service.services.projects.discover_project_ids = lambda: ["project-1"]
+    source_video_reader._SERVICES[str(service.services.root)] = service
+    try:
+        recovered = source_video_reader.recover_interrupted_source_video_reads(
+            service.services,
+        )
+    finally:
+        source_video_reader.clear_source_video_reader_service_registry()
+
+    assert recovered == 2
+    assert executions.tasks["task-running"].status is TaskStatus.FAILED
+    assert executions.tasks["task-queued"].status is TaskStatus.FAILED
+    assert executions.tasks["task-done"].status is TaskStatus.SUCCEEDED
+    assert all(
+        "process restart" in failure["message"]
+        for failure in executions.failures
+    )

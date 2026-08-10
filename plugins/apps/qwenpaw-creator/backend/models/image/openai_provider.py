@@ -374,8 +374,10 @@ class OpenAIImageModel(BaseImageModel):
             # support): decode this payload directly.
             return submit
         # Billed on acceptance: record the id in the paying Task's durable
-        # ledger so an interrupted poll stays retrievable.
-        note_provider_task(
+        # ledger so an interrupted poll stays retrievable. The append is a
+        # small durable write; keep it off the event loop.
+        await asyncio.to_thread(
+            note_provider_task,
             provider_task_id=response_id,
             model=self.model_name,
             kind="image_generation",
@@ -451,6 +453,21 @@ class OpenAIImageModel(BaseImageModel):
                 )
             await asyncio.sleep(RESPONSES_POLL_INTERVAL_SECONDS)
 
+    def _persist_base64_image(self, encoded: str) -> str:
+        """Decode and durably stage one image; runs in a worker thread.
+
+        Both the base64 decode of a full image and the durable write
+        (fsync + rename + directory fsync) are heavyweight, so callers
+        offload this via ``asyncio.to_thread``; contextvars carry the Task
+        scope into the worker thread.
+        """
+
+        return persist_image_bytes(
+            base64.b64decode(encoded),
+            self.model_name,
+            "base64→file",
+        )
+
     async def _decode(self, data: dict | list) -> str:
         # Responses-API payloads carry the image inside an
         # image_generation_call output block as base64.
@@ -461,11 +478,9 @@ class OpenAIImageModel(BaseImageModel):
                     and block.get("type") == "image_generation_call"
                     and block.get("result")
                 ):
-                    img_bytes = base64.b64decode(str(block["result"]))
-                    return persist_image_bytes(
-                        img_bytes,
-                        self.model_name,
-                        "base64→file",
+                    return await asyncio.to_thread(
+                        self._persist_base64_image,
+                        str(block["result"]),
                     )
             raise ModelError(
                 f"No image_generation_call result in response: {data}",
@@ -496,11 +511,9 @@ class OpenAIImageModel(BaseImageModel):
             )
 
         if item.get("b64_json"):
-            img_bytes = base64.b64decode(item["b64_json"])
-            return persist_image_bytes(
-                img_bytes,
-                self.model_name,
-                "base64→file",
+            return await asyncio.to_thread(
+                self._persist_base64_image,
+                str(item["b64_json"]),
             )
         if item.get("url"):
             return await download_remote_image(

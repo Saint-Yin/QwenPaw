@@ -31,6 +31,7 @@ import threading
 import time
 from typing import Any, Literal, NoReturn
 from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
+from urllib.request import url2pathname
 from uuid import uuid4
 
 import httpx
@@ -48,6 +49,9 @@ _COPY_CHUNK_BYTES = 64 * 1024
 _MAGIC_PREFIX_BYTES = 4096
 _PROCESS_R2V_MATERIALIZE_SEMAPHORE = threading.BoundedSemaphore(4)
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+# A native Windows absolute path: drive letter (C:\ or C:/) or UNC (\\host).
+# urlsplit() would read "C:" as a URL scheme, so these are matched first.
+_WINDOWS_NATIVE_PATH = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 
@@ -643,9 +647,15 @@ def _local_relative_parts(
     project_id: str,
     task_id: str,
 ) -> tuple[str, ...] | None:
+    scratch = project_root / "runtime" / "task-work" / task_id
+    if _WINDOWS_NATIVE_PATH.match(source):
+        # Windows providers legitimately return drive-letter or UNC paths
+        # for local outputs; urlsplit() would misread "C:" as a scheme and
+        # reject them. Containment against the Task scratch still applies.
+        candidate = Path(source)
+        return _contained_relative_parts(candidate, scratch)
     parsed = urlsplit(source)
     scheme = parsed.scheme.casefold()
-    scratch = project_root / "runtime" / "task-work" / task_id
     if scheme in {"http", "https"}:
         return None
     if scheme == "file":
@@ -655,7 +665,10 @@ def _local_relative_parts(
             or parsed.fragment
         ):
             raise ValidationError("provider file URL host/query/fragment 非法")
-        candidate = Path(unquote(parsed.path))
+        # url2pathname() applies platform semantics: on Windows it turns
+        # /C:/dir/file (Path.as_uri() output) into C:\dir\file, on POSIX
+        # it just unquotes — Path(unquote(...)) mis-parsed the drive form.
+        candidate = Path(url2pathname(parsed.path))
     elif not scheme and source.startswith("/generated/"):
         if parsed.query or parsed.fragment:
             raise ValidationError("provider generated URL 不允许 query/fragment")
@@ -677,6 +690,14 @@ def _local_relative_parts(
         raise ValidationError("provider 视频 URL scheme 不受支持")
     else:
         candidate = Path(source).expanduser()
+    return _contained_relative_parts(candidate, scratch)
+
+
+def _contained_relative_parts(
+    candidate: Path,
+    scratch: Path,
+) -> tuple[str, ...]:
+    """Validate a local candidate path against the Task scratch scope."""
 
     if candidate.is_absolute():
         try:

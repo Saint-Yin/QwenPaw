@@ -279,7 +279,9 @@ class DashScopeImageModel(BaseImageModel):
                     return submit
                 # Billed on acceptance: record the id in the paying Task's
                 # durable ledger so an interrupted poll stays retrievable.
-                note_provider_task(
+                # The append is a small durable write; keep it off the loop.
+                await asyncio.to_thread(
+                    note_provider_task,
                     provider_task_id=task_id,
                     model=self.model_name,
                     kind="image_generation",
@@ -545,7 +547,8 @@ class DashScopeImageModel(BaseImageModel):
                 f"Image translate returned no task_id: {submitted}",
                 model_name=translate_model,
             )
-        note_provider_task(
+        await asyncio.to_thread(
+            note_provider_task,
             provider_task_id=task_id,
             model=translate_model,
             kind="image_translate",

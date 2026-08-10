@@ -1856,7 +1856,9 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
   );
 
   // Live status row above the input: derived purely on the frontend, no data
-  // structures are mutated.
+  // structures are mutated. `t` must stay in the deps: the labels come from
+  // the global i18n singleton, so a runtime language switch has to recompute
+  // them even when the agent state itself did not change.
   const liveStatus = useMemo(
     () =>
       deriveAgentLiveStatus({
@@ -1882,6 +1884,7 @@ export default function AgentDock({ sidebar = false }: { sidebar?: boolean }) {
       tasks,
       project,
       rateLimitRetry,
+      t,
     ],
   );
 

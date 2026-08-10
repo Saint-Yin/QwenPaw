@@ -258,3 +258,53 @@ def test_decode_still_reads_the_classic_images_payload(monkeypatch) -> None:
         ],
     }
     assert asyncio.run(model._decode(classic)) == "/generated/classic.png"
+
+
+def test_decode_persists_off_the_event_loop_with_task_scope(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """The durable image write never runs on the event loop.
+
+    The review's case: base64 decode plus the fsync-heavy persist stalled
+    every other coroutine while a large image landed on a slow disk. The
+    write must run in a worker thread, and contextvars must carry the Task
+    scope there so the file still lands in the right scratch directory.
+    """
+
+    import threading
+
+    # pylint: disable=no-name-in-module
+    from utils.paths import media_task_scope, task_work_root
+
+    # pylint: enable=no-name-in-module
+
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path))
+    (tmp_path / "project-bg" / "runtime").mkdir(parents=True)
+    (tmp_path / "project-bg" / "project.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    model = _model()
+    seen: dict = {}
+
+    def fake_persist(img_bytes: bytes, model_name: str, source: str) -> str:
+        seen["thread"] = threading.get_ident()
+        seen["work_root"] = str(task_work_root())
+        seen["bytes"] = img_bytes
+        return "/generated/bg.png"
+
+    monkeypatch.setattr(openai_provider, "persist_image_bytes", fake_persist)
+
+    async def scenario() -> tuple[int, str]:
+        with media_task_scope("task-bg-1", project_id="project-bg"):
+            url = await model._decode(_completed_payload())
+        return threading.get_ident(), url
+
+    loop_thread, url = asyncio.run(scenario())
+
+    assert url == "/generated/bg.png"
+    assert seen["bytes"] == _PNG_BYTES
+    # Off the loop, but still inside the Task's scratch scope.
+    assert seen["thread"] != loop_thread
+    assert "task-bg-1" in seen["work_root"]

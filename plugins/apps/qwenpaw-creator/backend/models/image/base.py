@@ -133,7 +133,15 @@ async def download_remote_image(remote_url: str, model_name: str) -> str:
             img_bytes = await asyncio.to_thread(temporary.read_bytes)
         finally:
             temporary.unlink(missing_ok=True)
-    return persist_image_bytes(img_bytes, model_name, "url→file")
+    # The durable write (full image + fsync + rename + directory fsync)
+    # must not stall the event loop; contextvars carry the Task scope into
+    # the worker thread so the file still lands in the right scratch dir.
+    return await asyncio.to_thread(
+        persist_image_bytes,
+        img_bytes,
+        model_name,
+        "url→file",
+    )
 
 
 def _logged_model_error(message: str, model_name: str) -> ModelError:

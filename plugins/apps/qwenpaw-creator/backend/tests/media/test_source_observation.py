@@ -284,3 +284,181 @@ def test_worker_failure_marks_task_failed(tmp_path, monkeypatch) -> None:
     asyncio.run(run())
     assert executions.failures
     assert executions.failures[0]["code"] == "OBSERVE_CLIP_FAILED"
+
+
+# ── restart/shutdown lifecycle (review: orphaned RUNNING tasks) ───────────
+
+
+class _LifecycleExecutions:
+    """Durable-store fake that records terminal transitions."""
+
+    def __init__(self) -> None:
+        self.tasks: dict[str, SimpleNamespace] = {}
+        self.failures: list = []
+
+    def seed(self, task_id: str, status: TaskStatus) -> SimpleNamespace:
+        record = SimpleNamespace(
+            task_id=task_id,
+            status=status,
+            kind=TaskKind.OBSERVE_SOURCE_CLIP,
+            metadata={
+                "targetRef": "asset:asset-1",
+                "assetVersionId": "version-1",
+                "startMs": 0,
+                "endMs": 5000,
+                "question": "出现了什么？",
+                "localPath": "clip.mp4",
+            },
+            last_attempt_seq=1 if status is TaskStatus.RUNNING else 0,
+        )
+        self.tasks[task_id] = record
+        return record
+
+    def get_task(self, project_id, task_id):
+        from services.runtime_files.errors import RecordNotFoundError
+
+        if task_id not in self.tasks:
+            raise RecordNotFoundError(task_id)
+        return self.tasks[task_id]
+
+    def create_task(self, candidate):
+        record = SimpleNamespace(
+            task_id=candidate.task_id,
+            status=TaskStatus.QUEUED,
+            kind=candidate.kind,
+            metadata=dict(candidate.metadata),
+            last_attempt_seq=0,
+        )
+        self.tasks[record.task_id] = record
+        return record
+
+    def append_attempt(self, project_id, task_id, **kwargs):
+        record = self.tasks[task_id]
+        if kwargs["status"].name == "RUNNING":
+            record.status = TaskStatus.RUNNING
+            record.last_attempt_seq += 1
+        else:
+            record.status = TaskStatus(kwargs["status"].value)
+            if kwargs.get("error"):
+                self.failures.append(kwargs["error"])
+        return SimpleNamespace(**kwargs)
+
+    def transition_task(self, project_id, task_id, **kwargs):
+        record = self.tasks[task_id]
+        record.status = kwargs["status"]
+        updates = kwargs.get("updates") or {}
+        if updates.get("error"):
+            self.failures.append(updates["error"])
+        return record
+
+    def list_tasks(self, project_id):
+        return list(self.tasks.values())
+
+
+def test_replay_fails_closed_on_an_orphaned_running_task(tmp_path) -> None:
+    """The review's case: replay must not return a RUNNING record that no
+    live worker owns — nothing would ever finish it."""
+
+    service = _service(tmp_path)
+    executions = _LifecycleExecutions()
+    service.executions = executions
+    task_id = source_observation._stable_id(
+        "observe",
+        "project-1",
+        "call-1",
+    )
+    executions.seed(task_id, TaskStatus.RUNNING)
+
+    replay = asyncio.run(
+        service.schedule_observe_clip(
+            project_id="project-1",
+            logical_asset_id="asset-1",
+            start_ms=0,
+            end_ms=5000,
+            question="出现了什么？",
+            idempotency_key="call-1",
+        ),
+    )
+
+    assert replay.status is TaskStatus.FAILED
+    assert executions.failures
+    assert "process restarted" in executions.failures[0]["message"]
+
+
+def test_startup_recovery_terminalizes_orphaned_tasks(tmp_path) -> None:
+    """Restart recovery fails QUEUED/RUNNING observation tasks closed."""
+
+    service = _service(tmp_path)
+    executions = _LifecycleExecutions()
+    service.executions = executions
+    executions.seed("task-running", TaskStatus.RUNNING)
+    executions.seed("task-queued", TaskStatus.QUEUED)
+    executions.seed("task-done", TaskStatus.SUCCEEDED)
+    service.services.projects.discover_project_ids = lambda: ["project-1"]
+    source_observation._SERVICES[str(service.services.root)] = service
+    try:
+        recovered = source_observation.recover_interrupted_source_observations(
+            service.services,
+        )
+    finally:
+        source_observation.clear_source_observation_service_registry()
+
+    assert recovered == 2
+    assert executions.tasks["task-running"].status is TaskStatus.FAILED
+    assert executions.tasks["task-queued"].status is TaskStatus.FAILED
+    assert executions.tasks["task-done"].status is TaskStatus.SUCCEEDED
+    assert all(
+        "process restart" in failure["message"]
+        for failure in executions.failures
+    )
+
+
+def test_drain_terminalizes_inflight_tasks(tmp_path, monkeypatch) -> None:
+    """Shutdown cancels the worker and fails its Task closed."""
+
+    service = _service(tmp_path)
+    executions = _LifecycleExecutions()
+    service.executions = executions
+    monkeypatch.setattr(
+        source_observation,
+        "clip_segment_for_transport_sync",
+        lambda local, out, start, end: out.write_bytes(b"clip") or out,
+    )
+    monkeypatch.setattr(
+        source_observation.vlm_model,
+        "multimodal_media_part",
+        lambda uri, kind, fps: {"type": "video_url"},
+    )
+
+    async def never_returns(content, **kwargs):
+        await asyncio.sleep(300)
+
+    monkeypatch.setattr(
+        source_observation.vlm_model,
+        "chat_completion",
+        never_returns,
+    )
+
+    async def run() -> SimpleNamespace:
+        task = await service.schedule_observe_clip(
+            project_id="project-1",
+            logical_asset_id="asset-1",
+            start_ms=0,
+            end_ms=5000,
+            question="出现了什么？",
+            idempotency_key="call-drain",
+        )
+        # Let the worker reach RUNNING before shutting down.
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if executions.tasks[task.task_id].status is TaskStatus.RUNNING:
+                break
+        await service.drain()
+        return executions.tasks[task.task_id]
+
+    record = asyncio.run(run())
+
+    assert record.status is TaskStatus.FAILED
+    assert not service._jobs
+    assert executions.failures
+    assert "shutdown" in executions.failures[0]["message"]

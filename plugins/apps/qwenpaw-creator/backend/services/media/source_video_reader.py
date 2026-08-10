@@ -304,6 +304,7 @@ class SourceVideoReaderService:
         self.services = services
         self.executions = ProjectExecutionStore(services.root)
         self._jobs: dict[str, asyncio.Task[None]] = {}
+        self._job_specs: dict[str, SourceVideoReadJob] = {}
 
     async def schedule_read_source_video(
         self,
@@ -363,7 +364,63 @@ class SourceVideoReaderService:
         )
         if task.status is TaskStatus.QUEUED:
             self._spawn(job)
+        elif task.status is TaskStatus.RUNNING and not self._has_live_worker(
+            task.task_id,
+        ):
+            # Idempotent replay found an orphan: a RUNNING record whose
+            # in-memory worker died with a previous process. Nothing will
+            # ever finish it, so fail it closed (retryable) instead of
+            # silently returning a Task the caller would await forever.
+            await asyncio.to_thread(
+                self._fail_sync,
+                job,
+                RuntimeError(
+                    "video read worker was lost (process restarted); "
+                    "retry the read",
+                ),
+            )
+            task = await asyncio.to_thread(
+                self.executions.get_task,
+                project_id,
+                task.task_id,
+            )
         return task
+
+    def _has_live_worker(self, task_id: str) -> bool:
+        worker = self._jobs.get(task_id)
+        return worker is not None and not worker.done()
+
+    async def drain(self) -> None:
+        """Cancel in-flight workers and fail their Tasks closed (retryable).
+
+        Frame extraction lives entirely in memory and scratch space, so
+        shutdown must terminalize the owning Task instead of leaving it
+        RUNNING for waiters that poll it after restart.
+        """
+
+        specs = dict(self._job_specs)
+        workers = {
+            task_id: worker
+            for task_id, worker in self._jobs.items()
+            if not worker.done()
+        }
+        self._jobs.clear()
+        self._job_specs.clear()
+        for worker in workers.values():
+            worker.cancel()
+        if workers:
+            await asyncio.gather(*workers.values(), return_exceptions=True)
+        for task_id in workers:
+            job = specs.get(task_id)
+            if job is None:
+                continue
+            await asyncio.to_thread(
+                self._fail_sync,
+                job,
+                RuntimeError(
+                    "video read was interrupted by shutdown; retry the read",
+                ),
+            )
 
     def _admit_sync(  # pylint: disable=too-many-arguments
         self,
@@ -422,10 +479,12 @@ class SourceVideoReaderService:
             name=f"read-source-video:{job.task_id}",
         )
         self._jobs[job.task_id] = worker
+        self._job_specs[job.task_id] = job
 
         def discard(done: asyncio.Task[None]) -> None:
             if self._jobs.get(job.task_id) is done:
                 self._jobs.pop(job.task_id, None)
+                self._job_specs.pop(job.task_id, None)
             if not done.cancelled():
                 try:
                     done.exception()
@@ -593,3 +652,54 @@ def source_video_reader_service(services: Any) -> SourceVideoReaderService:
 
 def clear_source_video_reader_service_registry() -> None:
     _SERVICES.clear()
+
+
+async def drain_source_video_reader_services() -> None:
+    """Shutdown drain: terminalize every in-flight video read Task."""
+
+    instances = list(_SERVICES.values())
+    for instance in instances:
+        await instance.drain()
+
+
+def recover_interrupted_source_video_reads(services: Any) -> int:
+    """Fail-close video read Tasks a dead process left QUEUED/RUNNING.
+
+    Extraction state lives only in the dead process, so restart recovery
+    terminalizes the Task with a retryable error instead of leaving
+    waiters polling a RUNNING record no worker owns.
+    """
+
+    service = source_video_reader_service(services)
+    recovered = 0
+    for project_id in services.projects.discover_project_ids():
+        for task in service.executions.list_tasks(project_id):
+            if task.kind is not TaskKind.READ_SOURCE_VIDEO:
+                continue
+            if task.status not in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
+                continue
+            job = SourceVideoReadJob(
+                project_id=project_id,
+                task_id=task.task_id,
+                logical_asset_id=str(
+                    task.metadata.get("targetRef") or "",
+                ).removeprefix("asset:"),
+                version_id=str(task.metadata.get("assetVersionId") or ""),
+                local_path=str(task.metadata.get("localPath") or ""),
+                fps=float(task.metadata.get("fps") or 0),
+                budget=str(task.metadata.get("budget") or "normal"),
+                start_ms=task.metadata.get("startMs"),
+                end_ms=task.metadata.get("endMs"),
+                max_frames=int(
+                    task.metadata.get("maxFrames") or DEFAULT_MAX_FRAMES,
+                ),
+            )
+            service._fail_sync(  # pylint: disable=protected-access
+                job,
+                RuntimeError(
+                    "video read was interrupted by a process restart; "
+                    "retry the read",
+                ),
+            )
+            recovered += 1
+    return recovered

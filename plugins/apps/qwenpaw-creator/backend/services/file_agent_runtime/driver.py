@@ -2009,7 +2009,9 @@ class FileCreatorAgentRuntime:
     ) -> _LoopResult:
         # External skills never break the run: loading is isolated and a
         # broken configuration only yields an empty toolset/context block.
-        external_skills = load_external_skills()
+        # Loading scans the skills directories and may probe `node --version`
+        # (up to 10s), so it must not run on the event loop.
+        external_skills = await asyncio.to_thread(load_external_skills)
         tool_manifest = _creator_agent_tool_manifest(external_skills)
         conversation_records = await asyncio.to_thread(
             self.sessions.list_messages,

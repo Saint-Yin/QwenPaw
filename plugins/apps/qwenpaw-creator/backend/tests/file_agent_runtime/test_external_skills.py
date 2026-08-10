@@ -362,3 +362,62 @@ def test_driver_progressive_disclosure(tmp_path, monkeypatch) -> None:
     assert payload["content"] == _SKILL_MD
     # Viewing domain knowledge is read-only: no authorization records.
     assert authorizations == []
+
+
+def test_skill_loading_runs_off_the_event_loop(tmp_path, monkeypatch) -> None:
+    """Skill discovery scans disk and may probe node; never on the loop.
+
+    The review's case: a slow requirement probe inside
+    ``load_external_skills()`` froze every coroutine in the process for up
+    to 10 seconds because the model loop called it synchronously.
+    """
+
+    import threading
+
+    from services.file_agent_runtime import driver as driver_module
+
+    monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path))
+    config._clear_skills_config_cache()
+    external_skills._clear_load_cache()
+
+    real_load = driver_module.load_external_skills
+    load_threads: list[int] = []
+
+    def recording_load():
+        load_threads.append(threading.get_ident())
+        return real_load()
+
+    monkeypatch.setattr(
+        driver_module,
+        "load_external_skills",
+        recording_load,
+    )
+
+    async def callback(_messages, _tools):
+        return AgentModelTurn(content="好的。")
+
+    async def scenario() -> int:
+        services = _create_project(tmp_path, initial_goal="问候")
+        driver = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(callback),
+            poll_interval_seconds=0.01,
+        )
+        await driver.start()
+        driver.notify(PROJECT_ID)
+        await _wait_for(
+            lambda: (
+                services.sessions.get_project_session(
+                    PROJECT_ID,
+                ).last_consumed_message_seq
+                == 1
+            ),
+        )
+        await driver.wait_until_idle(PROJECT_ID)
+        await driver.stop()
+        return threading.get_ident()
+
+    loop_thread = asyncio.run(scenario())
+
+    assert load_threads, "the model loop must have loaded external skills"
+    assert all(thread != loop_thread for thread in load_threads)
