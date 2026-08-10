@@ -511,7 +511,7 @@ def _repair_common_html_slips(html: str) -> str:
         return f"{opening}</script><script>{body}</script>"
 
     html = re.sub(
-        r"(<script\b[^>]*\bsrc\s*=[^>]*>)(.*?)</script\s*>",
+        r"(<script\b[^>]*\bsrc\s*=[^>]*>)(.*?)</script\b[^>]*>",
         _split,
         html,
         flags=re.IGNORECASE | re.DOTALL,
@@ -533,13 +533,13 @@ def _repair_common_html_slips(html: str) -> str:
         return f"{opening}{body}{closing}"
 
     html = re.sub(
-        r"(<script(?![^>]*\bsrc)[^>]*>)(.*?)(</script\s*>)",
+        r"(<script(?![^>]*\bsrc)[^>]*>)(.*?)(</script\b[^>]*>)",
         _lift_zero_alpha,
         html,
         flags=re.IGNORECASE | re.DOTALL,
     )
     html = re.sub(
-        r"(<style\b[^>]*>)(.*?)(</style\s*>)",
+        r"(<style\b[^>]*>)(.*?)(</style\b[^>]*>)",
         _lift_zero_alpha,
         html,
         flags=re.IGNORECASE | re.DOTALL,
