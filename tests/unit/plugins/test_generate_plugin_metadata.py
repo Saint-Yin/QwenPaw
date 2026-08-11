@@ -208,6 +208,16 @@ def test_pack_exclude_never_drops_manifest_or_entries(
     assert "ui/dist/index.js" in rels
 
 
+def test_iter_tree_relpaths_are_posix_on_every_platform(
+    tmp_path: Path,
+) -> None:
+    """Relpaths never carry a native separator (Windows regression guard)."""
+    plugin_dir = _make_plugin_tree(tmp_path)
+    rels = _iter_tree_relpaths(plugin_dir, _demo_manifest())
+    assert rels
+    assert not any("\\" in rel for rel in rels)
+
+
 def test_pack_exclude_exact_prefix_no_sibling_bleed(tmp_path: Path) -> None:
     """'e2e' must not exclude a sibling like 'e2e-extra/'."""
     plugin_dir = _make_plugin_tree(tmp_path)

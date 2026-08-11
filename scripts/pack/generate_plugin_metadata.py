@@ -151,6 +151,11 @@ def _iter_tree_relpaths(
     plugin_dir: Path,
     manifest: dict[str, Any] | None = None,
 ) -> list[str]:
+    """Return packable plugin-root-relative paths, always POSIX-separated.
+
+    Paths stay POSIX on every platform so zip entry names and ``pack_exclude``
+    matching behave identically on Windows and on Unix.
+    """
     pack_exclude = _normalize_pack_exclude(manifest or {})
     protected = _protected_relpaths(manifest or {})
     rels: list[str] = []
@@ -159,10 +164,10 @@ def _iter_tree_relpaths(
         for fname in files:
             if _is_excluded(fname):
                 continue
-            rel = (Path(root) / fname).relative_to(plugin_dir)
-            if _is_pack_excluded(rel.as_posix(), pack_exclude, protected):
+            rel = (Path(root) / fname).relative_to(plugin_dir).as_posix()
+            if _is_pack_excluded(rel, pack_exclude, protected):
                 continue
-            rels.append(str(rel))
+            rels.append(rel)
     rels.sort()
     return rels
 
