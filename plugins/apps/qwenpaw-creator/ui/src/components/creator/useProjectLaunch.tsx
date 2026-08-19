@@ -428,8 +428,10 @@ export function useProjectLaunch(options?: {
   };
 
   const stopOnOversizedFiles = (files: File[]) => {
-    // 100 * 1024 * 1024: 100MB
-    const oversized = files.filter((file) => file.size > 104857600);
+    // 2 * 1024 * 1024 * 1024: 2GB
+    const oversized = files.filter(
+      (file) => file.size > 2 * 1024 * 1024 * 1024,
+    );
     if (oversized.length > 0) {
       const errorMessage = `${oversized.map((f) => f.name).join("\n")}`;
       Modal.error({
