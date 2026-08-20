@@ -76,6 +76,7 @@ from .dependencies import (
     resolve_idempotency_key,
 )
 
+from utils.exceptions import redact_url, upstream_status_hint
 from utils.logger import setup_logger
 
 logger = setup_logger("model_routes")
@@ -1469,11 +1470,15 @@ def _anthropic_llm_probe(
     base: str,
 ) -> tuple[str, dict[str, str], dict[str, Any]]:
     """Anthropic Messages API probe for llm/vlm connectivity tests."""
-    headers = {
-        "x-api-key": body.api_key,
+    headers: dict[str, str] = {
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
     }
+    # Free-tier providers probe with require_api_key=False and an empty
+    # key; sending an empty x-api-key would fail with 401 instead of
+    # letting the unauthenticated probe proceed.
+    if body.api_key:
+        headers["x-api-key"] = body.api_key
     if body.type == "vlm":
         content: list[dict[str, Any]] = [
             {"type": "text", "text": "Reply with red only."},
@@ -1503,8 +1508,16 @@ def _gemini_llm_probe(
     body: ModelConnectionTestRequest,
     base: str,
 ) -> tuple[str, dict[str, str], dict[str, Any]]:
-    """Google Gemini Generative AI probe for llm/vlm connectivity tests."""
+    """Google Gemini Generative AI probe for llm/vlm connectivity tests.
+
+    Gemini authenticates through the ``key=`` query parameter (the same
+    transport used by ``text_model._call_gemini``); without it the probe
+    always fails with 400/401/403.
+    """
     url = f"{base}/v1beta/models/{body.model_name}:generateContent"
+    if body.api_key:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}key={body.api_key}"
     headers = {
         "Content-Type": "application/json",
     }
@@ -1532,7 +1545,11 @@ def _probe_payload(
 ) -> tuple[str, dict[str, str], dict[str, Any]]:
     base = body.base_url.rstrip("/")
     headers: dict[str, str] = {"Content-Type": "application/json"}
-    if body.require_api_key:
+    # Send the credential whenever one is present so paid models behind a
+    # free-tier-capable provider still authenticate; ``require_api_key``
+    # only controls whether an *absent* key is tolerated (validated by the
+    # route before probing).
+    if body.api_key:
         headers["Authorization"] = f"Bearer {body.api_key}"
     if body.type == "asr":
         provider = body.provider or (
@@ -1597,10 +1614,9 @@ def _probe_payload(
             },
         )
     if body.type in {"llm", "vlm"}:
-        protocol_lower = body.protocol.casefold()
-        if "anthropic" in protocol_lower or "minimax" in protocol_lower:
+        if model_config.is_anthropic_protocol(body.protocol):
             return _anthropic_llm_probe(body, base)
-        if "gemini" in protocol_lower or "google" in protocol_lower:
+        if model_config.is_gemini_protocol(body.protocol):
             return _gemini_llm_probe(body, base)
         content: Any = "Reply with pong only."
         if body.type == "vlm":
@@ -1667,15 +1683,22 @@ async def test_model_connection(
             "voice": body.voice or getattr(item, "voice", ""),
         },
     )
-    if (
-        not selected.base_url
-        or (body.require_api_key and not selected.api_key)
-        or not selected.model_name
-    ):
+    missing: list[str] = []
+    if not selected.base_url:
+        missing.append("Base URL")
+    if body.require_api_key and not selected.api_key:
+        missing.append("API Key")
+    if not selected.model_name:
+        missing.append("模型名称")
+    if missing:
         return ConnectionTestResponse(
             ok=False,
             ms=0,
-            error="配置不完整，请检查 Base URL、API Key 和模型名称",
+            error=(
+                f"配置不完整：缺少 {'、'.join(missing)}（配置项: "
+                f"{body.type}，协议: {selected.protocol or '未指定'}）。"
+                "请在模型配置弹窗中补齐后重试。"
+            ),
         )
     start = time.monotonic()
     try:
@@ -1721,28 +1744,42 @@ async def test_model_connection(
                 provider_error = str(provider_body)
         except ValueError:
             provider_error = response.text[:300]
+        hint = upstream_status_hint(response.status_code)
         return ConnectionTestResponse(
             ok=False,
             ms=elapsed,
-            error=f"HTTP {response.status_code}: {provider_error or '请求失败'}",
+            error=(
+                f"HTTP {response.status_code}: "
+                f"{provider_error or '请求失败'} "
+                f"[探测端点: {redact_url(url)}，协议: {selected.protocol}]"
+                + (f"。{hint}" if hint else "")
+            ),
         )
     except httpx.ConnectError:
         return ConnectionTestResponse(
             ok=False,
             ms=round((time.monotonic() - start) * 1000),
-            error="无法连接到服务，请检查 Base URL 是否正确",
+            error=(
+                f"无法连接到服务，请检查 Base URL 是否正确"
+                f"（当前 Base URL: {selected.base_url}）"
+            ),
         )
     except httpx.TimeoutException:
         return ConnectionTestResponse(
             ok=False,
             ms=round((time.monotonic() - start) * 1000),
-            error="连接超时，请检查网络或 Base URL",
+            error=(
+                f"连接超时，请检查网络或 Base URL" f"（当前 Base URL: {selected.base_url}）"
+            ),
         )
     except (httpx.HTTPError, ValueError) as exc:
         return ConnectionTestResponse(
             ok=False,
             ms=round((time.monotonic() - start) * 1000),
-            error=str(exc),
+            error=(
+                f"{type(exc).__name__}: {exc} "
+                f"[配置项: {body.type}，协议: {selected.protocol}]"
+            ),
         )
 
 

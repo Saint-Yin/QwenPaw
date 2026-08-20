@@ -551,16 +551,8 @@ def records_to_agentscope_messages(
 
 
 # ── Protocol-aware model construction ────────────────────────────────────────
-
-
-def _is_anthropic_protocol(protocol: str) -> bool:
-    lower = protocol.casefold()
-    return "anthropic" in lower or "minimax" in lower
-
-
-def _is_gemini_protocol(protocol: str) -> bool:
-    lower = protocol.casefold()
-    return "gemini" in lower or "google" in lower
+# Protocol classification lives in ``models.config`` so every module agrees
+# on which gateway speaks which wire format.
 
 
 def _build_chat_model(
@@ -580,8 +572,7 @@ def _build_chat_model(
     Google Gemini     → `GeminiChatModel` + `GeminiCredential`
     Everything else   → `DashScopeChatModel` + `DashScopeCredential`
     """
-    protocol_lower = protocol.casefold()
-    if "anthropic" in protocol_lower or "minimax" in protocol_lower:
+    if model_config.is_anthropic_protocol(protocol):
         from agentscope.credential import AnthropicCredential
         from agentscope.model import AnthropicChatModel
 
@@ -596,7 +587,7 @@ def _build_chat_model(
             formatter=formatter,
             client_kwargs=client_kwargs,
         )
-    if "gemini" in protocol_lower or "google" in protocol_lower:
+    if model_config.is_gemini_protocol(protocol):
         from agentscope.credential import GeminiCredential
         from agentscope.model import GeminiChatModel
 
@@ -667,24 +658,34 @@ class AgentScopeAgentChatClient:
         base_url = model_config.get_text_base_url().strip()
         model_name = model_config.get_text_model_name().strip()
         protocol = model_config.get_text_protocol().strip()
-        missing = [
-            name
-            for name, value in (
-                ("api_key", api_key),
-                ("base_url", base_url),
-                ("model", model_name),
-            )
-            if not value
-        ]
+        # Anthropic and Gemini gateways always authenticate; OpenAI-compatible
+        # gateways may serve free keyless models (e.g. OpenCode Zen), where
+        # the openai client with an empty key simply omits the Authorization
+        # header.
+        required_fields: tuple[tuple[str, str], ...] = (
+            ("base_url", base_url),
+            ("model", model_name),
+        )
+        if model_config.protocol_requires_api_key(protocol):
+            required_fields = (("api_key", api_key),) + required_fields
+        missing = [name for name, value in required_fields if not value]
         if missing:
             raise AgentModelConfigurationError(
                 "Creator text model configuration is incomplete: "
                 + ", ".join(missing)
-                + ". Configure creator_text_model before retrying.",
+                + f" (protocol='{protocol}', "
+                + f"base_url='{base_url or '<empty>'}', "
+                + f"model='{model_name or '<empty>'}', "
+                + "api_key="
+                + ("'<set>'" if api_key else "'<empty>'")
+                + "). Open the Creator model config dialog (or set the "
+                + "creator text model fields) and retry. Protocols "
+                + "'Anthropic'/'Gemini' always require an api_key; "
+                + "OpenAI-compatible gateways may run keyless free models.",
             )
         configuration = (api_key, base_url, model_name, protocol)
         if self.model is None or self._configuration != configuration:
-            if _is_anthropic_protocol(protocol):
+            if model_config.is_anthropic_protocol(protocol):
                 from agentscope.model import AnthropicChatModel
 
                 parameters = AnthropicChatModel.Parameters(
@@ -699,7 +700,7 @@ class AgentScopeAgentChatClient:
                     parameters=parameters,
                     client_kwargs={"timeout": self.timeout_seconds},
                 )
-            elif _is_gemini_protocol(protocol):
+            elif model_config.is_gemini_protocol(protocol):
                 from agentscope.model import GeminiChatModel
 
                 parameters = GeminiChatModel.Parameters(
@@ -1168,24 +1169,34 @@ class AgentScopeVlmChatClient(AgentScopeAgentChatClient):
         ).strip()
         protocol = model_config.get_vlm_protocol().strip()
         timeout_seconds = model_config.get_vlm_timeout_seconds()
-        missing = [
-            name
-            for name, value in (
-                ("api_key", api_key),
-                ("base_url", base_url),
-                ("model", model_name),
-            )
-            if not value
-        ]
+        # Anthropic and Gemini gateways always authenticate; OpenAI-compatible
+        # gateways may serve free keyless models (e.g. OpenCode Zen), where
+        # the openai client with an empty key simply omits the Authorization
+        # header.
+        required_fields: tuple[tuple[str, str], ...] = (
+            ("base_url", base_url),
+            ("model", model_name),
+        )
+        if model_config.protocol_requires_api_key(protocol):
+            required_fields = (("api_key", api_key),) + required_fields
+        missing = [name for name, value in required_fields if not value]
         if missing:
             raise AgentModelConfigurationError(
                 "Creator VLM configuration is incomplete: "
                 + ", ".join(missing)
-                + ". Configure creator_vlm before retrying.",
+                + f" (protocol='{protocol}', "
+                + f"base_url='{base_url or '<empty>'}', "
+                + f"model='{model_name or '<empty>'}', "
+                + "api_key="
+                + ("'<set>'" if api_key else "'<empty>'")
+                + "). Open the Creator model config dialog (or set the "
+                + "creator VLM fields) and retry. Protocols "
+                + "'Anthropic'/'Gemini' always require an api_key; "
+                + "OpenAI-compatible gateways may run keyless free models.",
             )
         configuration = (api_key, base_url, model_name, protocol)
         if self.model is None or self._configuration != configuration:
-            if _is_anthropic_protocol(protocol):
+            if model_config.is_anthropic_protocol(protocol):
                 from agentscope.model import AnthropicChatModel
 
                 parameters = AnthropicChatModel.Parameters(
@@ -1200,7 +1211,7 @@ class AgentScopeVlmChatClient(AgentScopeAgentChatClient):
                     parameters=parameters,
                     client_kwargs={"timeout": timeout_seconds},
                 )
-            elif _is_gemini_protocol(protocol):
+            elif model_config.is_gemini_protocol(protocol):
                 from agentscope.model import GeminiChatModel
 
                 parameters = GeminiChatModel.Parameters(
