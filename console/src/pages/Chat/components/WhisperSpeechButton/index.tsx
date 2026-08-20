@@ -15,12 +15,6 @@ import { useUploadLimitStore } from "@/stores/uploadLimitStore";
 
 const MAX_RECORDING_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 
-// getUserMedia only exists in secure contexts (HTTPS / localhost); on an
-// HTTP LAN deployment the API is absent entirely, so the button must be
-// disabled up front instead of erroring on click.
-const speechUnavailable = () =>
-  typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia;
-
 export interface WhisperSpeechButtonRef {
   toggleRecording: () => void;
   isRecording: () => boolean;
@@ -115,10 +109,6 @@ const WhisperSpeechButton = forwardRef<
 
   const startRecording = useCallback(async () => {
     if (internalRecordingRef.current || loading) return;
-    if (speechUnavailable()) {
-      message.error(t("chat.speech.microphoneError"));
-      return;
-    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mimeType = MediaRecorder.isTypeSupported("audio/webm")
@@ -228,14 +218,12 @@ const WhisperSpeechButton = forwardRef<
     [toggleRecording, loading],
   );
 
-  const isDisabled = disabled || loading || speechUnavailable();
+  const isDisabled = disabled || loading;
 
   return (
     <Tooltip
       title={
-        speechUnavailable()
-          ? t("chat.speech.microphoneError")
-          : loading
+        loading
           ? t("chat.speech.transcribing")
           : recording
           ? t("chat.speech.stopRecording")

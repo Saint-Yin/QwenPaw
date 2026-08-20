@@ -8,7 +8,6 @@ import {
   buildTraceDisplayItems,
   type TraceDisplayItem,
 } from "../utils/traceUtils";
-import { copyText } from "@/utils/clipboard";
 
 interface TraceData {
   events: Array<{ at: number; event: Record<string, unknown> }>;
@@ -121,9 +120,7 @@ export function useTraceViewer(
     async (text: string) => {
       if (!text) return;
       try {
-        // copyText degrades to execCommand on non-secure (HTTP) contexts
-        // where navigator.clipboard is unavailable.
-        await copyText(text);
+        await navigator.clipboard.writeText(text);
         message.success(t("common.copied"));
       } catch {
         message.error(t("common.copyFailed"));
