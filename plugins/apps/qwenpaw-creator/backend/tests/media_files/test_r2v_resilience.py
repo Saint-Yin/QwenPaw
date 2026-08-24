@@ -2,6 +2,7 @@
 # flake8: noqa: E501
 # pylint: disable=protected-access
 """Transient R2V failures reopen a retry slot; deterministic ones stay walls."""
+
 from __future__ import annotations
 
 import asyncio
@@ -24,7 +25,6 @@ from .conftest import (
     make_r2v_element,
     r2v_project_services,
 )
-
 
 pytestmark = pytest.mark.unit
 
@@ -193,7 +193,7 @@ def _mat_worker(tmp_path, monkeypatch) -> FileR2VExecutionService:
     )
 
 
-def _run_materialize(worker, monkeypatch, stub):
+def _run_materialize(worker, monkeypatch, stub, provider_result=None):
     monkeypatch.setattr(r2v_execution, "materialize_r2v_video", stub)
 
     async def live_claim(*_args, **_kwargs):
@@ -205,7 +205,9 @@ def _run_materialize(worker, monkeypatch, stub):
         live_claim,
     )
     task = SimpleNamespace(project_id=PROJECT_ID, task_id="task-materialize")
-    claim = SimpleNamespace(provider_result={"result_url": "https://x/v.mp4"})
+    claim = SimpleNamespace(
+        provider_result=provider_result or {"result_url": "https://x/v.mp4"},
+    )
 
     async def scenario():
         try:
@@ -233,6 +235,47 @@ def test_transient_download_failures_are_retried(tmp_path, monkeypatch):
     )
     assert result is sentinel
     assert len(calls) == 3
+
+
+def test_veo_download_auth_is_resolved_only_for_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from models import config as model_config
+
+    sentinel = object()
+    captured: dict = {}
+    durable = r2v_execution._durable_provider_result(
+        {
+            "status": "SUCCEEDED",
+            "result_url": "https://video.example/v.mp4?key=old-secret&alt=media",
+            "download_auth": "x-goog-api-key",
+        },
+    )
+    monkeypatch.setattr(
+        model_config,
+        "get_video_api_key",
+        lambda: "new-secret",
+    )
+
+    async def stub(output, **kwargs):
+        captured.update(output=output, kwargs=kwargs)
+        return sentinel
+
+    result = _run_materialize(
+        _mat_worker(tmp_path, monkeypatch),
+        monkeypatch,
+        stub,
+        provider_result=durable,
+    )
+
+    assert result is sentinel
+    assert durable["result_url"] == "https://video.example/v.mp4?alt=media"
+    assert "old-secret" not in repr(durable)
+    assert "new-secret" not in repr(captured["output"])
+    assert captured["kwargs"]["request_headers"] == {
+        "x-goog-api-key": "new-secret",
+    }
 
 
 _MP4 = b"\x00\x00\x00\x18ftypmp42" + b"stale-video" * 64

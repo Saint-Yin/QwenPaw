@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, memo } from "react";
+import { useEffect, useState, useCallback, memo, useRef } from "react";
 import { Modal, message, Tooltip } from "antd";
 import {
   Film,
@@ -21,6 +21,8 @@ import {
   getRecreateParams,
   listProjects,
   getArtifactVersionMediaUrl,
+  CreatorHttpError,
+  newClientId,
 } from "@/api/creator";
 import { useModelConfigStore } from "@/store/modelConfigStore";
 import { useRecreateStore } from "@/store/recreateStore";
@@ -227,6 +229,7 @@ export default function HomePage() {
   const [importerOpen, setImporterOpen] = useState(false);
   const [sortBy, setSortBy] = useState<SortField>("updated_at");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const copyRetryKeys = useRef(new Map<string, string>());
   const requestHomeTour = useOnboardingStore((state) => state.requestHomeTour);
   // Shared with the composer and header badges so saving the model config
   // anywhere clears every home-page warning at once.
@@ -307,11 +310,24 @@ export default function HomePage() {
 
   const handleCopy = useCallback(
     async (project: ProjectSummary) => {
+      const requestId =
+        copyRetryKeys.current.get(project.projectId) ??
+        newClientId("copy-project");
+      copyRetryKeys.current.set(project.projectId, requestId);
       try {
-        const result = await copyProject(project.projectId);
+        const result = await copyProject(project.projectId, requestId);
+        copyRetryKeys.current.delete(project.projectId);
         message.success(t("home.copySuccess"));
         router.push(`/project/${result.projectId}/plan`);
-      } catch {
+      } catch (error) {
+        // A lost response or client timeout is an ambiguous commit: preserve
+        // the operation key so the next user attempt replays the same copy.
+        if (
+          !(error instanceof CreatorHttpError) ||
+          (error.status !== 0 && error.status !== 408)
+        ) {
+          copyRetryKeys.current.delete(project.projectId);
+        }
         message.error(t("home.copyFailed"));
       }
     },

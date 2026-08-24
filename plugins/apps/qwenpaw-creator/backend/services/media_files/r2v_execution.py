@@ -31,6 +31,7 @@ import stat
 import threading
 import time
 from typing import Any, Literal, Protocol
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from pydantic import Field
@@ -145,6 +146,62 @@ _TERMINAL_TASKS = frozenset(
 )
 
 logger = setup_logger("services.media_files.r2v_execution")
+
+_GOOGLE_API_KEY_AUTH = "x-goog-api-key"
+_CREDENTIAL_QUERY_NAMES = frozenset(
+    {"key", "api_key", "token", "access_token"},
+)
+
+
+def _strip_credential_query(value: object) -> object:
+    """Remove credential-shaped query parameters from one durable URL."""
+
+    if not isinstance(value, str) or not value:
+        return value
+    parsed = urlsplit(value)
+    if parsed.scheme.casefold() not in {"http", "https"} or not parsed.query:
+        return value
+    kept = [
+        (key, item)
+        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+        if key.casefold() not in _CREDENTIAL_QUERY_NAMES
+    ]
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(kept),
+            parsed.fragment,
+        ),
+    )
+
+
+def _durable_provider_result(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a credential-free provider result suitable for task state."""
+
+    durable = dict(result)
+    if str(durable.get("download_auth") or "") == _GOOGLE_API_KEY_AUTH:
+        for field in ("url", "result_url", "video_url"):
+            if field in durable:
+                durable[field] = _strip_credential_query(durable[field])
+    return durable
+
+
+def _provider_download_headers(result: Mapping[str, Any]) -> dict[str, str]:
+    """Resolve non-durable provider download credentials at request time."""
+
+    auth = str(result.get("download_auth") or "")
+    if not auth:
+        return {}
+    if auth != _GOOGLE_API_KEY_AUTH:
+        raise ValidationError(f"未知 provider 下载鉴权类型: {auth}")
+    from models import config as model_config
+
+    api_key = model_config.get_video_api_key()
+    if not api_key:
+        raise ValidationError("Veo 视频下载需要当前模型配置中的 API Key")
+    return {_GOOGLE_API_KEY_AUTH: api_key}
 
 
 class VideoReferenceBudgetError(ValidationError):
@@ -3155,7 +3212,9 @@ class FileR2VExecutionService:
                 invoke_provider(),
                 timeout=self.poll_timeout_seconds,
             )
-            result = _json_mapping(raw, label="R2V provider poll result")
+            result = _durable_provider_result(
+                _json_mapping(raw, label="R2V provider poll result"),
+            )
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -3612,6 +3671,9 @@ class FileR2VExecutionService:
                     task_id=task.task_id,
                     max_bytes=self.max_output_bytes,
                     total_timeout_seconds=self.materialize_timeout_seconds,
+                    request_headers=_provider_download_headers(
+                        claim.provider_result,
+                    ),
                 )
             except Exception as error:
                 if attempt >= len(delays) or not (

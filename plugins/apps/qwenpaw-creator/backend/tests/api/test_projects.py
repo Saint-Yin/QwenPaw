@@ -117,6 +117,53 @@ def test_project_runtime_bootstrap_failure_never_publishes_half_project(
     assert list(api_runtime_root.rglob("project.json")) == []
 
 
+def test_project_copy_replays_one_durable_result_and_rejects_key_drift(
+    app,
+    api_runtime_root,
+    run_scenario,
+) -> None:
+    async def scenario(client):
+        source = await client.post(
+            "/projects",
+            json=_create_payload("copy-source-a", "Source A"),
+        )
+        other = await client.post(
+            "/projects",
+            json=_create_payload("copy-source-b", "Source B"),
+        )
+        source_id = source.json()["projectId"]
+        other_id = other.json()["projectId"]
+        copy_url = f"/projects/{source_id}/copy"
+        headers = {"Idempotency-Key": "copy-retry-1"}
+        first = await client.post(copy_url, headers=headers)
+        replay = await client.post(copy_url, headers=headers)
+        drift = await client.post(
+            f"/projects/{other_id}/copy",
+            headers=headers,
+        )
+        listed = await client.get("/projects")
+        return source_id, other_id, first, replay, drift, listed
+
+    (
+        source_id,
+        other_id,
+        first,
+        replay,
+        drift,
+        listed,
+    ) = run_scenario(app, scenario)
+
+    assert first.status_code == replay.status_code == 201
+    assert replay.json() == first.json()
+    assert drift.status_code == 409
+    assert drift.json()["code"] == "CONFLICT"
+    assert {item["projectId"] for item in listed.json()["items"]} == {
+        source_id,
+        other_id,
+        first.json()["projectId"],
+    }
+
+
 def test_work_graph_get_dispatch_unknown_and_missing_project(
     app,
     api_runtime_root,

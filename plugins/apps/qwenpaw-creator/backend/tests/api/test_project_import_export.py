@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
-# pylint: disable=unused-argument
+# pylint: disable=unused-argument,protected-access
 """Project archive export/import behavior and safety limits."""
+
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 from uuid import uuid4
 
 import pytest
 
 from api import project_routes
+from services.media_files import r2v_execution
 from services.runtime_files import ProjectRuntimeSessionStore
 
 pytestmark = pytest.mark.unit
@@ -105,6 +108,43 @@ def test_export_does_not_cancel_sessions_or_consume_messages(
     assert after.status.value != "CANCELLED"
     assert after.last_consumed_message_seq == before.last_consumed_message_seq
     assert after.last_message_seq == before.last_message_seq
+
+
+def test_veo_provider_key_is_absent_from_project_state_and_export(
+    app,
+    api_runtime_root,
+    run_scenario,
+) -> None:
+    secret = "gm-export-secret"
+
+    async def scenario(client):
+        project_id = await _create_project(client)
+        task_root = (
+            api_runtime_root / project_id / "runtime" / "tasks" / "veo-1"
+        )
+        task_root.mkdir(parents=True)
+        provider_result = r2v_execution._durable_provider_result(
+            {
+                "status": "SUCCEEDED",
+                "result_url": (
+                    f"https://video.example/result.mp4?key={secret}&alt=media"
+                ),
+                "download_auth": "x-goog-api-key",
+            },
+        )
+        (task_root / "r2v-state.json").write_text(
+            json.dumps({"provider_result": provider_result}),
+            encoding="utf-8",
+        )
+        return await _export(client, project_id)
+
+    exported = run_scenario(app, scenario)
+    assert exported.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+        assert all(
+            secret.encode() not in archive.read(name)
+            for name in archive.namelist()
+        )
 
 
 def _rename_archive_root(archive: bytes, new_root: str) -> bytes:

@@ -181,10 +181,13 @@ export function deleteProject(projectId: string): Promise<void> {
   });
 }
 
-export function copyProject(projectId: string): Promise<{ projectId: string }> {
+export function copyProject(
+  projectId: string,
+  clientRequestId = newClientId("copy-project"),
+): Promise<{ projectId: string }> {
   return creatorRequest(`/projects/${encodeURIComponent(projectId)}/copy`, {
     method: "POST",
-    headers: { "Idempotency-Key": newClientId("copy-project") },
+    headers: { "Idempotency-Key": clientRequestId },
   });
 }
 

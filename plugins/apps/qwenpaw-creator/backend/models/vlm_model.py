@@ -37,6 +37,10 @@ from models import config as model_config
 from models.concurrency import model_slot
 from models.media_transport import upload_local_file_to_dashscope_temp
 from models.model_capability_cache import get_capability_cache
+from services.runtime_files.safe_remote_download import (
+    SafeRemoteDownloadError,
+    open_safe_remote_stream,
+)
 from utils.exceptions import ModelError, redact_url, upstream_status_hint
 from utils.logger import setup_logger
 from utils.paths import local_path_from_file_url, media_path_from_url
@@ -244,38 +248,48 @@ def _is_gemini_file_uri(url: str) -> bool:
     )
 
 
+def _download_remote_media_sync(
+    url: str,
+    fallback_mime: str,
+    timeout: float,
+) -> tuple[str, str]:
+    """Safely download remote media and return ``(mime_type, base64_data)``.
+
+    Gemini only accepts inline media or Files API resources, so remote
+    references must be downloaded and inlined before the request.
+    """
+    max_bytes = model_config.get_vlm_max_inline_bytes()
+    with open_safe_remote_stream(
+        url,
+        max_bytes=max_bytes,
+        timeout=timeout,
+    ) as remote:
+        data = b"".join(remote.iter_raw())
+        if not data:
+            raise SafeRemoteDownloadError("远程 URL 返回了空内容")
+        content_type = remote.media_type
+        final_path = urlparse(remote.final_url).path
+    mime = (
+        content_type
+        if content_type.startswith(("image/", "video/"))
+        else mimetypes.guess_type(final_path)[0] or fallback_mime
+    )
+    return mime, base64.b64encode(data).decode("utf-8")
+
+
 async def _download_remote_media(
     url: str,
     fallback_mime: str,
     timeout: float,
 ) -> tuple[str, str]:
-    """Download a remote media URL and return ``(mime_type, base64_data)``.
+    """Run the shared synchronous safe downloader off the event loop."""
 
-    Gemini only accepts inline media or Files API resources, so remote
-    references must be downloaded and inlined before the request.
-    """
-    async with httpx.AsyncClient(
-        timeout=timeout,
-        follow_redirects=True,
-    ) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-        data = response.content
-    max_bytes = model_config.get_vlm_max_inline_bytes()
-    if len(data) > max_bytes:
-        raise ModelError(
-            f"VLM remote media inline size limit exceeded: {url} is "
-            f"{len(data)} bytes, limit is {max_bytes}",
-        )
-    content_type = (
-        (response.headers.get("Content-Type") or "").split(";")[0].strip()
+    return await asyncio.to_thread(
+        _download_remote_media_sync,
+        url,
+        fallback_mime,
+        timeout,
     )
-    mime = (
-        content_type
-        if content_type.startswith(("image/", "video/"))
-        else mimetypes.guess_type(urlparse(url).path)[0] or fallback_mime
-    )
-    return mime, base64.b64encode(data).decode("utf-8")
 
 
 # ── Response parsers ─────────────────────────────────────────────────────────
@@ -354,9 +368,9 @@ def _convert_to_anthropic_content(
 ) -> list[dict]:
     """Convert OpenAI-format content parts to Anthropic Messages format.
 
-    OpenAI ``image_url`` / ``video_url`` parts become Anthropic ``image``
-    blocks.  Anthropic does not support video in the Messages API, so
-    ``video_url`` parts are converted to a text placeholder.
+    OpenAI ``image_url`` parts become Anthropic ``image`` blocks. Anthropic
+    Messages does not accept video input, so callers must fail explicitly
+    rather than allowing a visually ungrounded response to look successful.
     """
     result: list[dict] = []
     for part in openai_content:
@@ -398,12 +412,12 @@ def _convert_to_anthropic_content(
                     },
                 )
         elif part_type == "video_url":
-            # Anthropic Messages API does not support video; use a placeholder.
-            result.append(
-                {
-                    "type": "text",
-                    "text": "[video content not supported by this model]",
-                },
+            raise ModelError(
+                "Anthropic Messages protocol does not support video input; "
+                "configure a video-capable VLM protocol or extract frames "
+                "before analysis",
+                model_name=model_config.get_vlm_model_name(),
+                retryable=False,
             )
         else:
             result.append({"type": "text", "text": str(part)})
@@ -763,6 +777,17 @@ async def _call_anthropic_vlm(
     model_name: str,
 ) -> dict:
     """Anthropic Messages API VLM request (Claude, MiniMax)."""
+    if any(
+        isinstance(item, dict) and item.get("type") == "video_url"
+        for item in content
+    ):
+        raise ModelError(
+            "Anthropic Messages protocol does not support video input; "
+            "configure a video-capable VLM protocol or extract frames "
+            "before analysis",
+            model_name=model_name,
+            retryable=False,
+        )
     # Transport local media to inline base64 for Anthropic format
     provider_content: list[dict] = []
     for item in content:
@@ -775,25 +800,16 @@ async def _call_anthropic_vlm(
             url = str(media_obj.get("url") or "")
             local_path = _local_path_from_url(url)
             if local_path is not None:
-                fallback = (
-                    "video/mp4" if part_type == "video_url" else "image/png"
-                )
+                fallback = "image/png"
                 mime, b64_data = await asyncio.to_thread(
                     _inline_base64,
                     local_path,
                     fallback,
                 )
-                if part_type == "image_url":
-                    normalized = {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime};base64,{b64_data}"},
-                    }
-                else:
-                    # Anthropic doesn't support video; keep as placeholder text
-                    normalized = {
-                        "type": "text",
-                        "text": "[video content]",
-                    }
+                normalized = {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64_data}"},
+                }
             # Remote URLs pass through as-is; the converter handles them
         provider_content.append(normalized)
 
@@ -872,9 +888,15 @@ async def _call_gemini_vlm(
                         fallback,
                         timeout,
                     )
+                except SafeRemoteDownloadError as exc:
+                    raise ModelError(
+                        f"VLM remote media download rejected: {exc}",
+                        model_name=model_name,
+                        retryable=False,
+                    ) from exc
                 except httpx.HTTPError as exc:
                     raise ModelError(
-                        f"VLM remote media download failed for {url}: {exc}",
+                        f"VLM remote media download failed: {exc}",
                         model_name=model_name,
                     ) from exc
                 normalized = {

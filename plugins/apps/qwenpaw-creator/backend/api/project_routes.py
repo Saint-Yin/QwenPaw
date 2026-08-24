@@ -80,6 +80,7 @@ from .dependencies import (
 logger = setup_logger("project_routes")
 
 _CREATE_SCOPE = "POST /projects"
+_COPY_SCOPE = "POST /projects/{project_id}/copy"
 
 
 def _log_safe(value: Any) -> str:
@@ -129,6 +130,15 @@ def _request_hash(request: ProjectCreateRequest) -> str:
                 by_alias=True,
                 exclude_none=True,
             ),
+        },
+    )
+
+
+def _copy_request_hash(source_project_id: str) -> str:
+    return IdempotencyRecordStore.request_hash(
+        {
+            "scope": _COPY_SCOPE,
+            "sourceProjectId": source_project_id,
         },
     )
 
@@ -219,6 +229,50 @@ def _existing_bootstrap(
     ):
         raise StorageIntegrityError("Project 创建响应快照身份不一致")
     return response
+
+
+def _existing_copy_receipt(
+    services: CreatorFileServices,
+    *,
+    target_project_id: str,
+    expected_session_id: str,
+    expected_conversation_id: str,
+    client_request_id: str,
+    request_hash: str,
+) -> dict[str, str]:
+    """Validate and replay one atomically published Project copy receipt."""
+
+    services.projects.read(target_project_id)
+    session = services.sessions.get_project_session(target_project_id)
+    conversations = services.sessions.list_conversations(
+        target_project_id,
+        session.session_id,
+    )
+    defaults = [item for item in conversations if item.is_default]
+    if len(defaults) != 1:
+        raise StorageIntegrityError(
+            "复制 Project Runtime 必须且只能有一个默认 Conversation",
+        )
+    receipt = session.metadata.get("projectCopy")
+    if not isinstance(receipt, dict):
+        raise ConflictError("Idempotency-Key 已用于非复制 Project 请求")
+    if (
+        receipt.get("clientRequestId") != client_request_id
+        or receipt.get("requestHash") != request_hash
+    ):
+        raise ConflictError("Idempotency-Key 已用于不同的 Project 复制请求")
+    if (
+        session.session_id != expected_session_id
+        or defaults[0].conversation_id != expected_conversation_id
+        or not isinstance(receipt.get("sourceGeneration"), int)
+        or not isinstance(receipt.get("sourceEtag"), str)
+        or not receipt.get("sourceEtag")
+    ):
+        raise StorageIntegrityError("Project 复制记录与确定性身份不一致")
+    stored_response = receipt.get("response")
+    if stored_response != {"projectId": target_project_id}:
+        raise StorageIntegrityError("Project 复制响应快照损坏")
+    return {"projectId": target_project_id}
 
 
 @router.get("")
@@ -484,85 +538,131 @@ async def get_recreate_params(
         raise StorageIntegrityError(str(exc)) from exc
 
 
+# pylint: disable=too-many-statements
 @router.post("/{project_id}/copy", status_code=status.HTTP_201_CREATED)
 async def copy_project(
     project_id: str,
     response: Response,
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     services: CreatorFileServices = Depends(project_file_services),
 ) -> dict[str, Any]:
     logger.info(f"copying project:{_log_safe(project_id)}")
+    client_request_id = resolve_idempotency_key(idempotency_key)
+    request_hash = _copy_request_hash(project_id)
+    copy_identity = f"{_COPY_SCOPE}:{client_request_id}"
+    new_project_id = _stable_id("project", copy_identity)
+    new_session_id = _stable_id("session", copy_identity)
+    new_conversation_id = _stable_id("conversation", copy_identity)
 
     def operation() -> dict[str, Any]:
-        source_snapshot = services.projects.read(project_id)
-        source = source_snapshot.project
-        source_root = services.projects.project_root(project_id)
-
-        new_project_id = f"project-{uuid4().hex}"
-        new_session_id = f"session-{uuid4().hex}"
-        new_conversation_id = f"conversation-{uuid4().hex}"
-
-        copy_name = f"{source.name} copy"
         with CrossProcessFileLock(
             services.projects.root / ".project-names.lock",
         ):
-            existing = services.projects.list()
-            base_name = copy_name
-            suffix = 1
-            while any(item.name == copy_name for item in existing):
-                suffix += 1
-                copy_name = f"{base_name} {suffix}"
-
-            new_project = Project.new(
-                project_id=new_project_id,
-                name=copy_name,
-                description=source.description,
-                scenario=source.scenario,
-                settings=source.settings,
-            )
-            new_project = new_project.model_copy(
-                update={
-                    "strategy": source.strategy,
-                    "visual": source.visual,
-                    "timelines": source.timelines,
-                    "assets": source.assets,
-                },
-            )
-
-            holder: list[None] = []
-
-            def initialize(staged_root: Path) -> None:
-                assets_src = source_root / "assets"
-                assets_dst = staged_root / "assets"
-                if assets_src.is_dir():
-                    for item in assets_src.iterdir():
-                        dst = assets_dst / item.name
-                        if item.is_dir():
-                            shutil.copytree(
-                                str(item),
-                                str(dst),
-                                dirs_exist_ok=True,
-                            )
-                        else:
-                            shutil.copy2(str(item), str(dst))
-                holder.append(None)
-                services.sessions.initialize_staged_project(
-                    staged_root,
-                    new_project_id,
-                    session_id=new_session_id,
-                    conversation_id=new_conversation_id,
+            try:
+                return _existing_copy_receipt(
+                    services,
+                    target_project_id=new_project_id,
+                    expected_session_id=new_session_id,
+                    expected_conversation_id=new_conversation_id,
+                    client_request_id=client_request_id,
+                    request_hash=request_hash,
                 )
+            except ProjectNotFound:
+                pass
 
-            snapshot = services.projects.create(
-                new_project,
-                initialize_staged_project=initialize,
-            )
+            # Freeze the source Project and its asset tree at one revision for
+            # the whole copy. Project commits/deletion take the exclusive side.
+            with services.projects.lifecycle_lock(project_id, shared=True):
+                source_snapshot = services.projects.read(project_id)
+                source = source_snapshot.project
+                source_root = services.projects.project_root(project_id)
+                copy_name = f"{source.name} copy"
+                existing = services.projects.list()
+                base_name = copy_name
+                suffix = 1
+                while any(item.name == copy_name for item in existing):
+                    suffix += 1
+                    copy_name = f"{base_name} {suffix}"
+
+                new_project = Project.new(
+                    project_id=new_project_id,
+                    name=copy_name,
+                    description=source.description,
+                    scenario=source.scenario,
+                    settings=source.settings,
+                )
+                new_project = new_project.model_copy(
+                    update={
+                        "strategy": source.strategy,
+                        "visual": source.visual,
+                        "timelines": source.timelines,
+                        "assets": source.assets,
+                    },
+                )
+                initial_response = {"projectId": new_project_id}
+                holder: list[ProjectRuntimeBootstrap] = []
+
+                def initialize(staged_root: Path) -> None:
+                    assets_src = source_root / "assets"
+                    assets_dst = staged_root / "assets"
+                    if assets_src.is_dir():
+                        for item in assets_src.iterdir():
+                            dst = assets_dst / item.name
+                            if item.is_dir():
+                                shutil.copytree(
+                                    str(item),
+                                    str(dst),
+                                    dirs_exist_ok=True,
+                                )
+                            else:
+                                shutil.copy2(str(item), str(dst))
+                    holder.append(
+                        services.sessions.initialize_staged_project(
+                            staged_root,
+                            new_project_id,
+                            session_id=new_session_id,
+                            conversation_id=new_conversation_id,
+                            session_metadata={
+                                "projectCopy": {
+                                    "clientRequestId": client_request_id,
+                                    "requestHash": request_hash,
+                                    "sourceProjectId": project_id,
+                                    "sourceGeneration": source_snapshot.generation,
+                                    "sourceEtag": source_snapshot.etag,
+                                    "response": initial_response,
+                                },
+                            },
+                        ),
+                    )
+
+                try:
+                    snapshot = services.projects.create(
+                        new_project,
+                        initialize_staged_project=initialize,
+                    )
+                except ProjectAlreadyExists:
+                    return _existing_copy_receipt(
+                        services,
+                        target_project_id=new_project_id,
+                        expected_session_id=new_session_id,
+                        expected_conversation_id=new_conversation_id,
+                        client_request_id=client_request_id,
+                        request_hash=request_hash,
+                    )
 
         if len(holder) != 1:
             raise StorageIntegrityError(
                 "Project Runtime 未随复制 Project 原子创建",
             )
         services.poller.note_commit(snapshot)
-        return {"projectId": new_project_id}
+        return _existing_copy_receipt(
+            services,
+            target_project_id=new_project_id,
+            expected_session_id=new_session_id,
+            expected_conversation_id=new_conversation_id,
+            client_request_id=client_request_id,
+            request_hash=request_hash,
+        )
 
     try:
         result = await asyncio.to_thread(operation)
@@ -575,6 +675,9 @@ async def copy_project(
     notify_creator_agent_runtime(result["projectId"])
     response.status_code = status.HTTP_201_CREATED
     return result
+
+
+# pylint: enable=too-many-statements
 
 
 @router.get("/{project_id}/export")

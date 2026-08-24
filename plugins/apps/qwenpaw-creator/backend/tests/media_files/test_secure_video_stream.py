@@ -17,7 +17,6 @@ from domain.errors import StorageIntegrityError, ValidationError
 from services.media_files import secure_video_stream
 from services.media_files.secure_video_stream import SecureR2VVideoMaterializer
 
-
 pytestmark = pytest.mark.unit
 
 _MP4 = b"\x00\x00\x00\x18ftypisom" + b"mp4-payload" * 16
@@ -45,11 +44,13 @@ async def _materialize(
     project_root: Path,
     **materializer_kwargs,
 ):
+    request_headers = materializer_kwargs.pop("request_headers", None)
     return await SecureR2VVideoMaterializer(**materializer_kwargs).materialize(
         output,
         project_root=project_root,
         project_id="project-1",
         task_id="task-1",
+        request_headers=request_headers,
     )
 
 
@@ -323,8 +324,12 @@ async def test_each_redirect_hop_is_resolved_and_peer_pinned_again(
 ) -> None:
     project_root, _scratch = _scope(tmp_path)
     calls: list[str] = []
+    request_headers: dict[str, str | None] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        request_headers[str(request.url.host)] = request.headers.get(
+            "x-goog-api-key",
+        )
         if request.url.host == "origin.example":
             return _response(
                 302,
@@ -349,9 +354,14 @@ async def test_each_redirect_hop_is_resolved_and_peer_pinned_again(
             calls,
         ),
         transport=httpx.MockTransport(handler),
+        request_headers={"x-goog-api-key": "gm-secret"},
     )
 
     assert calls == ["origin.example", "cdn.example"]
+    assert request_headers == {
+        "origin.example": "gm-secret",
+        "cdn.example": None,
+    }
     assert result.container == "webm"
 
 

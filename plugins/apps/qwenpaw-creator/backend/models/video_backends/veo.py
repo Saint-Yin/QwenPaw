@@ -22,8 +22,9 @@ must be "8" with reference images or 1080p/4k output).
 Images must be inlined as base64 (the Gemini API accepts no remote image
 URLs here). The finished video URI at
 ``response.generateVideoResponse.generatedSamples[0].video.uri`` requires
-API-key auth, so the documented ``key`` query parameter is appended to
-keep the URL downloadable by the shared materializer.
+API-key auth. The durable poll result keeps that URI credential-free and marks
+the required authentication scheme; the shared materializer adds the current
+API key as an in-memory request header only while downloading.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ from utils.logger import setup_logger
 logger = setup_logger("model.video.veo")
 
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+DOWNLOAD_AUTH = "x-goog-api-key"
 
 
 def _api_base(base_url: str) -> str:
@@ -172,15 +174,6 @@ def extract_task_id(payload: dict) -> str:
     return ""
 
 
-def _downloadable_uri(uri: str, api_key: str) -> str:
-    """Append the documented ``key`` query parameter for download auth."""
-
-    if not uri:
-        return uri
-    separator = "&" if "?" in uri else "?"
-    return f"{uri}{separator}key={api_key}"
-
-
 async def check_status(
     task_id: str,
     *,
@@ -234,7 +227,8 @@ async def check_status(
             return {
                 "task_id": task_id,
                 "status": "SUCCEEDED",
-                "result_url": _downloadable_uri(uri, api_key),
+                "result_url": uri,
+                "download_auth": DOWNLOAD_AUTH,
             }
     return {
         "task_id": task_id,

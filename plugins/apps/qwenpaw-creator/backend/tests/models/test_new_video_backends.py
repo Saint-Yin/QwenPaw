@@ -215,7 +215,9 @@ def test_veo_constraints(overrides, match) -> None:
         _veo_submit(**overrides)
 
 
-def test_veo_check_status_appends_download_key(monkeypatch) -> None:
+def test_veo_check_status_keeps_download_key_out_of_durable_result(
+    monkeypatch,
+) -> None:
     payload = {
         "done": True,
         "response": {
@@ -242,7 +244,9 @@ def test_veo_check_status_appends_download_key(monkeypatch) -> None:
         ),
     )
     assert result["status"] == "SUCCEEDED"
-    assert result["result_url"] == "https://dl.example/video.mp4?key=gm-key"
+    assert result["result_url"] == "https://dl.example/video.mp4"
+    assert result["download_auth"] == "x-goog-api-key"
+    assert "gm-key" not in repr(result)
 
 
 # ── MiniMax ──────────────────────────────────────────────────────────────────

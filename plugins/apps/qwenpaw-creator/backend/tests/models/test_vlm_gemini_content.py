@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 import pytest
 
 from models import vlm_model
+from services.runtime_files.safe_remote_download import SafeRemoteDownloadError
 from utils.exceptions import ModelError
 
 pytestmark = pytest.mark.unit
@@ -76,11 +77,7 @@ def test_gemini_caller_downloads_remote_media_and_inlines_it(
         def __init__(self, method: str):
             self._method = method
             self.status_code = 200
-            if method == "GET":
-                self.content = media_bytes
-                self.headers = {"Content-Type": "image/png"}
-            else:
-                self.headers = {}
+            self.headers = {}
 
         def raise_for_status(self) -> None:
             return None
@@ -105,13 +102,17 @@ def test_gemini_caller_downloads_remote_media_and_inlines_it(
         async def __aexit__(self, _exc_type, _exc, _tb):
             return False
 
-        async def get(self, url, **_kwargs):
-            captured["get_url"] = url
-            return FakeResponse("GET")
-
         async def post(self, url, *, headers, json):
             captured.update(post_url=url, headers=headers, body=json)
             return FakeResponse("POST")
+
+    async def fake_download(url, fallback_mime, timeout):
+        captured.update(
+            get_url=url,
+            download_fallback=fallback_mime,
+            download_timeout=timeout,
+        )
+        return "image/png", base64.b64encode(media_bytes).decode("ascii")
 
     @asynccontextmanager
     async def fake_model_slot(_kind):
@@ -119,6 +120,7 @@ def test_gemini_caller_downloads_remote_media_and_inlines_it(
 
     monkeypatch.setattr(vlm_model.httpx, "AsyncClient", FakeAsyncClient)
     monkeypatch.setattr(vlm_model, "model_slot", fake_model_slot)
+    monkeypatch.setattr(vlm_model, "_download_remote_media", fake_download)
     monkeypatch.setattr(
         vlm_model.model_config,
         "get_vlm_max_inline_bytes",
@@ -156,6 +158,17 @@ def test_gemini_caller_downloads_remote_media_and_inlines_it(
     inline = parts[1]["inline_data"]
     assert inline["mime_type"] == "image/png"
     assert base64.b64decode(inline["data"]) == media_bytes
+
+
+def test_gemini_remote_downloader_rejects_loopback_before_connecting() -> None:
+    with pytest.raises(SafeRemoteDownloadError, match="本机|私有|保留"):
+        asyncio.run(
+            vlm_model._download_remote_media(
+                "http://127.0.0.1:65535/private",
+                "image/png",
+                1.0,
+            ),
+        )
 
 
 def test_gemini_caller_omits_key_param_when_keyless(monkeypatch) -> None:
