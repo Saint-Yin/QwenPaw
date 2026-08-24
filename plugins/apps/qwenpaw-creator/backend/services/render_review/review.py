@@ -415,6 +415,49 @@ def _is_voiceover_audio(project: Any, creation: Any) -> bool:
     return role in _VOICEOVER_ROLES
 
 
+def _timeline_review_expectations(
+    project: Any,
+    timeline: Any,
+    context: dict[str, Any],
+) -> tuple[bool, bool, set[str]]:
+    """Derive review expectations and live take ids from one timeline."""
+    edit_plan = getattr(timeline, "edit_plan", None)
+    if edit_plan is not None:
+        # The contract row grades against the taste contract; ship it
+        # verbatim (scene_ledger is assembly state, not contract).
+        context["edit_plan"] = edit_plan.model_dump(
+            mode="json",
+            exclude={"scene_ledger"},
+        )
+    expects_voiceover = False
+    expects_subtitles = False
+    live_operation_versions: set[str] = set()
+    sources = getattr(
+        getattr(project, "assets", None),
+        "source_versions_by_id",
+        None,
+    )
+    for element in timeline.elements_by_id.values():
+        if not getattr(element, "enabled", True):
+            continue
+        creation = getattr(element, "creation", None)
+        kind = getattr(creation, "type", None)
+        if kind == "audio" and _is_voiceover_audio(project, creation):
+            expects_voiceover = True
+        if kind == "overlay":
+            text = str(getattr(creation, "text", "") or "").strip()
+            expects_subtitles = expects_subtitles or bool(text)
+        render_source = getattr(element, "render_source", None)
+        version_id = str(getattr(render_source, "version_id", "") or "")
+        if not version_id:
+            continue
+        version = (sources or {}).get(version_id)
+        metadata = getattr(version, "metadata", None) or {}
+        if str(metadata.get("sourceKind") or "") == "live_operation_take":
+            live_operation_versions.add(version_id)
+    return expects_voiceover, expects_subtitles, live_operation_versions
+
+
 def derive_plan_context(project: Any, target_ref: str) -> dict[str, Any]:
     """Derive the review plan context from authoritative Project data.
 
@@ -444,32 +487,23 @@ def derive_plan_context(project: Any, target_ref: str) -> dict[str, Any]:
     # (mirrors local_execution._target_timeline).
     stripped = target_ref.partition(":")[2] or target_ref
     timeline = timelines.get(stripped) or timelines.get(target_ref)
-    expects_voiceover = False
-    expects_subtitles = False
+    expectations: tuple[bool, bool, set[str]] = (False, False, set())
     if timeline is not None:
-        edit_plan = getattr(timeline, "edit_plan", None)
-        if edit_plan is not None:
-            # The contract row grades against the taste contract; ship it
-            # verbatim (scene_ledger is assembly state, not contract).
-            context["edit_plan"] = edit_plan.model_dump(
-                mode="json",
-                exclude={"scene_ledger"},
-            )
-        for element in timeline.elements_by_id.values():
-            if not getattr(element, "enabled", True):
-                continue
-            creation = getattr(element, "creation", None)
-            kind = getattr(creation, "type", None)
-            if kind == "audio":
-                if _is_voiceover_audio(project, creation):
-                    expects_voiceover = True
-            elif kind == "overlay":
-                overlay_kind = getattr(creation, "overlay_kind", "")
-                text = str(getattr(creation, "text", "") or "").strip()
-                if overlay_kind in ("pet_os", "interview_summary") and text:
-                    expects_subtitles = True
+        expectations = _timeline_review_expectations(
+            project,
+            timeline,
+            context,
+        )
+    (
+        expects_voiceover,
+        expects_subtitles,
+        live_operation_versions,
+    ) = expectations
     context["expects_voiceover"] = expects_voiceover
     context["expects_subtitles"] = expects_subtitles
+    if live_operation_versions:
+        context["live_operation_tutorial"] = True
+        context["live_operation_take_count"] = len(live_operation_versions)
     return context
 
 

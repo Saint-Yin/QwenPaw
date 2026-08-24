@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # flake8: noqa: E501
 """Config-tree resolution: env fallbacks, request overrides, turn limits."""
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -16,11 +17,18 @@ from models.config import (
     get_specialist_max_model_turns,
     scale_mainline_max_model_turns,
 )
+from models.image.base import _mask_key as mask_image_api_key
 from models.image.dashscope_provider import DashScopeImageModel
 from models.image.openai_provider import OpenAIImageModel
 
-
 pytestmark = pytest.mark.unit
+
+
+def test_image_api_key_mask_never_reveals_a_secret_fragment() -> None:
+    secret = "sk-sensitive-prefix-and-private-suffix"
+
+    assert mask_image_api_key(secret) == "[redacted]"
+    assert mask_image_api_key("") == "(empty)"
 
 
 def _patch_user_config(monkeypatch, data: dict) -> None:
@@ -71,6 +79,35 @@ def test_explicit_image_backend_still_wins(monkeypatch) -> None:
     monkeypatch.setenv("IMAGE_MODEL", "OPENAI")
     monkeypatch.setenv("IMAGE_MODEL_NAME", "qwen-image-2.0-pro")
     assert image_models.get_image_backend() == "OPENAI"
+
+
+def test_persisted_image_backend_log_never_contains_api_key(
+    monkeypatch,
+) -> None:
+    secret = "sk-creator-must-never-reach-logs"
+    _patch_user_config(
+        monkeypatch,
+        {
+            "image": {
+                "enabled": True,
+                "protocol": "DashScope（百炼）",
+                "model_name": "qwen-image-2.0-pro",
+                "base_url": "https://workspace.example/api/v1",
+                "api_key": secret,
+            },
+        },
+    )
+    monkeypatch.delenv("IMAGE_MODEL", raising=False)
+    emitted: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        image_models.logger,
+        "info",
+        lambda *args, **_kwargs: emitted.append(args),
+    )
+
+    assert image_models.get_image_backend() == "DASHSCOPE"
+    assert secret not in repr(emitted)
+    assert "workspace.example" in repr(emitted)
 
 
 def test_unconfigured_concurrency_follows_the_scheduler_dispatch_cap(
