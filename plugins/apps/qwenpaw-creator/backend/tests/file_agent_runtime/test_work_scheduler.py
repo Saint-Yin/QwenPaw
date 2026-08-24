@@ -9,7 +9,12 @@ from types import SimpleNamespace
 import pytest
 
 from domain.enums import TaskStatus
-from services.file_agent_runtime.work_scheduler import WorkGraphScheduler
+from services.file_agent_runtime.work_graph import WorkNode, WorkNodeStatus
+from services.file_agent_runtime.work_scheduler import (
+    WorkGraphScheduler,
+    _blocked_by_active_media_review,
+    _blocked_by_active_sync_review,
+)
 from services.project_files.facade import CreatorFileServices
 from services.project_files.models import (
     Project,
@@ -20,6 +25,69 @@ from services.project_files.models import (
 pytestmark = pytest.mark.unit
 
 PROJECT_ID = "scheduler-project"
+
+
+@pytest.mark.parametrize(
+    ("kind", "blocked"),
+    [
+        ("visual", False),
+        ("lineup", False),
+        ("storyboard", True),
+        ("video", True),
+        ("compose", True),
+    ],
+)
+def test_async_media_review_fences_only_dependent_billed_work(
+    kind,
+    blocked,
+) -> None:
+    node = WorkNode(
+        node_id=f"{kind}:one",
+        kind=kind,
+        label=kind,
+        status=WorkNodeStatus.READY,
+    )
+    assert (
+        _blocked_by_active_media_review(
+            node,
+            frozenset({"element:e:storyboard"}),
+        )
+        is blocked
+    )
+    assert _blocked_by_active_media_review(node, frozenset()) is False
+
+
+@pytest.mark.parametrize(
+    ("kind", "blocked"),
+    [
+        ("visual", False),
+        ("lineup", False),
+        ("storyboard", True),
+        ("video", True),
+        ("compose", True),
+    ],
+)
+def test_sync_review_is_a_pre_generation_scheduler_gate(
+    kind,
+    blocked,
+) -> None:
+    node = WorkNode(
+        node_id=f"{kind}:sync",
+        kind=kind,
+        label=kind,
+        status=WorkNodeStatus.READY,
+    )
+    assert (
+        _blocked_by_active_sync_review(
+            node,
+            sync_review_pending=True,
+        )
+        is blocked
+    )
+    assert not _blocked_by_active_sync_review(
+        node,
+        sync_review_pending=False,
+    )
 
 
 def _entity(entity_id: str, variants: dict[str, str | None]) -> VisualEntity:
@@ -395,6 +463,150 @@ def test_cancel_project_does_not_resurrect_dispatch_and_wake_rearms(
         scheduler.wake(PROJECT_ID)
         assert PROJECT_ID not in scheduler._cancelled_projects
         scheduler.cancel_project(PROJECT_ID)
+        await scheduler.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        "IMAGE_REFERENCE_BUDGET_EXCEEDED",
+        "VIDEO_MODEL_CAPABILITY_UNKNOWN",
+    ],
+)
+def test_deterministic_error_blocks_retries(
+    tmp_path,
+    monkeypatch,
+    error_code,
+):
+    """Errors with specific codes (e.g., IMAGE_REFERENCE_BUDGET_EXCEEDED)
+    must block all further retries until the project is modified and the
+    node succeeds. This prevents hot-looping on structural errors that
+    require explicit agent intervention."""
+    from domain.errors import ValidationError
+
+    services = _services(tmp_path, monkeypatch, ready_variants=1)
+    _enable_yolo(monkeypatch)
+
+    calls: list[dict] = []
+
+    class BudgetExceededError(ValidationError):
+        code = error_code
+
+    async def rejecting_dispatch(inner_services, **kwargs):  # noqa: ARG001
+        del inner_services
+        calls.append(kwargs)
+        raise BudgetExceededError("4 张参考图超过模型限制 3 张")
+
+    scheduler = WorkGraphScheduler(services, image_dispatch=rejecting_dispatch)
+
+    async def scenario():
+        for _ in range(10):
+            await scheduler.tick(PROJECT_ID)
+            await _drain()
+        await scheduler.shutdown()
+
+    asyncio.run(scenario())
+
+    # Only 1 dispatch — the deterministic error blocks all retries.
+    assert len(calls) == 1
+    # The node is recorded as deterministically failed.
+    assert (PROJECT_ID, "visual:char:a:var:0") in (
+        scheduler._deterministic_failure_nodes
+    )
+
+
+def test_deterministic_failure_cleared_on_success(tmp_path, monkeypatch):
+    """A successful dispatch clears the deterministic failure record,
+    allowing the node to be dispatched again if needed."""
+    from domain.errors import ValidationError
+
+    services = _services(tmp_path, monkeypatch, ready_variants=1)
+    _enable_yolo(monkeypatch)
+
+    calls: list[dict] = []
+    records: list = []
+    fail_first = True
+
+    class BudgetExceededError(ValidationError):
+        code = "IMAGE_REFERENCE_BUDGET_EXCEEDED"
+
+    async def conditional_dispatch(inner_services, **kwargs):  # noqa: ARG001
+        del inner_services
+        calls.append(kwargs)
+        nonlocal fail_first
+        if fail_first:
+            fail_first = False
+            raise BudgetExceededError("4 张参考图超过模型限制 3 张")
+        # Real executors leave the durable record behind, so the node is no
+        # longer recordless once it succeeds.
+        records.append(
+            SimpleNamespace(
+                kind="image_generation",
+                status=TaskStatus.SUCCEEDED,
+                error=None,
+                result={"outputRef": "artifact-version:ok"},
+                metadata={"targetRef": kwargs["target_ref"]},
+                input_refs=[kwargs["target_ref"]],
+                idempotency_key=kwargs["idempotency_key"],
+                updated_at="2026-08-12T00:00:01Z",
+            ),
+        )
+        return SimpleNamespace(status="SUCCEEDED")
+
+    scheduler = WorkGraphScheduler(
+        services,
+        image_dispatch=conditional_dispatch,
+    )
+    monkeypatch.setattr(
+        scheduler.executions,
+        "list_tasks",
+        lambda _project_id: list(records),
+    )
+    # The ticks below are the whole schedule: the post-dispatch wake would add
+    # background ticks whose timing, not the ledger, decides the dispatch
+    # count.
+    monkeypatch.setattr(scheduler, "wake", lambda _project_id: None)
+
+    async def scenario():
+        # First tick: fails with deterministic error.
+        await scheduler.tick(PROJECT_ID)
+        await _drain()
+        assert len(calls) == 1
+        assert (PROJECT_ID, "visual:char:a:var:0") in (
+            scheduler._deterministic_failure_nodes
+        )
+
+        # More ticks should NOT dispatch again (blocked by deterministic).
+        for _ in range(5):
+            await scheduler.tick(PROJECT_ID)
+            await _drain()
+        assert len(calls) == 1
+
+        # Manually clear the deterministic failure to simulate project fix.
+        scheduler._deterministic_failure_nodes.pop(
+            (PROJECT_ID, "visual:char:a:var:0"),
+            None,
+        )
+        scheduler._dispatched.clear()
+
+        # Next tick: succeeds and clears the record.
+        await scheduler.tick(PROJECT_ID)
+        await _drain()
+        assert len(calls) == 2
+        assert (PROJECT_ID, "visual:char:a:var:0") not in (
+            scheduler._deterministic_failure_nodes
+        )
+
+        # Later ticks must not pay for the node twice: the durable record
+        # left by the successful dispatch keeps the recordless reopen from
+        # re-arming the ledger.
+        for _ in range(3):
+            await scheduler.tick(PROJECT_ID)
+            await _drain()
+        assert len(calls) == 2
+
         await scheduler.shutdown()
 
     asyncio.run(scenario())
