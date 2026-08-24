@@ -130,7 +130,7 @@ Shot 是视频的最小叙事单元，每个 Shot 同时承载**内容节拍**�
 - `dialogue`：有对话/旁白的场景必须填写，长度与 Shot 时长匹配
 - `camera` / `framing`：服务于内容节拍和镜头节奏
 
-3. 单个 R2V Element 不超过 15 秒。较长内容拆为多个首尾衔接的 Element；下一项的 `start_tick` 等于上一项的 `start_tick + duration_tick`，除非创作意图明确要求 gap 或 overlap。
+3. 单个 R2V Element 的时长必须符合本轮注入的当前精确视频模型能力上限；较长内容拆为多个首尾衔接的 Element。下一项的 `start_tick` 等于上一项的 `start_tick + duration_tick`，除非创作意图明确要求 gap 或 overlap。
 4. `creation.storyboard_prompt`、`video_prompt`、recipe 和 exact reference version IDs 属于当前 Element。先从用户描述中提取每个 VisualEntity 的全部必需状态，完整写入 `required_variant_ids`；再建立对应 Variant，并让每个 Element 通过 `visual_variant_refs` 绑定正确状态。
 
 **显式媒体预算覆盖默认资产拆分（硬性规则）**：若用户明确把**共享角色/场景设计资产**限制为“一张共享参考图/合成基准图”，该资产上限优先于逐角色 Variant 和 cast lineup 的默认做法。此时把需要共同保持的角色、道具和场景建模为**一个复合 scene VisualEntity 的一个 Variant**，其 prompt 同时包含所有持久判别子；所有 R2V Element 通过同一个 `scene_ref` / `visual_variant_refs` 复用这张选定图。不得再创建会被调度器自动展开的独立角色/道具 `required_variant_ids`，不得创建需要额外角色锚点和额外图片调用的 cast lineup。注意：R2V 执行器仍强制每个 R2V Element 生成一个归属于该 Element 的 storyboard，不能用共享设计 Artifact 冒充、跨 Element 复用或构造占位版本。若用户限制的是**全部图片生成调用总数**，写入前必须计算 `共享设计图数 + R2V Element 数`；超出上限时在任何付费调用前汇报冲突并 `[BLOCKED]`，不得偷偷超限或删除必需 storyboard。写入前按调度器实际节点计算图片/视频/TTS 调用总数，必须不超过用户声明的硬上限。
@@ -191,6 +191,8 @@ Specialist 返回后读取最新 Project，逐项核对：
 
 ### 创作类型策略差异
 不同 creation.type 的委派策略：
+
+{{video_model_guidance}}
 
 - **r2v**：先确保 Element 结构（shots、continuity、visual refs）完整，并在规划期把每个 Element 的 `storyboard_prompt` 与 `video_prompt` 一次性写入 Project（video_prompt 逐格编译、含全部 Shot 台词原文，否则 video 节点会保持 GATED）。**已写好 prompt 的 Element 不要委派生成**：调度器会在依赖就绪时自动并行生成分镜和视频（逐个委派 = 串行 + 白烧模型轮）。只在 model-required 缺口时委派 `r2v_generation_director`：缺 `storyboard_prompt`/`video_prompt`、确定性失败需要改写 prompt 或更换参考（如 safety 拒绝）、或需要重新设计镜头结构。同理，视觉实体的 Variant prompt 已写好时不要为“生成”委派视觉开发；视觉开发委派只用于 prompt 创作与失败修复（含阵容图返修）——阵容图条目与 `cast_lineup_refs` 的创建是主线规划期的结构工作，不要为此委派。结构或视觉设定不完整时不得进入分镜阶段。
 - **t2v**：纯文本生视频，只需写好 narrative/continuity 并产出 video_prompt；没有 shots、分镜图和参考素材，不要为它委派视觉开发或生成分镜。

@@ -458,3 +458,35 @@ def test_concurrent_single_file_save_is_atomic_and_last_writer_wins(
     assert persisted["llm"]["api_key"] == "second-api-key"
     assert persisted["oss"]["access_key_secret"] == "second-oss-secret"
     assert model_routes.load_model_config().llm.model_name == "second-writer"
+
+
+def test_video_capability_route_exposes_wan3_all_in_one_contract(
+    app,
+    api_request,
+) -> None:
+    response = api_request(
+        app,
+        "GET",
+        "/models/video-capabilities",
+        params={
+            "modelName": "wan3.0-video-prime",
+            "protocol": "DashScope（百炼）",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "provider": "wan",
+        "model": "wan3.0-video-prime",
+        "known": True,
+        "supportedModes": ["r2v", "t2v", "i2v"],
+        "effectiveModels": {
+            "r2v": "wan3.0-video-prime",
+            "t2v": "wan3.0-video-prime",
+            "i2v": "wan3.0-video-prime",
+        },
+        "derivesModeModel": False,
+        "documentationUrl": (
+            "https://help.aliyun.com/zh/model-studio/"
+            "wan3-video-generation-api-reference"
+        ),
+    }
