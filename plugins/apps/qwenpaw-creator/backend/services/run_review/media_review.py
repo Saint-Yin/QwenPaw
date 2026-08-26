@@ -470,11 +470,9 @@ async def _video_objective_facts(
         if is_operator_enabled("av_sync"):
             multi_shot = len(shots) >= 2
             if not multi_shot:
-                predecoded_gray_samples, multi_shot = (
-                    await _to_thread_or_join(
-                        _gray_samples_and_has_cuts,
-                        media_path,
-                    )
+                predecoded_gray_samples, multi_shot = await _to_thread_or_join(
+                    _gray_samples_and_has_cuts,
+                    media_path,
                 )
             if multi_shot:
                 transcript = await transcript_sentences(media_path)

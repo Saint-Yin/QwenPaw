@@ -828,7 +828,10 @@ async def _execute(
         codes = _code_objects(compiled)
         _SYNC_DEADLINE.activate(codes, started + deadline_seconds)
     try:
-        outcome = eval(compiled, namespace)  # noqa: S307 - the model's own code
+        outcome = eval(
+            compiled,
+            namespace,
+        )  # noqa: S307 - the model's own code
         if asyncio.iscoroutine(outcome):
             outcome = await outcome
     except _SyncDeadlineExceeded as exc:

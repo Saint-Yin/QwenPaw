@@ -523,8 +523,8 @@ def test_gather_or_cancel_joins_thread_workers_before_raising() -> None:
                 media_module._to_thread_or_join(slow_worker),
                 failing_leg(),
             )
-        assert finished.is_set(), (
-            "the error propagated before the thread worker finished"
-        )
+        assert (
+            finished.is_set()
+        ), "the error propagated before the thread worker finished"
 
     asyncio.run(scenario())
