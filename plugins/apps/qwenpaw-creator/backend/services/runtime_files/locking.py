@@ -324,10 +324,18 @@ class CrossProcessFileLock:
                 if self.timeout_seconds is not None:
                     elapsed = time.monotonic() - started
                     if elapsed >= self.timeout_seconds:
+                        # Log held locks to help debug deadlocks
+                        with _HELD_LOCKS_GUARD:
+                            held_locks_info = {
+                                f"{k[0]}:{k[1]}": v
+                                for k, v in _HELD_LOCKS.items()
+                            }
                         logger.warning(
-                            "lock admission gate %s timed out after %.2fs",
+                            "lock admission gate %s timed out after %.2fs; "
+                            "held locks: %s",
                             self.path,
                             elapsed,
+                            json.dumps(held_locks_info, default=str),
                         )
                         raise LockTimeoutError(
                             self.path,
@@ -380,10 +388,17 @@ class CrossProcessFileLock:
                 if self.timeout_seconds is not None:
                     elapsed = time.monotonic() - started
                     if elapsed >= self.timeout_seconds:
+                        # Log held locks to help debug deadlocks
+                        with _HELD_LOCKS_GUARD:
+                            held_locks_info = {
+                                f"{k[0]}:{k[1]}": v
+                                for k, v in _HELD_LOCKS.items()
+                            }
                         logger.warning(
-                            "lock %s timed out after %.2fs",
+                            "lock %s timed out after %.2fs; held locks: %s",
                             self.path,
                             elapsed,
+                            json.dumps(held_locks_info, default=str),
                         )
                         raise LockTimeoutError(
                             self.path,

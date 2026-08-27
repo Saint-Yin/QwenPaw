@@ -1292,10 +1292,11 @@ class ProjectCommitBoundary:
                         },
                     )
                 elif overlaps:
-                    # A non-user writer moved this pointer after the review
-                    # captured it.  Rebase the candidate side so the pending
-                    # operation still hashes against the live document —
-                    # otherwise every later Keep/Undo would fail CAS forever.
+                    # A non-user writer (runtime task / agent auto-fix) moved
+                    # this pointer after the review captured it.  Rebase the
+                    # candidate side so the pending operation still hashes
+                    # against the live document — otherwise every later
+                    # Keep/Undo would fail CAS forever.
                     live_value = value_at(
                         current_data,
                         operation.json_pointer,

@@ -614,13 +614,32 @@ async def stream_events(
         except ValueError as error:
             raise ValidationError("Last-Event-ID 必须是 event seq") from error
     store = _store(services)
-    try:
-        session = await asyncio.to_thread(
-            store.get_project_session_snapshot,
-            project_id,
-        )
-    except BaseException as error:
-        _translate_runtime_error(error)
+    # Retry logic for transient lock contention during SSE bootstrap.
+    # The backend session is guaranteed to exist after POST /projects returns,
+    # so failures are typically transient lock timeouts.
+    session = None
+    last_error: Exception | None = None
+    for attempt in range(4):  # 1 initial + 3 retries
+        try:
+            session = await asyncio.to_thread(
+                store.get_project_session_snapshot,
+                project_id,
+            )
+            last_error = None
+            break
+        except Exception as error:
+            last_error = error
+            if attempt < 3:
+                logger.warning(
+                    "SSE bootstrap attempt %d failed for project=%s, retrying: %s",
+                    attempt + 1,
+                    project_id,
+                    error,
+                )
+                await asyncio.sleep(0.5 * (2**attempt))
+    if last_error is not None:
+        _translate_runtime_error(last_error)
+    assert session is not None
 
     async def body() -> AsyncIterator[str]:
         current = cursor

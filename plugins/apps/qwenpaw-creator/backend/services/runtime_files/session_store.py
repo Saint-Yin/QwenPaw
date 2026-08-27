@@ -1144,6 +1144,7 @@ class ProjectRuntimeSessionStore:
         initial_creation: bool = False,
         hard_stop: bool = False,
         admission_guard: Callable[[], bool] | None = None,
+        _lifecycle_lock_held: bool = False,
     ) -> RequestAdmissionResult:
         """Persist a user request and decide review admission under one lock.
 
@@ -1187,159 +1188,212 @@ class ProjectRuntimeSessionStore:
                 "hard_stop": hard_stop,
             },
         )
-        # Review admission and Project commit finalization share this order
-        # lock.  The boundary therefore cannot capture an accepted baseline
-        # from the crash window after project.json was replaced but before
-        # runtime/state.json was advanced.
-        with self._project_lifecycle_lock(project_id):
-            # The precheck performed while normalizing IDs can race delete.
-            # Revalidate only after lifecycle admission, before either Runtime
-            # lock is allowed to create parent directories.
+        # Runtime lock serializes review admission with other runtime
+        # transitions.  The commit-order lock is not needed here because
+        # admit_user_request only writes runtime files (messages, review
+        # boundaries), not project.json.
+        if _lifecycle_lock_held:
             self._require_project(project_id)
             if admission_guard is not None and not admission_guard():
                 raise RequestAdmissionConflict(
                     "admission guard rejected the request",
                 )
-            with (
-                self._project_commit_order_lock(project_id),
-                self._runtime_lock(project_id),
-            ):
-                session = self._recover_session_unlocked(
-                    project_id,
-                    session_id,
-                )
-                self._read_conversation_unlocked(
+            with self._runtime_lock(project_id):
+                return self._admit_user_request_unlocked(
                     project_id,
                     session_id,
                     conversation_id,
-                )
-                existing = self._message_by_client_id_unlocked(
-                    project_id,
-                    session_id,
-                    client_message_id,
-                )
-                if existing is not None:
-                    self._assert_same_message_request(
-                        existing,
-                        client_message_id=client_message_id,
-                        request_hash=request_hash,
-                    )
-                    if existing.review_boundary is not None:
-                        self._ensure_review_boundary_unlocked(
-                            project_id,
-                            session_id,
-                            existing.review_boundary,
-                        )
-                    return RequestAdmissionResult(
-                        message=existing,
-                        review_policy=(
-                            ReviewPolicy.REQUIRE_REVIEW
-                            if existing.review_boundary is not None
-                            else ReviewPolicy.AUTO_FIX
-                        ),
-                        review_boundary=existing.review_boundary,
-                        replayed=True,
-                    )
-
-                boundary: ReviewBoundary | None = None
-                project_state: RuntimeProjectState | None = None
-                requires_review = self._requires_review(
-                    session,
+                    request_id=request_id,
+                    client_message_id=client_message_id,
+                    content_parts=parts,
                     channel=resolved_channel,
                     classification=resolved_classification,
+                    source=source,
+                    metadata=metadata_dict,
                     initial_creation=initial_creation,
                     hard_stop=hard_stop,
-                )
-                if requires_review:
-                    self._assert_review_active_goal_unlocked(
-                        project_id,
-                        session,
-                    )
-                    project_state = self._runtime_state_store(
-                        project_id,
-                    ).read_or_none()
-                    if project_state is None:
-                        if session.active_run_id is not None:
-                            raise RequestAdmissionConflict(
-                                "Cannot capture review boundary without runtime/state.json",
-                            )
-                        # A brand-new Project has no accepted baseline yet, so
-                        # an idle feedback request has nothing to diff against.
-                        # Admit it as a plain auto-fix instruction instead of
-                        # failing the request.
-                        requires_review = False
-                    elif project_state.project_id != project_id:
-                        raise SessionStoreIntegrityError(
-                            "RuntimeProjectState belongs to another Project",
-                        )
-                if requires_review and project_state is not None:
-                    next_message_seq = (
-                        self._messages_store(project_id, session_id).last_seq()
-                        + 1
-                    )
-                    boundary = ReviewBoundary(
-                        request_message_seq=next_message_seq,
-                        request_id=request_id,
-                        interrupted_run_id=session.active_run_id,
-                        accepted_generation=project_state.accepted_generation,
-                        accepted_etag=project_state.accepted_etag,
-                    )
-                    boundary_path = self.review_boundary_path(
-                        project_id,
-                        session_id,
-                        request_id,
-                    )
-                    if (
-                        AtomicJsonRecordStore(
-                            boundary_path,
-                            ReviewBoundary,
-                        ).read_or_none()
-                        is not None
-                    ):
-                        raise RequestAdmissionConflict(
-                            "request_id already owns another ReviewBoundary",
-                        )
-
-                append_result = self._append_message_unlocked(
-                    project_id=project_id,
-                    session_id=session_id,
-                    conversation_id=conversation_id,
-                    role="user",
-                    content_parts=parts,
-                    message_id=None,
-                    client_message_id=client_message_id,
                     request_hash=request_hash,
-                    source=source,
-                    channel=resolved_channel,
-                    classification=resolved_classification,
-                    review_boundary=boundary,
-                    metadata=metadata_dict,
-                    completed_at=None,
                 )
-                if boundary is not None:
-                    self._ensure_review_boundary_unlocked(
+        else:
+            with self._project_lifecycle_lock(project_id):
+                # The precheck performed while normalizing IDs can race delete.
+                # Revalidate only after lifecycle admission, before either Runtime
+                # lock is allowed to create parent directories.
+                self._require_project(project_id)
+                if admission_guard is not None and not admission_guard():
+                    raise RequestAdmissionConflict(
+                        "admission guard rejected the request",
+                    )
+                with self._runtime_lock(project_id):
+                    return self._admit_user_request_unlocked(
                         project_id,
                         session_id,
-                        boundary,
+                        conversation_id,
+                        request_id=request_id,
+                        client_message_id=client_message_id,
+                        content_parts=parts,
+                        channel=resolved_channel,
+                        classification=resolved_classification,
+                        source=source,
+                        metadata=metadata_dict,
+                        initial_creation=initial_creation,
+                        hard_stop=hard_stop,
+                        request_hash=request_hash,
                     )
-                result = RequestAdmissionResult(
-                    message=append_result.message,
-                    review_policy=(
-                        ReviewPolicy.REQUIRE_REVIEW
-                        if boundary is not None
-                        else ReviewPolicy.AUTO_FIX
-                    ),
-                    review_boundary=boundary,
-                    replayed=append_result.replayed,
-                )
-                logger.info(
-                    "message admitted: project=%s session=%s seq=%d replayed=%s",
+
+    def _admit_user_request_unlocked(
+        self,
+        project_id: str,
+        session_id: str,
+        conversation_id: str,
+        *,
+        request_id: str,
+        client_message_id: str,
+        content_parts: list[MessageContentPart],
+        channel: MessageChannel,
+        classification: MessageClassification,
+        source: str,
+        metadata: dict[str, Any],
+        initial_creation: bool,
+        hard_stop: bool,
+        request_hash: str,
+    ) -> RequestAdmissionResult:
+        """Inner admission logic called with runtime lock already held."""
+        session = self._recover_session_unlocked(
+            project_id,
+            session_id,
+        )
+        self._read_conversation_unlocked(
+            project_id,
+            session_id,
+            conversation_id,
+        )
+        existing = self._message_by_client_id_unlocked(
+            project_id,
+            session_id,
+            client_message_id,
+        )
+        if existing is not None:
+            self._assert_same_message_request(
+                existing,
+                client_message_id=client_message_id,
+                request_hash=request_hash,
+            )
+            if existing.review_boundary is not None:
+                self._ensure_review_boundary_unlocked(
                     project_id,
                     session_id,
-                    append_result.message.message_seq,
-                    append_result.replayed,
+                    existing.review_boundary,
                 )
-                return result
+            return RequestAdmissionResult(
+                message=existing,
+                review_policy=(
+                    ReviewPolicy.REQUIRE_REVIEW
+                    if existing.review_boundary is not None
+                    else ReviewPolicy.AUTO_FIX
+                ),
+                review_boundary=existing.review_boundary,
+                replayed=True,
+            )
+
+        boundary: ReviewBoundary | None = None
+        project_state: RuntimeProjectState | None = None
+        requires_review = self._requires_review(
+            session,
+            channel=channel,
+            classification=classification,
+            initial_creation=initial_creation,
+            hard_stop=hard_stop,
+        )
+        if requires_review:
+            self._assert_review_active_goal_unlocked(
+                project_id,
+                session,
+            )
+            project_state = self._runtime_state_store(
+                project_id,
+            ).read_or_none()
+            if project_state is None:
+                if session.active_run_id is not None:
+                    raise RequestAdmissionConflict(
+                        "Cannot capture review boundary without runtime/state.json",
+                    )
+                # A brand-new Project has no accepted baseline yet, so
+                # an idle feedback request has nothing to diff against.
+                # Admit it as a plain auto-fix instruction instead of
+                # failing the request.
+                requires_review = False
+            elif project_state.project_id != project_id:
+                raise SessionStoreIntegrityError(
+                    "RuntimeProjectState belongs to another Project",
+                )
+        if requires_review and project_state is not None:
+            next_message_seq = (
+                self._messages_store(project_id, session_id).last_seq() + 1
+            )
+            boundary = ReviewBoundary(
+                request_message_seq=next_message_seq,
+                request_id=request_id,
+                interrupted_run_id=session.active_run_id,
+                accepted_generation=project_state.accepted_generation,
+                accepted_etag=project_state.accepted_etag,
+            )
+            boundary_path = self.review_boundary_path(
+                project_id,
+                session_id,
+                request_id,
+            )
+            if (
+                AtomicJsonRecordStore(
+                    boundary_path,
+                    ReviewBoundary,
+                ).read_or_none()
+                is not None
+            ):
+                raise RequestAdmissionConflict(
+                    "request_id already owns another ReviewBoundary",
+                )
+
+        append_result = self._append_message_unlocked(
+            project_id=project_id,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            role="user",
+            content_parts=content_parts,
+            message_id=None,
+            client_message_id=client_message_id,
+            request_hash=request_hash,
+            source=source,
+            channel=channel,
+            classification=classification,
+            review_boundary=boundary,
+            metadata=metadata,
+            completed_at=None,
+        )
+        if boundary is not None:
+            self._ensure_review_boundary_unlocked(
+                project_id,
+                session_id,
+                boundary,
+            )
+        result = RequestAdmissionResult(
+            message=append_result.message,
+            review_policy=(
+                ReviewPolicy.REQUIRE_REVIEW
+                if boundary is not None
+                else ReviewPolicy.AUTO_FIX
+            ),
+            review_boundary=boundary,
+            replayed=append_result.replayed,
+        )
+        logger.info(
+            "message admitted: project=%s session=%s seq=%d replayed=%s",
+            project_id,
+            session_id,
+            append_result.message.message_seq,
+            append_result.replayed,
+        )
+        return result
 
     def list_messages(
         self,
@@ -1937,7 +1991,6 @@ class ProjectRuntimeSessionStore:
         session_id: str,
     ) -> CreatorSessionRecord:
         session = self._read_session_unlocked(project_id, session_id)
-        messages = self._message_records_unlocked(project_id, session_id)
         # The event stream dominates the aggregate size (streaming deltas
         # append thousands of records per run).  Re-parsing and re-validating
         # every event here — under the exclusive project lock — made each
@@ -1955,14 +2008,29 @@ class ProjectRuntimeSessionStore:
             item.state is QueuedMessageState.QUEUED
             for item in latest_queued.values()
         )
-        message_head = len(messages)
-        for message in messages:
-            if message.review_boundary is not None:
-                self._ensure_review_boundary_unlocked(
-                    project_id,
-                    session_id,
-                    message.review_boundary,
-                )
+        # Use last_seq() for message head instead of reading all messages.
+        # Only read full message stream when we need to check review boundaries
+        # (i.e., when session state doesn't match or we need to ensure boundaries).
+        # The fast path (needs_boundary_check=False) is safe because review
+        # boundaries are ensured at append time in _admit_user_request_unlocked;
+        # if session state matches durable state, no crash-induced inconsistency
+        # exists and no boundaries need repair.
+        message_head = self._messages_store(project_id, session_id).last_seq()
+        needs_boundary_check = (
+            session.last_message_seq != message_head
+            or session.last_event_seq != event_head
+            or session.queued_user_message_count != queue_count
+        )
+        if needs_boundary_check:
+            messages = self._message_records_unlocked(project_id, session_id)
+            message_head = len(messages)
+            for message in messages:
+                if message.review_boundary is not None:
+                    self._ensure_review_boundary_unlocked(
+                        project_id,
+                        session_id,
+                        message.review_boundary,
+                    )
         if (
             session.last_message_seq == message_head
             and session.last_event_seq == event_head
@@ -2334,17 +2402,6 @@ class ProjectRuntimeSessionStore:
     def _runtime_lock(self, project_id: str) -> CrossProcessFileLock:
         return CrossProcessFileLock(
             self._runtime_root(project_id) / "locks" / "session-runtime.lock",
-            timeout_seconds=self.lock_timeout_seconds,
-        )
-
-    def _project_commit_order_lock(
-        self,
-        project_id: str,
-    ) -> CrossProcessFileLock:
-        return CrossProcessFileLock(
-            self._runtime_root(project_id)
-            / "locks"
-            / "project-commit-order.lock",
             timeout_seconds=self.lock_timeout_seconds,
         )
 

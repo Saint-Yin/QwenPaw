@@ -574,10 +574,38 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
           });
         }
         try {
-          const [sessionResponse, conversationPage] = await Promise.all([
-            getCreatorSession(projectId),
-            listConversations(projectId),
-          ]);
+          // Retry logic for transient lock contention errors.
+          // The backend session is guaranteed to exist after POST /projects
+          // returns successfully, so failures are always transient lock timeouts.
+          const MAX_BOOTSTRAP_RETRIES = 3;
+          const RETRY_DELAYS_MS = [500, 1000, 2000];
+          let sessionResponse: Awaited<ReturnType<typeof getCreatorSession>>;
+          let conversationPage: Awaited<ReturnType<typeof listConversations>>;
+          let lastError: Error | null = null;
+          for (let attempt = 0; attempt <= MAX_BOOTSTRAP_RETRIES; attempt++) {
+            try {
+              [sessionResponse, conversationPage] = await Promise.all([
+                getCreatorSession(projectId),
+                listConversations(projectId),
+              ]);
+              lastError = null;
+              break;
+            } catch (err) {
+              lastError = err as Error;
+              if (attempt < MAX_BOOTSTRAP_RETRIES) {
+                console.warn(
+                  `[bootstrap] attempt ${attempt + 1} failed, retrying in ${
+                    RETRY_DELAYS_MS[attempt]
+                  }ms:`,
+                  lastError.message,
+                );
+                await new Promise((r) =>
+                  setTimeout(r, RETRY_DELAYS_MS[attempt]),
+                );
+              }
+            }
+          }
+          if (lastError) throw lastError;
           if (
             bootstrapGeneration !== lifecycleGeneration ||
             get().projectId !== projectId
