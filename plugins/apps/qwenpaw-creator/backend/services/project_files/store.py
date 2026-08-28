@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 from services.runtime_files.atomic_store import (
+    atomic_replace_path,
     fsync_directory as runtime_fsync_directory,
 )
 from services.runtime_files.locking import CrossProcessFileLock
@@ -546,7 +547,7 @@ class ProjectStore:
 
             tombstone = self.root / f".deleted-{safe_id}-{uuid4().hex}"
             try:
-                os.replace(project_root, tombstone)
+                atomic_replace_path(project_root, tombstone)
                 _fsync_directory(self.root)
             except OSError as exc:
                 raise ProjectStoreError(
@@ -684,7 +685,7 @@ class ProjectStore:
                 stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temp_path, target)
+            atomic_replace_path(temp_path, target)
             _fsync_directory(project_root)
             _fsync_directory(temp_dir)
         except Exception:
