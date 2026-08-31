@@ -13,12 +13,16 @@ import pytest
 
 from domain.errors import ConflictError
 from services.media_files import r2v_execution
+from services.media_files.secure_video_stream import PeerAddressMismatchError
 from services.media_files.image_execution import FileImageExecutionService
 from services.media_files.r2v_execution import FileR2VExecutionService
 from services.project_files.facade import CreatorFileServices
 from services.runtime_files.execution_store import ProjectExecutionStore
 from services.runtime_files.models import ChangeOrigin, ReviewPolicy
 from utils.paths import unique_task_work_path
+from scripts.recover_completed_r2v_materialization import (
+    _reopen_materialization_state,
+)
 
 from .conftest import (
     accept_pending_reviews,
@@ -38,6 +42,61 @@ ELEMENT_ID = "r2v-1"
 class _ImageProvider:
     async def generate(self, **_kwargs):
         return {"content": _PNG_RETRY, "media_type": "image/png"}
+
+
+class _RecoveryState(SimpleNamespace):
+    def model_dump(self, *, mode: str) -> dict:
+        assert mode == "python"
+        return dict(vars(self))
+
+
+@pytest.mark.parametrize("phase", ["FAILED", "PROVIDER_SUCCEEDED"])
+def test_recovery_reopens_first_attempt_and_interrupted_rerun(phase) -> None:
+    result = {"status": "SUCCEEDED", "url": "https://cdn.example/video.mp4"}
+    state = _RecoveryState(
+        phase=phase,
+        provider_task_id="provider-1",
+        provider_result=result,
+        last_error="download failed",
+        materialize_owner="stale-owner",
+        materialize_claim_token="stale-claim",
+        materialize_claimed_at_epoch=1.0,
+        materialize_heartbeat_at_epoch=2.0,
+        materialize_claim_expires_at_epoch=3.0,
+    )
+
+    reopened = _reopen_materialization_state(
+        state,
+        provider_task_id="provider-1",
+        provider_result=result,
+    )
+
+    assert reopened["phase"] == "PROVIDER_SUCCEEDED"
+    assert reopened["last_error"] is None
+    claim_fields = (
+        "materialize_owner",
+        "materialize_claim_token",
+        "materialize_claimed_at_epoch",
+        "materialize_heartbeat_at_epoch",
+        "materialize_claim_expires_at_epoch",
+    )
+    assert all(reopened[field] is None for field in claim_fields)
+
+
+def test_recovery_fails_closed_when_provider_identity_changes() -> None:
+    result = {"status": "SUCCEEDED", "url": "https://cdn.example/video.mp4"}
+    state = _RecoveryState(
+        phase="PROVIDER_SUCCEEDED",
+        provider_task_id="provider-other",
+        provider_result=result,
+    )
+
+    with pytest.raises(RuntimeError, match="state changed"):
+        _reopen_materialization_state(
+            state,
+            provider_task_id="provider-1",
+            provider_result=result,
+        )
 
 
 def _services(tmp_path, monkeypatch) -> CreatorFileServices:
@@ -276,6 +335,27 @@ def test_veo_download_auth_is_resolved_only_for_materialization(
     assert captured["kwargs"]["request_headers"] == {
         "x-goog-api-key": "new-secret",
     }
+
+
+def test_public_cdn_dns_peer_rotation_is_retried(tmp_path, monkeypatch):
+    sentinel = object()
+    calls = []
+
+    async def stub(*_args, **_kwargs):
+        calls.append(1)
+        if len(calls) < 3:
+            raise PeerAddressMismatchError(
+                "远程视频连接 peer 不属于当前跳 DNS 预解析集合",
+            )
+        return sentinel
+
+    result = _run_materialize(
+        _mat_worker(tmp_path, monkeypatch),
+        monkeypatch,
+        stub,
+    )
+    assert result is sentinel
+    assert len(calls) == 3
 
 
 _MP4 = b"\x00\x00\x00\x18ftypmp42" + b"stale-video" * 64

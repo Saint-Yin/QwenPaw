@@ -144,9 +144,13 @@ from services.external_skills import (
 from services.observability import report_error, trace_event, traced_async
 from services.source_analysis import SourceAgentToolContext
 from services.specialist_tools import (
+    CHARACTER_VOICE_TOOL_NAME,
     FileSpecialistToolRegistry,
     SpecialistToolSpec,
     SpecialistToolWait,
+    character_voice_tool_manifest,
+    character_voice_tool_spec,
+    invoke_character_voice_tool,
 )
 from services.runtime_files.session_store import (
     ProjectRuntimeSessionStore,
@@ -177,6 +181,7 @@ from .model_client import (
     AgentStreamCallbackError,
     AgentStreamCallbackPassthrough,
     AgentModelTurn,
+    DEFAULT_MODEL_TURN_TIMEOUT_SECONDS as _DEFAULT_MODEL_TURN_TIMEOUT_SECONDS,
     RateLimitExhaustedError,
     RateLimitRetryNotice,
     AgentScopeAgentChatClient,
@@ -277,8 +282,10 @@ MAX_REPEATED_DETERMINISTIC_TOOL_FAILURES = 2
 # legitimately run past 300s on slower endpoints; failing the goal there
 # just burns an auto-resume round-trip that redoes the same turn (field
 # run 2026-08-25: a 5-minute planning turn failed the goal and cost ~14
-# minutes before resume). Keep a hard bound, but a generous one.
-DEFAULT_MODEL_TURN_TIMEOUT_SECONDS = 600.0
+# minutes before resume). Keep a hard bound, but a generous one, and let
+# CREATOR_MODEL_TURN_TIMEOUT_SECONDS raise it further per deployment.
+# Shared with the model-client transport timeout so it never undercuts.
+DEFAULT_MODEL_TURN_TIMEOUT_SECONDS = _DEFAULT_MODEL_TURN_TIMEOUT_SECONDS
 _LIVE_EDIT_CONTEXT_MAX_TAKES = 12
 _LIVE_EDIT_CONTEXT_MAX_FACTS = 80
 _LIVE_EDIT_CONTEXT_MAX_RAW_FACTS = 320
@@ -536,16 +543,16 @@ def _specialist_waiting_review_summary(
     role: SpecialistRole,
     target_refs: list[str],
 ) -> str:
-    # The Runtime does not auto-resume a paused specialist: after approval
-    # the mainline must re-delegate the same target. The summary must not
-    # promise an automation that does not exist, or the mainline skips the
-    # re-delegation and falsely reports the video as in progress.
+    # The Runtime does not auto-resume a paused active specialist: after
+    # approval the mainline must re-delegate the same target. R2V is retained
+    # here only to describe historical records created before that Specialist
+    # was retired; current R2V execution belongs to the work scheduler.
     target = "、".join(target_refs) or "当前目标"
     if role is SpecialistRole.R2V_GENERATION_DIRECTOR:
         return (
             f"{target} 的分镜图已生成，视频尚未开始。请先审阅分镜图；"
-            "审阅通过后，主线需对该 Element 重新委派 R2V 生成 Director 以继续生成视频；"
-            "这不算重新生成已通过产物。"
+            "审阅通过后由主 Agent 修复必要字段，Runtime 会根据 Element 状态"
+            "自动继续调度，无需重新委派。"
         )
     return f"{target} 的产物已生成，后续步骤尚未开始。请先完成审阅；" "审阅通过后，主线需重新委派同一目标以继续后续步骤。"
 
@@ -938,6 +945,9 @@ def _creator_agent_tool_manifest(
         manifest.append(_computer_use_tool_manifest())
     if external_skills:
         manifest.extend(external_skill_tool_manifests(external_skills))
+    voice_manifest = character_voice_tool_manifest()
+    if voice_manifest is not None:
+        manifest.append(voice_manifest)
     manifest.append(delegate_tool_manifest())
     return manifest
 
@@ -1582,7 +1592,8 @@ class FileCreatorAgentRuntime:
         race automation that invalidates state right after it passed
         (field run 2026-08-09: the pre-compose design pass expired scene
         locks minutes after the run's clean exit). Both continuations go
-        through the standard YOLO gate (auto-approve mode only, resume
+        through the standard YOLO gate (paid continuation only under
+        auto-approve, free prompt repairs in every review mode, resume
         caps, no-progress fuse), so an actually-finished project is a
         no-op.
         """
@@ -2800,6 +2811,17 @@ class FileCreatorAgentRuntime:
                             tools=tools,
                             arguments=call.arguments,
                         )
+                    elif call.name == CHARACTER_VOICE_TOOL_NAME:
+                        result = await self._run_mainline_character_voice(
+                            project_id=project_id,
+                            session_id=session_id,
+                            run_id=run_id,
+                            epoch=epoch,
+                            request=request,
+                            tools=tools,
+                            call_id=call.call_id,
+                            arguments=call.arguments,
+                        )
                     elif call.name == GROUND_PROMPT_CONTEXT_TOOL_NAME:
                         result = await self._run_ground_prompt_context(
                             request=request,
@@ -2964,6 +2986,77 @@ class FileCreatorAgentRuntime:
                 )
         raise AgentModelError(
             f"Creator Agent exceeded {effective_max_turns} model turns",
+        )
+
+    async def _run_mainline_character_voice(
+        self,
+        *,
+        project_id: str,
+        session_id: str,
+        run_id: str,
+        epoch: int,
+        request: CreatorMessageRecord,
+        tools: AgentProjectTools,
+        call_id: str,
+        arguments: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Voice enrollment on the mainline (was visual-development-owned).
+
+        The paid TTS enrollment reuses the same execution-authorization
+        machinery as specialist tools; the run identity on the approval
+        record is the mainline run.
+        """
+
+        spec = character_voice_tool_spec()
+        if spec is None:
+            raise FileAgentRuntimeError(
+                "create_character_voice 不可用：当前部署未配置 TTS",
+            )
+        target_ref = str(arguments.get("targetRef") or "")
+        common = {
+            "parentRunId": run_id,
+            "runId": run_id,
+            "role": "creator_agent",
+            "displayName": "creator_agent",
+            "targetRefs": [target_ref] if target_ref else [],
+        }
+        if (
+            spec.requires_execution_authorization
+            and get_execution_authorization_mode()
+            != EXECUTION_AUTHORIZATION_ALLOW_ALL
+        ):
+            await self._await_execution_authorization(
+                project_id=project_id,
+                session_id=session_id,
+                parent_run_id=run_id,
+                specialist_run_id=run_id,
+                round_id=tools.context.round_id or f"agent-round-{run_id}",
+                epoch=epoch,
+                request=request,
+                common=common,
+                call_id=call_id,
+                spec=spec,
+                arguments=arguments,
+                tools=tools,
+                park_specialist_run=False,
+            )
+        payload = arguments.get("arguments")
+        if not isinstance(payload, Mapping):
+            raise FileAgentRuntimeError(
+                "create_character_voice arguments 必须是 object",
+            )
+        idempotency_key = _specialist_tool_invocation_id(
+            run_id,
+            spec.name,
+            arguments,
+            call_id=call_id,
+        )
+        return await invoke_character_voice_tool(
+            self.services,
+            project_id=project_id,
+            target_ref=target_ref,
+            arguments=payload,
+            idempotency_key=idempotency_key,
         )
 
     async def _run_ground_prompt_context(
@@ -3883,7 +3976,6 @@ class FileCreatorAgentRuntime:
             self.services.projects.read,
             project_id,
         )
-        delegated.validate_project_targets(project=snapshot.project)
         repair_attempts: dict[str, int] = {}
         if request.source in review_repair_sources:
             from services.run_review import admission
@@ -5384,16 +5476,18 @@ class FileCreatorAgentRuntime:
         authorization: ExecutionAuthorizationRecord,
         decided_event: str = "execution.authorization_decided",
         decided_payload: Mapping[str, Any] | None = None,
+        park_specialist_run: bool = True,
     ) -> ExecutionAuthorizationRecord:
         """Park the Specialist run until a persisted approval is decided."""
 
-        await asyncio.to_thread(
-            self.executions.transition_specialist_run,
-            project_id,
-            specialist_run_id,
-            expected_status=SpecialistRunStatus.RUNNING_MODEL,
-            status=SpecialistRunStatus.WAITING_AUTHORIZATION,
-        )
+        if park_specialist_run:
+            await asyncio.to_thread(
+                self.executions.transition_specialist_run,
+                project_id,
+                specialist_run_id,
+                expected_status=SpecialistRunStatus.RUNNING_MODEL,
+                status=SpecialistRunStatus.WAITING_AUTHORIZATION,
+            )
         try:
             while authorization.status is ExecutionAuthorizationStatus.PENDING:
                 self._assert_epoch(project_id, parent_run_id, epoch)
@@ -5404,19 +5498,22 @@ class FileCreatorAgentRuntime:
                     authorization.authorization_id,
                 )
         finally:
-            current = await asyncio.to_thread(
-                self.executions.get_specialist_run,
-                project_id,
-                specialist_run_id,
-            )
-            if current.status is SpecialistRunStatus.WAITING_AUTHORIZATION:
-                await asyncio.to_thread(
-                    self.executions.transition_specialist_run,
+            if park_specialist_run:
+                current = await asyncio.to_thread(
+                    self.executions.get_specialist_run,
                     project_id,
                     specialist_run_id,
-                    expected_status=SpecialistRunStatus.WAITING_AUTHORIZATION,
-                    status=SpecialistRunStatus.RUNNING_MODEL,
                 )
+                if current.status is SpecialistRunStatus.WAITING_AUTHORIZATION:
+                    await asyncio.to_thread(
+                        self.executions.transition_specialist_run,
+                        project_id,
+                        specialist_run_id,
+                        expected_status=(
+                            SpecialistRunStatus.WAITING_AUTHORIZATION
+                        ),
+                        status=SpecialistRunStatus.RUNNING_MODEL,
+                    )
         await self._event(
             project_id,
             session_id,
@@ -5518,6 +5615,7 @@ class FileCreatorAgentRuntime:
         spec: SpecialistToolSpec,
         arguments: Mapping[str, Any],
         tools: AgentProjectTools,
+        park_specialist_run: bool = True,
     ) -> str:
         execution_request_id = _specialist_tool_request_id(
             specialist_run_id,
@@ -5700,6 +5798,7 @@ class FileCreatorAgentRuntime:
             common=common,
             call_id=call_id,
             authorization=authorization,
+            park_specialist_run=park_specialist_run,
         )
         logger.info(
             "approval decided: project=%s run=%s role=%s tool=%s call_id=%s status=%s",
@@ -6007,9 +6106,11 @@ class FileCreatorAgentRuntime:
 
     MAINLINE_RESUME_SOURCE = "mainline_resume"
     YOLO_RESUME_SOURCE = "yolo_auto_resume"
+    PROMPT_CONTRACT_RESUME_SOURCE = "prompt_contract_resume"
     # Fuse 1: never chain more unattended resumes than this since the last
     # human message — a stuck project must fall back to a human.
     YOLO_RESUME_MAX_CONSECUTIVE = 5
+    PROMPT_CONTRACT_RESUME_MAX_CONSECUTIVE = 5
 
     async def _queue_yolo_completion_resume(  # pylint: disable=too-many-return-statements
         self,
@@ -6020,24 +6121,24 @@ class FileCreatorAgentRuntime:
         run_id: str,
         after_failure: bool = False,
     ) -> None:
-        """Keep an unattended (YOLO) project moving until it is finished.
+        """Return unfinished scheduler state to the main Agent.
 
         A succeeded mainline run is a model decision to stop narrating, not
-        proof the project reached its goal: models habitually wrap up with a
-        progress report after a batch of work. Under media_review
-        auto_approve the operator asked for zero attendance, so when timeline
-        elements still lack their main video the Runtime injects the same
-        “继续” a supervising user would type. Two fuses stop runaway loops:
-        a consecutive-resume cap and a no-progress breaker.
+        proof the project reached its goal. Deterministic authored-prompt gaps
+        are returned in every review mode because repairing Project text is
+        free and never authorizes a media call. Other unfinished work is
+        resumed only under media_review auto_approve. Two fuses stop runaway
+        loops: a consecutive-resume cap and a no-progress breaker.
 
         ``after_failure`` covers retryable faults (empty model turns,
         transport blips): the failure itself proves the work is unfinished,
         so the completion criterion is skipped — an early failure with no
-        elements yet must still resume.
+        elements yet must still resume. Outside auto_approve such a failure
+        still queues only the free prompt repair; paid continuation keeps
+        waiting for a human.
         """
 
-        if get_media_review_mode() != MEDIA_REVIEW_AUTO_APPROVE:
-            return
+        auto_approve = get_media_review_mode() == MEDIA_REVIEW_AUTO_APPROVE
         try:
             snapshot = await asyncio.to_thread(
                 self.services.projects.read,
@@ -6056,27 +6157,37 @@ class FileCreatorAgentRuntime:
         unfinished_nodes = graph.unfinished()
         if not unfinished_nodes and not after_failure:
             return
+        model_required = graph.model_required_nodes()
+        prompt_required = tuple(
+            node
+            for node in model_required
+            if node.kind in {"visual", "storyboard", "video"}
+            and node.authored_text_gap
+        )
+        if not auto_approve and not prompt_required:
+            return
         # Let the machine take every dispatchable gap before deciding to
         # spend a model turn: the scheduler fans out READY media nodes.
-        self.work_scheduler.wake(project_id)
-        try:
-            await asyncio.to_thread(
-                ensure_media_call_budget,
-                self.services,
-                project_id,
-            )
-        except MediaCallBudgetExhausted as exc:
-            # A spent wallet fuse paralyzes every media path — a resume
-            # would only make the model walk into the same wall.
-            logger.warning(
-                "YOLO auto-resume stopped for %s: %s",
-                project_id,
-                exc,
-            )
-            return
-        model_required = graph.model_required_nodes()
+        if auto_approve:
+            self.work_scheduler.wake(project_id)
+            try:
+                await asyncio.to_thread(
+                    ensure_media_call_budget,
+                    self.services,
+                    project_id,
+                )
+            except MediaCallBudgetExhausted as exc:
+                # A spent wallet fuse paralyzes every media path — a resume
+                # would only make the model walk into the same wall.
+                logger.warning(
+                    "YOLO auto-resume stopped for %s: %s",
+                    project_id,
+                    exc,
+                )
+                return
         if (
             not after_failure
+            and auto_approve
             and self.work_scheduler.enabled()
             and not model_required
             and not self.work_scheduler.deterministic_failure_nodes_for_project(
@@ -6086,9 +6197,12 @@ class FileCreatorAgentRuntime:
             # Every remaining gap is machine-dispatchable (READY/RUNNING):
             # the scheduler owns it; a resume would only burn model turns.
             return
-        unfinished = [
-            node.label for node in (model_required or unfinished_nodes)
-        ]
+        feedback_nodes = (
+            model_required or unfinished_nodes
+            if auto_approve
+            else prompt_required
+        )
+        unfinished = [node.label for node in feedback_nodes]
         messages = await asyncio.to_thread(
             self.sessions.list_messages,
             project_id,
@@ -6096,25 +6210,44 @@ class FileCreatorAgentRuntime:
             after_seq=0,
             limit=None,
         )
+        active_resume_source = (
+            self.YOLO_RESUME_SOURCE
+            if auto_approve
+            else self.PROMPT_CONTRACT_RESUME_SOURCE
+        )
+        resume_limit = (
+            self.YOLO_RESUME_MAX_CONSECUTIVE
+            if auto_approve
+            else self.PROMPT_CONTRACT_RESUME_MAX_CONSECUTIVE
+        )
         resume_streak = 0
         last_resume_generation: int | None = None
         for item in reversed(messages):
             if item.role != "user":
                 continue
-            if item.source == self.YOLO_RESUME_SOURCE:
+            if item.source == active_resume_source:
                 if resume_streak == 0:
                     generation = item.metadata.get("projectGeneration")
                     if isinstance(generation, int):
                         last_resume_generation = generation
                 resume_streak += 1
                 continue
+            if item.source in {
+                self.YOLO_RESUME_SOURCE,
+                self.PROMPT_CONTRACT_RESUME_SOURCE,
+            }:
+                # A review-mode transition starts a distinct repair streak.
+                # Paid YOLO continuation and free prompt repair must never
+                # consume one another's fuse allowance.
+                break
             if item.source == self.MAINLINE_RESUME_SOURCE:
                 continue
             break
-        if resume_streak >= self.YOLO_RESUME_MAX_CONSECUTIVE:
+        if resume_streak >= resume_limit:
             logger.warning(
-                "YOLO auto-resume stopped for %s: %d consecutive resumes "
-                "without a human message",
+                "%s stopped for %s: %d consecutive resumes without a "
+                "human message",
+                active_resume_source,
                 project_id,
                 resume_streak,
             )
@@ -6129,7 +6262,7 @@ class FileCreatorAgentRuntime:
                 snapshot.generation,
             )
             return
-        if after_failure:
+        if after_failure and auto_approve:
             text = (
                 "【系统自动消息 · YOLO 持续执行】上一回合因瞬态故障中止"
                 "（如模型空响应或传输抖动），项目尚未完成。\n"
@@ -6143,15 +6276,32 @@ class FileCreatorAgentRuntime:
                 )
         else:
             reasons = []
-            for node in model_required[:8]:
+            for node in feedback_nodes[:8]:
                 why = node.error or "、".join(node.missing[:3]) or "待处理"
                 reasons.append(f"{node.label}（{why}）")
-            text = (
-                "【系统自动消息 · YOLO 持续执行】主线回合已结束，但以下环节需要"
-                "你处理（可自动派发的媒体生成已由 Runtime 并行执行，无需重复委派）：\n"
-                + "\n".join(f"- {reason}" for reason in reasons)
-                + "\n请针对上述环节修复结构、补全 prompt 或调整参数；不要重复已完成的工作。"
-            )
+            if auto_approve:
+                text = (
+                    "【系统自动消息 · YOLO 持续执行】主线回合已结束，但以下环节需要"
+                    "你处理（可自动派发的媒体生成已由 Runtime 并行执行，无需重复委派）：\n"
+                    + "\n".join(f"- {reason}" for reason in reasons)
+                    + "\n请针对上述环节修复结构、补全 prompt 或调整参数；不要重复已完成的工作。"
+                )
+            else:
+                opening = (
+                    "上一回合因瞬态故障中止（如模型空响应或传输抖动）" if after_failure else "主线回合已结束"
+                )
+                text = (
+                    f"【系统自动消息 · Prompt 合同修复】{opening}，但调度器"
+                    "发现以下非空/台词合同缺口，因此没有提交任何对应的付费媒体任务：\n"
+                    + "\n".join(f"- {reason}" for reason in reasons)
+                    + "\nR2V prompt 由你直接负责；请只修复上述"
+                    " Project 字段并重新核对，保留已经完成的工作。"
+                )
+        message_source = (
+            self.YOLO_RESUME_SOURCE
+            if auto_approve
+            else self.PROMPT_CONTRACT_RESUME_SOURCE
+        )
         appended = await asyncio.to_thread(
             self.sessions.append_message,
             project_id,
@@ -6159,21 +6309,25 @@ class FileCreatorAgentRuntime:
             conversation_id,
             role="user",
             content_parts=[{"type": "text", "text": text}],
-            source=self.YOLO_RESUME_SOURCE,
+            source=message_source,
             channel=MessageChannel.RUNTIME,
             metadata={
                 "resumeAfterRunId": run_id,
                 "projectGeneration": snapshot.generation,
                 "unfinishedElements": unfinished,
                 "modelRequiredNodes": [
-                    node.node_id for node in model_required[:12]
+                    node.node_id for node in feedback_nodes[:12]
                 ],
             },
         )
         await self._event(
             project_id,
             session_id,
-            "agent.yolo.resumed",
+            (
+                "agent.yolo.resumed"
+                if auto_approve
+                else "agent.prompt_contract.resumed"
+            ),
             run_id,
             appended.message,
             {
@@ -6878,16 +7032,36 @@ class FileCreatorAgentRuntime:
         request: CreatorMessageRecord,
         payload: Mapping[str, Any],
     ) -> None:
-        await asyncio.to_thread(
-            self.sessions.append_event,
-            project_id,
-            session_id,
-            event_type=event_type,
-            actor="file_agent_runtime",
-            round_id=f"agent-round-{run_id}",
-            message_id=request.message_id,
-            payload=dict(payload),
-        )
+        # A lock timeout means the append never started (the exclusive
+        # project lock was never acquired), so retrying is safe. Bursts of
+        # serial Project commits (e.g. scene auto-rereview) can hold the
+        # lock beyond one wait and must not kill the whole agent run.
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            try:
+                await asyncio.to_thread(
+                    self.sessions.append_event,
+                    project_id,
+                    session_id,
+                    event_type=event_type,
+                    actor="file_agent_runtime",
+                    round_id=f"agent-round-{run_id}",
+                    message_id=request.message_id,
+                    payload=dict(payload),
+                )
+                break
+            except LockTimeoutError:
+                if attempt == attempts:
+                    raise
+                logger.warning(
+                    "event append lock contention (attempt %d/%d) "
+                    "project=%s type=%s; retrying",
+                    attempt,
+                    attempts,
+                    project_id,
+                    event_type,
+                )
+                await asyncio.sleep(attempt)
         if not event_type.endswith("_delta"):
             trace_event(
                 f"creator.{event_type}",
@@ -7560,6 +7734,8 @@ def _specialist_tool_recovery(
             "rejected by the safety system",
             "content policy",
             "content_policy_violation",
+            "green net check failed",
+            "may contain inappropriate content",
         )
     ):
         # The image provider's safety system deterministically rejects the
@@ -7576,7 +7752,13 @@ def _specialist_tool_recovery(
             "(asset-version IDs of downloaded or uploaded images) and use "
             "already generated stylized artifact-version references — or a "
             "text-only prompt — instead, then call image_generation again "
-            "with the adjusted references or a rephrased prompt."
+            "with the adjusted references or a rephrased prompt. If the "
+            "message names the *output* or a green-net check, the moderator "
+            "refused the rendered image rather than the request, so changing "
+            "references alone cannot help: rewrite the prompt itself, "
+            "softening the wording most likely to have been flagged (injury, "
+            "blood, nudity, minors, distress, real public figures) while "
+            "keeping the shot's narrative intent."
         )
     if name == "jq_project":
         return _jq_project_recovery(code)

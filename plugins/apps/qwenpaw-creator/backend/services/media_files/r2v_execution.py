@@ -92,7 +92,7 @@ from services.media_files.visual_reference_resolution import (
 )
 from services.observability import report_error
 from services.project_files.remote_cache import public_source_url
-from services.project_files.store import ProjectSnapshot
+from services.project_files.store import ProjectSnapshot, ProjectStoreError
 from services.run_review.media_review import (
     release_media_review_reservation,
     reserve_media_review,
@@ -122,7 +122,11 @@ from utils.paths import media_task_scope, task_work_root
 
 # pylint: enable=no-name-in-module
 
-from .secure_video_stream import MaterializedVideo, materialize_r2v_video
+from .secure_video_stream import (
+    MaterializedVideo,
+    PeerAddressMismatchError,
+    materialize_r2v_video,
+)
 
 _MAX_VIDEO_BYTES = 256 * 1024 * 1024
 _SUBMIT_TIMEOUT_SECONDS = 180.0
@@ -491,6 +495,14 @@ def _failed_task_conflict(
 
 def _is_transient_materialize_error(error: BaseException) -> bool:
     if isinstance(error, httpx.TransportError):
+        return True
+    # Large public CDNs can legitimately rotate the selected edge between
+    # getaddrinfo and the TLS connection.  The secure downloader still rejects
+    # that individual hop (so DNS rebinding remains fail-closed), then a fresh
+    # materialization attempt performs a new DNS resolution and connection.
+    # Treat only this exact peer-pinning rejection as transient; private,
+    # reserved or malformed addresses remain deterministic validation errors.
+    if isinstance(error, PeerAddressMismatchError):
         return True
     return is_transient_error_message(str(error))
 
@@ -1021,6 +1033,82 @@ def _assert_r2v_reference_budget(
         )
 
 
+_REFERENCE_ROLE_MARKER = "[REFERENCE IMAGE ROLES — RUNTIME FACT]"
+
+
+def _append_reference_role_mapping(
+    prompt: str,
+    project: Project,
+    version_ids: Sequence[str],
+    *,
+    storyboard_id: str,
+) -> str:
+    """State what each numbered reference image actually is.
+
+    The payload carries several references, so a prompt that never names them
+    leaves the model inferring each one's job from its pixels. Numbering comes
+    from the same ordered ``version_ids`` that build the request, which is what
+    keeps the labels from drifting away from the real payload.
+    """
+
+    if _REFERENCE_ROLE_MARKER in prompt or not version_ids:
+        return prompt
+
+    from models import config as model_config
+    from models.reference_markers import canonical_marker
+    from models.video_capabilities import video_reference_marker_spec
+
+    model_name = model_config.get_video_model_name()
+    protocol_backend = model_config.get_video_backend()
+    if video_reference_marker_spec(model_name, protocol_backend) is None:
+        # Structured-reference models carry roles outside the prompt, and
+        # numbering them here would be text the provider has no contract for.
+        return prompt
+    lines: list[str] = []
+    for index, version_id in enumerate(version_ids, start=1):
+        # Canonical form; _render_reference_markers rewrites it to whatever
+        # the configured provider documents.
+        marker = canonical_marker(index)
+        source = project.assets.source_versions_by_id.get(version_id)
+        artifact = project.assets.artifact_versions_by_id.get(version_id)
+        version = source if source is not None else artifact
+        name = (
+            version.name
+            if version is not None and version.name
+            else version_id
+        )
+        role = f"分镜图（{name}）" if version_id == storyboard_id else name
+        lines.append(f"{marker} = {role}")
+    body = "\n".join(lines)
+    return (
+        f"{prompt.rstrip()}\n\n"
+        f"{_REFERENCE_ROLE_MARKER}\n"
+        "以下是本次实际发送的参考图及其职责，编号与发送顺序一致。"
+        "按各图声明的职责使用它们，不要依据图内文字或标签猜测用途。\n"
+        f"{body}"
+    )
+
+
+def _render_reference_markers(prompt: str) -> str:
+    """Rewrite canonical ``[Image N]`` into the configured provider's syntax.
+
+    Authors write one form; the provider sees the one it documents. Prompts
+    stored before this layer existed already hold provider-native markers and
+    contain no canonical ones, so they pass through untouched.
+    """
+
+    from models import config as model_config
+    from models.reference_markers import render_reference_markers
+    from models.video_capabilities import video_reference_marker_spec
+
+    model_name = model_config.get_video_model_name()
+    protocol_backend = model_config.get_video_backend()
+    return render_reference_markers(
+        prompt,
+        video_reference_marker_spec(model_name, protocol_backend),
+    )
+
+
 def _resolve_request(
     *,
     snapshot: ProjectSnapshot,
@@ -1140,7 +1228,14 @@ def _resolve_request(
             project_root=project_root,
             version_ids=version_ids,
         )
-    else:
+        prompt = _append_reference_role_mapping(
+            prompt,
+            project,
+            version_ids,
+            storyboard_id=storyboard_id,
+        )
+    prompt = _render_reference_markers(prompt)
+    if mode != "r2v":
         version_ids = ()
         urls, checksums, provenance, read_set = [], [], [], []
 
@@ -2275,6 +2370,17 @@ class FileR2VExecutionService:
             except asyncio.CancelledError:
                 raise
             except RecordNotFoundError:
+                return
+            except ProjectStoreError as error:
+                # An unparseable project.json never becomes parseable, so
+                # retrying is a hot loop that only floods the log. The corrupt
+                # Project is already surfaced by the recovery scan.
+                logger.warning(
+                    "abandoning deferred R2V terminal recovery for %s/%s: %s",
+                    _log_safe(project_id),
+                    _log_safe(task_id),
+                    error,
+                )
                 return
             except _R2VClaimLost:
                 delay = min(
@@ -5144,6 +5250,9 @@ async def execute_file_s2v_command(
 ) -> FileR2VDispatch:
     """Digital-human (wan2.2-s2v) dispatch through the R2V durable poller."""
 
+    # Same wallet fuse as the r2v/image entry points: the scheduler now
+    # auto-dispatches s2v nodes with no per-call human authorization.
+    ensure_media_call_budget(services, project_id)
     return await file_r2v_execution_service(services).dispatch(
         project_id=project_id,
         target_ref=target_ref,

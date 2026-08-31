@@ -10,11 +10,13 @@ import pytest
 
 from domain.enums import TaskStatus
 from services.file_agent_runtime.work_graph import WorkNode, WorkNodeStatus
+from services.file_agent_runtime import work_scheduler
 from services.file_agent_runtime.work_scheduler import (
     WorkGraphScheduler,
     _blocked_by_active_media_review,
     _blocked_by_active_sync_review,
 )
+from services.runtime_files.path_safety import require_safe_runtime_segment
 from services.project_files.facade import CreatorFileServices
 from services.project_files.models import (
     Project,
@@ -303,6 +305,68 @@ def test_idempotency_key_is_node_and_fingerprint_stable(
 
     key = dispatch.calls[0]["idempotency_key"]
     assert key.startswith("dag-visual:char:a:var:0-")
+    # The key travels on to the Task as caused_by_request_id, so it has to be
+    # a legal path segment; a prefix check alone let "|model" separators
+    # through and every dispatch was rejected.
+    require_safe_runtime_segment(key, label="caused_by_request_id")
+
+
+def test_idempotency_key_survives_provider_qualified_model_names(
+    tmp_path,
+    monkeypatch,
+):
+    """Model names feed the fingerprint and may contain "/"."""
+    services = _services(tmp_path, monkeypatch, ready_variants=1)
+    _enable_yolo(monkeypatch)
+    monkeypatch.setattr(
+        work_scheduler,
+        "get_image_model_name",
+        lambda: "provider/gpt-image-2",
+    )
+    monkeypatch.setattr(
+        work_scheduler,
+        "get_video_model_name",
+        lambda: "provider/kling-v2",
+    )
+    dispatch = _RecordingDispatch()
+    scheduler = WorkGraphScheduler(services, image_dispatch=dispatch)
+
+    async def scenario():
+        await scheduler.tick(PROJECT_ID)
+        await _drain()
+
+    asyncio.run(scenario())
+
+    key = dispatch.calls[0]["idempotency_key"]
+    require_safe_runtime_segment(key, label="caused_by_request_id")
+    assert "/" not in key
+
+
+def test_ledger_fingerprint_still_reopens_on_model_change():
+    """Switching model must mint a new ledger identity."""
+    node = SimpleNamespace(
+        node_id="visual:char:a:var:0",
+        dispatch_fingerprint="a1b2c3d4e5f60718",
+    )
+
+    def fingerprint_for(image_model: str, video_model: str) -> str:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(
+                work_scheduler,
+                "get_image_model_name",
+                lambda: image_model,
+            )
+            patch.setattr(
+                work_scheduler,
+                "get_video_model_name",
+                lambda: video_model,
+            )
+            return WorkGraphScheduler._ledger_fingerprint(node)
+
+    baseline = fingerprint_for("image-a", "video-a")
+    assert baseline == fingerprint_for("image-a", "video-a")
+    assert baseline != fingerprint_for("image-b", "video-a")
+    assert baseline != fingerprint_for("image-a", "video-b")
 
 
 def test_quarantined_stale_result_reopens_dispatch(tmp_path, monkeypatch):
@@ -680,7 +744,6 @@ def test_deterministic_failure_unlocks_when_media_model_changes(
     reference-budget rejection under a small-budget model must not keep
     the node locked after the operator configures a roomier model."""
     from domain.errors import ValidationError
-    from services.file_agent_runtime import work_scheduler as scheduler_mod
 
     services = _services(tmp_path, monkeypatch, ready_variants=1)
     _enable_yolo(monkeypatch)
@@ -696,7 +759,7 @@ def test_deterministic_failure_unlocks_when_media_model_changes(
         raise BudgetExceededError("4 张参考图超过模型限制 3 张")
 
     monkeypatch.setattr(
-        scheduler_mod,
+        work_scheduler,
         "get_image_model_name",
         lambda: "small-budget-model",
     )
@@ -714,7 +777,7 @@ def test_deterministic_failure_unlocks_when_media_model_changes(
         # New model → new ledger fingerprint → dispatch reopens without
         # anyone touching the ledger or the in-memory dispatch record.
         monkeypatch.setattr(
-            scheduler_mod,
+            work_scheduler,
             "get_image_model_name",
             lambda: "large-budget-model",
         )
@@ -724,3 +787,39 @@ def test_deterministic_failure_unlocks_when_media_model_changes(
         await scheduler.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_idle_exit_confirms_the_graph_is_drained_first(tmp_path, monkeypatch):
+    """Field run 2026-08-26: three storyboards reached READY after the agent
+    turn ended. wake() only fires from agent turns and media review, so the
+    project loop idled out and returned with that work undispatched; 43% of
+    the timeline then had no media and the live preview stayed black there.
+    The idle exit must confirm the graph is drained before giving up.
+    """
+
+    services = _services(tmp_path, monkeypatch, ready_variants=1)
+    _enable_yolo(monkeypatch)
+    dispatch = _RecordingDispatch()
+    scheduler = WorkGraphScheduler(services, image_dispatch=dispatch)
+    monkeypatch.setattr(work_scheduler, "_IDLE_EXIT_SECONDS", 0.05)
+
+    async def scenario():
+        # Start the loop without ever setting the wake event, so the only
+        # path to dispatch is the idle-timeout drain check.
+        loop_task = asyncio.create_task(scheduler._project_loop(PROJECT_ID))
+        for _ in range(60):
+            await asyncio.sleep(0.05)
+            if dispatch.calls:
+                break
+        loop_task.cancel()
+        try:
+            await loop_task
+        except asyncio.CancelledError:
+            pass
+        await _drain()
+
+    asyncio.run(scenario())
+
+    assert (
+        dispatch.calls
+    ), "idle exit abandoned a READY node instead of dispatching it"

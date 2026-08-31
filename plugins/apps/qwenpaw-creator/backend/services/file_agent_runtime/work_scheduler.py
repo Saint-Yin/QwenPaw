@@ -41,6 +41,7 @@ from services.media_files.call_budget import (
 )
 from services.media_files.transient_errors import is_transient_error_message
 from services.file_agent_runtime.work_graph import (
+    dispatch_key_predates_digest_ledger,
     WorkGraph,
     WorkNode,
     derive_work_graph,
@@ -241,15 +242,20 @@ class WorkGraphScheduler:
         """
 
         base = node.dispatch_fingerprint or node.node_id
-        return hashlib.sha256(
+        # This value is interpolated into the dispatch idempotency key, which
+        # becomes a Task's caused_by_request_id and must stay inside the
+        # [A-Za-z0-9._:-] segment alphabet. Model names are opaque and may
+        # carry "/" or other unsafe characters, so digest them rather than
+        # interpolating them.
+        models = hashlib.sha256(
             "\x1f".join(
                 (
-                    base,
                     get_image_model_name().strip(),
                     get_video_model_name().strip(),
                 ),
             ).encode("utf-8"),
-        ).hexdigest()[:24]
+        ).hexdigest()[:16]
+        return f"{base}-m{models}"
 
     # -- lifecycle -----------------------------------------------------
 
@@ -340,6 +346,21 @@ class WorkGraphScheduler:
                 async with asyncio.timeout(_IDLE_EXIT_SECONDS):
                     await event.wait()
             except TimeoutError:
+                if self._inflight.get(project_id):
+                    continue
+                # A node can reach READY without a wake arriving here: a gate
+                # clears, or a commit's wake was already consumed by an
+                # earlier tick. wake() is only called from agent turns and
+                # media review, so returning now would strand that node for
+                # good and leave a permanent hole in the rendered timeline.
+                # Confirm the graph is really drained before giving up.
+                try:
+                    await self.tick(project_id)
+                except Exception:  # pylint: disable=broad-except
+                    logger.exception(
+                        "work-graph drain check failed for %s",
+                        project_id,
+                    )
                 if not self._inflight.get(project_id):
                     return
                 continue
@@ -697,7 +718,19 @@ class WorkGraphScheduler:
             if ledger_key not in self._dispatched or node.node_id in inflight:
                 continue
             prefix = f"dag-{node.node_id}-{fingerprint}"
-            if any(key.startswith(prefix) for key in recorded_keys):
+            node_prefix = f"dag-{node.node_id}-"
+            if any(
+                key.startswith(prefix)
+                # A record minted under the old plaintext-model ledger format
+                # cannot match today's digest prefix. Treating it as absent
+                # would reopen a node that already owns a durable task and
+                # pay for the same render twice across an upgrade.
+                or (
+                    key.startswith(node_prefix)
+                    and dispatch_key_predates_digest_ledger(key)
+                )
+                for key in recorded_keys
+            ):
                 # A durable record exists (running / failed / quarantined):
                 # the record — not this reopen path — owns its lifecycle.
                 continue

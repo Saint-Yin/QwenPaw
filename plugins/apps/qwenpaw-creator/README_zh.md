@@ -6,7 +6,7 @@
 
 <p class="creator-lead">QwenPaw Creator 是一个 <strong>Agentic 视频创作平台</strong>：你负责提出目标、提供素材和把握方向，Agent 团队负责策划、生成、剪辑与合成，并在关键节点把决定权交还给你。</p>
 
-- **Agent 贯穿全程**：编剧、导演、视觉开发、动效、剪辑等 Specialist 按项目状态协作，不是一次性生成后就结束；
+- **Agent 贯穿全程**：主 Agent 负责编剧、导演与视觉开发（按需加载专业 skill），与素材理解、AI 剪辑等 Specialist 按项目状态协作，不是一次性生成后就结束；
 - **你始终掌舵**：随时用一句话改变方向，也可以直接在时间线上手动精修；
 - **两类素材都能开始**：从一句想法生成短剧，或从一批现有视频剪出成片。
 
@@ -56,6 +56,7 @@ Creator 通过 QwenPaw 的 **Apps（应用中心）** 安装和打开。启动 Q
   - Vidu 官方：能力按精确模型区分——`viduq3-turbo` 支持 t2v/i2v/r2v，`viduq3-mix`、`viduq3` 仅 r2v，`viduq2-pro` 支持 i2v/r2v，`viduq2` 支持 t2v/r2v；
   - 可灵与 Vidu 同时提供百炼托管和官方直连两条渠道，**由模型配置中选择的协议决定走哪条**；
   - 每个“协议 + 精确模型 ID”都有独立官方契约：不支持的模式及非法时长、分辨率、画幅、参考素材会在上传/建单前被拒绝，同一能力表同时驱动设置页与 Agent 提示词；
+  - R2V 图片引用顺序保持存量合同：`storyboard → lineup → character → scene → prop`；升级不会把已有 `video_prompt` 中的场景与道具编号静默互换；
 - **ASR**：DashScope Fun-ASR、DashScope Qwen3-ASR 或 OpenAI Whisper；
 - **TTS / 数字人**：DashScope Qwen-TTS、CosyVoice，以及 `wan2.2-s2v`（并提供 `wan2.2-s2v-detect` 免费人脸检测）；
 - **Embedding**：DashScope `qwen3-vl-embedding`，用于资产检索与长素材记忆。

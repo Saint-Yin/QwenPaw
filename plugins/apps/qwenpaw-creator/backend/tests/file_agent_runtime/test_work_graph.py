@@ -45,6 +45,7 @@ def _entity(entity_id: str, variants: dict[str, str | None]) -> VisualEntity:
             "items": {
                 variant_id: VisualVariant(
                     variant_id=variant_id,
+                    prompt="专业视觉资产 prompt",
                     selected_artifact_version_id=selected,
                 )
                 for variant_id, selected in variants.items()
@@ -96,6 +97,7 @@ def _select_slot(
     owner_ref: str,
     version_id: str,
     provenance: list[str] | None = None,
+    task_id: str | None = None,
 ) -> None:
     project.assets.artifact_slots_by_id[slot_id] = ArtifactSlot(
         slot_id=slot_id,
@@ -124,6 +126,7 @@ def _select_slot(
         input_fingerprint="sha256:" + "1" * 64,
         based_on_generation=1,
         provenance_refs=provenance or [],
+        metadata={"taskId": task_id} if task_id else {},
         created_at="2026-08-05T00:00:00Z",
     )
 
@@ -316,8 +319,27 @@ def test_missing_storyboard_prompt_is_a_model_required_gap() -> None:
     storyboard = graph.by_id["storyboard:elem:one"]
     assert storyboard.status is WorkNodeStatus.GATED
     assert storyboard.missing == ("storyboard_prompt 缺失",)
+    assert storyboard.authored_text_gap
     # The scheduler cannot solve this: it needs a model turn.
     assert storyboard in graph.model_required_nodes()
+
+
+def test_missing_visual_prompt_is_a_model_required_gap() -> None:
+    project = _project()
+    entity = _entity("char:hero", {"var:default": None})
+    entity.variants.items["var:default"].prompt = ""
+    project.visual.entities.items[entity.entity_id] = entity
+    project.visual.entities.order.append(entity.entity_id)
+
+    graph = derive_work_graph(project)
+    visual = graph.by_id["visual:char:hero:var:default"]
+    assert visual.status is WorkNodeStatus.GATED
+    assert visual.missing == ("visual_prompt 缺失",)
+    assert visual.authored_text_gap
+    # A one-line entity description fallback must never start a paid image
+    # task before visual development has committed its production prompt.
+    assert visual in graph.model_required_nodes()
+    assert visual not in graph.ready_media_nodes()
 
 
 def _element_with_landed_storyboard(
@@ -469,6 +491,104 @@ def test_stale_marks_but_does_not_regenerate() -> None:
     assert node not in graph.ready_media_nodes()
 
 
+def test_stale_manual_storyboard_is_visible_but_not_dispatched() -> None:
+    """The lifecycle flag is authoritative, never automatic spend authority."""
+
+    project = _project()
+    _add_element(project, _element("elem:one"))
+    _select_slot(
+        project,
+        slot_id="element:elem:one:storyboard",
+        kind="r2v_storyboard_image",
+        owner_ref="element:elem:one",
+        version_id="art:manual-storyboard",
+    )
+    project.assets.artifact_versions_by_id[
+        "art:manual-storyboard"
+    ].stale = True
+
+    graph = derive_work_graph(project)
+    node = graph.by_id["storyboard:elem:one"]
+
+    assert node.status is WorkNodeStatus.STALE
+    assert node not in graph.ready_media_nodes()
+
+
+@pytest.mark.parametrize("changed_input", ["aspect_ratio", "shot_count"])
+def test_completed_storyboard_stales_when_implicit_prompt_input_changes(
+    changed_input,
+) -> None:
+    project = _project()
+    _add_element(project, _element("elem:one"))
+    node_id = "storyboard:elem:one"
+    original = derive_work_graph(project).by_id[node_id].dispatch_fingerprint
+    task = _task(
+        "image_generation",
+        "element:elem:one",
+        TaskStatus.SUCCEEDED,
+        idempotency_key=f"dag-{node_id}-{original}",
+    )
+    _select_slot(
+        project,
+        slot_id="element:elem:one:storyboard",
+        kind="r2v_storyboard_image",
+        owner_ref="element:elem:one",
+        version_id="art:sb",
+        task_id=task.task_id,
+    )
+    assert (
+        derive_work_graph(project, tasks=[task]).by_id[node_id].status
+        is WorkNodeStatus.DONE
+    )
+
+    if changed_input == "aspect_ratio":
+        project.settings.aspect_ratio = "9:16"
+    else:
+        creation = (
+            project.timelines.items["timeline:main"]
+            .elements_by_id["elem:one"]
+            .creation
+        )
+        second = Shot(
+            shot_id="elem:one-shot-2",
+            description="第二镜头",
+            camera="⊙ 静止",
+            framing="近景",
+            duration_seconds=2,
+        )
+        creation.shots.items[second.shot_id] = second
+        creation.shots.order.append(second.shot_id)
+
+    assert (
+        derive_work_graph(project, tasks=[task]).by_id[node_id].status
+        is WorkNodeStatus.STALE
+    )
+
+
+def test_failed_storyboard_reopens_when_aspect_ratio_changes() -> None:
+    project = _project()
+    _add_element(project, _element("elem:one"))
+    node_id = "storyboard:elem:one"
+    original = derive_work_graph(project).by_id[node_id].dispatch_fingerprint
+    failed = _task(
+        "image_generation",
+        "element:elem:one",
+        TaskStatus.FAILED,
+        error={"message": "provider rejected layout"},
+        idempotency_key=f"dag-{node_id}-{original}",
+    )
+    assert (
+        derive_work_graph(project, tasks=[failed]).by_id[node_id].status
+        is WorkNodeStatus.FAILED
+    )
+
+    project.settings.aspect_ratio = "9:16"
+    assert (
+        derive_work_graph(project, tasks=[failed]).by_id[node_id].status
+        is WorkNodeStatus.READY
+    )
+
+
 def test_storyboard_waits_for_all_referenced_entities_not_just_bindings() -> (
     None
 ):
@@ -602,6 +722,109 @@ def test_superseded_render_source_reopens_compose_without_stale_flag() -> None:
     compose = graph.by_id["compose:final"]
     assert compose.status is WorkNodeStatus.READY
     assert compose in graph.ready_media_nodes()
+
+
+def test_budget_dropped_reference_does_not_stale_the_artifact() -> None:
+    """A reference the model budget forced out of the automatic chain is
+    absent from provenance by design. Field run 2026-08-26: reading that as
+    drift marked all four truncated portrait storyboards permanently stale,
+    a false "needs review" on artifacts that were correct.
+    """
+    from services.file_agent_runtime.work_graph import _artifact_is_stale
+
+    project = Project.new(project_id="p-stale", name="Stale")
+    project.assets.artifact_versions_by_id["art:sb"] = ArtifactVersion(
+        version_id="art:sb",
+        slot_id="element:elem:1:storyboard",
+        kind="r2v_storyboard_image",
+        owner_ref="element:elem:1",
+        name="分镜图",
+        file_id="file-sb",
+        checksum="0" * 64,
+        based_on_generation=1,
+        created_at="2026-08-26T00:00:00Z",
+        provenance_refs=["artifact-version:art:kept"],
+        metadata={"budgetDroppedReferenceVersionIds": ["art:dropped"]},
+    )
+
+    # The dropped reference must not count as drift...
+    assert not _artifact_is_stale(
+        project,
+        "art:sb",
+        ["art:kept", "art:dropped"],
+    )
+    # ...while a genuinely new upstream selection still does.
+    assert _artifact_is_stale(
+        project,
+        "art:sb",
+        ["art:kept", "art:something-new"],
+    )
+
+
+def test_upgrade_does_not_restale_artifacts_from_the_old_ledger() -> None:
+    """The ledger fingerprint dropped the plaintext model names, and the
+    storyboard graph fingerprint gained aspect ratio and shot count. Every
+    durable key minted before that therefore mismatches today's digest. Reading
+    the mismatch as drift would flip every pre-existing storyboard from DONE to
+    READY and auto-dispatch a paid re-render, replacing artifacts the user had
+    already accepted.
+    """
+    from services.file_agent_runtime.work_graph import (
+        _artifact_is_stale,
+        dispatch_key_predates_digest_ledger,
+    )
+
+    project = Project.new(project_id="p-upgrade", name="Upgrade")
+    project.assets.artifact_versions_by_id["art:sb"] = ArtifactVersion(
+        version_id="art:sb",
+        slot_id="element:elem:1:storyboard",
+        kind="r2v_storyboard_image",
+        owner_ref="element:elem:1",
+        name="分镜图",
+        file_id="file-sb",
+        checksum="0" * 64,
+        based_on_generation=1,
+        created_at="2026-08-20T00:00:00Z",
+        metadata={"taskId": "task-legacy"},
+    )
+    node_id = "storyboard:elem:1"
+    legacy_key = (
+        f"dag-{node_id}-a1b2c3d4e5f60718"
+        "|img:qwen-image-3.0-pro|vid:wan3.0-video"
+    )
+    assert dispatch_key_predates_digest_ledger(legacy_key)
+
+    legacy_task = SimpleNamespace(
+        task_id="task-legacy",
+        idempotency_key=legacy_key,
+    )
+    assert not _artifact_is_stale(
+        project,
+        "art:sb",
+        [],
+        node_id=node_id,
+        dispatch_fingerprint="9f8e7d6c5b4a3210",
+        tasks=[legacy_task],
+    )
+
+    # A key already in the digest format is still compared, so a genuine input
+    # change after the upgrade is still caught.
+    versions = project.assets.artifact_versions_by_id
+    versions["art:sb2"] = versions["art:sb"].model_copy(
+        update={"version_id": "art:sb2", "metadata": {"taskId": "task-new"}},
+    )
+    new_task = SimpleNamespace(
+        task_id="task-new",
+        idempotency_key=f"dag-{node_id}-a1b2c3d4e5f60718-mdeadbeefdeadbeef",
+    )
+    assert _artifact_is_stale(
+        project,
+        "art:sb2",
+        [],
+        node_id=node_id,
+        dispatch_fingerprint="9f8e7d6c5b4a3210",
+        tasks=[new_task],
+    )
 
 
 def test_t2v_element_produces_only_video_node() -> None:

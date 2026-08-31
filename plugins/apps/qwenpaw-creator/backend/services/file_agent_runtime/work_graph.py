@@ -14,12 +14,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Iterable, Mapping, Sequence
 
 from domain.enums import CreatorCommandType, TaskKind, TaskStatus
+from services.prompt_text import dialogue_match_key, dialogue_spoken_lines
 from services.project_files.models import (
     ArtifactVersionRenderSource,
     ElementOutputRenderSource,
@@ -62,6 +62,11 @@ class WorkNode:
     progress: float | None = None
     error: str | None = None
     missing: tuple[str, ...] = ()  # unmet dependency node ids / reasons
+    # True when every reason in ``missing`` is repairable by rewriting
+    # authored Project text (prompt, dialogue). The completion loop returns
+    # these in every review mode because the repair costs no media call, so
+    # it must not depend on the human-readable wording of ``missing``.
+    authored_text_gap: bool = False
     locator: dict[str, Any] = field(default_factory=dict)
     # Dispatch recipe (command + targetRef) for scheduler / manual retry.
     command: str | None = None
@@ -313,30 +318,6 @@ def _upstream_missing(
     )
 
 
-def _dialogue_match_key(text: str) -> str:
-    return "".join(text.split())
-
-
-# Speaker prefixes ("老板娘：…" / "Regular: …") and stage directions
-# ("（回头）") belong to the shot plan, not to the spoken line itself — the
-# prompt naturally rephrases them ("她温和地说：“…”"), so requiring them
-# verbatim makes the gate unsatisfiable (field run 2026-08-12, project
-# 27dc: three YOLO continuation rounds burned against exactly this).
-_DIALOGUE_SPEAKER_PREFIX = re.compile(r"^[^：:]{1,20}[：:]\s*")
-_DIALOGUE_STAGE_DIRECTION = re.compile(r"[（(][^）)]*[）)]")
-
-
-def _dialogue_spoken_lines(dialogue: str) -> tuple[str, ...]:
-    """The spoken sentences of a shot's dialogue field, one per line."""
-    lines: list[str] = []
-    for raw in dialogue.splitlines():
-        line = _DIALOGUE_SPEAKER_PREFIX.sub("", raw.strip())
-        line = _DIALOGUE_STAGE_DIRECTION.sub("", line).strip()
-        if line:
-            lines.append(line)
-    return tuple(lines)
-
-
 def _video_prompt_dialogue_gaps(creation: R2VCreation) -> tuple[str, ...]:
     """Shots whose spoken lines never reached the committed video prompt.
 
@@ -351,14 +332,14 @@ def _video_prompt_dialogue_gaps(creation: R2VCreation) -> tuple[str, ...]:
     prefixes and stage directions so natural prompt phrasing never causes
     a false gap.
     """
-    prompt = _dialogue_match_key(creation.video_prompt or "")
+    prompt = dialogue_match_key(creation.video_prompt or "")
     gaps: list[str] = []
     for shot_id in creation.shots.order:
         shot = creation.shots.items.get(shot_id)
         if shot is None:
             continue
-        for line in _dialogue_spoken_lines(shot.dialogue or ""):
-            if _dialogue_match_key(line) not in prompt:
+        for line in dialogue_spoken_lines(shot.dialogue or ""):
+            if dialogue_match_key(line) not in prompt:
                 gaps.append(f"video_prompt 缺台词原文：{shot_id}")
                 break
     return tuple(gaps)
@@ -421,29 +402,90 @@ def _slot_selected(project: Project, slot_id: str) -> str | None:
     return slot.selected_version_id
 
 
+# Ledger fingerprints used to interpolate the configured model names in
+# plaintext, separated by "|". Those keys cannot be compared against today's
+# digest form, and reading the mismatch as drift would flip every artifact
+# rendered before the upgrade from DONE to READY — re-billing the user for
+# storyboards they had already accepted, and replacing them.
+_LEGACY_LEDGER_KEY_MARKER = "|img:"
+
+
+def dispatch_key_predates_digest_ledger(key: str) -> bool:
+    """Whether a durable idempotency key predates the digest ledger format."""
+
+    return _LEGACY_LEDGER_KEY_MARKER in key
+
+
 def _artifact_is_stale(
     project: Project,
     version_id: str | None,
     upstream_selected: Iterable[str | None],
+    *,
+    node_id: str = "",
+    dispatch_fingerprint: str = "",
+    tasks: Sequence[Any] = (),
 ) -> bool:
-    """True when provenance shows an upstream selection changed since.
+    """True when provenance or an automatic dispatch input changed since.
 
-    Conservative: only flags when the artifact recorded provenance refs
-    and an upstream node's *current* selection is absent from them. An
-    empty provenance never flags.
+    An explicit lifecycle ``stale`` flag is authoritative for every artifact,
+    including manual ones, but returns the terminal STALE state rather than a
+    scheduler-dispatchable READY state. Otherwise this is conservative: it
+    only flags recorded provenance mismatches. For scheduler-owned artifacts,
+    the durable Task idempotency key also records the work-graph fingerprint;
+    this catches prompt/aspect/panel-count changes that do not appear in media
+    provenance. Agent/manual artifacts without a graph identity remain
+    conservative instead of being invalidated by a guessed fingerprint.
     """
 
     if not version_id:
         return False
     artifact = project.assets.artifact_versions_by_id.get(version_id)
-    if artifact is None or not artifact.provenance_refs:
+    if artifact is None:
         return False
-    provenance = {
-        ref.removeprefix("artifact-version:").removeprefix("asset-version:")
-        for ref in artifact.provenance_refs
-    }
-    for selected in upstream_selected:
-        if selected and selected not in provenance:
+    if artifact.stale:
+        # STALE is intentionally excluded from ready_media_nodes(). This is a
+        # visible review signal, never permission to regenerate manual media.
+        return True
+    if artifact.provenance_refs:
+        provenance = {
+            ref.removeprefix("artifact-version:").removeprefix(
+                "asset-version:",
+            )
+            for ref in artifact.provenance_refs
+        }
+        # The model's reference budget can force a reference out of the
+        # automatic chain. It is absent from provenance by design, so treating
+        # it as drift would mark the artifact stale for good.
+        budget_dropped = {
+            str(item)
+            for item in (
+                artifact.metadata.get("budgetDroppedReferenceVersionIds") or ()
+            )
+        }
+        for selected in upstream_selected:
+            if (
+                selected
+                and selected not in provenance
+                and selected not in budget_dropped
+            ):
+                return True
+    if node_id and dispatch_fingerprint:
+        task_id = str(artifact.metadata.get("taskId") or "")
+        task = next(
+            (
+                candidate
+                for candidate in tasks
+                if str(getattr(candidate, "task_id", "")) == task_id
+            ),
+            None,
+        )
+        key = str(getattr(task, "idempotency_key", "") or "")
+        graph_prefix = f"dag-{node_id}-"
+        if (
+            not dispatch_key_predates_digest_ledger(key)
+            and key.startswith(graph_prefix)
+            and not key.startswith(f"{graph_prefix}{dispatch_fingerprint}")
+        ):
             return True
     return False
 
@@ -491,6 +533,21 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                 fingerprint,
             ):
                 status, task = WorkNodeStatus.READY, None
+            missing: tuple[str, ...] = ()
+            authored_text_gap = False
+            if (
+                status is WorkNodeStatus.READY
+                and not (variant.prompt or "").strip()
+            ):
+                # Entity descriptions are continuity facts, not production
+                # prompts.  Dispatching their one-line fallback caused real
+                # qwen-image jobs to race ahead of visual development during
+                # a 60-second acceptance run (2026-08-24).  Keep the node in
+                # the model-required lane until the committed Variant owns a
+                # deliberate prompt, just as storyboards already do.
+                status = WorkNodeStatus.GATED
+                missing = ("visual_prompt 缺失",)
+                authored_text_gap = True
             add(
                 WorkNode(
                     node_id=node_id,
@@ -505,6 +562,8 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                         if status is WorkNodeStatus.FAILED
                         else None
                     ),
+                    missing=missing,
+                    authored_text_gap=authored_text_gap,
                     locator={"page": "assets", "assetId": entity_id},
                     command="GENERATE_ASSET",
                     target_ref=f"asset:{entity_id}",
@@ -618,7 +677,9 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
             gate_missing: list[str] = []
 
             if creation_type == "r2v":
-                # R2V: storyboard + video dual-node structure
+                # R2V: storyboard + video dual-node structure; only r2v
+                # elements produce a storyboard (T2V/I2V/S2V creations carry
+                # no shots, storyboard prompt or reference stacks).
                 for ref in creation.cast_lineup_refs:
                     deps.append(f"lineup:{ref}")
                 for entity_id, variant_id in sorted(
@@ -643,14 +704,15 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                 task = active.get(key)
                 failure = failed.get(key)
                 missing = (*_upstream_missing(deps, statuses), *gate_missing)
+                authored_text_gap = False
                 upstream_selected = _element_upstream_selected(
                     project,
                     creation,
                 )
                 # Mirrors the submit path: agent-specified references are
                 # authoritative, so they (not the auto chain) must drive the
-                # fingerprint and staleness — editing the explicit list has to
-                # reopen dispatch and flag a stale artifact.
+                # fingerprint and staleness — editing the explicit list has
+                # to reopen dispatch and flag a stale artifact.
                 storyboard_refs: list[str | None] = (
                     list(creation.storyboard_reference_version_ids)
                     or upstream_selected
@@ -658,6 +720,8 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                 fingerprint = _fingerprint(
                     storyboard_id,
                     creation.storyboard_prompt,
+                    project.settings.aspect_ratio,
+                    len(creation.shots.order),
                     sorted(
                         selected for selected in storyboard_refs if selected
                     ),
@@ -671,6 +735,9 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                             project,
                             storyboard_slot,
                             storyboard_refs,
+                            node_id=storyboard_id,
+                            dispatch_fingerprint=fingerprint,
+                            tasks=tasks,
                         )
                         else WorkNodeStatus.DONE
                     )
@@ -687,6 +754,7 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                     # a non-node reason so the completion loop names it.
                     status = WorkNodeStatus.GATED
                     missing = ("storyboard_prompt 缺失",)
+                    authored_text_gap = True
                 else:
                     status = WorkNodeStatus.READY
                 add(
@@ -705,6 +773,7 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                             else None
                         ),
                         missing=missing,
+                        authored_text_gap=authored_text_gap,
                         locator={"page": "plan", "elementId": element_id},
                         command="GENERATE_STORYBOARD_IMAGE",
                         target_ref=f"element:{element_id}",
@@ -770,6 +839,7 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                 )
 
             video_missing: tuple[str, ...] = ()
+            video_text_gap = False
             if task is not None:
                 status = WorkNodeStatus.RUNNING
             elif video_slot:
@@ -815,18 +885,27 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
             elif not (creation.video_prompt or "").strip():
                 status = WorkNodeStatus.GATED
                 video_missing = ("video_prompt 缺失",)
+                video_text_gap = True
             elif creation_type == "r2v":
                 # R2V-specific gates (dialogue coverage and density)
                 assert isinstance(creation, R2VCreation)
                 if dialogue_gaps := _video_prompt_dialogue_gaps(creation):
+                    # Planned dialogue must be quoted verbatim in the video
+                    # prompt before dispatch — see
+                    # _video_prompt_dialogue_gaps.
                     status = WorkNodeStatus.GATED
                     video_missing = dialogue_gaps
+                    video_text_gap = True
                 elif absence_gap := _element_dialogue_density_gap(
                     creation,
                     project.scenario,
                 ):
+                    # Element dialogue density below min_dialogue_ratio —
+                    # the model wrote a silent film or too-sparse dialogue.
+                    # See _element_dialogue_density_gap.
                     status = WorkNodeStatus.GATED
                     video_missing = (absence_gap,)
+                    video_text_gap = True
                 else:
                     status = WorkNodeStatus.READY
             elif (
@@ -867,6 +946,7 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                         else None
                     ),
                     missing=video_missing,
+                    authored_text_gap=video_text_gap,
                     locator={"page": "plan", "elementId": element_id},
                     command=command,
                     target_ref=f"element:{element_id}",
