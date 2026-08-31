@@ -10,9 +10,11 @@ authorities used here.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shutil
 import stat as stat_module
+import sys
 import zipfile
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -774,6 +776,16 @@ async def export_project(
 _WINDOWS_UNSAFE_CHARS = re.compile(r'[<>:"\\|?*]')
 
 
+def _win_long_path(path: Path) -> Path:
+    r"""Bypass Windows MAX_PATH (260 char) limit by adding the ``\\?\`` prefix."""
+    if sys.platform != "win32":
+        return path
+    abs_path = os.path.abspath(path)
+    if len(abs_path) > 240 and not abs_path.startswith("\\\\?\\"):
+        return Path("\\\\?\\" + abs_path)
+    return path
+
+
 def _sanitize_zip_entry(name: str) -> str:
     """Replace Windows-reserved characters in each path component."""
 
@@ -795,10 +807,15 @@ def _extract_archive_sanitized(archive_path: Path, extract_dir: Path) -> None:
                     f"{info.filename!r}",
                 )
             if info.is_dir():
-                target_path.mkdir(parents=True, exist_ok=True)
+                _win_long_path(target_path).mkdir(parents=True, exist_ok=True)
             else:
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(info) as src, target_path.open("wb") as dst:
+                _win_long_path(target_path.parent).mkdir(
+                    parents=True,
+                    exist_ok=True,
+                )
+                with archive.open(info) as src, _win_long_path(
+                    target_path,
+                ).open("wb") as dst:
                     shutil.copyfileobj(src, dst)
 
 

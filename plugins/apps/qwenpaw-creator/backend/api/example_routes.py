@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import shutil
 import time
 import zipfile
@@ -310,6 +311,16 @@ def _sanitize_zip_entry(name: str) -> str:
     return "/".join(_WINDOWS_UNSAFE_CHARS.sub("_", p) for p in parts)
 
 
+def _win_long_path(path: Path) -> Path:
+    r"""Bypass Windows MAX_PATH (260 char) limit by adding the ``\\?\`` prefix."""
+    if sys.platform != "win32":
+        return path
+    abs_path = os.path.abspath(path)
+    if len(abs_path) > 240 and not abs_path.startswith("\\\\?\\"):
+        return Path("\\\\?\\" + abs_path)
+    return path
+
+
 def _extract_example_archive(archive_path: Path, extract_dir: Path) -> None:
     """Unpack a zip, sanitizing entry names and guarding against path traversal."""
 
@@ -324,10 +335,15 @@ def _extract_example_archive(archive_path: Path, extract_dir: Path) -> None:
                     f"{info.filename!r}",
                 )
             if info.is_dir():
-                target_path.mkdir(parents=True, exist_ok=True)
+                _win_long_path(target_path).mkdir(parents=True, exist_ok=True)
             else:
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(info) as src, target_path.open("wb") as dst:
+                _win_long_path(target_path.parent).mkdir(
+                    parents=True,
+                    exist_ok=True,
+                )
+                with archive.open(info) as src, _win_long_path(
+                    target_path,
+                ).open("wb") as dst:
                     shutil.copyfileobj(src, dst)
 
 
