@@ -35,6 +35,9 @@ RUN cd /app/creator-ui && npm ci --include=dev && npm run build
 # -----------------------------------------------------------------------------
 FROM ${QWENPAW_BASE_IMAGE}
 
+# Re-declare global ARGs for use in this stage (Docker ARG scoping rule).
+ARG PYPI_INDEX_URL
+
 # Install geopandas system dependency (not included in official QwenPaw image).
 # Replace default Debian mirror with Aliyun mirror for faster downloads in China.
 RUN sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
