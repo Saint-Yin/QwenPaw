@@ -20,7 +20,7 @@ import secrets
 import shutil
 import threading
 import time
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -30,6 +30,7 @@ from domain.enums import (
     CreatorSessionStatus,
     SpecialistRole,
     SpecialistRunStatus,
+    TERMINAL_SPECIALIST_STATUSES,
     TaskStatus,
 )
 from domain.errors import (
@@ -106,6 +107,7 @@ from services.runtime_files.execution_models import (
     SpecialistRunRecord,
 )
 from services.runtime_files.execution_store import (
+    ExecutionStateConflict,
     ExecutionStoreError,
     ProjectExecutionStore,
 )
@@ -198,6 +200,11 @@ from .native_media import (
     video_frame_content_parts,
     source_intelligence_content_parts,
 )
+from .notifications import (
+    NOTIFICATION_SOURCE,
+    RuntimeEventKind,
+    RuntimeNotificationBus,
+)
 from .prompts import render_creator_system_prompt
 from .run_store import AgentRunStateConflict, CreatorAgentRunStore
 from .work_graph import derive_work_graph
@@ -210,6 +217,20 @@ from .subagents import (
 )
 
 logger = setup_logger("creator.agent_runtime")
+
+# Runtime-authored user messages whose consecutive queue prefix merges into
+# one Agent run (Codex-style input-queue drain). Review-feedback sources
+# (run_review_feedback / render_review_feedback / review_rejection_feedback)
+# must never join a batch: repair deduplication, repair budgets and target
+# constraints are all keyed to the individual request message.
+BATCHABLE_NOTIFICATION_SOURCES = frozenset(
+    {
+        NOTIFICATION_SOURCE,
+        "yolo_auto_resume",
+        "prompt_contract_resume",
+        "mainline_resume",
+    },
+)
 
 
 def _log_safe(value: object) -> str:
@@ -1333,6 +1354,66 @@ class _LoopResult:
     review_ids: tuple[str, ...]
 
 
+class _RunFence(Protocol):
+    """Liveness gate asserted at model/tool/commit boundaries."""
+
+    def assert_alive(self) -> None:
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class _EpochFence:
+    """Mainline fence: alive while the per-project epoch is unchanged."""
+
+    driver: "FileCreatorAgentRuntime"
+    project_id: str
+    run_id: str
+    epoch: int
+
+    def assert_alive(self) -> None:
+        self.driver._assert_epoch(self.project_id, self.run_id, self.epoch)
+
+
+@dataclass(slots=True)
+class _SpecialistHandle:
+    """Lifecycle of one detached (asynchronous) specialist run.
+
+    Detached specialists must not assert the project epoch: every new
+    mainline run increments it (_begin_epoch), which would kill an
+    in-flight specialist the moment any notification-triggered run
+    starts. Revocation is an explicit token flipped by interrupt/stop/
+    project-delete instead.
+    """
+
+    project_id: str
+    specialist_run_id: str
+    role: str = ""
+    target_refs: tuple[str, ...] = ()
+    cancel_reason: str | None = None
+    task: asyncio.Task[None] | None = None
+
+    def cancel(self, reason: str) -> None:
+        if self.cancel_reason is None:
+            self.cancel_reason = reason
+        if self.task is not None and not self.task.done():
+            self.task.cancel()
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenFence:
+    """Detached-specialist fence: alive until its handle is revoked."""
+
+    handle: _SpecialistHandle
+
+    def assert_alive(self) -> None:
+        if self.handle.cancel_reason is not None:
+            raise StaleAgentRun(
+                "specialist run revoked "
+                f"({self.handle.cancel_reason}): "
+                f"{self.handle.specialist_run_id}",
+            )
+
+
 class _FencedCommitBoundary:
     """Hold the run fence throughout publication.
 
@@ -1344,20 +1425,16 @@ class _FencedCommitBoundary:
     def __init__(
         self,
         driver: FileCreatorAgentRuntime,
-        project_id: str,
-        run_id: str,
-        epoch: int,
+        fence: _RunFence,
         delegate: ProjectCommitBoundary,
     ) -> None:
         self.driver = driver
-        self.project_id = project_id
-        self.run_id = run_id
-        self.epoch = epoch
+        self.fence = fence
         self.delegate = delegate
 
     def commit(self, **kwargs: Any):
         with self.driver._publication_lock:
-            self.driver._assert_epoch(self.project_id, self.run_id, self.epoch)
+            self.fence.assert_alive()
             return self.delegate.commit(**kwargs)
 
 
@@ -1408,6 +1485,9 @@ class FileCreatorAgentRuntime:
         self._wake = asyncio.Event()
         self._stopping = False
         self._active: dict[str, _ProjectTask] = {}
+        # Detached (asynchronous) specialist runs by project; cancelled
+        # by interrupt/stop/project-delete, never by a new mainline run.
+        self._specialist_tasks: dict[str, dict[str, _SpecialistHandle]] = {}
         self._interrupt_cleanup_tasks: set[asyncio.Task[Any]] = set()
         self._blocked_heads: dict[str, int] = {}
         # Durable-interrupt stall tracking: project -> (run_id, first seen
@@ -1418,9 +1498,19 @@ class FileCreatorAgentRuntime:
         self._interrupt_stalls: dict[str, tuple[str, float]] = {}
         self._epochs: dict[str, int] = {}
         self._publication_lock = threading.RLock()
+        # Runtime→Agent notification bus: background work (scheduler nodes,
+        # asynchronous specialists) reports back as durable RUNTIME-channel
+        # user messages that the dispatcher consumes at run boundaries.
+        self.notifications = RuntimeNotificationBus(
+            services,
+            wake_dispatcher=self.notify,
+        )
         # Event-driven media fan-out: the model plans, the Runtime executes
         # READY work-graph nodes in parallel (unattended ladder only).
-        self.work_scheduler = WorkGraphScheduler(services)
+        self.work_scheduler = WorkGraphScheduler(
+            services,
+            notifications=self.notifications,
+        )
         # Media workers commit from thread-pool threads; route their
         # post-commit signal onto the loop so a finished r2v/compose task
         # re-evaluates the work graph without waiting for a model turn.
@@ -1502,10 +1592,29 @@ class FileCreatorAgentRuntime:
         for summary in summaries:
             self.work_scheduler.wake(summary.project_id)
             try:
+                # Any surviving INJECTED record belongs to a run that died
+                # with the previous process; return it to PENDING so it
+                # rides along with the startup resume digest.
+                await self.notifications.reopen_all_injected(
+                    summary.project_id,
+                )
+            except Exception:  # pylint: disable=broad-except
+                logger.exception(
+                    "startup injected-notification reopen failed for %s",
+                    summary.project_id,
+                )
+            try:
                 await self._reclaim_startup_orphans(summary.project_id)
             except Exception:  # pylint: disable=broad-except
                 logger.exception(
                     "startup orphan reclaim failed for %s",
+                    summary.project_id,
+                )
+            try:
+                await self._reclaim_specialist_orphans(summary.project_id)
+            except Exception:  # pylint: disable=broad-except
+                logger.exception(
+                    "startup specialist orphan reclaim failed for %s",
                     summary.project_id,
                 )
             try:
@@ -1523,9 +1632,10 @@ class FileCreatorAgentRuntime:
         other process can own a QUEUED/RUNNING run: any non-terminal run is a
         crash leftover.  Without this pass the Session shows a phantom
         "running" Agent until the user presses stop and the interrupt stall
-        fuse expires.  Media/specialist tasks are deliberately left alone:
-        they carry their own provider-resume machinery and an in-progress
-        cloud job may still be reusable.
+        fuse expires.  Detached specialist runs are reclaimed by
+        ``_reclaim_specialist_orphans``; media tasks are deliberately left
+        alone: they carry their own provider-resume machinery and an
+        in-progress cloud job may still be reusable.
         """
 
         try:
@@ -1647,6 +1757,13 @@ class FileCreatorAgentRuntime:
                 handle.epoch,
             )
             handle.task.cancel()
+        specialist_handles = [
+            item
+            for project_handles in self._specialist_tasks.values()
+            for item in project_handles.values()
+        ]
+        for specialist in specialist_handles:
+            specialist.cancel("shutdown")
         cleanup_tasks = list(self._interrupt_cleanup_tasks)
         for task in cleanup_tasks:
             task.cancel()
@@ -1655,11 +1772,17 @@ class FileCreatorAgentRuntime:
                 *(handle.task for handle in handles),
                 return_exceptions=True,
             )
+        specialist_tasks = [
+            item.task for item in specialist_handles if item.task is not None
+        ]
+        if specialist_tasks:
+            await asyncio.gather(*specialist_tasks, return_exceptions=True)
         if dispatcher is not None:
             await asyncio.gather(dispatcher, return_exceptions=True)
         if cleanup_tasks:
             await asyncio.gather(*cleanup_tasks, return_exceptions=True)
         self._active.clear()
+        self._specialist_tasks.clear()
         self._interrupt_cleanup_tasks.clear()
         self._loop = None
 
@@ -1714,7 +1837,14 @@ class FileCreatorAgentRuntime:
                 # cleanup writer from racing deletion and recreating Runtime
                 # parents under the old Project id.
                 self.work_scheduler.cancel_project(project_id)
+                self._cancel_project_specialists(project_id, reason=reason)
                 return False
+            self._cancel_project_specialists(project_id, reason=reason)
+            # A hard stop with no active mainline (idle, or only detached
+            # specialists) must still drop undelivered progress: leaving
+            # the outbox pending would re-inject the cancelled work's
+            # notifications into the next run.
+            await self.notifications.cancel_pending(project_id)
             await self._record_idle_interrupt(project_id, reason=reason)
             self.notify(project_id)
             return False
@@ -1741,6 +1871,7 @@ class FileCreatorAgentRuntime:
                 handle.epoch,
             )
             self.work_scheduler.cancel_project(project_id)
+            self._cancel_project_specialists(project_id, reason=reason)
             handle.task.cancel()
             self.notify(project_id)
             return True
@@ -1748,6 +1879,7 @@ class FileCreatorAgentRuntime:
         # publication already holding the in-process commit boundary; stop and
         # delete must not keep the caller waiting for that completed decision.
         self.work_scheduler.cancel_project(project_id)
+        self._cancel_project_specialists(project_id, reason=reason)
         handle.task.cancel()
         cleanup = asyncio.create_task(
             asyncio.to_thread(
@@ -1762,6 +1894,80 @@ class FileCreatorAgentRuntime:
         cleanup.add_done_callback(self._interrupt_cleanup_tasks.discard)
         self.notify(project_id)
         return True
+
+    def _cancel_project_specialists(
+        self,
+        project_id: str,
+        *,
+        reason: str,
+    ) -> None:
+        """Revoke every detached specialist of one Project.
+
+        Only interrupt/stop/project-delete reach here; a new mainline run
+        never cancels a detached specialist.
+        """
+
+        for handle in list(
+            self._specialist_tasks.get(project_id, {}).values(),
+        ):
+            handle.cancel(reason)
+
+    async def _reclaim_specialist_orphans(self, project_id: str) -> None:
+        """Fail over detached specialist runs stranded by an unclean exit.
+
+        A restart loses every in-process specialist task; their durable
+        records would sit in RUNNING_MODEL / WAITING_* forever and their
+        delegation targets would stay locked against re-delegation. Each
+        orphan turns FAILED and reports through the notification bus so
+        the mainline Agent can decide whether to re-delegate.
+        """
+
+        try:
+            records = await asyncio.to_thread(
+                self.executions.list_specialist_runs,
+                project_id,
+            )
+        except Exception:  # pylint: disable=broad-except
+            return
+        for record in records:
+            if record.status in TERMINAL_SPECIALIST_STATUSES:
+                continue
+            # The SpecialistRun store is shared with media execution runs
+            # (r2v/image executor identities). Those carry their own
+            # provider-resume machinery and MUST survive a restart; only
+            # chat-delegated runs (spawned by delegate_to_agent, marked by
+            # parentActionId) lose their driving task with the process.
+            if not record.metadata.get("parentActionId"):
+                continue
+            try:
+                await asyncio.to_thread(
+                    self.executions.transition_specialist_run,
+                    project_id,
+                    record.run_id,
+                    expected_status=record.status,
+                    status=SpecialistRunStatus.FAILED,
+                    updates={
+                        "final_marker": "FAILED",
+                        "final_summary_text": (
+                            "specialist run orphaned by restart"
+                        ),
+                    },
+                )
+            except Exception:  # pylint: disable=broad-except
+                logger.exception(
+                    "specialist orphan reclaim failed: project=%s run=%s",
+                    project_id,
+                    record.run_id,
+                )
+                continue
+            await self._notify_specialist_terminal(
+                project_id,
+                specialist_run_id=record.run_id,
+                role_name=record.role.value,
+                target_refs=list(record.target_refs),
+                status="FAILED",
+                summary="进程重启导致该委派中断，未产出终态结果。",
+            )
 
     async def wait_until_idle(
         self,
@@ -2047,6 +2253,11 @@ class FileCreatorAgentRuntime:
                     session.session_id,
                     CreatorSessionStatus.IDLE,
                 )
+            elif session.status is CreatorSessionStatus.IDLE:
+                # Hard-cap parked NEXT_STEP notifications have no future
+                # run to ride into on an idle session; the poll-driven
+                # reconcile is their bounded escape valve.
+                await self._maybe_flush_idle_notifications(project_id)
             return
         message = user_messages[0]
         if self._blocked_heads.get(project_id) == message.message_seq:
@@ -2074,10 +2285,64 @@ class FileCreatorAgentRuntime:
             except SessionStateConflict:
                 pass
             return
+        # A detached specialist can create a Review after its mainline run
+        # already finished, so the Session never transitioned to
+        # PENDING_REVIEW. Gate on the durable Review record itself
+        # (read-only, and only when a run is about to launch): queued
+        # messages wait and are consumed once the user decides.
+        try:
+            active_review = await asyncio.to_thread(
+                self.services.reviews.active,
+                project_id,
+            )
+        except Exception:  # pylint: disable=broad-except
+            # Fail closed: with the Review state unknown (lock timeout,
+            # I/O error), launching a run could consume queued messages an
+            # active Review must hold. The next poll tick retries the read.
+            logger.exception(
+                "review gate read failed for %s; holding the queued message",
+                project_id,
+            )
+            return
+        if active_review is not None:
+            return
         run_id = f"agent-run-{uuid4().hex}"
         epoch = self._begin_epoch(project_id, run_id)
+        # Consecutive runtime-authored messages (notifications, resumes)
+        # merge into one run: three queued progress reports must not spend
+        # three model runs. Human requests and review-feedback messages
+        # keep their one-message-per-run identity — review repair budgets
+        # and target constraints are keyed to the request message.
+        batch = [message]
+        if (
+            message.source in BATCHABLE_NOTIFICATION_SOURCES
+            and message.review_boundary is None
+        ):
+            for item in user_messages[1:]:
+                if (
+                    item.source in BATCHABLE_NOTIFICATION_SOURCES
+                    and item.review_boundary is None
+                    and item.conversation_id == message.conversation_id
+                    # Specialist terminal notifications carry the
+                    # delegation-origin identity (repair dedup + paid
+                    # budget), which _delegation_origin resolves from the
+                    # run's HEAD message. Folding one into another head's
+                    # batch would strip that identity, so it must start
+                    # its own run.
+                    and item.metadata.get("notificationKind")
+                    != RuntimeEventKind.SUBAGENT_TERMINAL.value
+                ):
+                    batch.append(item)
+                else:
+                    break
         task = asyncio.create_task(
-            self._run_message(project_id, message, run_id=run_id, epoch=epoch),
+            self._run_message(
+                project_id,
+                message,
+                run_id=run_id,
+                epoch=epoch,
+                batch=batch,
+            ),
             name=f"creator-file-agent:{project_id}:{run_id}",
         )
         handle = _ProjectTask(
@@ -2097,16 +2362,45 @@ class FileCreatorAgentRuntime:
 
         task.add_done_callback(completed)
 
+    async def _maybe_flush_idle_notifications(self, project_id: str) -> None:
+        """Deliver hard-cap parked notifications once the session idles.
+
+        Skipped while detached specialists are still running (their
+        terminal steer or the run it wakes will drain the outbox) and
+        while a Review waits on the user (a human is already coming, and
+        their message resets the autonomous streak anyway).
+        """
+
+        if self._specialist_tasks.get(project_id):
+            return
+        try:
+            if not await self.notifications.has_flush_candidates(project_id):
+                return
+            active_review = await asyncio.to_thread(
+                self.services.reviews.active,
+                project_id,
+            )
+            if active_review is not None:
+                return
+            await self.notifications.flush_pending_on_idle(project_id)
+        except Exception:  # pylint: disable=broad-except
+            # The escape valve must never break the dispatch loop; parked
+            # records simply wait for the next poll tick.
+            logger.exception(
+                "idle notification flush failed for %s",
+                project_id,
+            )
+
     @traced_async(
         "creator.agent.execution",
         component="creator.file_agent_runtime",
-        context=lambda _self, project_id, message, *, run_id, epoch: {
+        context=lambda _self, project_id, message, *, run_id, epoch, **_kw: {
             "projectId": project_id,
             "sessionId": message.creator_session_id,
             "conversationId": message.conversation_id,
             "runId": run_id,
         },
-        attributes=lambda _self, project_id, message, *, run_id, epoch: {
+        attributes=lambda _self, project_id, message, *, run_id, epoch, **_kw: {
             "messageId": message.message_id,
             "messageSeq": message.message_seq,
             "epoch": epoch,
@@ -2119,7 +2413,12 @@ class FileCreatorAgentRuntime:
         *,
         run_id: str,
         epoch: int,
+        batch: list[CreatorMessageRecord] | None = None,
     ) -> None:
+        # ``batch`` is the head message plus any consecutive runtime-authored
+        # messages (notifications, resumes) merged into this run; consumption
+        # advances to the batch tail on success.
+        batch = batch if batch else [message]
         # Snapshot read: _run_message only needs session identity (session_id,
         # active_goal_id) to build the run record and resolve its goal; the
         # durable writes that follow (activate_run, runs.create, ...) take the
@@ -2232,9 +2531,7 @@ class FileCreatorAgentRuntime:
 
         commits = _FencedCommitBoundary(
             self,
-            project_id,
-            run_id,
-            epoch,
+            _EpochFence(self, project_id, run_id, epoch),
             ProjectCommitBoundary(self.services.projects),
         )
         tools = AgentProjectTools(
@@ -2243,6 +2540,7 @@ class FileCreatorAgentRuntime:
             transformer=self.services.jq,
             commits=commits,
         )
+        injected_settled = False
         try:
             result = await self._model_loop(
                 project_id=project_id,
@@ -2251,6 +2549,7 @@ class FileCreatorAgentRuntime:
                 epoch=epoch,
                 request=message,
                 tools=tools,
+                batch_tail=batch[1:],
             )
             self._assert_epoch(project_id, run_id, epoch)
             await asyncio.to_thread(
@@ -2269,9 +2568,15 @@ class FileCreatorAgentRuntime:
                 self.sessions.mark_messages_consumed,
                 project_id,
                 session.session_id,
-                through_seq=message.message_seq,
+                through_seq=batch[-1].message_seq,
                 goal_id=goal.goal_id,
             )
+            await self.notifications.settle_injected(
+                project_id,
+                run_id=run_id,
+                success=True,
+            )
+            injected_settled = True
             needs_review = bool(result.review_ids)
             await asyncio.to_thread(
                 self.sessions.set_goal_status,
@@ -2475,6 +2780,17 @@ class FileCreatorAgentRuntime:
                 retryable=False,
             )
             self._blocked_heads[project_id] = message.message_seq
+        finally:
+            if not injected_settled:
+                # The run did not reach its success settlement: whatever
+                # was injected into its wire messages never became durable
+                # context, so the records return to PENDING for the next
+                # delivery.
+                await self.notifications.settle_injected(
+                    project_id,
+                    run_id=run_id,
+                    success=False,
+                )
 
     async def _model_loop(
         self,
@@ -2485,6 +2801,7 @@ class FileCreatorAgentRuntime:
         epoch: int,
         request: CreatorMessageRecord,
         tools: AgentProjectTools,
+        batch_tail: list[CreatorMessageRecord] | None = None,
     ) -> _LoopResult:
         # External skills never break the run: loading is isolated and a
         # broken configuration only yields an empty toolset/context block.
@@ -2518,7 +2835,11 @@ class FileCreatorAgentRuntime:
             },
             {
                 "role": "user",
-                "content": _continuation_message_text(request, prior_context),
+                "content": _continuation_message_text(
+                    request,
+                    prior_context,
+                    batch_tail=batch_tail,
+                ),
             },
         ]
         tool_call_count = 0
@@ -2555,6 +2876,20 @@ class FileCreatorAgentRuntime:
         while turn_number < effective_max_turns:
             turn_number += 1
             self._assert_epoch(project_id, run_id, epoch)
+            # Turn-boundary drain: quiet progress staged while this run is
+            # working (e.g. a detached specialist finishing mid-run) joins
+            # the live conversation as a non-durable user turn instead of
+            # waiting for the run to end. Durable steer messages are NOT
+            # injected here — they queue in the inbox and would be
+            # double-delivered.
+            injected_digest = await self.notifications.inject_pending_into_run(
+                project_id,
+                run_id=run_id,
+            )
+            if injected_digest:
+                messages.append(
+                    {"role": "user", "content": injected_digest},
+                )
             _compact_wire_project_snapshots(messages)
             assistant_message_id = f"message-{uuid4().hex}"
             delta_index = 0
@@ -3031,7 +3366,7 @@ class FileCreatorAgentRuntime:
                 parent_run_id=run_id,
                 specialist_run_id=run_id,
                 round_id=tools.context.round_id or f"agent-round-{run_id}",
-                epoch=epoch,
+                fence=_EpochFence(self, project_id, run_id, epoch),
                 request=request,
                 common=common,
                 call_id=call_id,
@@ -3922,6 +4257,50 @@ class FileCreatorAgentRuntime:
             skill_name=skill_name,
         )
 
+    async def _delegation_origin(
+        self,
+        project_id: str,
+        request: CreatorMessageRecord,
+    ) -> tuple[str, str]:
+        """Resolve which user message a delegation is really answering.
+
+        A specialist terminal notification is runtime-authored; the
+        delegation it prompts still belongs to the message that caused the
+        reported specialist run (e.g. a review-feedback message whose
+        repair identity gates dedup and the paid repair budget).
+        """
+
+        if (
+            request.source != NOTIFICATION_SOURCE
+            or request.metadata.get("notificationKind")
+            != RuntimeEventKind.SUBAGENT_TERMINAL.value
+        ):
+            return request.source, request.message_id
+        specialist_run_id = str(
+            request.metadata.get("specialistRunId") or "",
+        )
+        if not specialist_run_id:
+            return request.source, request.message_id
+        try:
+            record = await asyncio.to_thread(
+                self.executions.get_specialist_run,
+                project_id,
+                specialist_run_id,
+            )
+        except Exception:  # pylint: disable=broad-except
+            return request.source, request.message_id
+        origin_source = str(
+            record.metadata.get("originSource") or "",
+        )
+        origin_message_id = str(
+            record.metadata.get("originMessageId")
+            or record.caused_by_message_id
+            or "",
+        )
+        if not origin_source or not origin_message_id:
+            return request.source, request.message_id
+        return origin_source, origin_message_id
+
     async def _run_subagent(
         self,
         *,
@@ -3948,7 +4327,17 @@ class FileCreatorAgentRuntime:
             "run_review_feedback",
             "render_review_feedback",
         }
-        if request.source in review_repair_sources:
+        # A repair delegation may arrive one hop later: the feedback run
+        # delegates, the specialist finishes asynchronously, and the model
+        # re-delegates from the terminal-notification run. The repair
+        # identity (dedup + paid budget) must follow that chain, or the
+        # notification hop would reopen an unbounded paid regeneration
+        # loop for the same feedback goal.
+        origin_source, origin_message_id = await self._delegation_origin(
+            project_id,
+            request,
+        )
+        if origin_source in review_repair_sources:
             prior_runs = await asyncio.to_thread(
                 self.executions.list_specialist_runs,
                 project_id,
@@ -3956,8 +4345,17 @@ class FileCreatorAgentRuntime:
             already_repaired = {
                 target_ref
                 for record in prior_runs
-                if record.caused_by_message_id == request.message_id
-                and record.status is SpecialistRunStatus.SUCCEEDED
+                if (
+                    record.caused_by_message_id == origin_message_id
+                    or record.metadata.get("originMessageId")
+                    == origin_message_id
+                )
+                and (
+                    record.status is SpecialistRunStatus.SUCCEEDED
+                    # A still-running repair holds its targets: asynchronous
+                    # delegation must not double-pay while it is in flight.
+                    or record.status not in TERMINAL_SPECIALIST_STATUSES
+                )
                 for target_ref in record.target_refs
             }
             repeated = already_repaired.intersection(delegated.target_refs)
@@ -3972,12 +4370,31 @@ class FileCreatorAgentRuntime:
                 )
         role = delegated.role
         role_name = role.value
+        self._assert_epoch(project_id, parent_run_id, epoch)
+        inflight_targets = sorted(
+            {
+                target_ref
+                for handle in self._specialist_tasks.get(
+                    project_id,
+                    {},
+                ).values()
+                for target_ref in handle.target_refs
+                if target_ref in set(delegated.target_refs)
+            },
+        )
+        if inflight_targets:
+            raise FileAgentRuntimeError(
+                "a specialist delegation is already in flight for: "
+                + ", ".join(inflight_targets)
+                + "; wait for its terminal Runtime notification instead of "
+                "delegating the same target again.",
+            )
         snapshot = await asyncio.to_thread(
             self.services.projects.read,
             project_id,
         )
         repair_attempts: dict[str, int] = {}
-        if request.source in review_repair_sources:
+        if origin_source in review_repair_sources:
             from services.run_review import admission
 
             reports_root = (
@@ -3989,7 +4406,7 @@ class FileCreatorAgentRuntime:
                 admission.admit_repair_attempts,
                 reports_root,
                 target_refs=delegated.target_refs,
-                attempt_id=f"{request.message_id}:{parent_action_id}",
+                attempt_id=f"{origin_message_id}:{parent_action_id}",
             )
             if admitted_attempts is None:
                 raise FileAgentRuntimeError(
@@ -4011,7 +4428,11 @@ class FileCreatorAgentRuntime:
             project_root=self.services.projects.project_root(project_id),
             target_refs=delegated.target_refs,
         )
-        record_metadata: dict[str, Any] = {"parentActionId": parent_action_id}
+        record_metadata: dict[str, Any] = {
+            "parentActionId": parent_action_id,
+            "originSource": origin_source,
+            "originMessageId": origin_message_id,
+        }
         if repair_attempts:
             record_metadata["reviewRepairAttempts"] = repair_attempts
         if request.source == "review_rejection_feedback":
@@ -4073,6 +4494,228 @@ class FileCreatorAgentRuntime:
             common,
         )
 
+        handle = _SpecialistHandle(
+            project_id=project_id,
+            specialist_run_id=specialist_run_id,
+            role=role_name,
+            target_refs=tuple(delegated.target_refs),
+        )
+        # The detached specialist owns its tools: commits go through a
+        # token fence, so a later mainline run (which increments the
+        # project epoch) can never invalidate this run's publications.
+        specialist_tools = AgentProjectTools(
+            self.services.projects,
+            context=tools.context,
+            transformer=self.services.jq,
+            commits=_FencedCommitBoundary(
+                self,
+                _TokenFence(handle),
+                ProjectCommitBoundary(self.services.projects),
+            ),
+        )
+        drive = asyncio.create_task(
+            self._drive_subagent(
+                project_id=project_id,
+                session_id=session_id,
+                parent_run_id=parent_run_id,
+                parent_action_id=parent_action_id,
+                request=request,
+                tools=specialist_tools,
+                delegated=delegated,
+                role=role,
+                snapshot=snapshot,
+                prompt=prompt,
+                specialist_run_id=specialist_run_id,
+                round_id=round_id,
+                common=common,
+                record_metadata=record_metadata,
+                handle=handle,
+            ),
+            name=f"creator-specialist:{project_id}:{specialist_run_id}",
+        )
+        handle.task = drive
+        self._specialist_tasks.setdefault(project_id, {})[
+            specialist_run_id
+        ] = handle
+
+        def _discard(
+            done: asyncio.Task[Any],
+            *,
+            owner: str = project_id,
+            run: str = specialist_run_id,
+        ) -> None:
+            handles = self._specialist_tasks.get(owner)
+            if handles is not None:
+                handles.pop(run, None)
+                if not handles:
+                    self._specialist_tasks.pop(owner, None)
+            if not done.cancelled() and done.exception() is not None:
+                logger.error(
+                    "specialist run crashed: project=%s run=%s",
+                    owner,
+                    run,
+                    exc_info=done.exception(),
+                )
+
+        drive.add_done_callback(_discard)
+        return {
+            "ok": True,
+            "status": "ACCEPTED",
+            "runId": specialist_run_id,
+            "role": role_name,
+            "targetRefs": list(delegated.target_refs),
+        }
+
+    async def _drive_subagent(
+        self,
+        *,
+        project_id: str,
+        session_id: str,
+        parent_run_id: str,
+        parent_action_id: str,
+        request: CreatorMessageRecord,
+        tools: AgentProjectTools,
+        delegated: DelegateToAgentInput,
+        role: SpecialistRole,
+        snapshot: Any,
+        prompt: str,
+        specialist_run_id: str,
+        round_id: str,
+        common: Mapping[str, Any],
+        record_metadata: dict[str, Any],
+        handle: _SpecialistHandle,
+    ) -> None:
+        """Drive one detached specialist run and report its terminal state.
+
+        Runs as a background task after delegate_to_agent returned
+        ACCEPTED; the terminal outcome reaches the mainline Agent through
+        the runtime notification bus (a durable user message), never
+        through a tool result.
+        """
+
+        try:
+            result = await self._drive_subagent_inner(
+                project_id=project_id,
+                session_id=session_id,
+                parent_run_id=parent_run_id,
+                parent_action_id=parent_action_id,
+                request=request,
+                tools=tools,
+                delegated=delegated,
+                role=role,
+                snapshot=snapshot,
+                prompt=prompt,
+                specialist_run_id=specialist_run_id,
+                round_id=round_id,
+                common=common,
+                record_metadata=record_metadata,
+                handle=handle,
+            )
+        except (asyncio.CancelledError, StaleAgentRun):
+            # Revoked by interrupt/stop/project-delete: a human took over,
+            # so no notification chases the cancelled work.
+            raise
+        except Exception as exc:  # pylint: disable=broad-except
+            await self._notify_specialist_terminal(
+                project_id,
+                specialist_run_id=specialist_run_id,
+                role_name=role.value,
+                target_refs=list(delegated.target_refs),
+                status="FAILED",
+                summary=f"{type(exc).__name__}: {exc}",
+            )
+            raise
+        await self._notify_specialist_terminal(
+            project_id,
+            specialist_run_id=specialist_run_id,
+            role_name=role.value,
+            target_refs=list(delegated.target_refs),
+            status=str(result.get("status") or "FAILED"),
+            summary=str(result.get("summary") or ""),
+            generation=result.get("generation"),
+            review_id=result.get("reviewId"),
+        )
+
+    async def _notify_specialist_terminal(
+        self,
+        project_id: str,
+        *,
+        specialist_run_id: str,
+        role_name: str,
+        target_refs: list[str],
+        status: str,
+        summary: str,
+        generation: int | None = None,
+        review_id: str | None = None,
+    ) -> None:
+        """Deliver one specialist terminal outcome as a steer notification."""
+
+        marker = {
+            "SUCCEEDED": "[SUCCESS]",
+            "BLOCKED": "[BLOCKED]",
+            "FAILED": "[FAILED]",
+            "WAITING_REVIEW": "[WAITING_REVIEW]",
+        }.get(status, f"[{status}]")
+        lines = [
+            f"Specialist 终态 {marker}：{role_name} 对 "
+            f"{'、'.join(target_refs)} 的委派已结束。",
+        ]
+        if summary:
+            lines.append(f"摘要：{summary}")
+        if generation is not None:
+            lines.append(f"Project generation：{generation}")
+        if status == "WAITING_REVIEW":
+            lines.append(
+                "该委派的产物正在等待审阅，这是正常暂停而不是制作失败：不要重试同一目标或启动其下游，可以继续处理不依赖该产物的目标。",
+            )
+        else:
+            lines.append(
+                "请重新读取 Project 核对该委派的实际产出，再决定下一步；不要重复已完成的工作。",
+            )
+        payload: dict[str, Any] = {
+            "specialistRunId": specialist_run_id,
+            "role": role_name,
+            "targetRefs": list(target_refs),
+            "specialistStatus": status,
+        }
+        if review_id:
+            payload["reviewId"] = review_id
+        try:
+            await self.notifications.notify(
+                project_id,
+                kind=RuntimeEventKind.SUBAGENT_TERMINAL,
+                request_id=f"specialist-{specialist_run_id}",
+                text="\n".join(lines),
+                payload=payload,
+            )
+        except Exception:  # pylint: disable=broad-except
+            logger.exception(
+                "specialist terminal notification failed: project=%s run=%s",
+                project_id,
+                specialist_run_id,
+            )
+
+    async def _drive_subagent_inner(
+        self,
+        *,
+        project_id: str,
+        session_id: str,
+        parent_run_id: str,
+        parent_action_id: str,
+        request: CreatorMessageRecord,
+        tools: AgentProjectTools,
+        delegated: DelegateToAgentInput,
+        role: SpecialistRole,
+        snapshot: Any,
+        prompt: str,
+        specialist_run_id: str,
+        round_id: str,
+        common: Mapping[str, Any],
+        record_metadata: dict[str, Any],
+        handle: _SpecialistHandle,
+    ) -> dict[str, Any]:
+        role_name = role.value
+        fence: _RunFence = _TokenFence(handle)
         user_text = (
             f"父任务的用户原始要求：\n{_message_text(request)}\n\n"
             f"本次委派：\n{delegated.task}\n\n"
@@ -4207,7 +4850,7 @@ class FileCreatorAgentRuntime:
                             ),
                         },
                     )
-                self._assert_epoch(project_id, parent_run_id, epoch)
+                fence.assert_alive()
                 message_id = f"specialist-message-{uuid4().hex}"
                 delta_index = 0
 
@@ -4215,7 +4858,7 @@ class FileCreatorAgentRuntime:
                     nonlocal delta_index
                     if not delta:
                         return
-                    self._assert_epoch(project_id, parent_run_id, epoch)
+                    fence.assert_alive()
                     await self._event(
                         project_id,
                         session_id,
@@ -4244,7 +4887,7 @@ class FileCreatorAgentRuntime:
                     complete: bool,
                 ) -> None:
                     nonlocal delta_index
-                    self._assert_epoch(project_id, parent_run_id, epoch)
+                    fence.assert_alive()
                     await self._event(
                         project_id,
                         session_id,
@@ -4596,7 +5239,7 @@ class FileCreatorAgentRuntime:
                         round_id=round_id,
                         role=role,
                         admitted_target_refs=delegated.target_refs,
-                        epoch=epoch,
+                        fence=fence,
                         request=request,
                         common=common,
                         call_id=call.call_id,
@@ -4954,14 +5597,32 @@ class FileCreatorAgentRuntime:
                 # specialist cleanup recreate Runtime directories below the
                 # removed id.
                 raise
-            await asyncio.to_thread(
-                self.executions.transition_specialist_run,
+            # The stop may land after the terminal status already persisted
+            # (the finalizer was still awaiting its terminal event): keep
+            # the durable outcome and propagate the cancellation — a CAS
+            # conflict here must never masquerade as a business failure
+            # that would chase a hard stop with a spurious [FAILED]
+            # notification.
+            current = await asyncio.to_thread(
+                self.executions.get_specialist_run,
                 project_id,
                 specialist_run_id,
-                expected_status=SpecialistRunStatus.RUNNING_MODEL,
-                status=SpecialistRunStatus.CANCELLED,
-                updates={"final_marker": "CANCELLED"},
             )
+            if current.status in TERMINAL_SPECIALIST_STATUSES:
+                raise
+            try:
+                await asyncio.to_thread(
+                    self.executions.transition_specialist_run,
+                    project_id,
+                    specialist_run_id,
+                    expected_status=current.status,
+                    status=SpecialistRunStatus.CANCELLED,
+                    updates={"final_marker": "CANCELLED"},
+                )
+            except ExecutionStateConflict:
+                # The run reached a terminal state concurrently; whoever
+                # moved it owns the outcome.
+                raise asyncio.CancelledError() from None
             # Emit subagent.failed so the frontend can disarm.
             await self._event(
                 project_id,
@@ -5016,7 +5677,7 @@ class FileCreatorAgentRuntime:
         round_id: str,
         role: SpecialistRole,
         admitted_target_refs: list[str],
-        epoch: int,
+        fence: _RunFence,
         request: CreatorMessageRecord,
         common: Mapping[str, Any],
         call_id: str,
@@ -5042,7 +5703,7 @@ class FileCreatorAgentRuntime:
                 parent_run_id=parent_run_id,
                 specialist_run_id=specialist_run_id,
                 round_id=round_id,
-                epoch=epoch,
+                fence=fence,
                 request=request,
                 common=common,
                 call_id=call_id,
@@ -5085,7 +5746,7 @@ class FileCreatorAgentRuntime:
                 parent_run_id=parent_run_id,
                 specialist_run_id=specialist_run_id,
                 round_id=round_id,
-                epoch=epoch,
+                fence=fence,
                 request=request,
                 common=common,
                 call_id=call_id,
@@ -5222,7 +5883,7 @@ class FileCreatorAgentRuntime:
                 task = await self._await_specialist_task(
                     project_id=project_id,
                     parent_run_id=parent_run_id,
-                    epoch=epoch,
+                    fence=fence,
                     task_id=invoked.task_id,
                 )
                 result.update(
@@ -5242,7 +5903,7 @@ class FileCreatorAgentRuntime:
                 result["tasks"] = await self._await_specialist_tasks(
                     project_id=project_id,
                     parent_run_id=parent_run_id,
-                    epoch=epoch,
+                    fence=fence,
                     task_ids=invoked.task_ids,
                 )
             if authorization_id is not None:
@@ -5285,7 +5946,7 @@ class FileCreatorAgentRuntime:
         parent_run_id: str,
         specialist_run_id: str,
         round_id: str,
-        epoch: int,
+        fence: _RunFence,
         request: CreatorMessageRecord,
         common: Mapping[str, Any],
         call_id: str,
@@ -5353,7 +6014,7 @@ class FileCreatorAgentRuntime:
                     session_id=session_id,
                     parent_run_id=parent_run_id,
                     specialist_run_id=specialist_run_id,
-                    epoch=epoch,
+                    fence=fence,
                     request=request,
                     common=common,
                     call_id=call_id,
@@ -5469,7 +6130,7 @@ class FileCreatorAgentRuntime:
         session_id: str,
         parent_run_id: str,
         specialist_run_id: str,
-        epoch: int,
+        fence: _RunFence,
         request: CreatorMessageRecord,
         common: Mapping[str, Any],
         call_id: str,
@@ -5490,7 +6151,7 @@ class FileCreatorAgentRuntime:
             )
         try:
             while authorization.status is ExecutionAuthorizationStatus.PENDING:
-                self._assert_epoch(project_id, parent_run_id, epoch)
+                fence.assert_alive()
                 await asyncio.sleep(min(self.poll_interval_seconds, 0.5))
                 authorization = await asyncio.to_thread(
                     self.executions.get_execution_authorization,
@@ -5608,7 +6269,7 @@ class FileCreatorAgentRuntime:
         parent_run_id: str,
         specialist_run_id: str,
         round_id: str,
-        epoch: int,
+        fence: _RunFence,
         request: CreatorMessageRecord,
         common: Mapping[str, Any],
         call_id: str,
@@ -5793,7 +6454,7 @@ class FileCreatorAgentRuntime:
             session_id=session_id,
             parent_run_id=parent_run_id,
             specialist_run_id=specialist_run_id,
-            epoch=epoch,
+            fence=fence,
             request=request,
             common=common,
             call_id=call_id,
@@ -5820,11 +6481,11 @@ class FileCreatorAgentRuntime:
         *,
         project_id: str,
         parent_run_id: str,
-        epoch: int,
+        fence: _RunFence,
         task_id: str,
     ) -> Any:
         while True:
-            self._assert_epoch(project_id, parent_run_id, epoch)
+            fence.assert_alive()
             task = await asyncio.to_thread(
                 self.executions.get_task,
                 project_id,
@@ -5848,7 +6509,7 @@ class FileCreatorAgentRuntime:
         *,
         project_id: str,
         parent_run_id: str,
-        epoch: int,
+        fence: _RunFence,
         task_ids: Sequence[str],
     ) -> list[dict[str, Any]]:
         """Await a batch of tasks in parallel, tolerating per-task failure.
@@ -5863,7 +6524,7 @@ class FileCreatorAgentRuntime:
                 task = await self._await_specialist_task(
                     project_id=project_id,
                     parent_run_id=parent_run_id,
-                    epoch=epoch,
+                    fence=fence,
                     task_id=task_id,
                 )
             except (asyncio.CancelledError, StaleAgentRun):
@@ -6242,6 +6903,12 @@ class FileCreatorAgentRuntime:
                 break
             if item.source == self.MAINLINE_RESUME_SOURCE:
                 continue
+            if item.source == NOTIFICATION_SOURCE:
+                # A runtime notification carries a new external fact, so it
+                # does not spend resume-fuse allowance; but it must not
+                # reset the streak either, or interleaved notifications
+                # would let resumes chain past the fuse forever.
+                continue
             break
         if resume_streak >= resume_limit:
             logger.warning(
@@ -6302,6 +6969,13 @@ class FileCreatorAgentRuntime:
             if auto_approve
             else self.PROMPT_CONTRACT_RESUME_SOURCE
         )
+        digest_identity = f"digest-{run_id}"
+        digest_prefix = await self.notifications.drain_into_resume(
+            project_id,
+            assigned_to=digest_identity,
+        )
+        if digest_prefix:
+            text = digest_prefix + "\n" + text
         appended = await asyncio.to_thread(
             self.sessions.append_message,
             project_id,
@@ -6319,6 +6993,10 @@ class FileCreatorAgentRuntime:
                     node.node_id for node in feedback_nodes[:12]
                 ],
             },
+        )
+        await self.notifications.settle_resume(
+            project_id,
+            assigned_to=digest_identity,
         )
         await self._event(
             project_id,
@@ -6418,6 +7096,13 @@ class FileCreatorAgentRuntime:
         )
         if mainline_goal:
             text += f"\n\n被中断的主线任务原始请求：\n{mainline_goal}"
+        digest_identity = f"digest-mainline-{intervention_run_id}"
+        digest_prefix = await self.notifications.drain_into_resume(
+            project_id,
+            assigned_to=digest_identity,
+        )
+        if digest_prefix:
+            text = digest_prefix + "\n" + text
         appended = await asyncio.to_thread(
             self.sessions.append_message,
             project_id,
@@ -6431,6 +7116,10 @@ class FileCreatorAgentRuntime:
                 "resumeAfterRunId": intervention_run_id,
                 "interruptedRunId": interrupted_run_id,
             },
+        )
+        await self.notifications.settle_resume(
+            project_id,
+            assigned_to=digest_identity,
         )
         await self._event(
             project_id,
@@ -6645,6 +7334,9 @@ class FileCreatorAgentRuntime:
                 )
             except SessionStateConflict:
                 pass
+            # A human took over: staged automatic progress must not resurface
+            # inside a later notification hours after this stop.
+            await self.notifications.cancel_pending(project_id)
         try:
             await asyncio.to_thread(
                 self.sessions.set_goal_status,
@@ -7379,10 +8071,32 @@ def _compact_wire_project_snapshots(messages: list[dict[str, Any]]) -> None:
 def _continuation_message_text(
     request: CreatorMessageRecord,
     prior_context: list[CreatorMessageRecord],
+    *,
+    batch_tail: list[CreatorMessageRecord] | None = None,
 ) -> str:
     """Carry one durable AgentDock Conversation into the next Agent run."""
 
     current = _message_text(request)
+    if batch_tail:
+        batch_payload = [
+            {
+                "messageSeq": item.message_seq,
+                "source": item.source,
+                "text": _message_text(item),
+                "metadata": dict(item.metadata),
+            }
+            for item in batch_tail
+        ]
+        current += (
+            "\n\n以下 RUNTIME_NOTIFICATIONS_BATCH 是与本请求一并送达的后续"
+            "Runtime 自动消息（已合并进本回合，处理完本回合即视为处理完毕）：\n"
+            "RUNTIME_NOTIFICATIONS_BATCH="
+            + json.dumps(
+                batch_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
     if not prior_context:
         return current
     snapshot_receipts = _elide_stale_snapshots(prior_context)

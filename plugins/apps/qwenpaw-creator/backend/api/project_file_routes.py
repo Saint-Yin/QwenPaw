@@ -439,7 +439,10 @@ async def _acquire_existing_project_lifecycle(
     phantom directory without ``project.json``.
     """
 
-    lifecycle_lock = services.projects.lifecycle_lock(project_id)
+    lifecycle_lock = services.projects.lifecycle_lock(
+        project_id,
+        cross_thread_hold=True,
+    )
     await asyncio.to_thread(lifecycle_lock.acquire)
     try:
         await _require_existing_project(services, project_id)
@@ -650,7 +653,10 @@ async def patch_project(
         idempotency_key=key,
         request_hash=request_hash,
     )
-    lifecycle_lock = services.projects.lifecycle_lock(project_id)
+    lifecycle_lock = services.projects.lifecycle_lock(
+        project_id,
+        cross_thread_hold=True,
+    )
     try:
         await asyncio.to_thread(lifecycle_lock.acquire)
         # Close the read/delete window before any idempotency or operation lock
@@ -678,6 +684,7 @@ async def patch_project(
         owner_id=project_id,
         scope=scope,
         idempotency_key=key,
+        cross_thread_hold=True,
     )
     try:
         await asyncio.to_thread(operation_lock.acquire)
@@ -1039,6 +1046,7 @@ async def decide_project_review(
         owner_id=project_id,
         scope=scope,
         idempotency_key=key,
+        cross_thread_hold=True,
     )
     try:
         await asyncio.to_thread(operation_lock.acquire)
