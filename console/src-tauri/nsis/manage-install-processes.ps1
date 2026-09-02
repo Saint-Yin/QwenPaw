@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$InstallDir,
     [ValidateSet("Prepare", "Restore")]
-    [string]$Action = "Prepare"
+    [string]$Action = "Prepare",
+    [int]$NsisProcessId = 0
 )
 
 # Prepare a recognized QwenPaw installation for NSIS replacement. The script
@@ -157,9 +158,15 @@ function Test-IsQwenPawInstall {
 }
 
 function Get-ScopedProcesses {
-    param([string]$Root)
+    param(
+        [string]$Root,
+        [int[]]$ExcludedProcessIds = @()
+    )
 
     $result = foreach ($process in @(Get-CimInstance Win32_Process)) {
+        if ($ExcludedProcessIds -contains $process.ProcessId) {
+            continue
+        }
         $path = Get-NormalizedPath -Path "$($process.ExecutablePath)"
         if (Test-PathBelowRoot -Path $path -Root $Root) {
             @{
@@ -173,6 +180,18 @@ function Get-ScopedProcesses {
     return @($result)
 }
 
+function Get-NsisProcessIds {
+    param([int]$ProcessId)
+
+    if ($ProcessId -le 0) {
+        return @()
+    }
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId"
+    return @($ProcessId, $process.ParentProcessId) |
+        Where-Object { $_ -gt 0 } |
+        Sort-Object -Unique
+}
+
 function Test-IsAutomaticProcess {
     param(
         [object]$Process,
@@ -180,7 +199,8 @@ function Test-IsAutomaticProcess {
     )
 
     $relative = $Process.ExecutablePath.Substring($Root.Length).TrimStart("\")
-    if ($relative -ieq "binaries\qwenpaw-backend\qwenpaw-backend.exe" -or
+    if ($relative -ieq "qwenpaw-desktop.exe" -or
+        $relative -ieq "binaries\qwenpaw-backend\qwenpaw-backend.exe" -or
         $relative -ieq "binaries\qwenpaw-backend\qwenpaw.exe") {
         return $true
     }
@@ -236,7 +256,8 @@ try {
     }
 
     Enable-NativeHostGate -Root $root
-    $scoped = Get-ScopedProcesses -Root $root
+    $nsisProcessIds = Get-NsisProcessIds -ProcessId $NsisProcessId
+    $scoped = Get-ScopedProcesses -Root $root -ExcludedProcessIds $nsisProcessIds
     $automatic = @(
         $scoped | Where-Object {
             Test-IsAutomaticProcess -Process $_ -Root $root
@@ -244,7 +265,7 @@ try {
     )
     Stop-ProcessRecords -Processes $automatic
 
-    $remaining = Get-ScopedProcesses -Root $root
+    $remaining = Get-ScopedProcesses -Root $root -ExcludedProcessIds $nsisProcessIds
     if ($remaining.Count -gt 0) {
         Write-Output "Close these processes before continuing:"
         Write-ProcessList -Processes $remaining -Root $root
