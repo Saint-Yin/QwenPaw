@@ -8,6 +8,7 @@ import type {
 } from "@/contracts/creator";
 import {
   orderedTimelineElements,
+  selectLiveTimelineIds,
   timelineEndTick,
 } from "./timelineElementSelectors";
 
@@ -79,32 +80,27 @@ export function selectTimelineRenderSlot(
 }
 
 /**
- * The whole composed film of the project: the newest rendered final_video
- * artifact backed by a real video file. Mirrors the backend derivation of
- * `finalVideoVersionId` (store._final_video_reference) so the blueprint
- * surfaces the same 成片 the project list previews.
+ * The whole film the UI may promise as 整片/成片.
+ *
+ * Composes are per-timeline artifacts (`timeline:{id}:render`), so a whole
+ * film only exists when the project has exactly ONE live timeline — and
+ * only the version the user currently has selected on that slot, while it
+ * is still fresh. Multi-episode projects return null: a single episode's
+ * final render must never masquerade as the whole project, and a stale or
+ * unselected newer version must never shadow the user's active choice.
  */
 export function selectFinalFilmVersionId(
   project: ProjectDocument | null | undefined,
 ): string | null {
   if (!project) return null;
-  const files = project.assets.files_by_id;
-  let newest: ArtifactVersionDocument | null = null;
-  for (const version of Object.values(
-    project.assets.artifact_versions_by_id,
-  )) {
-    if (version.kind !== "final_video" || !version.file_id) continue;
-    if (!files[version.file_id]?.media_type?.startsWith("video/")) continue;
-    if (
-      !newest ||
-      version.created_at > newest.created_at ||
-      (version.created_at === newest.created_at &&
-        version.version_id > newest.version_id)
-    ) {
-      newest = version;
-    }
-  }
-  return newest?.version_id ?? null;
+  const live = selectLiveTimelineIds(project);
+  if (live.length !== 1) return null;
+  const render = selectTimelineRenderSlot(project, live[0]);
+  const selected = render?.selected;
+  if (!selected || selected.stale || !selected.file_id) return null;
+  const file = project.assets.files_by_id[selected.file_id];
+  if (!file?.media_type?.startsWith("video/")) return null;
+  return selected.version_id;
 }
 
 const VIDEO_CREATION_TYPES = new Set([
@@ -279,12 +275,12 @@ export function roughCutFrameForElement(
   return { versionId: null, versionKind: null, mediaKind: null, source: "none" };
 }
 
-/** All frames of the project: every enabled element, timeline order first. */
+/** All frames of the live timelines (history snapshots excluded). */
 export function selectRoughCutFrames(
   project: ProjectDocument | null | undefined,
 ): RoughCutFrame[] {
   if (!project) return [];
-  return project.timelines.order.flatMap((timelineId, timelineIndex) => {
+  return selectLiveTimelineIds(project).flatMap((timelineId, timelineIndex) => {
     const timeline = project.timelines.items[timelineId];
     if (!timeline) return [];
     return orderedTimelineElements(timeline)
@@ -367,10 +363,7 @@ export function selectTimelineSummaries(
   project: ProjectDocument | null | undefined,
 ): TimelineSummary[] {
   if (!project) return [];
-  return project.timelines.order
-    // Snapshot timelines are version history (历史快照), not episodes.
-    .filter((timelineId) => !timelineId.startsWith("snapshot:"))
+  return selectLiveTimelineIds(project)
     .map((timelineId, index) => summarizeTimeline(project, timelineId, index))
     .filter((summary): summary is TimelineSummary => Boolean(summary));
 }
-

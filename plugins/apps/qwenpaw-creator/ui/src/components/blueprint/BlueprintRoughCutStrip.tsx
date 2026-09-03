@@ -22,6 +22,7 @@ import {
   selectRoughCutFrames,
   type RoughCutSource,
 } from "@/selectors/blueprintSelectors";
+import { selectLiveTimelineIds } from "@/selectors/timelineElementSelectors";
 
 const SOURCE_STYLE: Record<RoughCutSource, string> = {
   final: "bg-[var(--color-success)]/90",
@@ -82,6 +83,11 @@ function PreviewCinema({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  const liveOrder = useMemo(
+    () => selectLiveTimelineIds(project),
+    [project],
+  );
+
   const advanceTo = useCallback((timelineId: string) => {
     setCurrentId(timelineId);
     setSegmentIndex((index) => index + 1);
@@ -95,15 +101,14 @@ function PreviewCinema({
       setEnded(true);
       return;
     }
-    // Linear story: fall through the ordered timelines.
-    const order = project.timelines.order;
-    const next = order[order.indexOf(currentId) + 1];
+    // Linear story: fall through the live timelines in narrative order.
+    const next = liveOrder[liveOrder.indexOf(currentId) + 1];
     if (next) {
       advanceTo(next);
       return;
     }
     setEnded(true);
-  }, [wholeFilm, currentId, project, advanceTo]);
+  }, [wholeFilm, currentId, liveOrder, advanceTo]);
 
   const replay = useCallback(() => {
     setReplayNonce((nonce) => nonce + 1);
@@ -113,8 +118,8 @@ function PreviewCinema({
       return;
     }
     setSegmentIndex(0);
-    advanceTo(project.timelines.order[0] ?? startId);
-  }, [wholeFilm, project, startId, advanceTo]);
+    advanceTo(liveOrder[0] ?? startId);
+  }, [wholeFilm, liveOrder, startId, advanceTo]);
 
   const badgeLabel = wholeFilm
     ? `${project.name} · ${t("blueprint.finalCutBadge")}`
@@ -272,7 +277,9 @@ export default function BlueprintRoughCutStrip({
         <button
           type="button"
           data-roughcut-preview-all
-          onClick={() => setPlayingId(project.timelines.order[0])}
+          onClick={() =>
+            setPlayingId(selectLiveTimelineIds(project)[0] ?? null)
+          }
           className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-[var(--color-text-primary)] px-2.5 py-1 text-[10px] font-bold text-[var(--color-bg-primary)] shadow-[0_2px_8px_rgba(0,0,0,.2)] transition-all hover:-translate-y-px hover:opacity-90"
         >
           <Play className="h-3 w-3" />

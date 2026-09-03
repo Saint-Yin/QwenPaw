@@ -212,3 +212,62 @@ def test_unknown_timeline_is_rejected(tmp_path, monkeypatch) -> None:
                 idempotency_key="dag-script-x",
             ),
         )
+
+# ---- guidance 是 prompt 输入：必须进指纹，不能被语义复放吞掉 -------------
+
+
+def _draft(services, *, guidance=None, key):
+    arguments = {} if guidance is None else {"guidance": guidance}
+    return asyncio.run(
+        execute_file_script_command(
+            services,
+            project_id=PROJECT_ID,
+            target_ref="timeline:timeline:ep2",
+            arguments=arguments,
+            idempotency_key=key,
+        ),
+    )
+
+
+def test_first_guidance_reaches_the_model_as_a_new_draft(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    services = _services(tmp_path)
+    calls = _mock_chat(monkeypatch, [DRAFT, DRAFT + "\n\n（喜剧结尾稿）"])
+
+    first = _draft(services, key="dag-script-1")
+    second = _draft(services, guidance="改成喜剧结尾", key="dag-script-2")
+
+    assert not second.replayed
+    assert second.artifact_version_id != first.artifact_version_id
+    assert len(calls) == 2
+    assert "改成喜剧结尾" in calls[1]["prompt"]
+
+
+def test_same_guidance_retry_still_replays(tmp_path, monkeypatch) -> None:
+    services = _services(tmp_path)
+    calls = _mock_chat(monkeypatch, [DRAFT])
+
+    first = _draft(services, guidance="改成喜剧结尾", key="dag-script-1")
+    retry = _draft(services, guidance="改成喜剧结尾", key="dag-script-2")
+
+    assert retry.replayed
+    assert retry.artifact_version_id == first.artifact_version_id
+    assert len(calls) == 1
+
+
+def test_different_guidance_drafts_a_new_version(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    services = _services(tmp_path)
+    calls = _mock_chat(monkeypatch, [DRAFT, DRAFT + "\n\n（悲剧结尾稿）"])
+
+    first = _draft(services, guidance="改成喜剧结尾", key="dag-script-1")
+    second = _draft(services, guidance="改成悲剧结尾", key="dag-script-2")
+
+    assert not second.replayed
+    assert second.artifact_version_id != first.artifact_version_id
+    assert len(calls) == 2
+    assert "改成悲剧结尾" in calls[1]["prompt"]

@@ -6144,7 +6144,13 @@ class FileCreatorAgentRuntime:
                 self.services.projects.read,
                 project_id,
             )
-            timeline_count = len(snapshot.project.timelines.order)
+            from services.project_files.models import (
+                narrative_timeline_ids,
+            )
+
+            timeline_count = len(
+                narrative_timeline_ids(snapshot.project),
+            )
         except Exception:  # pylint: disable=broad-except
             timeline_count = None
         for phase in required_checkpoint_phases(

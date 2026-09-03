@@ -22,7 +22,11 @@ from domain.errors import ValidationError
 from models import text_model
 from services.project_files.assets import AssetAlreadyExists, AssetFileStore
 from services.project_files.facade import CreatorFileServices
-from services.project_files.models import Project, Timeline
+from services.project_files.models import (
+    Project,
+    Timeline,
+    narrative_timeline_ids,
+)
 from services.project_files.script_artifacts import (
     add_script_version,
     script_file_relative_uri,
@@ -138,7 +142,10 @@ def _narrative_context(project: Project, timeline_id: str) -> str:
     """本集在整体结构中的位置：前后集。"""
 
     lines: list[str] = []
-    for index, other_id in enumerate(project.timelines.order, start=1):
+    for index, other_id in enumerate(
+        narrative_timeline_ids(project),
+        start=1,
+    ):
         other = project.timelines.items[other_id]
         marker = "←本集" if other_id == timeline_id else ""
         lines.append(
@@ -191,7 +198,29 @@ def _build_script_prompt(
     return "\n\n".join(sections)
 
 
-def _request_fingerprint(project: Project, timeline: Timeline) -> str:
+def _intelligence_version_ids(project: Project) -> list[str]:
+    """The intelligence versions the prompt digest reads, in source order."""
+
+    ids: list[str] = []
+    for source_id in project.sources.sources.order:
+        if len(ids) >= _MAX_INTELLIGENCE_SOURCES:
+            break
+        source = project.sources.sources.items[source_id]
+        if source.current_intelligence_version_id is not None:
+            ids.append(source.current_intelligence_version_id)
+    return ids
+
+
+def _request_fingerprint(
+    project: Project,
+    timeline: Timeline,
+    *,
+    guidance: str,
+) -> str:
+    # Every persisted input that reaches the prompt must be covered here;
+    # otherwise an edited input silently replays a stale version. The user's
+    # explicit rewrite guidance is an input too — identical retries of the
+    # same guidance still replay, but new guidance must reach the model.
     digest = hashlib.sha256(
         "\x1f".join(
             [
@@ -200,11 +229,14 @@ def _request_fingerprint(project: Project, timeline: Timeline) -> str:
                 timeline.synopsis,
                 str(timeline.planned_duration_seconds or ""),
                 project.strategy.creative_brief,
+                project.strategy.audience,
                 project.strategy.creative_direction,
                 project.strategy.constraints,
                 # The prompt embeds the whole narrative structure (episode
                 # list + branch edges); new episodes/edges must re-draft.
                 _narrative_context(project, timeline.timeline_id),
+                guidance,
+                *_intelligence_version_ids(project),
             ],
         ).encode("utf-8"),
     ).hexdigest()
@@ -349,7 +381,8 @@ async def execute_file_script_command(
     if timeline is None:
         raise ValidationError(f"timeline 不存在: {timeline_id}")
 
-    fingerprint = _request_fingerprint(project, timeline)
+    guidance = str(arguments.get("guidance") or "").strip()
+    fingerprint = _request_fingerprint(project, timeline, guidance=guidance)
     # Stale re-drafts share the node's dispatch idempotency key but must not
     # reuse a previous publish transaction. Staleness triggers on more inputs
     # than the fingerprint covers (e.g. element edits), so scope the durable
@@ -385,7 +418,6 @@ async def execute_file_script_command(
         project,
     )
     prompt = _build_script_prompt(project, timeline, intelligence_digest)
-    guidance = str(arguments.get("guidance") or "").strip()
     if guidance:
         prompt += f"\n\n额外修改意见（必须遵循）：{guidance}"
     raw = await text_model.chat_completion(
