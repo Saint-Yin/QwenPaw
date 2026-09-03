@@ -54,3 +54,29 @@ export function createCharacterVoice(
     { timeoutMs: 120_000 },
   );
 }
+
+export interface RegenerateNarrationResult {
+  audioVersionId: string;
+  replayed: boolean;
+  rebound: boolean;
+  voice: string;
+  model: string;
+  durationSeconds: number | null;
+}
+
+/** Re-synthesize one narration element's audio (no agent turn) and rebind
+ *  the element to the fresh version; the enrolled voice rides along. */
+export function regenerateNarration(
+  projectId: string,
+  timelineId: string,
+  elementId: string,
+): Promise<RegenerateNarrationResult> {
+  return creatorRequest(
+    `${project(projectId)}/timelines/${encodeURIComponent(
+      timelineId,
+    )}/elements/${encodeURIComponent(elementId)}/narration`,
+    { method: "POST" },
+    // TTS synthesis is a provider round-trip; don't cut it off.
+    { timeoutMs: 120_000 },
+  );
+}

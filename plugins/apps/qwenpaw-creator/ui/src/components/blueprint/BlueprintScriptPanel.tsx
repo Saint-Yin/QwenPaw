@@ -8,7 +8,7 @@ import type {
   TimelineElementDocument,
 } from "@/contracts/creator";
 import { getArtifactVersionMediaUrl } from "@/api/creator";
-import { useCreatorSessionStore } from "@/store/creatorSessionStore";
+import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import {
   selectTimelineScriptSlot,
@@ -395,10 +395,22 @@ export default function BlueprintScriptPanel({
   };
 
   const requestChanges = () => {
-    void useCreatorSessionStore.getState().sendMessage({
-      message: t("blueprint.requestChangesMessage", { title }),
+    // Prefill the assistant composer instead of firing a message: the
+    // script rides along as a selection attachment and the user adds
+    // concrete feedback before sending.
+    const dock = useAgentDockUiStore.getState();
+    dock.setSelection({
+      text: timeline.synopsis || title,
+      ref: `timeline:${timelineId}`,
+      field: script?.slot.slot_id ?? null,
+      start: 0,
+      end: 0,
+      label: t("blueprint.scriptAttachmentLabel", { title }),
+      kind: "text",
     });
-    message.success(t("blueprint.requestChangesQueued"));
+    dock.setDraft(t("blueprint.requestChangesDraft", { title }));
+    dock.setSidebarTab("assistant");
+    message.success(t("blueprint.requestChangesPrefilled"));
   };
 
   return (
