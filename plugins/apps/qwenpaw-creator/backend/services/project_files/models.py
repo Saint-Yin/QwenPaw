@@ -277,6 +277,8 @@ ARTIFACT_SLOT_KINDS = frozenset(
         "element_video",
         "final_video",
         "r2v_storyboard_image",
+        "research_report",
+        "timeline_script",
         "visual_asset_image",
     },
 )
@@ -496,6 +498,9 @@ class CharacterVoice(StrictModel):
     target_model: str = Field(min_length=1)
     preferred_name: str = ""
     sample_source_version_id: EntityId | None = None
+    # Design-path timbre description; kept so the voice can be tweaked and
+    # regenerated from the asset library without re-deriving the prompt.
+    voice_prompt: str = ""
     enrollment_key: str = ""
     created_at: UtcDateTime
 
@@ -1220,6 +1225,13 @@ class Timeline(StrictModel):
     """One time coordinate system containing freely overlapping Elements."""
 
     timeline_id: EntityId
+    # Narrative-node display fields consumed by the project blueprint: a
+    # Timeline doubles as one narrative node (episode / ending / the single
+    # video). All optional so pre-v9 projects stay valid untouched.
+    title: str = ""
+    synopsis: str = ""
+    planned_duration_seconds: float | None = Field(default=None, gt=0)
+    # Multi-timeline naming (A/B compare snapshots).
     name: str = ""
     description: str = ""
     ticks_per_second: int = Field(
@@ -1604,6 +1616,13 @@ class Project(StrictModel):
                 element_timelines[element_id] = timeline
 
         for element_id, element in elements.items():
+            if element_timelines[element_id].timeline_id.startswith(
+                "snapshot:",
+            ):
+                # 历史快照是冻结副本：元素 id 带快照前缀，outputs/引用指向
+                # 拍摄当时的资产（slot 不随副本复制）。资产引用校验只对活
+                # 时间线成立；恢复快照时前缀被剥除，引用重新指回真实资产。
+                continue
             creation = element.creation
             if isinstance(creation, R2VCreation):
                 _require_version_refs(

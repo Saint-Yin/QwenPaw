@@ -267,7 +267,7 @@ export function LiveSelectionDemo() {
         <button
           type="button"
           onClick={runDemo}
-          className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-[var(--color-accent)] px-2 py-1 text-[10px] font-semibold text-white transition hover:opacity-90"
+          className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-[var(--color-text-primary)] px-2 py-1 text-[10px] font-semibold text-[var(--color-bg-primary)] transition hover:opacity-90"
         >
           <Play className="h-3 w-3" />
           {t("tourMocks.simulateSelect")}
@@ -296,7 +296,7 @@ export function LiveDockToggleDemo() {
         <button
           type="button"
           onClick={() => setOpen(!open)}
-          className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-[var(--color-accent)] px-2 py-1 text-[10px] font-semibold text-white transition hover:opacity-90"
+          className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-[var(--color-text-primary)] px-2 py-1 text-[10px] font-semibold text-[var(--color-bg-primary)] transition hover:opacity-90"
         >
           <Play className="h-3 w-3" />
           {open ? t("tourMocks.collapsePanel") : t("tourMocks.expandPanel")}

@@ -201,3 +201,114 @@ class TestAutoSnapshotTimelines:
         items = c2["timelines"]["items"]
         assert "snapshot:timeline:main:1" in items
         assert "snapshot:timeline:main:2" in items
+
+
+class TestSnapshotProjectValidation:
+    """Frozen snapshots must survive full Project validation.
+
+    Snapshot copies remap element ids (and therefore their outputs'
+    slot ids) without cloning the ArtifactSlots — the validator exempts
+    snapshot-timeline elements from asset-reference checks, while live
+    timelines keep the strict guarantees.
+    """
+
+    @staticmethod
+    def _project_with_output() -> dict:
+        from datetime import datetime, timezone
+
+        from services.project_files.models import Project
+
+        raw = Project.new(
+            project_id="project-snap",
+            name="Snapshot Project",
+            scenario="video_edit",
+            now=datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc),
+        ).model_dump(mode="json")
+        raw["assets"]["files_by_id"] = {
+            "file-video": {
+                "file_id": "file-video",
+                "kind": "artifact_payload",
+                "relative_uri": "assets/artifacts/element-1/main.mp4",
+                "sha256": "a" * 64,
+                "size_bytes": 123,
+                "media_type": "video/mp4",
+                "created_at": "2026-09-03T08:00:00Z",
+            },
+        }
+        raw["assets"]["artifact_versions_by_id"] = {
+            "artifact-1": {
+                "version_id": "artifact-1",
+                "slot_id": "element:element-1:main",
+                "kind": "element_video",
+                "owner_ref": "element:element-1",
+                "name": "main video",
+                "file_id": "file-video",
+                "checksum": "a" * 64,
+                "based_on_generation": 1,
+                "provenance_refs": [],
+                "thumbnail_file_id": None,
+                "duration_seconds": 3,
+                "input_fingerprint": None,
+                "stale": False,
+                "created_at": "2026-09-03T08:00:00Z",
+                "metadata": {},
+            },
+        }
+        raw["assets"]["artifact_slots_by_id"] = {
+            "element:element-1:main": {
+                "slot_id": "element:element-1:main",
+                "kind": "element_video",
+                "owner_ref": "element:element-1",
+                "version_ids": ["artifact-1"],
+                "selected_version_id": "artifact-1",
+                "metadata": {},
+            },
+        }
+        raw["timelines"]["items"]["timeline:main"]["elements_by_id"] = {
+            "element-1": {
+                "element_id": "element-1",
+                "label": "T2V Element",
+                "enabled": True,
+                "span": {"start_tick": 0, "duration_tick": 3000},
+                "location": None,
+                "z_index": 0,
+                "creation": {
+                    "type": "t2v",
+                    "intent": "",
+                    "video_prompt": "一只猫",
+                },
+                "outputs": {"main": {"slot_id": "element:element-1:main"}},
+                "render_source": None,
+                "provenance_refs": [],
+            },
+        }
+        return raw
+
+    def test_snapshot_with_remapped_outputs_validates(self):
+        from services.project_files.models import Project
+
+        raw = self._project_with_output()
+        Project.model_validate(raw)  # live baseline is valid
+
+        base = copy.deepcopy(raw)
+        base["timelines"]["items"]["timeline:main"]["elements_by_id"] = {}
+        auto_snapshot_timelines(base, raw)
+        snapshot_ids = [
+            tid
+            for tid in raw["timelines"]["order"]
+            if tid.startswith("snapshot:")
+        ]
+        assert snapshot_ids, "auto snapshot must fire for element changes"
+        # The snapshot's remapped slot reference has no ArtifactSlot — the
+        # exemption keeps the whole Project valid regardless.
+        Project.model_validate(raw)
+
+    def test_live_timeline_keeps_strict_slot_validation(self):
+        from services.project_files.models import Project
+
+        raw = self._project_with_output()
+        raw["timelines"]["items"]["timeline:main"]["elements_by_id"][
+            "element-1"
+        ]["outputs"]["main"]["slot_id"] = "element:missing:main"
+        with pytest.raises(Exception, match="ArtifactSlot"):
+            Project.model_validate(raw)
