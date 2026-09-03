@@ -331,10 +331,7 @@ function SourceDetail({
           <KvLines
             kv={[
               [t("common.name"), source.display_name || source.source_id],
-              [
-                t("blueprint.mediaKind"),
-                version?.media_kind ?? "—",
-              ],
+              [t("blueprint.mediaKind"), version?.media_kind ?? "—"],
               [
                 t("common.duration"),
                 version?.duration_seconds != null
@@ -738,8 +735,7 @@ export default function BlueprintPrepDrawer({
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        {detailNode ??
-          (tab === "visual" ? visualGrid : researchList)}
+        {detailNode ?? (tab === "visual" ? visualGrid : researchList)}
       </div>
     </div>
   );

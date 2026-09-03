@@ -83,10 +83,7 @@ function PreviewCinema({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const liveOrder = useMemo(
-    () => selectLiveTimelineIds(project),
-    [project],
-  );
+  const liveOrder = useMemo(() => selectLiveTimelineIds(project), [project]);
 
   const advanceTo = useCallback((timelineId: string) => {
     setCurrentId(timelineId);
@@ -148,7 +145,7 @@ function PreviewCinema({
           // in either orientation.
           <video
             key={`${currentId}:${replayNonce}`}
-            src={wholeFilm ? (filmUrl ?? undefined) : srcOf(currentId)}
+            src={wholeFilm ? filmUrl ?? undefined : srcOf(currentId)}
             controls
             autoPlay
             playsInline
@@ -245,12 +242,9 @@ export default function BlueprintRoughCutStrip({
 
   const timelineLabelOf = (timelineId: string) => {
     const timeline = project.timelines.items[timelineId];
-    const index = frames.find(
-      (frame) => frame.timelineId === timelineId,
-    )?.timelineIndex;
-    return (
-      timeline?.title || t("blueprint.episodeN", { n: (index ?? 0) + 1 })
-    );
+    const index = frames.find((frame) => frame.timelineId === timelineId)
+      ?.timelineIndex;
+    return timeline?.title || t("blueprint.episodeN", { n: (index ?? 0) + 1 });
   };
 
   const finalCutUrlOf = (timelineId: string) => {
@@ -400,8 +394,7 @@ export default function BlueprintRoughCutStrip({
                         ? getAssetVersionMediaUrl(frame.versionId)
                         : getArtifactVersionMediaUrl(frame.versionId)
                       : null;
-                    const element =
-                      timeline?.elements_by_id[frame.elementId];
+                    const element = timeline?.elements_by_id[frame.elementId];
                     const seconds = element
                       ? Math.max(
                           0,
@@ -446,7 +439,9 @@ export default function BlueprintRoughCutStrip({
                               />
                             ))}
                           <span
-                            className={`absolute left-0 top-0 rounded-br px-1 py-px text-[8px] font-bold text-white ${SOURCE_STYLE[frame.source]}`}
+                            className={`absolute left-0 top-0 rounded-br px-1 py-px text-[8px] font-bold text-white ${
+                              SOURCE_STYLE[frame.source]
+                            }`}
                           >
                             {t(`blueprint.frameSource.${frame.source}`)}
                           </span>

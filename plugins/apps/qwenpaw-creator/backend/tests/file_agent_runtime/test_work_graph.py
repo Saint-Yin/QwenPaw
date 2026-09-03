@@ -1109,9 +1109,7 @@ def test_legacy_single_timeline_project_has_no_script_node() -> None:
     assert "script:timeline:main" not in storyboard.deps
 
 
-def test_multi_timeline_project_derives_script_nodes_gating_elements() -> (
-    None
-):
+def test_multi_timeline_project_derives_script_nodes_gating_elements() -> None:
     project = _project()
     _add_second_timeline(project)
     _add_element(project, _element("elem:one"))
@@ -1149,12 +1147,8 @@ def test_multi_timeline_project_derives_script_nodes_gating_elements() -> (
         version_id="art:script-main",
     )
     graph = derive_work_graph(project)
-    assert (
-        graph.by_id["script:timeline:main"].status is WorkNodeStatus.DONE
-    )
-    assert (
-        graph.by_id["storyboard:elem:one"].status is WorkNodeStatus.READY
-    )
+    assert graph.by_id["script:timeline:main"].status is WorkNodeStatus.DONE
+    assert graph.by_id["storyboard:elem:one"].status is WorkNodeStatus.READY
 
 
 def test_stale_script_version_marks_script_node_stale() -> None:
@@ -1212,6 +1206,7 @@ def test_running_script_task_projects_running_status() -> None:
     node = graph.by_id["script:timeline:ep2"]
     assert node.status is WorkNodeStatus.RUNNING
     assert node.progress == 0.5
+
 
 # ---- History snapshots are frozen: never part of the production graph ----
 

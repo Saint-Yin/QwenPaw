@@ -192,6 +192,7 @@ def build_transition_filter_chain(
                     HARD_CUT_AUDIO_EDGE_FADE_SECONDS,
                     clip.duration_seconds / 4,
                 )
+                # pylint: disable-next=chained-comparison
                 if i > 0 and joins[i - 1].effective_blend() <= 0:
                     edge_fades += f",afade=t=in:d={fade:.3f}"
                 if i < n - 1 and joins[i].effective_blend() <= 0:

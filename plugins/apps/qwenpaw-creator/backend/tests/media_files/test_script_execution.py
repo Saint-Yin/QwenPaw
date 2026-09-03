@@ -54,7 +54,7 @@ def _services(tmp_path) -> CreatorFileServices:
 def _mock_chat(monkeypatch, replies: list[str]):
     calls: list[dict] = []
 
-    async def fake_chat_completion(prompt, *, system_prompt="", **kwargs):
+    async def fake_chat_completion(prompt, *, system_prompt="", **_kwargs):
         calls.append({"prompt": prompt, "system": system_prompt})
         return replies[min(len(calls) - 1, len(replies) - 1)]
 
@@ -105,9 +105,7 @@ def test_script_command_publishes_selected_version(
     assert "旧宅悬疑短剧" in calls[0]["prompt"]
     # 工作图上该 timeline 的 script 节点转 DONE。
     graph = derive_work_graph(snapshot.project)
-    assert (
-        graph.by_id["script:timeline:ep2"].status is WorkNodeStatus.DONE
-    )
+    assert graph.by_id["script:timeline:ep2"].status is WorkNodeStatus.DONE
 
 
 def test_same_inputs_replay_without_second_model_call(
@@ -161,9 +159,9 @@ def test_changed_synopsis_drafts_a_new_selected_version(
     with services.projects.lifecycle_lock(PROJECT_ID):
         base = services.projects.read(PROJECT_ID)
         candidate = base.project.model_dump(mode="json")
-        candidate["timelines"]["items"]["timeline:ep2"]["synopsis"] = (
-            "改：林晚在阁楼发现日记。"
-        )
+        candidate["timelines"]["items"]["timeline:ep2"][
+            "synopsis"
+        ] = "改：林晚在阁楼发现日记。"
         commit = services.commits.commit(
             base=base,
             candidate=candidate,
@@ -212,6 +210,7 @@ def test_unknown_timeline_is_rejected(tmp_path, monkeypatch) -> None:
                 idempotency_key="dag-script-x",
             ),
         )
+
 
 # ---- guidance 是 prompt 输入：必须进指纹，不能被语义复放吞掉 -------------
 

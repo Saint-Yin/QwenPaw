@@ -64,9 +64,7 @@ describe("selectFinalFilmVersionId", () => {
     const slot =
       project.assets.artifact_slots_by_id["timeline:timeline:main:render"];
     project.assets.artifact_versions_by_id["final-v2"] = {
-      ...structuredClone(
-        project.assets.artifact_versions_by_id["final-v1"],
-      ),
+      ...structuredClone(project.assets.artifact_versions_by_id["final-v1"]),
       version_id: "final-v2",
       created_at: "2026-07-21T00:00:00Z",
     };

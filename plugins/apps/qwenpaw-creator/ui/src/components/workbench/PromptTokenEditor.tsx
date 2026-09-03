@@ -1,9 +1,4 @@
-import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-} from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import i18n from "@/i18n";
 import type { PromptRichToken } from "./PromptRichBlock";
@@ -89,7 +84,10 @@ const PromptTokenEditor = forwardRef<
     disabled?: boolean;
     onChange: (value: string) => void;
   }
->(function PromptTokenEditor({ initialValue, tokens, disabled, onChange }, ref) {
+>(function PromptTokenEditor(
+  { initialValue, tokens, disabled, onChange },
+  ref,
+) {
   const editorRef = useRef<HTMLDivElement>(null);
   const savedRange = useRef<Range | null>(null);
   const tokensRef = useRef(tokens);
@@ -179,9 +177,7 @@ const PromptTokenEditor = forwardRef<
   }));
 
   const handleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
-    const pill = (event.target as HTMLElement).closest?.(
-      "[data-image-index]",
-    );
+    const pill = (event.target as HTMLElement).closest?.("[data-image-index]");
     if (pill && editorRef.current?.contains(pill)) {
       pill.remove();
       emit();

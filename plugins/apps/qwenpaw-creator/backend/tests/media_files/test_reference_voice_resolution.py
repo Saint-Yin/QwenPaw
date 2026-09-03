@@ -58,8 +58,15 @@ def _gate(monkeypatch, supported: bool) -> None:
 
 def _stub_sample_resolution(monkeypatch) -> None:
     def fake_resolve(
-        *, project, project_root, version_id, media_prefix, label
+        *,
+        project,
+        project_root,
+        version_id,
+        media_prefix,
+        label,
     ):
+        # The fake mirrors the real keyword-only signature.
+        del project, project_root
         assert media_prefix == "audio/"
         assert label == "characterVoiceSample"
         return (
@@ -109,8 +116,8 @@ def test_unsupported_model_resolves_nothing(monkeypatch) -> None:
         version_ids=("artifact:rusty-image",),
     )
 
-    assert voice_urls == ()
-    assert entries == []
+    assert not voice_urls
+    assert not entries
 
 
 def test_voiceless_or_unreferenced_characters_contribute_nothing(
@@ -128,8 +135,8 @@ def test_voiceless_or_unreferenced_characters_contribute_nothing(
         creation=creation,
         version_ids=("artifact:unrelated",),
     )
-    assert voice_urls == ()
-    assert entries == []
+    assert not voice_urls
+    assert not entries
 
     # A character without an enrolled voice never resolves a sample.
     project.visual.entities.items["char:rusty"].voice = None
@@ -139,5 +146,5 @@ def test_voiceless_or_unreferenced_characters_contribute_nothing(
         creation=creation,
         version_ids=("artifact:rusty-image",),
     )
-    assert voice_urls == ()
-    assert entries == []
+    assert not voice_urls
+    assert not entries

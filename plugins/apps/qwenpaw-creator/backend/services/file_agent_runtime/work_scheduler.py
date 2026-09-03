@@ -442,6 +442,7 @@ class WorkGraphScheduler:
         }
 
     # pylint: disable=too-many-statements
+    # pylint: disable-next=too-many-branches
     async def tick(self, project_id: str) -> WorkGraph | None:
         """Derive the graph once and dispatch what capacity allows."""
 

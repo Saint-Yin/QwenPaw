@@ -83,9 +83,9 @@ describe("BlueprintRoughCutStrip whole-film preview", () => {
 
   it("opens the same floating overlay from a per-timeline play chip", () => {
     const { container, baseElement } = renderStrip(cloneProject());
-    const chip = container.querySelector("[data-roughcut-play]") as
-      | HTMLElement
-      | null;
+    const chip = container.querySelector(
+      "[data-roughcut-play]",
+    ) as HTMLElement | null;
     expect(chip).toBeTruthy();
     fireEvent.click(chip!);
     const video = baseElement.querySelector<HTMLVideoElement>(

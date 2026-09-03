@@ -1767,7 +1767,7 @@ class FileCreatorAgentRuntime:
             )
             self._wake.set()
 
-    async def _reclaim_crashed_run(
+    async def _reclaim_crashed_run(  # pylint: disable=too-many-return-statements  # noqa: E501
         self,
         project_id: str,
         run: CreatorAgentRunRecord,

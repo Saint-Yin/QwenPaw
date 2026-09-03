@@ -145,7 +145,9 @@ function remapSlotId(slotId: string, snapshotId: string): string {
   if (!slotId.startsWith("element:")) return slotId;
   const parts = slotId.split(":");
   const rest = parts.slice(2).join(":");
-  return `element:${remapElementId(parts[1], snapshotId)}${rest ? `:${rest}` : ""}`;
+  return `element:${remapElementId(parts[1], snapshotId)}${
+    rest ? `:${rest}` : ""
+  }`;
 }
 
 type MutableElement = Record<string, unknown> & {

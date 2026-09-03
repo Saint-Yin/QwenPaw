@@ -3,9 +3,7 @@ import { Dropdown, message } from "antd";
 import { ChevronDown, Download, FileOutput } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ProjectDocument } from "@/contracts/creator";
-import {
-  getArtifactVersionMediaUrl,
-} from "@/api/creator";
+import { getArtifactVersionMediaUrl } from "@/api/creator";
 import { selectFinalFilmVersionId } from "@/selectors/blueprintSelectors";
 import {
   ExportProgressCard,

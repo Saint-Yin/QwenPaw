@@ -111,42 +111,46 @@ export default function BlueprintDemoPlanPage() {
                         : "hover:bg-[var(--color-bg-secondary)]"
                     }`}
                   >
-                  <span
-                    className="h-9 w-7 shrink-0 rounded-md border border-[var(--color-border)]"
-                    style={{ backgroundImage: GRADS[episode.cast[0]?.grad ?? "g1"] }}
-                  />
-                  <span className="min-w-0 flex-1 leading-tight">
                     <span
-                      className={`block truncate text-[11px] font-bold ${
-                        active
-                          ? "text-[var(--color-text-primary)]"
-                          : "text-[var(--color-text-secondary)]"
-                      }`}
-                    >
-                      {episode.name}
-                    </span>
-                    <span className="mt-0.5 flex items-center gap-1">
+                      className="h-9 w-7 shrink-0 rounded-md border border-[var(--color-border)]"
+                      style={{
+                        backgroundImage: GRADS[episode.cast[0]?.grad ?? "g1"],
+                      }}
+                    />
+                    <span className="min-w-0 flex-1 leading-tight">
                       <span
-                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT_TONE[episode.status.tone]}`}
-                      />
-                      <span className="truncate text-[10px] text-[var(--color-text-tertiary)]">
-                        {episode.status.text}
+                        className={`block truncate text-[11px] font-bold ${
+                          active
+                            ? "text-[var(--color-text-primary)]"
+                            : "text-[var(--color-text-secondary)]"
+                        }`}
+                      >
+                        {episode.name}
                       </span>
-                    </span>
-                    {episode.status.progress != null && (
-                      <span className="mt-1 block h-1 overflow-hidden rounded-full bg-[var(--color-bg-secondary)]">
+                      <span className="mt-0.5 flex items-center gap-1">
                         <span
-                          className="block h-full rounded-full bg-[var(--color-primary,#3b82f6)]"
-                          style={{ width: `${episode.status.progress}%` }}
+                          className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                            DOT_TONE[episode.status.tone]
+                          }`}
                         />
+                        <span className="truncate text-[10px] text-[var(--color-text-tertiary)]">
+                          {episode.status.text}
+                        </span>
                       </span>
-                    )}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </aside>
+                      {episode.status.progress != null && (
+                        <span className="mt-1 block h-1 overflow-hidden rounded-full bg-[var(--color-bg-secondary)]">
+                          <span
+                            className="block h-full rounded-full bg-[var(--color-primary,#3b82f6)]"
+                            style={{ width: `${episode.status.progress}%` }}
+                          />
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
         )}
 
         <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">

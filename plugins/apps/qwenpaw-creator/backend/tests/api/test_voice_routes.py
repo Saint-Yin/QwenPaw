@@ -2,7 +2,7 @@
 """Character-voice HTTP surface: capability probe and direct enrollment."""
 from __future__ import annotations
 
-import api.voice_routes as voice_routes
+from api import voice_routes
 
 
 def test_voice_capabilities_shape(app, run_scenario, monkeypatch):
@@ -42,7 +42,7 @@ def test_character_voice_normalizes_ref_and_forwards(
     captured: dict = {}
 
     async def fake_invoke(
-        services,
+        _services,
         *,
         project_id,
         target_ref,

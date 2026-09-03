@@ -36,7 +36,9 @@ function BlockView({ block }: { block: ScriptBlock }) {
   if (block.kind === "line") {
     return (
       <p className="my-1 ml-8">
-        <b className="mr-2 text-[var(--color-text-primary)]">{block.character}</b>
+        <b className="mr-2 text-[var(--color-text-primary)]">
+          {block.character}
+        </b>
         {block.parenthetical && (
           <span className="mr-1.5 text-xs text-[var(--color-text-tertiary)]">
             （{block.parenthetical}）
@@ -105,7 +107,9 @@ export default function ScriptDrawer({
             {episode.version}
           </span>
           <span
-            className={`shrink-0 rounded px-1.5 text-[10px] font-semibold leading-[18px] ${TONE_CHIP[episode.status.tone]}`}
+            className={`shrink-0 rounded px-1.5 text-[10px] font-semibold leading-[18px] ${
+              TONE_CHIP[episode.status.tone]
+            }`}
           >
             {episode.status.text}
           </span>
@@ -175,7 +179,9 @@ export default function ScriptDrawer({
               {episode.stages.map((stage) => (
                 <span
                   key={stage.label}
-                  className={`rounded px-1.5 text-[10px] font-semibold leading-[18px] ${TONE_CHIP[stage.tone]}`}
+                  className={`rounded px-1.5 text-[10px] font-semibold leading-[18px] ${
+                    TONE_CHIP[stage.tone]
+                  }`}
                 >
                   {stage.label}
                 </span>
@@ -198,7 +204,9 @@ export default function ScriptDrawer({
                     );
                     if (hit) onOpenVisual(hit);
                     else
-                      messageApi.info("该实体的视觉设计尚未开始（等待剧本通过）");
+                      messageApi.info(
+                        "该实体的视觉设计尚未开始（等待剧本通过）",
+                      );
                   }}
                   className="flex h-11 w-11 items-end justify-center rounded-lg border border-[var(--color-border)] pb-0.5 text-[9px] text-white [text-shadow:0_1px_2px_rgba(0,0,0,.5)] transition-transform hover:-translate-y-px"
                   style={{ backgroundImage: GRADS[member.grad] }}

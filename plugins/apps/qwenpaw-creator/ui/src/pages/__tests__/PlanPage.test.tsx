@@ -300,9 +300,10 @@ describe("PlanPage Timeline/Element frontend", () => {
       renderPage();
 
       // All main-track elements ready and no final render → auto-compose.
-      expect(
-        screen.getByRole("button", { name: "合成成片" }),
-      ).toHaveAttribute("title", "点击合成成片");
+      expect(screen.getByRole("button", { name: "合成成片" })).toHaveAttribute(
+        "title",
+        "点击合成成片",
+      );
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1600);
       });

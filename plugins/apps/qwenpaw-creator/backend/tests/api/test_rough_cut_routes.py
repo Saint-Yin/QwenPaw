@@ -131,11 +131,8 @@ def _commit_storyboard_element(services, snapshot, png_bytes: bytes) -> None:
     )
 
 
-def test_rough_cut_unknown_timeline_is_404(
-    tmp_path,
-    run_scenario,
-    api_runtime_root,
-):
+@pytest.mark.usefixtures("api_runtime_root")
+def test_rough_cut_unknown_timeline_is_404(tmp_path, run_scenario):
     app, _services, _snapshot = _app(tmp_path)
 
     async def scenario(client):
@@ -147,11 +144,8 @@ def test_rough_cut_unknown_timeline_is_404(
     run_scenario(app, scenario)
 
 
-def test_rough_cut_without_material_fails_closed_409(
-    tmp_path,
-    run_scenario,
-    api_runtime_root,
-):
+@pytest.mark.usefixtures("api_runtime_root")
+def test_rough_cut_without_material_fails_closed_409(tmp_path, run_scenario):
     app, _services, _snapshot = _app(tmp_path)
 
     async def scenario(client):
@@ -165,11 +159,8 @@ def test_rough_cut_without_material_fails_closed_409(
 
 
 @requires_ffmpeg
-def test_rough_cut_with_storyboard_returns_mp4(
-    tmp_path,
-    run_scenario,
-    api_runtime_root,
-):
+@pytest.mark.usefixtures("api_runtime_root")
+def test_rough_cut_with_storyboard_returns_mp4(tmp_path, run_scenario):
     app, services, snapshot = _app(tmp_path)
     _commit_storyboard_element(services, snapshot, _make_still_bytes(tmp_path))
 

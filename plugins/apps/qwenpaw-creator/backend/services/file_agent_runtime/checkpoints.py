@@ -37,8 +37,7 @@ CHECKPOINT_PROVIDER = "creator-checkpoint"
 
 _CHECKPOINT_SUMMARIES = {
     CHECKPOINT_STRUCTURE: (
-        "结构检查点：确认分集结构（各集标题与梗概）之后再"
-        "起草剧本与生成媒体。通过后本项目不再重复询问。"
+        "结构检查点：确认分集结构（各集标题与梗概）之后再" "起草剧本与生成媒体。通过后本项目不再重复询问。"
     ),
     CHECKPOINT_SCRIPT: (
         "剧本检查点：确认各集剧本草稿之后再进入设计与分镜，" "文本阶段修改的成本远低于媒体阶段。通过后本项目不再重复询问。"
@@ -61,7 +60,7 @@ _CHECKPOINT_LABELS = {
 }
 
 
-def required_checkpoint_phases(
+def required_checkpoint_phases(  # pylint: disable=too-many-return-statements  # noqa: E501
     tool_name: str,
     role: SpecialistRole,
     *,

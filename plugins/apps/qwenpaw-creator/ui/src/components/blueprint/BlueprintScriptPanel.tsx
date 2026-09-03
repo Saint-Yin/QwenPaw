@@ -449,7 +449,11 @@ export default function BlueprintScriptPanel({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <button type="button" className="btn-secondary" onClick={requestChanges}>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={requestChanges}
+          >
             {t("blueprint.requestChanges")}
           </button>
           <span className="mx-0.5 h-[22px] w-px bg-[var(--color-border)]" />

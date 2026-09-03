@@ -26,8 +26,7 @@ function resolveSlot(
   return {
     slot,
     selected: slot.selected_version_id
-      ? project.assets.artifact_versions_by_id[slot.selected_version_id] ??
-        null
+      ? project.assets.artifact_versions_by_id[slot.selected_version_id] ?? null
       : null,
   };
 }
@@ -202,7 +201,10 @@ export function roughCutFrameForElement(
   if (renderSource?.type === "source_asset_version") {
     const version =
       project.assets.source_versions_by_id[renderSource.version_id];
-    if (version && (version.media_kind === "video" || version.media_kind === "image")) {
+    if (
+      version &&
+      (version.media_kind === "video" || version.media_kind === "image")
+    ) {
       return {
         versionId: version.version_id,
         versionKind: "source",
@@ -233,7 +235,12 @@ export function roughCutFrameForElement(
     element.creation.type === "motion_clip" &&
     (element.creation.motion?.html || element.creation.motion?.html_file_id)
   ) {
-    return { versionId: null, versionKind: null, mediaKind: null, source: "final" };
+    return {
+      versionId: null,
+      versionKind: null,
+      mediaKind: null,
+      source: "final",
+    };
   }
   // 4. Storyboard image (the mandatory intermediate of generated elements).
   const storyboard = Object.values(project.assets.artifact_slots_by_id).find(
@@ -272,7 +279,12 @@ export function roughCutFrameForElement(
         source: "design",
       };
   }
-  return { versionId: null, versionKind: null, mediaKind: null, source: "none" };
+  return {
+    versionId: null,
+    versionKind: null,
+    mediaKind: null,
+    source: "none",
+  };
 }
 
 /** All frames of the live timelines (history snapshots excluded). */
@@ -290,9 +302,7 @@ export function selectRoughCutFrames(
           // Only picture-carrying scene elements; overlays / motion clips /
           // transitions / audio / interaction points never have storyboards
           // or base frames to wait for.
-          ["r2v", "t2v", "i2v", "s2v", "edit"].includes(
-            element.creation.type,
-          ),
+          ["r2v", "t2v", "i2v", "s2v", "edit"].includes(element.creation.type),
       )
       .map((element) => ({
         key: `${timelineId}:${element.element_id}`,
@@ -333,8 +343,7 @@ export function summarizeTimeline(
   );
   const videoElements = elements.filter(isVideoProductionElement);
   const videoReady = videoElements.filter(
-    (element) =>
-      roughCutFrameForElement(project, element).source === "final",
+    (element) => roughCutFrameForElement(project, element).source === "final",
   ).length;
   const script = selectTimelineScriptSlot(project, timelineId);
   const render = selectTimelineRenderSlot(project, timelineId);

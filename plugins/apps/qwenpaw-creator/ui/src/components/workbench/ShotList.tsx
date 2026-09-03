@@ -127,89 +127,89 @@ export default function ShotList({
               </Popconfirm>
             </div>
             <div className="grid grid-cols-[1.25fr_1fr_0.85fr] gap-1.5">
-                <label
-                  data-creator-field={`element:${elementId}/shot:${shotId}/camera`}
-                  data-creator-path={shotPointer(shotId, "camera")}
-                  data-creator-field-label={t("lib.shotCamera", {
-                    index: index + 1,
-                  })}
-                  className="min-w-0"
-                >
-                  <span className="mb-0.5 block text-[10px] leading-3 text-[var(--color-text-tertiary)]">
-                    {t("workbench.shotCameraLabel")}
-                  </span>
-                  <AutoComplete
-                    value={shot.camera ?? ""}
-                    disabled={disabled}
-                    options={CAMERA_OPTIONS}
-                    onChange={(value) =>
-                      onChangeField(shotId, "camera", value ?? "")
-                    }
-                    onFocus={() => trackShotFocus(shotId, "camera")}
-                    onBlur={releaseShotFocus}
-                    size="small"
-                    placeholder={t("workbench.shotCamera")}
-                    className="!w-full !text-[11px]"
-                  />
-                </label>
-                <label
-                  data-creator-field={`element:${elementId}/shot:${shotId}/framing`}
-                  data-creator-path={shotPointer(shotId, "framing")}
-                  data-creator-field-label={t("lib.shotFraming", {
-                    index: index + 1,
-                  })}
-                  className="min-w-0"
-                >
-                  <span className="mb-0.5 block text-[10px] leading-3 text-[var(--color-text-tertiary)]">
-                    {t("workbench.shotFraming")}
-                  </span>
-                  <AutoComplete
-                    value={shot.framing ?? ""}
-                    disabled={disabled}
-                    options={FRAMING_OPTIONS}
-                    onChange={(value) =>
-                      onChangeField(shotId, "framing", value ?? "")
-                    }
-                    onFocus={() => trackShotFocus(shotId, "framing")}
-                    onBlur={releaseShotFocus}
-                    size="small"
-                    placeholder={t("workbench.shotFraming")}
-                    className="!w-full !text-[11px]"
-                  />
-                </label>
-                <label
-                  data-creator-field={`element:${elementId}/shot:${shotId}/duration_seconds`}
-                  data-creator-path={shotPointer(shotId, "duration_seconds")}
-                  data-creator-field-label={t("lib.shotDuration", {
-                    index: index + 1,
-                  })}
-                  className="min-w-0"
-                >
-                  <span className="mb-0.5 block text-[10px] leading-3 text-[var(--color-text-tertiary)]">
-                    {t("workbench.shotDurationLabel")}
-                  </span>
-                  <InputNumber
-                    min={1}
-                    max={15}
-                    value={shot.duration_seconds}
-                    disabled={disabled}
-                    onChange={(value) =>
-                      onChangeField(shotId, "duration_seconds", value ?? 1)
-                    }
-                    onFocus={() => trackShotFocus(shotId, "duration_seconds")}
-                    onBlur={releaseShotFocus}
-                    size="small"
-                    suffix="s"
-                    controls={false}
-                    className="!w-full"
-                  />
-                </label>
-              </div>
-              <InlineReviewDiff pointer={shotPointer(shotId, "camera")} />
-              <InlineReviewDiff pointer={shotPointer(shotId, "framing")} />
-              <InlineReviewDiff
-                pointer={shotPointer(shotId, "duration_seconds")}
-              />
+              <label
+                data-creator-field={`element:${elementId}/shot:${shotId}/camera`}
+                data-creator-path={shotPointer(shotId, "camera")}
+                data-creator-field-label={t("lib.shotCamera", {
+                  index: index + 1,
+                })}
+                className="min-w-0"
+              >
+                <span className="mb-0.5 block text-[10px] leading-3 text-[var(--color-text-tertiary)]">
+                  {t("workbench.shotCameraLabel")}
+                </span>
+                <AutoComplete
+                  value={shot.camera ?? ""}
+                  disabled={disabled}
+                  options={CAMERA_OPTIONS}
+                  onChange={(value) =>
+                    onChangeField(shotId, "camera", value ?? "")
+                  }
+                  onFocus={() => trackShotFocus(shotId, "camera")}
+                  onBlur={releaseShotFocus}
+                  size="small"
+                  placeholder={t("workbench.shotCamera")}
+                  className="!w-full !text-[11px]"
+                />
+              </label>
+              <label
+                data-creator-field={`element:${elementId}/shot:${shotId}/framing`}
+                data-creator-path={shotPointer(shotId, "framing")}
+                data-creator-field-label={t("lib.shotFraming", {
+                  index: index + 1,
+                })}
+                className="min-w-0"
+              >
+                <span className="mb-0.5 block text-[10px] leading-3 text-[var(--color-text-tertiary)]">
+                  {t("workbench.shotFraming")}
+                </span>
+                <AutoComplete
+                  value={shot.framing ?? ""}
+                  disabled={disabled}
+                  options={FRAMING_OPTIONS}
+                  onChange={(value) =>
+                    onChangeField(shotId, "framing", value ?? "")
+                  }
+                  onFocus={() => trackShotFocus(shotId, "framing")}
+                  onBlur={releaseShotFocus}
+                  size="small"
+                  placeholder={t("workbench.shotFraming")}
+                  className="!w-full !text-[11px]"
+                />
+              </label>
+              <label
+                data-creator-field={`element:${elementId}/shot:${shotId}/duration_seconds`}
+                data-creator-path={shotPointer(shotId, "duration_seconds")}
+                data-creator-field-label={t("lib.shotDuration", {
+                  index: index + 1,
+                })}
+                className="min-w-0"
+              >
+                <span className="mb-0.5 block text-[10px] leading-3 text-[var(--color-text-tertiary)]">
+                  {t("workbench.shotDurationLabel")}
+                </span>
+                <InputNumber
+                  min={1}
+                  max={15}
+                  value={shot.duration_seconds}
+                  disabled={disabled}
+                  onChange={(value) =>
+                    onChangeField(shotId, "duration_seconds", value ?? 1)
+                  }
+                  onFocus={() => trackShotFocus(shotId, "duration_seconds")}
+                  onBlur={releaseShotFocus}
+                  size="small"
+                  suffix="s"
+                  controls={false}
+                  className="!w-full"
+                />
+              </label>
+            </div>
+            <InlineReviewDiff pointer={shotPointer(shotId, "camera")} />
+            <InlineReviewDiff pointer={shotPointer(shotId, "framing")} />
+            <InlineReviewDiff
+              pointer={shotPointer(shotId, "duration_seconds")}
+            />
           </div>
         );
       })}

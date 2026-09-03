@@ -86,7 +86,12 @@ export default function TimelineSnapshotPanel({
   const createSnapshot = async () => {
     const name = createName.trim() || t("timeline.snapshotDefaultName");
     const now = new Date();
-    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+      2,
+      "0",
+    )}-${String(now.getDate()).padStart(2, "0")} ${String(
+      now.getHours(),
+    ).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
     const operations = createSnapshotOperations(
       project,
       timeline.timeline_id,

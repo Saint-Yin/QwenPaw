@@ -243,8 +243,7 @@ function EventCard({
       : creatorRoleLabel(String(data.role ?? ""));
     const completed = event.type.endsWith("completed");
     // A cancelled run (superseded / user stop) is not a production failure.
-    const cancelled =
-      event.type.endsWith("failed") && data.cancelled === true;
+    const cancelled = event.type.endsWith("failed") && data.cancelled === true;
     const failed =
       !cancelled &&
       (event.type.endsWith("failed") || event.type.endsWith("stale"));
