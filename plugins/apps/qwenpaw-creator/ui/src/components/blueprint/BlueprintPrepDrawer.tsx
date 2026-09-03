@@ -116,9 +116,7 @@ function VisualDetail({
     void dispatchWorkGraphNode(projectId, regenerateNodeId)
       .then((result) => {
         message.success(
-          result.dispatched
-            ? t("r2v.regenQueued")
-            : t("r2v.regenUpToDate"),
+          result.dispatched ? t("r2v.regenQueued") : t("r2v.regenUpToDate"),
         );
         void refreshTasks(projectId);
         void pollOnce(projectId);

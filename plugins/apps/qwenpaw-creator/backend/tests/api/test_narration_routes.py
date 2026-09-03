@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
 from fastapi import FastAPI
 
-import services.media_files.audio_execution as audio_execution
 from api.dependencies import creator_error_handler, project_file_services
 from api.router import router
 from domain.errors import CreatorError
+from services.media_files import audio_execution
 from services.project_files.commit import ProjectCommitBoundary
 from services.project_files.facade import CreatorFileServices
 from services.project_files.models import Project
@@ -93,10 +94,10 @@ def _commit_narration_element(services, snapshot) -> None:
     )
 
 
+@pytest.mark.usefixtures("api_runtime_root")
 def test_regenerate_narration_rejects_non_audio_element(
     tmp_path,
     run_scenario,
-    api_runtime_root,
 ):
     app, _services, _snapshot = _app(tmp_path)
 
@@ -110,10 +111,10 @@ def test_regenerate_narration_rejects_non_audio_element(
     run_scenario(app, scenario)
 
 
+@pytest.mark.usefixtures("api_runtime_root")
 def test_regenerate_narration_rejects_snapshot_timeline(
     tmp_path,
     run_scenario,
-    api_runtime_root,
 ):
     app, _services, _snapshot = _app(tmp_path)
 
@@ -127,18 +128,24 @@ def test_regenerate_narration_rejects_snapshot_timeline(
     run_scenario(app, scenario)
 
 
+@pytest.mark.usefixtures("api_runtime_root")
 def test_regenerate_narration_resynthesizes_and_rebinds(
     tmp_path,
     run_scenario,
-    api_runtime_root,
     monkeypatch,
 ):
     app, services, snapshot = _app(tmp_path)
     _commit_narration_element(services, snapshot)
     captured: dict = {}
 
-    async def fake_tts(_services, *, project_id, target_ref, arguments,
-                       idempotency_key):
+    async def fake_tts(
+        _services,
+        *,
+        project_id,
+        target_ref,
+        arguments,
+        idempotency_key,
+    ):
         captured.update(
             project_id=project_id,
             target_ref=target_ref,
