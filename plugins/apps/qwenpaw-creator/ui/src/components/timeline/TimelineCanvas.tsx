@@ -1015,6 +1015,7 @@ export default function TimelineCanvas({
       </div>
 
       <div
+        data-timeline-tracks
         className={
           split
             ? "col-span-full row-start-4 flex h-[225px] min-h-0 flex-col overflow-hidden bg-[var(--color-bg-primary)]"

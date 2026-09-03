@@ -2139,6 +2139,15 @@ export default function AgentDock({
     }
   }, [open, orderedMessages, queued, toolCalls]);
 
+  // Apply a pending draft before inserting any selection pill: callers like
+  // the blueprint "request changes" action set both, and the draft must land
+  // while the input is still empty.
+  useEffect(() => {
+    if (!open || !draft || inputRef.current?.getContent().text) return;
+    inputRef.current?.setText(draft);
+    setCanSend(Boolean(draft.trim()));
+  }, [draft, open]);
+
   useEffect(() => {
     if (!open || !selectionAttachment) return;
     inputRef.current?.insertSelection(selectionAttachment);
@@ -2149,12 +2158,6 @@ export default function AgentDock({
     const timer = window.setTimeout(() => inputRef.current?.focus(), 40);
     return () => window.clearTimeout(timer);
   }, [open, selectionAttachment, setSelectionAttachment]);
-
-  useEffect(() => {
-    if (!open || !draft || inputRef.current?.getContent().text) return;
-    inputRef.current?.setText(draft);
-    setCanSend(Boolean(draft.trim()));
-  }, [draft, open]);
 
   useEffect(() => {
     if (mentionQuery === null || !projectId) {
