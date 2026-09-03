@@ -160,8 +160,8 @@ export default function ProjectExportActions({
             shape === "branching"
               ? t("blueprint.exportProject")
               : filmVersion
-                ? t("blueprint.downloadFinalTitle")
-                : t("blueprint.waitingForFinalCut")
+              ? t("blueprint.downloadFinalTitle")
+              : t("blueprint.waitingForFinalCut")
           }
           className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-bg-secondary)]"
         >
