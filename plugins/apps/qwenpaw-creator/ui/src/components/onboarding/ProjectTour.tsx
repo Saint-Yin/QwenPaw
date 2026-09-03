@@ -37,7 +37,7 @@ export default function ProjectTour() {
       description: t("onboarding.projectTourBriefDesc"),
     },
     {
-      selectors: ["[data-timeline-panel]"],
+      selectors: ["[data-timeline-tracks]", "[data-timeline-panel]"],
       title: t("onboarding.projectTourTimeline"),
       description: (
         <div className="space-y-2">
@@ -60,7 +60,7 @@ export default function ProjectTour() {
       ),
     },
     {
-      selectors: ["[data-timeline-panel]"],
+      selectors: ["[data-timeline-tracks]", "[data-timeline-panel]"],
       title: t("onboarding.projectTourContext"),
       description: (
         <div className="space-y-2">
