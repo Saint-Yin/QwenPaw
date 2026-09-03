@@ -145,7 +145,11 @@ def _script_selection_project(tmp_path):
     )
 
     project = Project.new(project_id="p-selection", name="Selection")
-    text = "## 场 1 · 内景 · 旧宅大厅 · 夜\n\n" + "铺垫。" * 200 + "\n\n**林晚**（低声）：这里……和二十年前一模一样。\n"
+    text = (
+        "## 场 1 · 内景 · 旧宅大厅 · 夜\n\n"
+        + "铺垫。" * 200
+        + "\n\n**林晚**（低声）：这里……和二十年前一模一样。\n"
+    )
     checksum = hashlib.sha256(text.encode("utf-8")).hexdigest()
     version = add_script_version(
         project,

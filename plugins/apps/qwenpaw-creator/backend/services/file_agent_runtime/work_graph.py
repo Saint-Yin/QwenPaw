@@ -25,6 +25,7 @@ from services.media_files.interaction_fingerprint import (
 from services.prompt_text import dialogue_match_key, dialogue_spoken_lines
 from services.project_files.models import (
     ArtifactVersionRenderSource,
+    narrative_timeline_ids,
     ElementOutputRenderSource,
     I2VCreation,
     InteractionCreation,
@@ -674,9 +675,10 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
     # 版本存在且未 stale→DONE，版本 stale→STALE。剧本流仅在项目启用时
     # 生效（存在 timeline_script slot 或多 timeline）；旧项目（单
     # timeline 且无 script slot）不生成 script 节点，行为零回退。
-    script_flow = len(project.timelines.order) > 1
+    live_timeline_ids = narrative_timeline_ids(project)
+    script_flow = len(live_timeline_ids) > 1
     script_node_by_timeline: dict[str, str] = {}
-    for timeline_id in project.timelines.order:
+    for timeline_id in live_timeline_ids:
         timeline = project.timelines.items[timeline_id]
         slot = project.assets.artifact_slots_by_id.get(
             f"script:{timeline_id}",
@@ -738,7 +740,7 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
 
     # ---- Lanes per element: storyboard -> video ----------------------
     video_node_ids: list[str] = []
-    for timeline_id in project.timelines.order:
+    for timeline_id in live_timeline_ids:
         timeline = project.timelines.items[timeline_id]
         script_node = script_node_by_timeline.get(timeline_id)
         for element_id, element in timeline.elements_by_id.items():
@@ -1116,7 +1118,7 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
         )
 
     for compose_timeline_id in (
-        tid for tid in project.timelines.order if _timeline_has_content(tid)
+        tid for tid in live_timeline_ids if _timeline_has_content(tid)
     ):
         timeline = project.timelines.items[compose_timeline_id]
         node_id = f"compose:{compose_timeline_id}"
@@ -1390,7 +1392,7 @@ def _declared_pending_lineup_nodes(project: Project) -> list[str]:
     """
 
     pending: list[str] = []
-    for timeline_id in project.timelines.order:
+    for timeline_id in narrative_timeline_ids(project):
         timeline = project.timelines.items[timeline_id]
         for element in timeline.elements_by_id.values():
             creation = element.creation

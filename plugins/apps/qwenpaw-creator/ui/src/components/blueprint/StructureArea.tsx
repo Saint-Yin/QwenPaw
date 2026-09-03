@@ -24,7 +24,9 @@ function StageChips({ stages }: { stages: { label: string; tone: Tone }[] }) {
       {stages.map((stage) => (
         <span
           key={stage.label}
-          className={`rounded px-1.5 text-[10px] font-semibold leading-[18px] ${TONE_CHIP[stage.tone]}`}
+          className={`rounded px-1.5 text-[10px] font-semibold leading-[18px] ${
+            TONE_CHIP[stage.tone]
+          }`}
         >
           {stage.label}
         </span>
@@ -68,7 +70,8 @@ function GraphStructure({
     <div
       className="h-full overflow-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] shadow-[var(--shadow-xs)]"
       style={{
-        backgroundImage: "radial-gradient(circle, #eee6da 1px, transparent 1px)",
+        backgroundImage:
+          "radial-gradient(circle, #eee6da 1px, transparent 1px)",
         backgroundSize: "22px 22px",
       }}
     >
@@ -83,7 +86,9 @@ function GraphStructure({
               d={edge.d}
               fill="none"
               stroke={
-                edge.active ? "var(--color-accent)" : "var(--color-border-strong)"
+                edge.active
+                  ? "var(--color-accent)"
+                  : "var(--color-border-strong)"
               }
               strokeWidth={edge.active ? 2 : 1.5}
             />
@@ -114,7 +119,9 @@ function GraphStructure({
               {graph.choice.question}
             </p>
             <span
-              className={`mt-1.5 inline-block rounded px-1.5 text-[9px] font-semibold leading-[16px] ${TONE_CHIP[graph.choice.tone]}`}
+              className={`mt-1.5 inline-block rounded px-1.5 text-[9px] font-semibold leading-[16px] ${
+                TONE_CHIP[graph.choice.tone]
+              }`}
             >
               {graph.choice.state}
             </span>
@@ -147,7 +154,9 @@ function GraphStructure({
                   {node.badge}
                 </span>
                 <span
-                  className={`text-xs ${node.iconClass} ${node.spin ? "animate-spin" : ""}`}
+                  className={`text-xs ${node.iconClass} ${
+                    node.spin ? "animate-spin" : ""
+                  }`}
                   title={node.ep.status.text}
                 >
                   {node.icon}
@@ -163,7 +172,9 @@ function GraphStructure({
                 <StageChips stages={node.ep.stages.slice(0, 3)} />
                 <span className="flex shrink-0 items-center text-[10px] text-[var(--color-text-tertiary)]">
                   {node.meta}
-                  <TimelineQuickButton onClick={() => onOpenTimeline(node.ep)} />
+                  <TimelineQuickButton
+                    onClick={() => onOpenTimeline(node.ep)}
+                  />
                 </span>
               </div>
               {node.ep.status.progress != null && (
@@ -204,10 +215,16 @@ function ListStructure({
           剧集列表 · 线性 {scenario.episodes!.length} 集
         </span>
         <span className="flex gap-2">
-          <button type="button" className="btn-secondary !px-2.5 !py-1.5 !text-[11px]">
+          <button
+            type="button"
+            className="btn-secondary !px-2.5 !py-1.5 !text-[11px]"
+          >
             调整分集
           </button>
-          <button type="button" className="btn-secondary !px-2.5 !py-1.5 !text-[11px]">
+          <button
+            type="button"
+            className="btn-secondary !px-2.5 !py-1.5 !text-[11px]"
+          >
             批量生成已通过剧集
           </button>
         </span>
@@ -242,7 +259,9 @@ function ListStructure({
               </span>
               <span className="flex shrink-0 items-center gap-3.5">
                 <span
-                  className={`rounded px-1.5 text-[10px] font-semibold leading-[18px] ${TONE_CHIP[item.ep.status.tone]}`}
+                  className={`rounded px-1.5 text-[10px] font-semibold leading-[18px] ${
+                    TONE_CHIP[item.ep.status.tone]
+                  }`}
                 >
                   {item.ep.status.text}
                 </span>
@@ -250,7 +269,9 @@ function ListStructure({
                   {item.dur}
                 </span>
                 <span
-                  className={`w-4 text-center text-[13px] ${item.iconClass} ${item.spin ? "animate-spin" : ""}`}
+                  className={`w-4 text-center text-[13px] ${item.iconClass} ${
+                    item.spin ? "animate-spin" : ""
+                  }`}
                 >
                   {item.icon}
                 </span>
@@ -368,7 +389,11 @@ function SingleStructure({
                 <span className="block truncate text-xs font-semibold text-[var(--color-text-primary)]">
                   {index + 1}. {step.name}
                 </span>
-                <span className={`block truncate text-[10px] ${TONE_TEXT[step.tone]}`}>
+                <span
+                  className={`block truncate text-[10px] ${
+                    TONE_TEXT[step.tone]
+                  }`}
+                >
                   {step.sub}
                 </span>
               </span>
@@ -395,7 +420,8 @@ function SingleStructure({
 }
 
 export default function StructureArea(props: StructureAreaProps) {
-  if (props.scenario.structure === "graph") return <GraphStructure {...props} />;
+  if (props.scenario.structure === "graph")
+    return <GraphStructure {...props} />;
   if (props.scenario.structure === "list") return <ListStructure {...props} />;
   return <SingleStructure {...props} />;
 }

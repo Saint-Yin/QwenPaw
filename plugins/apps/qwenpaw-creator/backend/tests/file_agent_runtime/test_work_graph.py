@@ -1109,9 +1109,7 @@ def test_legacy_single_timeline_project_has_no_script_node() -> None:
     assert "script:timeline:main" not in storyboard.deps
 
 
-def test_multi_timeline_project_derives_script_nodes_gating_elements() -> (
-    None
-):
+def test_multi_timeline_project_derives_script_nodes_gating_elements() -> None:
     project = _project()
     _add_second_timeline(project)
     _add_element(project, _element("elem:one"))
@@ -1149,12 +1147,8 @@ def test_multi_timeline_project_derives_script_nodes_gating_elements() -> (
         version_id="art:script-main",
     )
     graph = derive_work_graph(project)
-    assert (
-        graph.by_id["script:timeline:main"].status is WorkNodeStatus.DONE
-    )
-    assert (
-        graph.by_id["storyboard:elem:one"].status is WorkNodeStatus.READY
-    )
+    assert graph.by_id["script:timeline:main"].status is WorkNodeStatus.DONE
+    assert graph.by_id["storyboard:elem:one"].status is WorkNodeStatus.READY
 
 
 def test_stale_script_version_marks_script_node_stale() -> None:
@@ -1472,3 +1466,59 @@ def test_projects_without_edges_have_no_interaction_or_bundle_nodes() -> None:
     assert not [
         node for node in graph.nodes if node.kind in ("interaction", "bundle")
     ]
+
+
+# ---- History snapshots are frozen: never part of the production graph ----
+
+
+def _append_snapshot(project: Project, base_id: str = "timeline:main") -> None:
+    """Clone *base_id* as a frozen history snapshot (mirrors auto_snapshot)."""
+
+    from services.project_files.models import Timeline
+
+    raw = project.timelines.items[base_id].model_dump(mode="json")
+    snapshot_id = f"snapshot:{base_id}:1"
+    raw["timeline_id"] = snapshot_id
+    remapped = {}
+    for element_id, element in raw["elements_by_id"].items():
+        element = dict(element)
+        element["element_id"] = f"{snapshot_id}:{element_id}"
+        remapped[f"{snapshot_id}:{element_id}"] = element
+    raw["elements_by_id"] = remapped
+    project.timelines.items[snapshot_id] = Timeline.model_validate(raw)
+    project.timelines.order.append(snapshot_id)
+
+
+def test_snapshot_never_enters_the_work_graph() -> None:
+    """单正式 timeline + 快照仍是单集：不开 script flow，也没有任何
+    script/storyboard/video/compose 节点指向 snapshot:*。"""
+
+    project = _project()
+    _add_element(project, _element("elem:one"))
+    _append_snapshot(project)
+
+    graph = derive_work_graph(project)
+
+    assert not [node for node in graph.nodes if node.kind == "script"]
+    snapshot_nodes = [
+        node.node_id for node in graph.nodes if "snapshot:" in node.node_id
+    ]
+    assert snapshot_nodes == []
+    # The live element still gets its lane.
+    assert "storyboard:elem:one" in graph.by_id
+
+
+def test_snapshot_does_not_count_toward_script_flow() -> None:
+    """多正式 timeline 按正式数量判定；快照不改变 script 节点集合。"""
+
+    project = _project()
+    _add_element(project, _element("elem:one"))
+    _add_second_timeline(project)
+    _append_snapshot(project)
+
+    graph = derive_work_graph(project)
+
+    script_nodes = sorted(
+        node.node_id for node in graph.nodes if node.kind == "script"
+    )
+    assert script_nodes == ["script:timeline:ep2", "script:timeline:main"]

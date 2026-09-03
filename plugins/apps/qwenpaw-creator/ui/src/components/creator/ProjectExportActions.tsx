@@ -8,10 +8,7 @@ import {
   getInteractiveBundleUrl,
 } from "@/api/creator";
 import { selectNarrativeShape } from "@/selectors/timelineElementSelectors";
-import {
-  selectFinalFilmVersionId,
-  selectTimelineRenderSlot,
-} from "@/selectors/blueprintSelectors";
+import { selectFinalFilmVersionId } from "@/selectors/blueprintSelectors";
 import {
   ExportProgressCard,
   saveExportFile,
@@ -36,28 +33,17 @@ export default function ProjectExportActions({
     useState<ExportProgressState | null>(null);
   const exporting = exportProgress?.status === "running";
 
-  // The downloadable 成片: the whole composed film when one exists; a
-  // single-timeline project falls back to its (fresh) timeline render so
-  // legacy projects that predate the final_video kind stay downloadable.
+  // The downloadable 成片: only the version the user currently has selected
+  // on the single live timeline's render slot, while it is fresh — the
+  // selector owns that contract (multi-episode projects have no whole film,
+  // and history snapshots never count as timelines).
   const filmVersion = useMemo(() => {
     const wholeFilmId = selectFinalFilmVersionId(project);
-    if (wholeFilmId)
-      return {
-        versionId: wholeFilmId,
-        name: project.assets.artifact_versions_by_id[wholeFilmId]?.name ?? null,
-      };
-    if (project.timelines.order.length === 1) {
-      const render = selectTimelineRenderSlot(
-        project,
-        project.timelines.order[0],
-      );
-      if (render?.selected && !render.selected.stale)
-        return {
-          versionId: render.selected.version_id,
-          name: render.selected.name ?? null,
-        };
-    }
-    return null;
+    if (!wholeFilmId) return null;
+    return {
+      versionId: wholeFilmId,
+      name: project.assets.artifact_versions_by_id[wholeFilmId]?.name ?? null,
+    };
   }, [project]);
 
   const downloadFilm = async () => {

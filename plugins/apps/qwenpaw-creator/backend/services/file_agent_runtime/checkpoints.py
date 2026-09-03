@@ -61,7 +61,7 @@ _CHECKPOINT_LABELS = {
 }
 
 
-def required_checkpoint_phases(
+def required_checkpoint_phases(  # pylint: disable=too-many-return-statements  # noqa: E501
     tool_name: str,
     role: SpecialistRole,
     *,

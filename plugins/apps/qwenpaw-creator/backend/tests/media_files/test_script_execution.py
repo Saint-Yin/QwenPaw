@@ -54,7 +54,7 @@ def _services(tmp_path) -> CreatorFileServices:
 def _mock_chat(monkeypatch, replies: list[str]):
     calls: list[dict] = []
 
-    async def fake_chat_completion(prompt, *, system_prompt="", **kwargs):
+    async def fake_chat_completion(prompt, *, system_prompt="", **_kwargs):
         calls.append({"prompt": prompt, "system": system_prompt})
         return replies[min(len(calls) - 1, len(replies) - 1)]
 
@@ -105,9 +105,7 @@ def test_script_command_publishes_selected_version(
     assert "旧宅悬疑短剧" in calls[0]["prompt"]
     # 工作图上该 timeline 的 script 节点转 DONE。
     graph = derive_work_graph(snapshot.project)
-    assert (
-        graph.by_id["script:timeline:ep2"].status is WorkNodeStatus.DONE
-    )
+    assert graph.by_id["script:timeline:ep2"].status is WorkNodeStatus.DONE
 
 
 def test_same_inputs_replay_without_second_model_call(
@@ -161,9 +159,9 @@ def test_changed_synopsis_drafts_a_new_selected_version(
     with services.projects.lifecycle_lock(PROJECT_ID):
         base = services.projects.read(PROJECT_ID)
         candidate = base.project.model_dump(mode="json")
-        candidate["timelines"]["items"]["timeline:ep2"]["synopsis"] = (
-            "改：林晚在阁楼发现日记。"
-        )
+        candidate["timelines"]["items"]["timeline:ep2"][
+            "synopsis"
+        ] = "改：林晚在阁楼发现日记。"
         commit = services.commits.commit(
             base=base,
             candidate=candidate,
@@ -212,3 +210,63 @@ def test_unknown_timeline_is_rejected(tmp_path, monkeypatch) -> None:
                 idempotency_key="dag-script-x",
             ),
         )
+
+
+# ---- guidance 是 prompt 输入：必须进指纹，不能被语义复放吞掉 -------------
+
+
+def _draft(services, *, guidance=None, key):
+    arguments = {} if guidance is None else {"guidance": guidance}
+    return asyncio.run(
+        execute_file_script_command(
+            services,
+            project_id=PROJECT_ID,
+            target_ref="timeline:timeline:ep2",
+            arguments=arguments,
+            idempotency_key=key,
+        ),
+    )
+
+
+def test_first_guidance_reaches_the_model_as_a_new_draft(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    services = _services(tmp_path)
+    calls = _mock_chat(monkeypatch, [DRAFT, DRAFT + "\n\n（喜剧结尾稿）"])
+
+    first = _draft(services, key="dag-script-1")
+    second = _draft(services, guidance="改成喜剧结尾", key="dag-script-2")
+
+    assert not second.replayed
+    assert second.artifact_version_id != first.artifact_version_id
+    assert len(calls) == 2
+    assert "改成喜剧结尾" in calls[1]["prompt"]
+
+
+def test_same_guidance_retry_still_replays(tmp_path, monkeypatch) -> None:
+    services = _services(tmp_path)
+    calls = _mock_chat(monkeypatch, [DRAFT])
+
+    first = _draft(services, guidance="改成喜剧结尾", key="dag-script-1")
+    retry = _draft(services, guidance="改成喜剧结尾", key="dag-script-2")
+
+    assert retry.replayed
+    assert retry.artifact_version_id == first.artifact_version_id
+    assert len(calls) == 1
+
+
+def test_different_guidance_drafts_a_new_version(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    services = _services(tmp_path)
+    calls = _mock_chat(monkeypatch, [DRAFT, DRAFT + "\n\n（悲剧结尾稿）"])
+
+    first = _draft(services, guidance="改成喜剧结尾", key="dag-script-1")
+    second = _draft(services, guidance="改成悲剧结尾", key="dag-script-2")
+
+    assert not second.replayed
+    assert second.artifact_version_id != first.artifact_version_id
+    assert len(calls) == 2
+    assert "改成悲剧结尾" in calls[1]["prompt"]

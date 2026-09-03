@@ -181,9 +181,9 @@ describe("flashCreatorReviewField + collapsed details", () => {
     `;
     const target = flashCreatorReviewField("element:e/label");
     expect(target).not.toBeNull();
-    expect(
-      document.querySelector<HTMLDetailsElement>("#advanced")!.open,
-    ).toBe(true);
+    expect(document.querySelector<HTMLDetailsElement>("#advanced")!.open).toBe(
+      true,
+    );
     expect(target).toHaveClass("review-flash");
   });
 });

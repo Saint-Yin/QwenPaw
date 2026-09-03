@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Rough-cut draft rendering tests — real ffmpeg, zero model calls."""
 
 from __future__ import annotations
@@ -23,9 +24,18 @@ requires_ffmpeg = pytest.mark.skipif(
 def _make_video(path: Path, seconds: float) -> None:
     subprocess.run(
         [
-            "ffmpeg", "-y",
-            "-f", "lavfi", "-i", f"color=c=blue:s=320x240:d={seconds}",
-            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=blue:s=320x240:d={seconds}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-pix_fmt",
+            "yuv420p",
             str(path),
         ],
         check=True,
@@ -36,9 +46,14 @@ def _make_video(path: Path, seconds: float) -> None:
 def _make_still(path: Path) -> None:
     subprocess.run(
         [
-            "ffmpeg", "-y",
-            "-f", "lavfi", "-i", "color=c=red:s=320x240:d=0.1",
-            "-frames:v", "1",
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=320x240:d=0.1",
+            "-frames:v",
+            "1",
             str(path),
         ],
         check=True,
@@ -51,9 +66,13 @@ def _duration_seconds(path_bytes: bytes, workdir: Path) -> float:
     probe_target.write_bytes(path_bytes)
     completed = subprocess.run(
         [
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=nw=1:nk=1",
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nw=1:nk=1",
             str(probe_target),
         ],
         check=True,

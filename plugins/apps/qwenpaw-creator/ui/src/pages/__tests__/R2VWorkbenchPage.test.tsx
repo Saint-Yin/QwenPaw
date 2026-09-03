@@ -150,9 +150,7 @@ describe("R2V Workbench page", () => {
   it("round-trips between the Plan detail CTA and the workbench", async () => {
     renderWorkbench("/project/p1/plan?element=r2v-window");
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /去制作台编辑/ }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /去制作台编辑/ }));
     // 制作台以工作区整页视图打开（片段编辑层设计，不再跳转独立路由）。
     await waitFor(() =>
       expect(

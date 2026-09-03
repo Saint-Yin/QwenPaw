@@ -9,12 +9,13 @@ function cloneProject(): ProjectDocument {
 }
 
 /**
- * Promote the fixture's rendered cut to the project-level final_video —
- * the artifact kind the backend derives `finalVideoVersionId` from and
- * the strip's whole-film chip keys on.
+ * A whole film only exists for a single live timeline whose render slot
+ * carries a fresh, user-selected video version (the selector's contract).
+ * Trim the fixture to its first episode; `final-v1` is that slot's
+ * currently selected, non-stale render.
  */
 function withWholeFilm(project: ProjectDocument): ProjectDocument {
-  project.assets.artifact_versions_by_id["final-v1"].kind = "final_video";
+  project.timelines.order = ["timeline:main"];
   return project;
 }
 
@@ -103,9 +104,9 @@ describe("BlueprintRoughCutStrip whole-film preview", () => {
 
   it("opens the same floating overlay from a per-timeline play chip", () => {
     const { container, baseElement } = renderStrip(cloneProject());
-    const chip = container.querySelector("[data-roughcut-play]") as
-      | HTMLElement
-      | null;
+    const chip = container.querySelector(
+      "[data-roughcut-play]",
+    ) as HTMLElement | null;
     expect(chip).toBeTruthy();
     fireEvent.click(chip!);
     const video = baseElement.querySelector<HTMLVideoElement>(

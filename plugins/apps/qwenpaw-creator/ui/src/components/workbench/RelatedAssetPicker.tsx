@@ -119,9 +119,7 @@ export default function RelatedAssetPicker({
                         : "border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]"
                     }`}
                   >
-                    {kind === "all"
-                      ? t("r2v.assetPickerAll")
-                      : kindLabel(kind)}
+                    {kind === "all" ? t("r2v.assetPickerAll") : kindLabel(kind)}
                   </button>
                 );
               })}
@@ -143,8 +141,8 @@ export default function RelatedAssetPicker({
                       picked
                         ? "border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]"
                         : candidate.thumbUrl
-                          ? "border-[var(--color-border)] group-hover:border-[var(--color-border-strong)]"
-                          : "border-dashed border-[var(--color-border-strong)] group-hover:border-[var(--color-border-strong)]"
+                        ? "border-[var(--color-border)] group-hover:border-[var(--color-border-strong)]"
+                        : "border-dashed border-[var(--color-border-strong)] group-hover:border-[var(--color-border-strong)]"
                     } bg-[var(--color-bg-secondary)]`}
                   >
                     {candidate.thumbUrl ? (

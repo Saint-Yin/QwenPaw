@@ -65,13 +65,7 @@ import { isVoiceOnlyVisualEntity } from "@/selectors/blueprintSelectors";
 import { visualVariantLabel } from "@/lib/visualVariants";
 import { useTranslation } from "react-i18next";
 
-type FilterKey =
-  | "all"
-  | "character"
-  | "scene"
-  | "prop"
-  | "video"
-  | "audio";
+type FilterKey = "all" | "character" | "scene" | "prop" | "video" | "audio";
 
 /** 来源下拉 (design 84:78645): 视觉设定 / 生成产物 / 上传素材. */
 type OriginKey = "any" | "visual" | "artifact" | "source";
@@ -162,7 +156,6 @@ function fileMedia(
     : "other";
   return { kind, type };
 }
-
 
 // Source version ids whose long-source graph memory is built FOR THE
 // CURRENTLY SELECTED VERSION. A SUCCEEDED source_memory_build task alone
@@ -449,8 +442,7 @@ function assetItems(project: ProjectDocument): AssetItem[] {
         metadata: artifact.metadata,
         raw: artifact,
       };
-    },
-  );
+    });
   const visuals = project.visual.entities.order.flatMap(
     (entityId): AssetItem[] => {
       const entity = project.visual.entities.items[entityId];
@@ -777,7 +769,6 @@ function mediaIcon(kind: string) {
   if (kind === "text" || kind === "document") return FileText;
   return Box;
 }
-
 
 /** Resolve a provenance/ref string to a previewable thumbnail + label. */
 function resolveProvenanceRef(
@@ -2035,7 +2026,9 @@ export default function AssetsPage() {
                               </p>
                               <div className="mt-2.5 flex justify-end">
                                 <RegeneratePill
-                                  field={`voice:${selected.entityId ?? selected.id}`}
+                                  field={`voice:${
+                                    selected.entityId ?? selected.id
+                                  }`}
                                   label={t("assets.voiceGenerate")}
                                   onClick={() =>
                                     setVoiceModalEntity(
@@ -2104,7 +2097,9 @@ export default function AssetsPage() {
                             )}
                             <div className="mt-2.5 flex justify-end">
                               <RegeneratePill
-                                field={`voice:${selected.entityId ?? selected.id}`}
+                                field={`voice:${
+                                  selected.entityId ?? selected.id
+                                }`}
                                 label={t("assets.voiceRegenerate")}
                                 onClick={() =>
                                   setVoiceModalEntity(
@@ -2132,8 +2127,8 @@ export default function AssetsPage() {
                               selected.mediaKind === "video"
                                 ? t("r2v.regenerateVideo")
                                 : selected.mediaKind === "audio"
-                                  ? t("assets.regenerateAudio")
-                                  : t("r2v.regenerateImage")
+                                ? t("assets.regenerateAudio")
+                                : t("r2v.regenerateImage")
                             }
                             onRegenerate={(() => {
                               const nodeId = dispatchNodeIdForPrompt(
@@ -2178,14 +2173,18 @@ export default function AssetsPage() {
                                       ],
                                   );
                                   const addedArtifacts = addedIds.filter(
-                                    (versionId) => !addedAssets.includes(versionId),
+                                    (versionId) =>
+                                      !addedAssets.includes(versionId),
                                   );
                                   if (addedAssets.length) {
                                     operations.push({
                                       op: "replace",
                                       path: `${binding.base}/reference_asset_version_ids`,
                                       before: binding.assetIds,
-                                      value: [...binding.assetIds, ...addedAssets],
+                                      value: [
+                                        ...binding.assetIds,
+                                        ...addedAssets,
+                                      ],
                                     });
                                   }
                                   if (addedArtifacts.length) {
@@ -2230,7 +2229,6 @@ export default function AssetsPage() {
                             {t("assets.enterR2VWorkbench")}
                           </Button>
                         )}
-
                     </div>
                   </div>
                 ) : (

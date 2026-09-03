@@ -63,17 +63,14 @@ describe("BlueprintPage narrative shapes", () => {
     ).not.toBeInTheDocument();
     // Legacy read-only mapping (project predates timeline_script).
     expect(
-      screen.getAllByText(
-        "本项目创建于剧本功能之前，以下为既有信息的只读映射",
-      ).length,
+      screen.getAllByText("本项目创建于剧本功能之前，以下为既有信息的只读映射")
+        .length,
     ).toBeGreaterThan(0);
     // Overview rail keeps the referenced visual entity reachable.
     expect(screen.getByText("圆润大橘猫")).toBeInTheDocument();
     // Rough-cut strip: one frame per picture-carrying element (edit + r2v);
     // overlays / audio / transitions are not shots and stay out.
-    expect(container.querySelectorAll("[data-roughcut-frame]")).toHaveLength(
-      2,
-    );
+    expect(container.querySelectorAll("[data-roughcut-frame]")).toHaveLength(2);
     // Approval never lives on the page — only edit actions.
     expect(
       screen.getByRole("button", { name: "提出修改" }),
@@ -130,7 +127,9 @@ describe("BlueprintPage narrative shapes", () => {
     expect(
       screen.getByRole("button", { name: /调研与素材/ }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /视觉开发/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /视觉开发/ }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "下载 / 导出" }),
     ).toBeInTheDocument();
@@ -218,9 +217,8 @@ describe("BlueprintPage narrative shapes", () => {
     ).not.toBeInTheDocument();
     // Legacy read-only mapping (no timeline_script slot on this path).
     expect(
-      screen.getAllByText(
-        "本项目创建于剧本功能之前，以下为既有信息的只读映射",
-      ).length,
+      screen.getAllByText("本项目创建于剧本功能之前，以下为既有信息的只读映射")
+        .length,
     ).toBeGreaterThan(0);
     // Rough-cut strip: the render_source clip counts as a final frame.
     expect(container.querySelectorAll("[data-roughcut-frame]")).toHaveLength(1);

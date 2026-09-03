@@ -321,9 +321,7 @@ export function WorkbenchSurface({
   const pollOnce = useProjectSnapshotStore((state) => state.pollOnce);
   const tasks = useCreatorTaskViewStore((state) => state.tasks);
   const refreshTasks = useCreatorTaskViewStore((state) => state.refresh);
-  const [regeneratingNode, setRegeneratingNode] = useState<string | null>(
-    null,
-  );
+  const [regeneratingNode, setRegeneratingNode] = useState<string | null>(null);
   // 设计已移除页头「应用修改」：草稿在停止编辑 800ms 后自动落盘（notify:false
   // 静默；校验不过时静默挂起，等待下一次编辑或「再次生成」的显式校验）。
   // applyDraft 定义在守卫分支之后，这里经 ref 引用最新实现。
@@ -427,7 +425,6 @@ export function WorkbenchSurface({
   useEffect(() => {
     if (reviewField?.includes("video_prompt")) setStage("vd");
   }, [reviewField, reviewPulse]);
-
 
   useEffect(() => {
     useCreatorInteractionStore
@@ -1003,8 +1000,7 @@ export function WorkbenchSurface({
                 )}
                 {viewedVideo &&
                   videoSlot &&
-                  viewedVideo.version_id !==
-                    videoSlot.selected_version_id && (
+                  viewedVideo.version_id !== videoSlot.selected_version_id && (
                     <Button
                       size="small"
                       type="primary"
@@ -1137,8 +1133,8 @@ export function WorkbenchSurface({
             ? [normalizeVisualEntityId(draft.creation.scene_ref)]
             : []
           : field === "characters"
-            ? draft.creation.character_refs.map(normalizeVisualEntityId)
-            : draft.creation.prop_refs.map(normalizeVisualEntityId);
+          ? draft.creation.character_refs.map(normalizeVisualEntityId)
+          : draft.creation.prop_refs.map(normalizeVisualEntityId);
       for (const entityId of previousEntityIds) {
         if (nextEntityIds.includes(entityId)) continue;
         delete draft.creation.visual_variant_refs[entityId];
@@ -1172,18 +1168,18 @@ export function WorkbenchSurface({
     kind === "character"
       ? creation.character_refs
       : kind === "prop"
-        ? creation.prop_refs
-        : creation.scene_ref
-          ? [creation.scene_ref]
-          : [];
+      ? creation.prop_refs
+      : creation.scene_ref
+      ? [creation.scene_ref]
+      : [];
   const removeEntityRef = (kind: "character" | "scene" | "prop", id: string) =>
     commitReferenceEdit(() => {
       const field =
         kind === "scene"
           ? ("scene" as const)
           : kind === "character"
-            ? ("characters" as const)
-            : ("props" as const);
+          ? ("characters" as const)
+          : ("props" as const);
       changeEntityReferences(
         field,
         entityKindRefs(kind).filter(
@@ -1308,9 +1304,7 @@ export function WorkbenchSurface({
       ...materialVersionIds.filter(
         (id) => !pickableMaterialIds.has(id) || selectedSet.has(id),
       ),
-      ...idsOfKind("material").filter(
-        (id) => !materialVersionIds.includes(id),
-      ),
+      ...idsOfKind("material").filter((id) => !materialVersionIds.includes(id)),
     ];
     const changed =
       !sameList(previousCharacters, nextCharacters) ||
@@ -1390,7 +1384,9 @@ export function WorkbenchSurface({
           index: index + (currentStoryboard ? 2 : 1),
           name: item.name,
           kind:
-            item.field === "sources" ? ("artifact" as const) : ("entity" as const),
+            item.field === "sources"
+              ? ("artifact" as const)
+              : ("entity" as const),
           thumbUrl: refImageThumbUrl(project, creation, item.ref),
         })),
       ];
@@ -1420,22 +1416,20 @@ export function WorkbenchSurface({
 
   const stageTabs = (
     <div className="flex shrink-0 gap-0.5 border-b border-[var(--color-border)] px-3">
-      {(
-        [
-          {
-            key: "sb" as const,
-            step: 1,
-            title: t("r2v.stageStoryboard"),
-            sub: t("r2v.stageStoryboardSub"),
-          },
-          {
-            key: "vd" as const,
-            step: 2,
-            title: t("r2v.stageVideo"),
-            sub: t("r2v.stageVideoSub"),
-          },
-        ]
-      ).map((tab) => {
+      {[
+        {
+          key: "sb" as const,
+          step: 1,
+          title: t("r2v.stageStoryboard"),
+          sub: t("r2v.stageStoryboardSub"),
+        },
+        {
+          key: "vd" as const,
+          step: 2,
+          title: t("r2v.stageVideo"),
+          sub: t("r2v.stageVideoSub"),
+        },
+      ].map((tab) => {
         const active = stage === tab.key;
         return (
           <button

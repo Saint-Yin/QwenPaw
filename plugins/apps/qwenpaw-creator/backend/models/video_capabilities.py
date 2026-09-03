@@ -652,7 +652,7 @@ REFERENCE_VOICE_PER_MEDIA = "per_media"
 REFERENCE_VOICE_STANDALONE = "standalone"
 
 
-def video_reference_voice_support(
+def video_reference_voice_support(  # pylint: disable=too-many-return-statements  # noqa: E501
     model_name: str,
     protocol_backend: str | None = None,
 ) -> tuple[str, int] | None:

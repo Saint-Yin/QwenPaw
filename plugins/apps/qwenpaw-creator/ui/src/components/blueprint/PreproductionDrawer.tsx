@@ -1,11 +1,7 @@
 import { useEffect, useState } from "react";
 import { Tabs, message } from "antd";
 import { ArrowLeft, Globe, RefreshCw, X } from "lucide-react";
-import type {
-  DetailData,
-  ResearchItem,
-  VisualItem,
-} from "./demoData";
+import type { DetailData, ResearchItem, VisualItem } from "./demoData";
 import { GRADS, TONE_CHIP, TONE_TEXT } from "./demoData";
 
 function KvLines({ kv }: { kv: [string, string][] }) {
@@ -16,8 +12,12 @@ function KvLines({ kv }: { kv: [string, string][] }) {
           key={key}
           className="flex justify-between gap-2.5 border-b border-dashed border-[var(--color-border)] py-1.5 text-xs last:border-b-0"
         >
-          <span className="shrink-0 text-[var(--color-text-tertiary)]">{key}</span>
-          <span className="text-right text-[var(--color-text-primary)]">{value}</span>
+          <span className="shrink-0 text-[var(--color-text-tertiary)]">
+            {key}
+          </span>
+          <span className="text-right text-[var(--color-text-primary)]">
+            {value}
+          </span>
         </div>
       ))}
     </div>
@@ -83,7 +83,9 @@ export function DetailView({
               <KvLines kv={detail.kv} />
             </div>
             <div>
-              <FieldLabel>设计 Prompt（可编辑，保存后重新生成新版本）</FieldLabel>
+              <FieldLabel>
+                设计 Prompt（可编辑，保存后重新生成新版本）
+              </FieldLabel>
               <textarea
                 data-creator-field="blueprint/visual-prompt"
                 data-creator-field-label={`${detail.title} · Prompt`}
@@ -95,7 +97,9 @@ export function DetailView({
               <button
                 type="button"
                 className="btn-secondary shrink-0"
-                onClick={() => messageApi.success("已按当前 prompt 排队重新生成")}
+                onClick={() =>
+                  messageApi.success("已按当前 prompt 排队重新生成")
+                }
               >
                 <RefreshCw className="h-3.5 w-3.5" />
                 重新生成
@@ -173,7 +177,9 @@ export function DetailView({
                   >
                     {timecode}
                   </button>
-                  <span className="text-[var(--color-text-secondary)]">{text}</span>
+                  <span className="text-[var(--color-text-secondary)]">
+                    {text}
+                  </span>
                 </div>
               ))}
             </div>
@@ -204,7 +210,9 @@ export function DetailView({
         {detail.type === "interaction" && (
           <>
             <div>
-              <FieldLabel>交互预览（真实可点击 · 渲染于上一片段末帧之上）</FieldLabel>
+              <FieldLabel>
+                交互预览（真实可点击 · 渲染于上一片段末帧之上）
+              </FieldLabel>
               <div
                 className="relative flex aspect-[9/16] max-h-[300px] w-full flex-col items-center justify-end overflow-hidden rounded-[10px] border border-[var(--color-border)] pb-5"
                 style={{ backgroundImage: GRADS[detail.lastFrame.grad] }}
@@ -216,7 +224,8 @@ export function DetailView({
                   10s
                 </span>
                 <p className="mb-3 px-6 text-center text-xs font-semibold text-white [text-shadow:0_1px_3px_rgba(0,0,0,.7)]">
-                  {detail.title.split(" · ").slice(1).join(" · ") || detail.title}
+                  {detail.title.split(" · ").slice(1).join(" · ") ||
+                    detail.title}
                 </p>
                 {detail.options.map((option) => (
                   <button
@@ -262,7 +271,9 @@ export function DetailView({
               <KvLines kv={detail.kv} />
             </div>
             <div>
-              <FieldLabel>动效设计 Prompt（html_css motion · 可编辑）</FieldLabel>
+              <FieldLabel>
+                动效设计 Prompt（html_css motion · 可编辑）
+              </FieldLabel>
               <textarea
                 data-creator-field="blueprint/interaction-motion"
                 data-creator-field-label={`${detail.title} · 动效 Prompt`}
@@ -274,7 +285,9 @@ export function DetailView({
               <button
                 type="button"
                 className="btn-secondary shrink-0"
-                onClick={() => messageApi.success("已按当前设计重新生成交互动效")}
+                onClick={() =>
+                  messageApi.success("已按当前设计重新生成交互动效")
+                }
               >
                 <RefreshCw className="h-3.5 w-3.5" />
                 重新生成动效
@@ -319,7 +332,10 @@ export default function PreproductionDrawer({
   if (!open) return null;
 
   return (
-    <div className="absolute inset-0 z-30 flex justify-end bg-[rgba(20,16,12,.18)]" onClick={onClose}>
+    <div
+      className="absolute inset-0 z-30 flex justify-end bg-[rgba(20,16,12,.18)]"
+      onClick={onClose}
+    >
       <div
         className="panel-enter flex h-full w-[min(560px,92%)] flex-col border-l border-[var(--color-border)] bg-[var(--color-bg-card)] shadow-[-8px_0_28px_rgba(0,0,0,.08)]"
         onClick={(event) => event.stopPropagation()}
@@ -338,94 +354,100 @@ export default function PreproductionDrawer({
           </button>
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-5 pt-2">
-      {detail ? (
-        <DetailView detail={detail} onBack={() => setDetail(null)} />
-      ) : (
-        <Tabs
-          activeKey={tab}
-          onChange={(key) => onTabChange(key as PreproductionTab)}
-          items={[
-            ...(visual
-              ? [
-                  {
-                    key: "visual",
-                    label: `视觉开发 (${visual.length})`,
-                    children: (
-                      <div className="grid grid-cols-2 gap-2.5 pt-2">
-                        {visual.map((item) => (
-                          <button
-                            key={item.name}
-                            type="button"
-                            onClick={() => setDetail(item.detail)}
-                            className={`overflow-hidden rounded-[10px] border bg-[var(--color-bg-card)] text-left transition-all hover:border-[var(--color-accent)] hover:shadow-[var(--shadow-sm)] ${
-                              item.pending
-                                ? "border-[rgba(247,144,9,.55)]"
-                                : "border-[var(--color-border)]"
+          {detail ? (
+            <DetailView detail={detail} onBack={() => setDetail(null)} />
+          ) : (
+            <Tabs
+              activeKey={tab}
+              onChange={(key) => onTabChange(key as PreproductionTab)}
+              items={[
+                ...(visual
+                  ? [
+                      {
+                        key: "visual",
+                        label: `视觉开发 (${visual.length})`,
+                        children: (
+                          <div className="grid grid-cols-2 gap-2.5 pt-2">
+                            {visual.map((item) => (
+                              <button
+                                key={item.name}
+                                type="button"
+                                onClick={() => setDetail(item.detail)}
+                                className={`overflow-hidden rounded-[10px] border bg-[var(--color-bg-card)] text-left transition-all hover:border-[var(--color-accent)] hover:shadow-[var(--shadow-sm)] ${
+                                  item.pending
+                                    ? "border-[rgba(247,144,9,.55)]"
+                                    : "border-[var(--color-border)]"
+                                }`}
+                              >
+                                <div
+                                  className="relative flex h-[108px] items-end p-1.5 text-[11px] font-semibold text-white [text-shadow:0_1px_3px_rgba(0,0,0,.6)]"
+                                  style={{ backgroundImage: GRADS[item.grad] }}
+                                >
+                                  {item.name.split(" · ")[0]}
+                                  <span className="absolute right-1.5 top-1.5 rounded bg-black/55 px-1.5 py-0.5 text-[9px] font-bold [text-shadow:none]">
+                                    {item.tag}
+                                  </span>
+                                </div>
+                                <div className="px-2.5 py-2">
+                                  <b className="block truncate text-[11px] font-semibold text-[var(--color-text-primary)]">
+                                    {item.name}
+                                  </b>
+                                  <span
+                                    className={`text-[10px] ${
+                                      TONE_TEXT[item.tone]
+                                    }`}
+                                  >
+                                    {item.state}
+                                  </span>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        ),
+                      },
+                    ]
+                  : []),
+                {
+                  key: "research",
+                  label: `调研与素材 (${research.length})`,
+                  children: (
+                    <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+                      {research.map((item) => (
+                        <button
+                          key={item.title}
+                          type="button"
+                          onClick={() => setDetail(item.detail)}
+                          className="flex w-full items-start gap-2.5 border-b border-[var(--color-border)] px-3 py-2.5 text-left transition-colors last:border-b-0 hover:bg-[var(--color-bg-secondary)]"
+                        >
+                          <span
+                            className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg text-[13px]"
+                            style={{ background: item.iconBg }}
+                          >
+                            {item.icon}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <b className="block truncate text-xs font-semibold text-[var(--color-text-primary)]">
+                              {item.title}
+                            </b>
+                            <p className="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+                              {item.summary}
+                            </p>
+                          </span>
+                          <span
+                            className={`shrink-0 rounded px-1.5 text-[10px] font-semibold leading-[18px] ${
+                              TONE_CHIP[item.tone]
                             }`}
                           >
-                            <div
-                              className="relative flex h-[108px] items-end p-1.5 text-[11px] font-semibold text-white [text-shadow:0_1px_3px_rgba(0,0,0,.6)]"
-                              style={{ backgroundImage: GRADS[item.grad] }}
-                            >
-                              {item.name.split(" · ")[0]}
-                              <span className="absolute right-1.5 top-1.5 rounded bg-black/55 px-1.5 py-0.5 text-[9px] font-bold [text-shadow:none]">
-                                {item.tag}
-                              </span>
-                            </div>
-                            <div className="px-2.5 py-2">
-                              <b className="block truncate text-[11px] font-semibold text-[var(--color-text-primary)]">
-                                {item.name}
-                              </b>
-                              <span className={`text-[10px] ${TONE_TEXT[item.tone]}`}>
-                                {item.state}
-                              </span>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    ),
-                  },
-                ]
-              : []),
-            {
-              key: "research",
-              label: `调研与素材 (${research.length})`,
-              children: (
-                <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]">
-                  {research.map((item) => (
-                    <button
-                      key={item.title}
-                      type="button"
-                      onClick={() => setDetail(item.detail)}
-                      className="flex w-full items-start gap-2.5 border-b border-[var(--color-border)] px-3 py-2.5 text-left transition-colors last:border-b-0 hover:bg-[var(--color-bg-secondary)]"
-                    >
-                      <span
-                        className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg text-[13px]"
-                        style={{ background: item.iconBg }}
-                      >
-                        {item.icon}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <b className="block truncate text-xs font-semibold text-[var(--color-text-primary)]">
-                          {item.title}
-                        </b>
-                        <p className="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
-                          {item.summary}
-                        </p>
-                      </span>
-                      <span
-                        className={`shrink-0 rounded px-1.5 text-[10px] font-semibold leading-[18px] ${TONE_CHIP[item.tone]}`}
-                      >
-                        {item.tag}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ),
-            },
-          ]}
-        />
-      )}
+                            {item.tag}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ),
+                },
+              ]}
+            />
+          )}
         </div>
       </div>
     </div>

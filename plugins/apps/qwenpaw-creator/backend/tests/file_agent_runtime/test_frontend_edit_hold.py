@@ -141,7 +141,7 @@ def test_tick_skips_frontend_held_elements_then_dispatches(
         frontend_edit_hold.note_frontend_edit(PROJECT_ID, ["elem:a"])
         await scheduler.tick(PROJECT_ID)
         await _drain()
-        assert dispatch.calls == []
+        assert not dispatch.calls
         # The skip arms a one-shot recheck so the final state still runs.
         assert PROJECT_ID in scheduler._sync_gate_rechecks
         frontend_edit_hold.clear(PROJECT_ID)

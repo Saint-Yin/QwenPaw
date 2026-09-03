@@ -22,6 +22,7 @@ import {
   selectRoughCutFrames,
   type RoughCutSource,
 } from "@/selectors/blueprintSelectors";
+import { selectLiveTimelineIds } from "@/selectors/timelineElementSelectors";
 
 const SOURCE_STYLE: Record<RoughCutSource, string> = {
   final: "bg-[var(--color-success)]/90",
@@ -70,7 +71,7 @@ function PreviewCinema({
   const wholeFilm = startId === FULL_FILM_ID && !branching;
   const initialId =
     startId === FULL_FILM_ID && branching
-      ? (project.timelines.order[0] ?? startId)
+      ? (selectLiveTimelineIds(project)[0] ?? startId)
       : startId;
   const [currentId, setCurrentId] = useState(initialId);
   const [segmentIndex, setSegmentIndex] = useState(1);
@@ -97,6 +98,8 @@ function PreviewCinema({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  const liveOrder = useMemo(() => selectLiveTimelineIds(project), [project]);
 
   const edges = useMemo(
     () => project.narrative_edges ?? [],
@@ -147,16 +150,15 @@ function PreviewCinema({
       return;
     }
     if (edges.length === 0) {
-      // Linear story: fall through the ordered timelines.
-      const order = project.timelines.order;
-      const next = order[order.indexOf(currentId) + 1];
+      // Linear story: fall through the live timelines in narrative order.
+      const next = liveOrder[liveOrder.indexOf(currentId) + 1];
       if (next) {
         advanceTo(next);
         return;
       }
     }
     setEnded(true);
-  }, [wholeFilm, edges, currentId, project, labelOf, advanceTo]);
+  }, [wholeFilm, edges, liveOrder, currentId, labelOf, advanceTo]);
 
   const replay = useCallback(() => {
     setReplayNonce((nonce) => nonce + 1);
@@ -166,8 +168,8 @@ function PreviewCinema({
       return;
     }
     setSegmentIndex(0);
-    advanceTo(project.timelines.order[0] ?? startId);
-  }, [wholeFilm, project, startId, advanceTo]);
+    advanceTo(liveOrder[0] ?? startId);
+  }, [wholeFilm, liveOrder, startId, advanceTo]);
 
   const badgeLabel = wholeFilm
     ? `${project.name} · ${t("blueprint.finalCutBadge")}`
@@ -196,7 +198,7 @@ function PreviewCinema({
           // in either orientation.
           <video
             key={`${currentId}:${replayNonce}`}
-            src={wholeFilm ? (filmUrl ?? undefined) : srcOf(currentId)}
+            src={wholeFilm ? filmUrl ?? undefined : srcOf(currentId)}
             controls
             autoPlay
             playsInline
@@ -313,12 +315,9 @@ export default function BlueprintRoughCutStrip({
 
   const timelineLabelOf = (timelineId: string) => {
     const timeline = project.timelines.items[timelineId];
-    const index = frames.find(
-      (frame) => frame.timelineId === timelineId,
-    )?.timelineIndex;
-    return (
-      timeline?.title || t("blueprint.episodeN", { n: (index ?? 0) + 1 })
-    );
+    const index = frames.find((frame) => frame.timelineId === timelineId)
+      ?.timelineIndex;
+    return timeline?.title || t("blueprint.episodeN", { n: (index ?? 0) + 1 });
   };
 
   const finalCutUrlOf = (timelineId: string) => {
@@ -345,7 +344,9 @@ export default function BlueprintRoughCutStrip({
         <button
           type="button"
           data-roughcut-preview-all
-          onClick={() => setPlayingId(project.timelines.order[0])}
+          onClick={() =>
+            setPlayingId(selectLiveTimelineIds(project)[0] ?? null)
+          }
           className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-[var(--color-text-primary)] px-2.5 py-1 text-[10px] font-bold text-[var(--color-bg-primary)] shadow-[0_2px_8px_rgba(0,0,0,.2)] transition-all hover:-translate-y-px hover:opacity-90"
         >
           <Play className="h-3 w-3" />
@@ -359,7 +360,7 @@ export default function BlueprintRoughCutStrip({
         </span>
         <span className="ml-auto flex min-w-0 shrink items-center gap-1.5 overflow-x-auto py-0.5 [scrollbar-width:none]">
           {(isBranching
-            ? project.timelines.order.length > 0
+            ? selectLiveTimelineIds(project).length > 0
             : Boolean(filmUrl)) && (
             <button
               type="button"
@@ -476,8 +477,7 @@ export default function BlueprintRoughCutStrip({
                         ? getAssetVersionMediaUrl(frame.versionId)
                         : getArtifactVersionMediaUrl(frame.versionId)
                       : null;
-                    const element =
-                      timeline?.elements_by_id[frame.elementId];
+                    const element = timeline?.elements_by_id[frame.elementId];
                     const seconds = element
                       ? Math.max(
                           0,
@@ -522,7 +522,9 @@ export default function BlueprintRoughCutStrip({
                               />
                             ))}
                           <span
-                            className={`absolute left-0 top-0 rounded-br px-1 py-px text-[8px] font-bold text-white ${SOURCE_STYLE[frame.source]}`}
+                            className={`absolute left-0 top-0 rounded-br px-1 py-px text-[8px] font-bold text-white ${
+                              SOURCE_STYLE[frame.source]
+                            }`}
                           >
                             {t(`blueprint.frameSource.${frame.source}`)}
                           </span>

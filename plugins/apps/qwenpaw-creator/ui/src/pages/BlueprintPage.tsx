@@ -7,9 +7,7 @@ import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useWorkGraphStore } from "@/store/workGraphStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
-import {
-  selectNarrativeShape,
-} from "@/selectors/timelineElementSelectors";
+import { selectNarrativeShape } from "@/selectors/timelineElementSelectors";
 import {
   isVoiceOnlyVisualEntity,
   selectNarrativeEdges,

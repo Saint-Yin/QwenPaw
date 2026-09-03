@@ -1,13 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { message, Modal, Tooltip } from "antd";
-import {
-  Bookmark,
-  FileText,
-  Info,
-  Loader2,
-  RefreshCw,
-  X,
-} from "lucide-react";
+import { Bookmark, FileText, Info, Loader2, RefreshCw, X } from "lucide-react";
 import { MenuUnfoldOutlined } from "@ant-design/icons";
 import { navigate, useParams, useSearchParams } from "@/routing/navigation";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
@@ -143,9 +136,7 @@ export default function PlanPage() {
   const [playheadTick, setPlayheadTick] = useState(0);
   // Right rail tabs (design 83:13383): 视频概览 hosts the element overview,
   // 分镜图预览 shows the element's storyboard image (r2v elements only).
-  const [railTab, setRailTab] = useState<"overview" | "storyboard">(
-    "overview",
-  );
+  const [railTab, setRailTab] = useState<"overview" | "storyboard">("overview");
   const storyboardTabAvailable = elementDraft.value?.creation.type === "r2v";
   useEffect(() => {
     if (!storyboardTabAvailable && railTab === "storyboard")
@@ -674,7 +665,6 @@ export default function PlanPage() {
         </div>
       )}
 
-
       {/* Design 83:13383 grid: main column (header + stage) on the left, the
           389px overview rail beside it, transport + tracks spanning the full
           width at the bottom. TimelineCanvas(split) supplies rows 2–4. */}
@@ -683,309 +673,309 @@ export default function PlanPage() {
           narrowWorkspace
             ? "grid-cols-[minmax(0,1fr)]"
             : sidebarOpen
-              ? "grid-cols-[minmax(0,1fr)_389px]"
-              : "grid-cols-[minmax(0,1fr)_509px]"
+            ? "grid-cols-[minmax(0,1fr)_389px]"
+            : "grid-cols-[minmax(0,1fr)_509px]"
         }`}
       >
         {/* Container queries are scoped to the header so the TimelineCanvas
             subtree never gains size containment. */}
         <header className="@container col-start-1 row-start-1 flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2.5">
-          {!sidebarOpen && (
-            <button
-              type="button"
-              data-sidebar-expand
-              title={t("plan.expandSidebar")}
-              aria-label={t("plan.expandSidebar")}
-              onClick={() => setSidebarOpen(true)}
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] transition hover:border-[var(--color-accent)]/50 hover:text-[var(--color-accent)] dark:bg-[var(--color-bg-elevated)]"
-            >
-              <MenuUnfoldOutlined className="text-base" />
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => leaveDraft(() => navigate(`/project/${id}`))}
-            className="btn-secondary shrink-0"
-          >
-            {t("common.back")}
-          </button>
-          <h2 className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-            {timeline.title || t("blueprint.timelineEdit")}
-          </h2>
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-2 pr-5">
-          {/* When the workspace runs out of width the info chips fold
-              into one tooltip so the action buttons keep their room. */}
-          <div className="flex flex-wrap items-center gap-2 @max-[559px]:hidden">
-            <span className="rounded-lg border border-[var(--color-border)] bg-white px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] dark:bg-[var(--color-bg-elevated)]">
-              {project.settings.aspect_ratio}
-            </span>
-            <span className="rounded-lg border border-[var(--color-border)] bg-white px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] dark:bg-[var(--color-bg-elevated)]">
-              {t("plan.items", {
-                count: Object.keys(timeline.elements_by_id).length,
-              })}
-            </span>
-          </div>
-          <Tooltip
-            title={`${sec(durationTick, timeline.ticks_per_second)}s · ${
-              project.settings.aspect_ratio
-            } · ${t("plan.items", {
-              count: Object.keys(timeline.elements_by_id).length,
-            })}`}
-          >
-            <span className="hidden rounded-full border border-[var(--color-border)] bg-white px-2 py-1 text-[var(--color-text-secondary)] @max-[559px]:inline-flex dark:bg-[var(--color-bg-elevated)]">
-              <Info className="h-3.5 w-3.5" />
-            </span>
-          </Tooltip>
-          {/* 脚本方案 (84:46780): drill back up to the blueprint page. */}
-          <button
-            type="button"
-            data-open-blueprint
-            onClick={() => leaveDraft(() => navigate(`/project/${id}`))}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-white px-3 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition hover:border-[var(--color-accent)]/50 hover:text-[var(--color-accent)] dark:bg-[var(--color-bg-elevated)]"
-          >
-            <FileText className="h-3.5 w-3.5" />
-            {t("plan.scriptPlan")}
-          </button>
-          {composeFailed && !isComposing && (
-            <button
-              type="button"
-              title={t("plan.retryComposeTitle")}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-danger)]/50 bg-[var(--color-danger-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--color-danger)] transition hover:border-[var(--color-danger)]"
-              onClick={() => void composeNow()}
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              {t("plan.retryCompose")}
-            </button>
-          )}
-          <button
-            type="button"
-            data-compose-render
-            title={
-              isComposing
-                ? composeElementProgress
-                  ? t("plan.composing", {
-                      completed: composeElementProgress.completed,
-                      total: composeElementProgress.total,
-                    })
-                  : t("plan.preparingCompose")
-                : t("plan.composeTooltip")
-            }
-            disabled={isComposing}
-            className="relative inline-flex items-center gap-1.5 overflow-hidden rounded-lg border border-[var(--color-accent)]/50 bg-[var(--color-accent-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--color-accent)] transition hover:border-[var(--color-accent)] disabled:opacity-70 disabled:cursor-not-allowed"
-            onClick={() => void composeNow()}
-          >
-            {isComposing && (
-              <span
-                aria-hidden="true"
-                className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-[var(--color-border)]"
-              >
-                {composeElementProgress ? (
-                  <span
-                    data-compose-progress
-                    className="block h-full bg-[var(--color-accent)] transition-[width] duration-300 ease-out"
-                    style={{
-                      width: `${composeElementProgress.fraction * 100}%`,
-                    }}
-                  />
-                ) : (
-                  <span
-                    data-compose-activity
-                    className="block h-full w-full animate-pulse bg-[var(--color-accent)]"
-                  />
-                )}
-              </span>
-            )}
-            <span className="relative z-[1] inline-flex items-center gap-1.5">
-              {isComposing ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="h-3.5 w-3.5" />
-              )}
-              {isComposing ? composeLabel : t("lib.composeFinalCut")}
-            </span>
-          </button>
-          <button
-            type="button"
-            data-save-template
-            title={t("home.saveAsTemplate")}
-            onClick={() => setSaveAsTemplateOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]"
-          >
-            <Bookmark className="h-3.5 w-3.5" />
-            {t("home.saveAsTemplate")}
-          </button>
-          <SaveAsTemplateDialog
-            open={saveAsTemplateOpen}
-            onClose={() => setSaveAsTemplateOpen(false)}
-            projectId={id}
-          />
-        </div>
-      </header>
-
-      {compareTimeline ? (
-        <div className="flex min-h-0 shrink-0 divide-x divide-[var(--color-border)]">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-accent-soft)] px-4 py-1">
-              <span className="rounded bg-[var(--color-accent)] px-1.5 py-0.5 text-[10px] font-bold text-white">
-                A
-              </span>
-              <span className="truncate text-xs font-medium text-[var(--color-text-primary)]">
-                {timeline?.name || timeline?.timeline_id}
-              </span>
-            </div>
-            <TimelineCanvas
-              project={project}
-              transportExtra={snapshotPanel}
-              timeline={timeline}
-              durationTick={displayDurationTick}
-              playheadTick={clampedPlayheadTick}
-              selectedElementId={selectedElementId}
-              previewOpen
-              tasks={tasks}
-              onPreviewOpenChange={() => {}}
-              onPlayheadChange={(tick) =>
-                movePlayhead(Math.max(0, Math.min(displayDurationTick, tick)))
-              }
-              onSelectElement={selectElement}
-              onActiveElementIdsChange={setExplicitActiveIds}
-            />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-4 py-1">
-              <span className="rounded bg-[var(--color-text-secondary)] px-1.5 py-0.5 text-[10px] font-bold text-white dark:bg-[var(--color-text-primary)]">
-                B
-              </span>
-              <span className="truncate text-xs font-medium text-[var(--color-text-secondary)]">
-                {compareTimeline.name || compareTimeline.timeline_id}
-              </span>
+          <div className="flex min-w-0 items-center gap-2.5">
+            {!sidebarOpen && (
               <button
                 type="button"
-                data-compare-close
-                title={t("timeline.snapshotExitCompare")}
-                onClick={() =>
-                  useTimelineStore.getState().setCompareTimelineId(null)
-                }
-                className="ml-auto flex h-5 items-center gap-1 rounded px-1.5 text-[11px] font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-primary)] hover:text-[var(--color-text-primary)]"
+                data-sidebar-expand
+                title={t("plan.expandSidebar")}
+                aria-label={t("plan.expandSidebar")}
+                onClick={() => setSidebarOpen(true)}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] transition hover:border-[var(--color-accent)]/50 hover:text-[var(--color-accent)] dark:bg-[var(--color-bg-elevated)]"
               >
-                <X className="h-3.5 w-3.5" />
-                {t("timeline.snapshotExitCompare")}
+                <MenuUnfoldOutlined className="text-base" />
               </button>
+            )}
+            <button
+              type="button"
+              onClick={() => leaveDraft(() => navigate(`/project/${id}`))}
+              className="btn-secondary shrink-0"
+            >
+              {t("common.back")}
+            </button>
+            <h2 className="truncate text-sm font-medium text-[var(--color-text-primary)]">
+              {timeline.title || t("blueprint.timelineEdit")}
+            </h2>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2 pr-5">
+            {/* When the workspace runs out of width the info chips fold
+              into one tooltip so the action buttons keep their room. */}
+            <div className="flex flex-wrap items-center gap-2 @max-[559px]:hidden">
+              <span className="rounded-lg border border-[var(--color-border)] bg-white px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] dark:bg-[var(--color-bg-elevated)]">
+                {project.settings.aspect_ratio}
+              </span>
+              <span className="rounded-lg border border-[var(--color-border)] bg-white px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] dark:bg-[var(--color-bg-elevated)]">
+                {t("plan.items", {
+                  count: Object.keys(timeline.elements_by_id).length,
+                })}
+              </span>
             </div>
-            <TimelineCanvas
-              project={project}
-              timeline={compareTimeline}
-              durationTick={Math.max(
-                displayDurationTick,
-                timelineEndTick(compareTimeline),
-              )}
-              playheadTick={clampedPlayheadTick}
-              selectedElementId={null}
-              previewOpen
-              tasks={tasks}
-              onPreviewOpenChange={() => {}}
-              onPlayheadChange={(tick) =>
-                movePlayhead(
-                  Math.max(
-                    0,
-                    Math.min(
-                      Math.max(
-                        displayDurationTick,
-                        timelineEndTick(compareTimeline),
-                      ),
-                      tick,
-                    ),
-                  ),
-                )
+            <Tooltip
+              title={`${sec(durationTick, timeline.ticks_per_second)}s · ${
+                project.settings.aspect_ratio
+              } · ${t("plan.items", {
+                count: Object.keys(timeline.elements_by_id).length,
+              })}`}
+            >
+              <span className="hidden rounded-full border border-[var(--color-border)] bg-white px-2 py-1 text-[var(--color-text-secondary)] @max-[559px]:inline-flex dark:bg-[var(--color-bg-elevated)]">
+                <Info className="h-3.5 w-3.5" />
+              </span>
+            </Tooltip>
+            {/* 脚本方案 (84:46780): drill back up to the blueprint page. */}
+            <button
+              type="button"
+              data-open-blueprint
+              onClick={() => leaveDraft(() => navigate(`/project/${id}`))}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-white px-3 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition hover:border-[var(--color-accent)]/50 hover:text-[var(--color-accent)] dark:bg-[var(--color-bg-elevated)]"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              {t("plan.scriptPlan")}
+            </button>
+            {composeFailed && !isComposing && (
+              <button
+                type="button"
+                title={t("plan.retryComposeTitle")}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-danger)]/50 bg-[var(--color-danger-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--color-danger)] transition hover:border-[var(--color-danger)]"
+                onClick={() => void composeNow()}
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                {t("plan.retryCompose")}
+              </button>
+            )}
+            <button
+              type="button"
+              data-compose-render
+              title={
+                isComposing
+                  ? composeElementProgress
+                    ? t("plan.composing", {
+                        completed: composeElementProgress.completed,
+                        total: composeElementProgress.total,
+                      })
+                    : t("plan.preparingCompose")
+                  : t("plan.composeTooltip")
               }
-              onSelectElement={() => {}}
-              onActiveElementIdsChange={() => {}}
+              disabled={isComposing}
+              className="relative inline-flex items-center gap-1.5 overflow-hidden rounded-lg border border-[var(--color-accent)]/50 bg-[var(--color-accent-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--color-accent)] transition hover:border-[var(--color-accent)] disabled:opacity-70 disabled:cursor-not-allowed"
+              onClick={() => void composeNow()}
+            >
+              {isComposing && (
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-[var(--color-border)]"
+                >
+                  {composeElementProgress ? (
+                    <span
+                      data-compose-progress
+                      className="block h-full bg-[var(--color-accent)] transition-[width] duration-300 ease-out"
+                      style={{
+                        width: `${composeElementProgress.fraction * 100}%`,
+                      }}
+                    />
+                  ) : (
+                    <span
+                      data-compose-activity
+                      className="block h-full w-full animate-pulse bg-[var(--color-accent)]"
+                    />
+                  )}
+                </span>
+              )}
+              <span className="relative z-[1] inline-flex items-center gap-1.5">
+                {isComposing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                {isComposing ? composeLabel : t("lib.composeFinalCut")}
+              </span>
+            </button>
+            <button
+              type="button"
+              data-save-template
+              title={t("home.saveAsTemplate")}
+              onClick={() => setSaveAsTemplateOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]"
+            >
+              <Bookmark className="h-3.5 w-3.5" />
+              {t("home.saveAsTemplate")}
+            </button>
+            <SaveAsTemplateDialog
+              open={saveAsTemplateOpen}
+              onClose={() => setSaveAsTemplateOpen(false)}
+              projectId={id}
             />
           </div>
-        </div>
-      ) : (
-      <TimelineCanvas
-        variant="split"
-        project={project}
-        transportExtra={snapshotPanel}
-        timeline={timeline}
-        durationTick={displayDurationTick}
-        playheadTick={clampedPlayheadTick}
-        selectedElementId={selectedElementId}
-        previewOpen
-        tasks={tasks}
-        onPreviewOpenChange={() => {}}
-        onPlayheadChange={(tick) =>
-          movePlayhead(Math.max(0, Math.min(displayDurationTick, tick)))
-        }
-        onSelectElement={selectElement}
-        onActiveElementIdsChange={setExplicitActiveIds}
-      />
-      )}
+        </header>
 
-      {/* Right rail (design 83:13383, 389px): 视频概览 hosts the element
+        {compareTimeline ? (
+          <div className="flex min-h-0 shrink-0 divide-x divide-[var(--color-border)]">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-accent-soft)] px-4 py-1">
+                <span className="rounded bg-[var(--color-accent)] px-1.5 py-0.5 text-[10px] font-bold text-white">
+                  A
+                </span>
+                <span className="truncate text-xs font-medium text-[var(--color-text-primary)]">
+                  {timeline?.name || timeline?.timeline_id}
+                </span>
+              </div>
+              <TimelineCanvas
+                project={project}
+                transportExtra={snapshotPanel}
+                timeline={timeline}
+                durationTick={displayDurationTick}
+                playheadTick={clampedPlayheadTick}
+                selectedElementId={selectedElementId}
+                previewOpen
+                tasks={tasks}
+                onPreviewOpenChange={() => {}}
+                onPlayheadChange={(tick) =>
+                  movePlayhead(Math.max(0, Math.min(displayDurationTick, tick)))
+                }
+                onSelectElement={selectElement}
+                onActiveElementIdsChange={setExplicitActiveIds}
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-4 py-1">
+                <span className="rounded bg-[var(--color-text-secondary)] px-1.5 py-0.5 text-[10px] font-bold text-white dark:bg-[var(--color-text-primary)]">
+                  B
+                </span>
+                <span className="truncate text-xs font-medium text-[var(--color-text-secondary)]">
+                  {compareTimeline.name || compareTimeline.timeline_id}
+                </span>
+                <button
+                  type="button"
+                  data-compare-close
+                  title={t("timeline.snapshotExitCompare")}
+                  onClick={() =>
+                    useTimelineStore.getState().setCompareTimelineId(null)
+                  }
+                  className="ml-auto flex h-5 items-center gap-1 rounded px-1.5 text-[11px] font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-primary)] hover:text-[var(--color-text-primary)]"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  {t("timeline.snapshotExitCompare")}
+                </button>
+              </div>
+              <TimelineCanvas
+                project={project}
+                timeline={compareTimeline}
+                durationTick={Math.max(
+                  displayDurationTick,
+                  timelineEndTick(compareTimeline),
+                )}
+                playheadTick={clampedPlayheadTick}
+                selectedElementId={null}
+                previewOpen
+                tasks={tasks}
+                onPreviewOpenChange={() => {}}
+                onPlayheadChange={(tick) =>
+                  movePlayhead(
+                    Math.max(
+                      0,
+                      Math.min(
+                        Math.max(
+                          displayDurationTick,
+                          timelineEndTick(compareTimeline),
+                        ),
+                        tick,
+                      ),
+                    ),
+                  )
+                }
+                onSelectElement={() => {}}
+                onActiveElementIdsChange={() => {}}
+              />
+            </div>
+          </div>
+        ) : (
+          <TimelineCanvas
+            variant="split"
+            project={project}
+            transportExtra={snapshotPanel}
+            timeline={timeline}
+            durationTick={displayDurationTick}
+            playheadTick={clampedPlayheadTick}
+            selectedElementId={selectedElementId}
+            previewOpen
+            tasks={tasks}
+            onPreviewOpenChange={() => {}}
+            onPlayheadChange={(tick) =>
+              movePlayhead(Math.max(0, Math.min(displayDurationTick, tick)))
+            }
+            onSelectElement={selectElement}
+            onActiveElementIdsChange={setExplicitActiveIds}
+          />
+        )}
+
+        {/* Right rail (design 83:13383, 389px): 视频概览 hosts the element
           overview, 分镜图预览 the storyboard image; the rail spans the header
           and stage rows. On narrow workspaces it degrades to a drawer. */}
-      {!narrowWorkspace ? (
-        <aside
-          data-element-rail
-          className="col-start-2 row-span-2 row-start-1 flex min-h-0 flex-col overflow-hidden border-l border-[var(--color-border)] bg-[var(--color-bg-primary)]"
-        >
-          <div
-            data-element-rail-tabs
-            className="flex h-12 shrink-0 items-center gap-6 border-b border-[var(--color-border)] px-4"
+        {!narrowWorkspace ? (
+          <aside
+            data-element-rail
+            className="col-start-2 row-span-2 row-start-1 flex min-h-0 flex-col overflow-hidden border-l border-[var(--color-border)] bg-[var(--color-bg-primary)]"
           >
-            {(
-              [
-                { key: "overview", label: t("plan.railOverviewTab") },
-                ...(storyboardTabAvailable
-                  ? [
-                      {
-                        key: "storyboard",
-                        label: t("plan.railStoryboardTab"),
-                      } as const,
-                    ]
-                  : []),
-              ] as { key: "overview" | "storyboard"; label: string }[]
-            ).map((item) => {
-              const active = railTab === item.key;
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => setRailTab(item.key)}
-                  data-active={active}
-                  className={`relative pb-1 text-sm transition-colors ${
-                    active
-                      ? "font-semibold text-[var(--color-text-primary)]"
-                      : "font-medium text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]"
-                  }`}
-                >
-                  {item.label}
-                  {active && (
-                    <span className="absolute inset-x-0 -bottom-0.5 mx-auto h-0.5 w-6 rounded-full bg-[var(--color-text-primary)]" />
-                  )}
-                </button>
-              );
-            })}
-          </div>
-          {railTab === "overview" ? (
-            <div className="grid min-h-0 flex-1">
-              {renderElementDetail(true)}
+            <div
+              data-element-rail-tabs
+              className="flex h-12 shrink-0 items-center gap-6 border-b border-[var(--color-border)] px-4"
+            >
+              {(
+                [
+                  { key: "overview", label: t("plan.railOverviewTab") },
+                  ...(storyboardTabAvailable
+                    ? [
+                        {
+                          key: "storyboard",
+                          label: t("plan.railStoryboardTab"),
+                        } as const,
+                      ]
+                    : []),
+                ] as { key: "overview" | "storyboard"; label: string }[]
+              ).map((item) => {
+                const active = railTab === item.key;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => setRailTab(item.key)}
+                    data-active={active}
+                    className={`relative pb-1 text-sm transition-colors ${
+                      active
+                        ? "font-semibold text-[var(--color-text-primary)]"
+                        : "font-medium text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]"
+                    }`}
+                  >
+                    {item.label}
+                    {active && (
+                      <span className="absolute inset-x-0 -bottom-0.5 mx-auto h-0.5 w-6 rounded-full bg-[var(--color-text-primary)]" />
+                    )}
+                  </button>
+                );
+              })}
             </div>
-          ) : (
-            <StoryboardPreviewPanel
-              project={project}
-              element={elementDraft.value}
-            />
-          )}
-        </aside>
-      ) : elementDraft.value ? (
-        <div className="absolute inset-y-4 right-4 z-40 grid w-[min(calc(100%-32px),420px)] min-h-0 shadow-2xl">
-          {renderElementDetail(false)}
-        </div>
-      ) : null}
+            {railTab === "overview" ? (
+              <div className="grid min-h-0 flex-1">
+                {renderElementDetail(true)}
+              </div>
+            ) : (
+              <StoryboardPreviewPanel
+                project={project}
+                element={elementDraft.value}
+              />
+            )}
+          </aside>
+        ) : elementDraft.value ? (
+          <div className="absolute inset-y-4 right-4 z-40 grid w-[min(calc(100%-32px),420px)] min-h-0 shadow-2xl">
+            {renderElementDetail(false)}
+          </div>
+        ) : null}
       </div>
 
       {workbenchElementId && timeline.elements_by_id[workbenchElementId] && (

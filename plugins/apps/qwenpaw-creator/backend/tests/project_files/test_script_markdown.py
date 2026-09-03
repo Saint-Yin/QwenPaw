@@ -132,5 +132,5 @@ def test_multi_line_hook_round_trips() -> None:
 
 
 def test_empty_document() -> None:
-    assert parse_script_markdown("") == []
+    assert not parse_script_markdown("")
     assert serialize_script_blocks([]) == ""

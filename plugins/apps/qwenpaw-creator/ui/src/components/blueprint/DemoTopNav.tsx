@@ -30,7 +30,11 @@ export default function DemoTopNav({
   return (
     <header className="relative z-[200] grid h-[58px] shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 border-b border-[var(--color-border)] bg-white/88 px-3 backdrop-blur-xl dark:bg-[var(--color-bg-primary)] md:px-4">
       <div className="flex min-w-0 items-center gap-2">
-        <Link href="/" className="icon-button shrink-0" aria-label="返回项目列表">
+        <Link
+          href="/"
+          className="icon-button shrink-0"
+          aria-label="返回项目列表"
+        >
           <LeftOutlined className="text-xs" />
         </Link>
         <img
@@ -73,7 +77,9 @@ export default function DemoTopNav({
           type="button"
           className={tabClass(active === "assets")}
           onClick={() =>
-            navigate(`/blueprint-demo/${DEMO_PROJECT_ID}/assets?sc=${scenarioKey}`)
+            navigate(
+              `/blueprint-demo/${DEMO_PROJECT_ID}/assets?sc=${scenarioKey}`,
+            )
           }
         >
           <Images className="h-3.5 w-3.5" />
@@ -87,7 +93,9 @@ export default function DemoTopNav({
             <CircleHelp className="h-3.5 w-3.5" />
           </span>
         </Tooltip>
-        <span className="icon-button shrink-0 text-[11px] font-semibold">EN</span>
+        <span className="icon-button shrink-0 text-[11px] font-semibold">
+          EN
+        </span>
         <span className="inline-flex h-[26px] items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2.5 text-[11px] font-semibold text-[var(--color-text-secondary)]">
           <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-success)]" />
           qwen3-max

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Zero-cost rough-cut preview rendering (plan §4.8).
 
 The blueprint's "播放粗剪" concatenates ALREADY-EXISTING artifacts — the
@@ -131,17 +132,24 @@ def render_rough_cut(
             duration = f"{clip.duration_seconds:.3f}"
             if clip.kind == "video":
                 command = [
-                    ffmpeg_binary, "-y", "-i", str(clip.path),
+                    ffmpeg_binary,
+                    "-y",
+                    "-i",
+                    str(clip.path),
                 ]
                 # Honor the planned span: freeze the last frame when the
                 # generated clip runs short, hard-cap when it runs long.
                 pad = f"tpad=stop_mode=clone:stop_duration={duration},"
             else:
                 command = [
-                    ffmpeg_binary, "-y",
-                    "-loop", "1",
-                    "-t", duration,
-                    "-i", str(clip.path),
+                    ffmpeg_binary,
+                    "-y",
+                    "-loop",
+                    "1",
+                    "-t",
+                    duration,
+                    "-i",
+                    str(clip.path),
                 ]
                 pad = ""
             command += [
@@ -151,8 +159,14 @@ def render_rough_cut(
                     f"scale=-2:{_DRAFT_HEIGHT},fps={_DRAFT_FPS},"
                     f"{pad}format=yuv420p"
                 ),
-                "-t", duration,
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+                "-t",
+                duration,
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "30",
                 str(segment),
             ]
             _run_ffmpeg(command)
@@ -165,10 +179,16 @@ def render_rough_cut(
         output = workdir / "rough-cut.mp4"
         _run_ffmpeg(
             [
-                ffmpeg_binary, "-y",
-                "-f", "concat", "-safe", "0",
-                "-i", str(concat_list),
-                "-c", "copy",
+                ffmpeg_binary,
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_list),
+                "-c",
+                "copy",
                 str(output),
             ],
         )

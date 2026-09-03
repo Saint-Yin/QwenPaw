@@ -41,7 +41,8 @@ router = APIRouter(
 
 @router.get("/voice-capabilities")
 async def get_voice_capabilities(project_id: str) -> dict[str, Any]:
-    del project_id  # capability is deployment-wide, kept per-project for URL symmetry
+    # Capability is deployment-wide; kept per-project for URL symmetry.
+    del project_id
     model = get_tts_model_name()
     capability = tts_capabilities.capability_for(model)
     return {

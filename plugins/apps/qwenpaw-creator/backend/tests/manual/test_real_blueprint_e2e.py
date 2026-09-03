@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=redefined-outer-name
 """Manual real-key acceptance for the project-blueprint slice.
 
 Drives the REAL HTTP surface (create → v9 snapshot → narrative structure
@@ -6,7 +7,8 @@ patch → real Qwen synopsis drafting → work graph → interactive-bundle
 fail-closed gate) against an isolated CREATOR_DATA_ROOT, using the real
 DashScope key. Opt-in::
 
-    DASHSCOPE_API_KEY=... pytest tests/manual/test_real_blueprint_e2e.py -q -m manual_real
+    DASHSCOPE_API_KEY=... pytest tests/manual/test_real_blueprint_e2e.py \\
+        -q -m manual_real
 """
 
 from __future__ import annotations
@@ -60,7 +62,6 @@ def client(tmp_path, monkeypatch):
     clear_creator_file_service_registry()
 
 
-
 def _pointer_get(document: dict, pointer: str):
     from services.project_files.json_pointer import MISSING
 
@@ -90,8 +91,9 @@ def _op(project: dict, op: str, path: str, value):
         "expectedValueHash": hash_json_value(_pointer_get(project, path)),
     }
 
-def _patch(client, project_id: str, snapshot: dict, operations: list) -> dict:
-    response = client.patch(
+
+def _patch(api, project_id: str, snapshot: dict, operations: list) -> dict:
+    response = api.patch(
         f"/projects/{project_id}/project",
         json={
             "clientCommandId": uuid.uuid4().hex,
@@ -105,11 +107,13 @@ def _patch(client, project_id: str, snapshot: dict, operations: list) -> dict:
     return response.json()
 
 
-def _snapshot(client, project_id: str) -> dict:
-    response = client.get(f"/projects/{project_id}/project")
+def _snapshot(api, project_id: str) -> dict:
+    response = api.get(f"/projects/{project_id}/project")
     assert response.status_code == 200, response.text
     payload = response.json()
-    payload["etag"] = response.headers.get("ETag", "").strip('"') or payload.get(
+    payload["etag"] = response.headers.get("ETag", "").strip(
+        '"',
+    ) or payload.get(
         "etag",
         "",
     )
@@ -117,6 +121,7 @@ def _snapshot(client, project_id: str) -> dict:
 
 
 @requires_dashscope_key
+# pylint: disable-next=too-many-statements
 def test_blueprint_slice_end_to_end_with_real_model(client) -> None:
     # 1. Create a story project through the real endpoint.
     created = client.post(
@@ -164,13 +169,28 @@ def test_blueprint_slice_end_to_end_with_real_model(client) -> None:
         project_id,
         snapshot,
         [
-            _op(project, "replace", f"/timelines/items/{primary_id}/title", "第1集 · 雾夜来信"),
-            _op(project, "replace", f"/timelines/items/{primary_id}/synopsis", synopses["ep1"].strip()),
-            _op(project, "add", f"/timelines/items/{second_id}", {
-                "timeline_id": second_id,
-                "title": "第2集 · 旧宅疑云",
-                "synopsis": synopses["ep2"].strip(),
-            }),
+            _op(
+                project,
+                "replace",
+                f"/timelines/items/{primary_id}/title",
+                "第1集 · 雾夜来信",
+            ),
+            _op(
+                project,
+                "replace",
+                f"/timelines/items/{primary_id}/synopsis",
+                synopses["ep1"].strip(),
+            ),
+            _op(
+                project,
+                "add",
+                f"/timelines/items/{second_id}",
+                {
+                    "timeline_id": second_id,
+                    "title": "第2集 · 旧宅疑云",
+                    "synopsis": synopses["ep2"].strip(),
+                },
+            ),
             _op(project, "add", "/timelines/order/1", second_id),
             _op(project, "add", "/narrative_edges/0", {
                 "edge_id": "edge:1",
@@ -182,9 +202,7 @@ def test_blueprint_slice_end_to_end_with_real_model(client) -> None:
         ],
     )
     updated = _snapshot(client, project_id)
-    updated_project = (
-        updated["project"] if "project" in updated else updated
-    )
+    updated_project = updated["project"] if "project" in updated else updated
     assert (
         updated_project["timelines"]["items"][second_id]["synopsis"]
         == synopses["ep2"].strip()
@@ -211,16 +229,20 @@ def test_blueprint_slice_end_to_end_with_real_model(client) -> None:
                     "span": {"start_tick": 0, "duration_tick": 4000},
                     "location": {
                         "coordinate_space": "normalized_canvas",
-                        "x": 0.5, "y": 0.5, "width": 1, "height": 1,
-                        "anchor_x": 0.5, "anchor_y": 0.5,
-                        "rotation_degrees": 0, "opacity": 1,
+                        "x": 0.5,
+                        "y": 0.5,
+                        "width": 1,
+                        "height": 1,
+                        "anchor_x": 0.5,
+                        "anchor_y": 0.5,
+                        "rotation_degrees": 0,
+                        "opacity": 1,
                     },
                     "creation": {
                         "type": "r2v",
                         "intent": "雨夜山路空镜",
                         "storyboard_prompt": (
-                            "暴雨夜的盘山公路，远光灯划开浓雾，"
-                            "冷蓝色调电影感，9:16 竖幅"
+                            "暴雨夜的盘山公路，远光灯划开浓雾，" "冷蓝色调电影感，9:16 竖幅"
                         ),
                         "video_prompt": "镜头缓慢前推，雨刷摆动",
                         "shots": {
@@ -296,7 +318,8 @@ def test_blueprint_slice_end_to_end_with_real_model(client) -> None:
 
     # 9b. Dispatch the storyboard node: REAL qwen-image renders it.
     dispatched = client.post(
-        f"/projects/{project_id}/work-graph/nodes/storyboard:{element_id}/dispatch",
+        f"/projects/{project_id}/work-graph/nodes"
+        f"/storyboard:{element_id}/dispatch",
     )
     assert dispatched.status_code == 200, dispatched.text
 

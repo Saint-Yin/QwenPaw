@@ -569,7 +569,7 @@ def _attach_voice_sample(
         return commit.snapshot
 
 
-async def execute_file_voice_enrollment_command(
+async def execute_file_voice_enrollment_command(  # pylint: disable=too-many-statements  # noqa: E501
     services: CreatorFileServices,
     *,
     project_id: str,

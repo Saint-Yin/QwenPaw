@@ -2,10 +2,7 @@ import {
   getArtifactVersionMediaUrl,
   getAssetVersionMediaUrl,
 } from "@/api/creator";
-import type {
-  ProjectDocument,
-  R2VCreationDocument,
-} from "@/contracts/creator";
+import type { ProjectDocument, R2VCreationDocument } from "@/contracts/creator";
 
 /**
  * Pure helpers to resolve a preview thumbnail for a reference string

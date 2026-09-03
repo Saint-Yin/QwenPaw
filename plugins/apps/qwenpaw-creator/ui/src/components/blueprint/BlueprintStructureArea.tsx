@@ -74,7 +74,6 @@ function formatDuration(seconds: number): string {
     : `${rest}s`;
 }
 
-
 /** 节点卡操作胶囊 (design 84:30317): h-6 filled pill, icon + bold caption. */
 function NodeActionPill({
   icon,
@@ -217,7 +216,8 @@ function SingleBoard({
             entity.selected_artifact_version_id ||
               entity.variants.order.some(
                 (variantId) =>
-                  entity.variants.items[variantId]?.selected_artifact_version_id,
+                  entity.variants.items[variantId]
+                    ?.selected_artifact_version_id,
               ),
           );
         return {
@@ -374,7 +374,9 @@ function SingleBoard({
                   {index + 1}. {column.name}
                 </span>
                 <span
-                  className={`block truncate text-[10px] ${TONE_TEXT[column.tone]}`}
+                  className={`block truncate text-[10px] ${
+                    TONE_TEXT[column.tone]
+                  }`}
                 >
                   {column.sub}
                 </span>
@@ -475,7 +477,9 @@ function EpisodeList({
             >
               <span className="flex items-center justify-between gap-1.5">
                 <span
-                  className={`rounded px-1.5 text-[10px] font-semibold leading-[18px] ${TONE_CHIP[status.tone]}`}
+                  className={`rounded px-1.5 text-[10px] font-semibold leading-[18px] ${
+                    TONE_CHIP[status.tone]
+                  }`}
                 >
                   {t(`blueprint.episodeStatus.${status.key}`)}
                 </span>

@@ -83,7 +83,8 @@ export default function RoughCutStrip({
           粗剪预览
         </span>
         <span className="min-w-0 truncate text-[11px] text-[var(--color-text-tertiary)]">
-          全部镜头的分镜图按时间序排列（有成片帧则替换为成片帧）· 零额外生成成本 · 成片帧 {readyCount}/{frames.length}
+          全部镜头的分镜图按时间序排列（有成片帧则替换为成片帧）· 零额外生成成本
+          · 成片帧 {readyCount}/{frames.length}
         </span>
         <button
           type="button"
@@ -117,14 +118,15 @@ export default function RoughCutStrip({
               index === 0 || frames[index - 1].ep.id !== frame.ep.id;
             return (
               <span key={frame.key} className="contents">
-                {isEpisodeStart && frames.some((f) => f.ep.id !== frame.ep.id) && (
-                  <span
-                    className="flex w-[18px] shrink-0 items-center justify-center self-stretch rounded-sm bg-[var(--color-bg-secondary)] text-[9px] font-bold tracking-widest text-[var(--color-text-tertiary)] [writing-mode:vertical-rl]"
-                    title={frame.ep.name}
-                  >
-                    {frame.ep.name.split(" · ")[0]}
-                  </span>
-                )}
+                {isEpisodeStart &&
+                  frames.some((f) => f.ep.id !== frame.ep.id) && (
+                    <span
+                      className="flex w-[18px] shrink-0 items-center justify-center self-stretch rounded-sm bg-[var(--color-bg-secondary)] text-[9px] font-bold tracking-widest text-[var(--color-text-tertiary)] [writing-mode:vertical-rl]"
+                      title={frame.ep.name}
+                    >
+                      {frame.ep.name.split(" · ")[0]}
+                    </span>
+                  )}
                 <button
                   type="button"
                   title={`${frame.ep.name} · ${frame.kindLabel}（点击审阅该节点）`}
@@ -133,7 +135,9 @@ export default function RoughCutStrip({
                   style={{ backgroundImage: GRADS[frame.grad] }}
                 >
                   <span
-                    className={`absolute left-0 top-0 rounded-br px-1 py-px text-[8px] font-bold text-white ${KIND_STYLE[frame.tone]}`}
+                    className={`absolute left-0 top-0 rounded-br px-1 py-px text-[8px] font-bold text-white ${
+                      KIND_STYLE[frame.tone]
+                    }`}
                   >
                     {frame.kindLabel}
                   </span>

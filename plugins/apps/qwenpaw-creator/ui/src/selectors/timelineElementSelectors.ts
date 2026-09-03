@@ -50,6 +50,20 @@ export function selectTimelineById(
 export type NarrativeShape = "single" | "linear" | "branching";
 
 /**
+ * Live narrative timelines in order; `snapshot:*` frozen history excluded.
+ * Every "how many episodes / which timeline is active" decision must go
+ * through this filter instead of reading `timelines.order` directly.
+ */
+export function selectLiveTimelineIds(
+  project: ProjectDocument | null | undefined,
+): string[] {
+  if (!project) return [];
+  return project.timelines.order.filter(
+    (id) => project.timelines.items[id] && !id.startsWith("snapshot:"),
+  );
+}
+
+/**
  * The blueprint's only fork point, derived purely from data (plan §4.5):
  * edges → branching graph; several timelines → linear episode list;
  * otherwise the single-node production board.
@@ -59,10 +73,7 @@ export function selectNarrativeShape(
 ): NarrativeShape {
   if (!project) return "single";
   if ((project.narrative_edges ?? []).length > 0) return "branching";
-  const count = project.timelines.order.filter(
-    (id) => project.timelines.items[id] && !id.startsWith("snapshot:"),
-  ).length;
-  return count > 1 ? "linear" : "single";
+  return selectLiveTimelineIds(project).length > 1 ? "linear" : "single";
 }
 
 export function timelineEndTick(
