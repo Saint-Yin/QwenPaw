@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Input, InputNumber, Select } from "antd";
+import { Alert, Button, Input, InputNumber, Select, message } from "antd";
 import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 import {
@@ -25,6 +25,9 @@ import {
   getAssetVersionMediaUrl,
   getR2VReferenceOrder,
 } from "@/api/creator";
+import { regenerateNarration } from "@/api/creator/voice";
+import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
+import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
 import {
   TRANSITION_KIND_LABEL,
   classifyElementTrack,
@@ -333,6 +336,33 @@ export default function ElementDetail({
   onOpenWorkbench,
 }: ElementDetailProps) {
   const { t } = useTranslation();
+  const [narrationBusy, setNarrationBusy] = useState(false);
+  const refreshNarrationTasks = useCreatorTaskViewStore(
+    (state) => state.refresh,
+  );
+  const pollProjectOnce = useProjectSnapshotStore((state) => state.pollOnce);
+  const regenerateNarrationNow = async () => {
+    if (!element) return;
+    setNarrationBusy(true);
+    try {
+      const result = await regenerateNarration(
+        project.project_id,
+        timeline.timeline_id,
+        element.element_id,
+      );
+      message.success(
+        result.rebound
+          ? t("elementDetail.narrationRegenerated")
+          : t("elementDetail.narrationUpToDate"),
+      );
+      void pollProjectOnce(project.project_id);
+      void refreshNarrationTasks(project.project_id);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setNarrationBusy(false);
+    }
+  };
   const outputs = useMemo(
     () => (element ? resolveElementOutputs(project, element) : []),
     [element, project],
@@ -1244,6 +1274,18 @@ export default function ElementDetail({
                   const textPreview = String(audioMeta.textPreview ?? "");
                   const voiceName = String(audioMeta.voice ?? "");
                   const ttsModel = String(audioMeta.model ?? "");
+                  const characterEntityId = String(
+                    audioMeta.characterEntityId ?? "",
+                  );
+                  const characterVoiceEntity = characterEntityId
+                    ? project.visual.entities.items[characterEntityId] ?? null
+                    : null;
+                  const voiceSampleUrl = characterVoiceEntity?.voice
+                    ?.sample_source_version_id
+                    ? getAssetVersionMediaUrl(
+                        characterVoiceEntity.voice.sample_source_version_id,
+                      )
+                    : null;
                   // Streaming WAV headers can claim absurd durations (hours); hide
                   // anything implausible instead of showing a broken number.
                   const plausibleDuration =
@@ -1357,16 +1399,34 @@ export default function ElementDetail({
                             </p>
                           </div>
                         )}
-                        {(voiceName || ttsModel) && (
-                          <p className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">
-                            {voiceName &&
-                              t("elementDetail.voiceLine", { name: voiceName })}
-                            {voiceName && ttsModel && " · "}
-                            {ttsModel &&
-                              t("elementDetail.ttsModelLine", {
-                                name: ttsModel,
-                              })}
-                          </p>
+                        {(voiceName || ttsModel || characterVoiceEntity) && (
+                          <div
+                            data-element-narration-voice
+                            className="mt-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-2"
+                          >
+                            <p className="text-[10px] font-semibold text-[var(--color-text-secondary)]">
+                              {t("elementDetail.referencedVoice")}
+                            </p>
+                            <p className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">
+                              {voiceName &&
+                                t("elementDetail.voiceLine", {
+                                  name: voiceName,
+                                })}
+                              {voiceName && ttsModel && " · "}
+                              {ttsModel &&
+                                t("elementDetail.ttsModelLine", {
+                                  name: ttsModel,
+                                })}
+                            </p>
+                            {voiceSampleUrl && (
+                              <audio
+                                src={voiceSampleUrl}
+                                controls
+                                preload="none"
+                                className="mt-1.5 h-7 w-full"
+                              />
+                            )}
+                          </div>
                         )}
                         {audioVersion && (
                           <audio
@@ -1377,6 +1437,21 @@ export default function ElementDetail({
                             preload="metadata"
                             className="mt-2 h-8 w-full"
                           />
+                        )}
+                        {scriptText.trim() !== "" && (
+                          <div className="mt-2 flex justify-end">
+                            <button
+                              type="button"
+                              data-narration-regenerate={element.element_id}
+                              disabled={narrationBusy}
+                              onClick={() => void regenerateNarrationNow()}
+                              className="inline-flex h-8 items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 text-xs font-medium text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-border-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {narrationBusy
+                                ? t("elementDetail.narrationRegenerating")
+                                : t("elementDetail.narrationRegenerate")}
+                            </button>
+                          </div>
                         )}
                       </div>
                       <label

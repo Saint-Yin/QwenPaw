@@ -52,6 +52,7 @@ import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
+import type { ProjectEditOperation } from "@/store/projectSnapshotStore";
 import { useTimelineStore } from "@/store/timelineStore";
 import { useNarrowWorkspace, useDetailRail } from "@/lib/useNarrowWorkspace";
 import AssetMediaPreview from "@/components/assets/AssetMediaPreview";
@@ -845,7 +846,7 @@ function resolveProvenanceRef(
   return null;
 }
 
-interface PromptTarget {
+export interface PromptTarget {
   pointer: string;
   value: string;
   label: string;
@@ -940,7 +941,7 @@ function variantReferenceCandidates(
 }
 
 /** Work-graph node the prompt regenerates through — manual dispatch, no agent. */
-function dispatchNodeIdForPrompt(pointer: string): string | null {
+export function dispatchNodeIdForPrompt(pointer: string): string | null {
   let match =
     /^\/visual\/entities\/items\/([^/]+)\/variants\/items\/([^/]+)\/prompt$/.exec(
       pointer,
@@ -959,7 +960,7 @@ function dispatchNodeIdForPrompt(pointer: string): string | null {
   return null;
 }
 
-function visualEntityPromptTarget(
+export function visualEntityPromptTarget(
   project: ProjectDocument,
   entity: VisualEntityDocument,
   versionId: string | null,
@@ -1075,7 +1076,52 @@ function generationPromptTarget(
 /** Prompt block: read-only text with 编辑 / 重新生成. 编辑 opens the same
  *  fullscreen token editor as the R2V workbench (reference images insert as
  *  pills); 重新生成 dispatches the matching work-graph node directly. */
-function GenerationPromptEditor({
+/** Build the patch ops for a prompt edit: text replace + newly picked
+ *  reference ids appended to the variant's reference bindings. */
+export function buildPromptSaveOperations(
+  project: ProjectDocument,
+  target: PromptTarget,
+  next: string,
+  addedReferenceIds: string[],
+): ProjectEditOperation[] {
+  const operations: ProjectEditOperation[] = [];
+  if (next !== target.value) {
+    operations.push({
+      op: "replace",
+      path: target.pointer,
+      before: target.value,
+      value: next,
+    });
+  }
+  const binding = target.referenceBinding;
+  if (binding && addedReferenceIds.length > 0) {
+    const addedAssets = addedReferenceIds.filter(
+      (versionId) => project.assets.source_versions_by_id[versionId],
+    );
+    const addedArtifacts = addedReferenceIds.filter(
+      (versionId) => !addedAssets.includes(versionId),
+    );
+    if (addedAssets.length) {
+      operations.push({
+        op: "replace",
+        path: `${binding.base}/reference_asset_version_ids`,
+        before: binding.assetIds,
+        value: [...binding.assetIds, ...addedAssets],
+      });
+    }
+    if (addedArtifacts.length) {
+      operations.push({
+        op: "replace",
+        path: `${binding.base}/reference_artifact_version_ids`,
+        before: binding.artifactIds,
+        value: [...binding.artifactIds, ...addedArtifacts],
+      });
+    }
+  }
+  return operations;
+}
+
+export function GenerationPromptEditor({
   target,
   onSave,
   onRegenerate,
@@ -2058,14 +2104,11 @@ export default function AssetsPage() {
                                   voice.preferred_name || "—",
                                 ],
                                 [t("assets.voiceModel"), voice.target_model],
-                                ...(voice.voice_prompt
-                                  ? [
-                                      [
-                                        t("assets.voicePromptLabel"),
-                                        voice.voice_prompt,
-                                      ],
-                                    ]
-                                  : []),
+                                [
+                                  t("assets.voicePromptLabel"),
+                                  voice.voice_prompt ||
+                                    t("assets.voicePromptMissing"),
+                                ],
                                 [
                                   t("assets.createdTime"),
                                   voice.created_at
@@ -2088,12 +2131,16 @@ export default function AssetsPage() {
                                 </div>
                               ))}
                             </dl>
-                            {sampleUrl && (
+                            {sampleUrl ? (
                               <audio
                                 src={sampleUrl}
                                 controls
                                 className="mt-2 h-8 w-full"
                               />
+                            ) : (
+                              <p className="mt-2 rounded bg-[var(--color-bg-primary)] px-2 py-1.5 text-[10px] leading-4 text-[var(--color-text-tertiary)]">
+                                {t("assets.voiceSampleMissing")}
+                              </p>
                             )}
                             <div className="mt-2.5 flex justify-end">
                               <RegeneratePill

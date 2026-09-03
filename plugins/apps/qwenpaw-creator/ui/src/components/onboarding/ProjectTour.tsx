@@ -47,7 +47,10 @@ export default function ProjectTour() {
       ),
     },
     {
-      selectors: ['[data-onboarding-id="element-detail"]'],
+      selectors: [
+        '[data-onboarding-id="element-detail"]',
+        "[data-element-rail]",
+      ],
       title: t("onboarding.projectTourDetail"),
       description: (
         <div className="space-y-2">

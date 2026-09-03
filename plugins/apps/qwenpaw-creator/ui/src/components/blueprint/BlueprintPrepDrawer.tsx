@@ -15,6 +15,15 @@ import {
   type ResolvedSlot,
 } from "@/selectors/blueprintSelectors";
 import { visualVariantLabel } from "@/lib/visualVariants";
+import { dispatchWorkGraphNode } from "@/api/creator/workGraph";
+import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
+import {
+  GenerationPromptEditor,
+  buildPromptSaveOperations,
+  dispatchNodeIdForPrompt,
+  visualEntityPromptTarget,
+  type PromptTarget,
+} from "@/pages/AssetsPage";
 import { TONE_CHIP } from "./tones";
 
 export type PreproductionTab = "visual" | "research";
@@ -90,23 +99,45 @@ function VisualDetail({
     ? getArtifactVersionMediaUrl(selectedVersionId)
     : null;
   const versionIds = primaryVariant?.generated_artifact_version_ids ?? [];
-  const [promptDraft, setPromptDraft] = useState(primaryVariant?.prompt ?? "");
-  useEffect(() => {
-    setPromptDraft(primaryVariant?.prompt ?? "");
-  }, [primaryVariant?.prompt, entity.entity_id]);
-  const promptDirty = promptDraft !== (primaryVariant?.prompt ?? "");
+  // Same editing surface as the asset library detail: fullscreen prompt
+  // editor with pickable reference images, plus the DAG regenerate pill.
+  const promptTarget = useMemo(
+    () => visualEntityPromptTarget(project, entity, selectedVersionId),
+    [project, entity, selectedVersionId],
+  );
+  const regenerateNodeId = promptTarget
+    ? dispatchNodeIdForPrompt(promptTarget.pointer)
+    : null;
+  const refreshTasks = useCreatorTaskViewStore((state) => state.refresh);
+  const pollOnce = useProjectSnapshotStore((state) => state.pollOnce);
 
-  const savePrompt = async () => {
-    if (!primaryVariant || !primaryVariantId) return;
+  const regenerate = () => {
+    if (!regenerateNodeId) return;
+    void dispatchWorkGraphNode(projectId, regenerateNodeId)
+      .then((result) => {
+        message.success(
+          result.dispatched ? t("r2v.regenQueued") : t("r2v.regenUpToDate"),
+        );
+        void refreshTasks(projectId);
+        void pollOnce(projectId);
+      })
+      .catch((error) => message.error((error as Error).message));
+  };
+
+  const savePromptTarget = async (
+    target: PromptTarget,
+    next: string,
+    addedReferenceIds: string[],
+  ) => {
     try {
-      await patchProject(projectId, [
-        {
-          op: "replace",
-          path: `/visual/entities/items/${entity.entity_id}/variants/items/${primaryVariantId}/prompt`,
-          before: primaryVariant.prompt,
-          value: promptDraft,
-        },
-      ]);
+      const operations = buildPromptSaveOperations(
+        project,
+        target,
+        next,
+        addedReferenceIds,
+      );
+      if (!operations.length) return;
+      await patchProject(projectId, operations);
       message.success(t("blueprint.promptSaved"));
     } catch (error) {
       message.error(
@@ -176,30 +207,17 @@ function VisualDetail({
             ]}
           />
         </div>
-        {primaryVariant && (
-          <div>
-            <FieldLabel>{t("blueprint.designPrompt")}</FieldLabel>
-            <textarea
-              data-creator-field={`visual-entity:${entity.entity_id}/prompt`}
-              data-creator-field-label={`${entity.name} · Prompt`}
-              data-creator-path={`/visual/entities/items/${entity.entity_id}/variants/items/${primaryVariantId}/prompt`}
-              value={promptDraft}
-              onChange={(event) => setPromptDraft(event.target.value)}
-              className="min-h-[96px] w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2 text-xs leading-relaxed text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-accent)] focus:shadow-[0_0_0_2px_rgba(255,127,22,.1)]"
-            />
-          </div>
+        {promptTarget && (
+          <GenerationPromptEditor
+            key={promptTarget.pointer}
+            target={promptTarget}
+            saving={patching}
+            regenerateLabel={t("r2v.regenerateImage")}
+            onRegenerate={regenerateNodeId ? regenerate : undefined}
+            onSave={savePromptTarget}
+          />
         )}
         <div className="mt-auto flex items-center gap-2 pt-1">
-          {promptDirty && (
-            <button
-              type="button"
-              className="btn-secondary shrink-0"
-              disabled={patching}
-              onClick={() => void savePrompt()}
-            >
-              {t("blueprint.savePrompt")}
-            </button>
-          )}
           <span className="text-[10px] leading-relaxed text-[var(--color-text-tertiary)]">
             {t("blueprint.visualApproveHint")}
           </span>

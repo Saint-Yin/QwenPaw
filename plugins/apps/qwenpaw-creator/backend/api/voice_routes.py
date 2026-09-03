@@ -14,11 +14,12 @@ along with the next steer/digest, never waking the agent by itself
 from __future__ import annotations
 
 from typing import Any
+import asyncio
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header
 
-from domain.errors import ValidationError
+from domain.errors import NotFoundError, ValidationError
 from models import tts_capabilities
 from models.config import get_tts_model_name
 from services.file_agent_runtime.notifications import RuntimeEventKind
@@ -97,3 +98,119 @@ async def create_character_voice(
         except Exception:  # noqa: BLE001 - the bind already succeeded
             pass
     return result
+
+
+@router.post("/timelines/{timeline_id}/elements/{element_id}/narration")
+async def regenerate_narration(
+    project_id: str,
+    timeline_id: str,
+    element_id: str,
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
+    services: CreatorFileServices = Depends(project_file_services),
+) -> dict[str, Any]:
+    """Re-synthesize one narration element's audio straight through the TTS
+    executor (no agent turn) and rebind the element to the new version.
+
+    The synthesis inputs come from the element itself — its script and
+    speech rate — plus the voice identity recorded on the current audio
+    version, so the regenerated narration keeps the user-selected voice.
+    """
+
+    # pylint: disable=import-outside-toplevel
+    from services.media_files.audio_execution import (
+        execute_file_tts_command,
+    )
+    from services.project_files.commit import ProjectCommitBoundary
+    from services.project_files.models import (
+        AudioCreation,
+        is_snapshot_timeline_id,
+    )
+
+    if is_snapshot_timeline_id(timeline_id):
+        raise ValidationError("历史快照是冻结副本，不能重新合成旁白")
+    snapshot = await asyncio.to_thread(services.projects.read, project_id)
+    timeline = snapshot.project.timelines.items.get(timeline_id)
+    if timeline is None:
+        raise NotFoundError(f"timeline 不存在: {timeline_id}")
+    element = timeline.elements_by_id.get(element_id)
+    if element is None:
+        raise NotFoundError(f"element 不存在: {element_id}")
+    creation = element.creation
+    if not isinstance(creation, AudioCreation) or not creation.script.strip():
+        raise ValidationError("该元素不是携带台词文稿的音频元素")
+
+    current = snapshot.project.assets.source_versions_by_id.get(
+        creation.source_asset_version_id,
+    )
+    meta: dict[str, Any] = dict(current.metadata) if current else {}
+    arguments: dict[str, Any] = {
+        "text": creation.script,
+        "label": element.label or "旁白",
+    }
+    if meta.get("voice"):
+        arguments["voice"] = meta["voice"]
+    if meta.get("characterEntityId"):
+        arguments["characterRef"] = f"asset:{meta['characterEntityId']}"
+    if creation.speech_rate is not None:
+        arguments["speechRate"] = creation.speech_rate
+
+    request_key = idempotency_key or f"narration-http-{uuid4().hex}"
+    result = await execute_file_tts_command(
+        services,
+        project_id=project_id,
+        target_ref=f"timeline:{timeline_id}",
+        arguments=arguments,
+        idempotency_key=request_key,
+    )
+
+    rebound = False
+    new_version_id = result.source_asset_version_id
+    if new_version_id != creation.source_asset_version_id:
+
+        def _rebind() -> None:
+            fresh = services.projects.read(project_id)
+            candidate = fresh.project.model_copy(deep=True)
+            target = candidate.timelines.items[timeline_id].elements_by_id[
+                element_id
+            ]
+            if not isinstance(target.creation, AudioCreation):
+                raise ValidationError("元素类型在重新合成期间被修改")
+            target.creation.source_asset_version_id = new_version_id
+            ProjectCommitBoundary(services.projects).commit(
+                base=fresh,
+                candidate=candidate.model_dump(mode="json"),
+                origin="runtime_task",
+            )
+
+        await asyncio.to_thread(_rebind)
+        rebound = True
+
+    runtime = get_creator_agent_runtime()
+    if runtime is not None and rebound:
+        try:
+            await runtime.notifications.notify(
+                project_id,
+                kind=RuntimeEventKind.NARRATION_REGENERATED,
+                request_id=f"narration-regen-{request_key}",
+                text=(
+                    f"元素 {element_id} 的旁白已按当前文稿与音色"
+                    f"（{result.voice or result.model}）直接重新合成并"
+                    "替换。这是状态同步，不是新的用户指令。"
+                ),
+                payload={
+                    "timelineId": timeline_id,
+                    "elementId": element_id,
+                    "audioVersionId": new_version_id,
+                },
+            )
+        except Exception:  # noqa: BLE001 - the rebind already succeeded
+            pass
+
+    return {
+        "audioVersionId": new_version_id,
+        "replayed": result.replayed,
+        "rebound": rebound,
+        "voice": result.voice,
+        "model": result.model,
+        "durationSeconds": result.duration_seconds,
+    }
