@@ -14,9 +14,24 @@ export interface TourStepBlueprint {
 }
 
 export function resolveTarget(selectors: string[]): HTMLElement | null {
+  // display:contents anchors report a 0x0 rect, which would pin the antd
+  // Tour spotlight to the viewport origin — only accept sized elements and
+  // as a last resort spotlight the first sized descendant.
+  const sized = (element: HTMLElement) => {
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  let zeroSize: HTMLElement | null = null;
   for (const selector of selectors) {
     const element = document.querySelector<HTMLElement>(selector);
-    if (element) return element;
+    if (!element) continue;
+    if (sized(element)) return element;
+    zeroSize = zeroSize ?? element;
+  }
+  if (zeroSize) {
+    for (const descendant of zeroSize.querySelectorAll<HTMLElement>("*")) {
+      if (sized(descendant)) return descendant;
+    }
   }
   return null;
 }

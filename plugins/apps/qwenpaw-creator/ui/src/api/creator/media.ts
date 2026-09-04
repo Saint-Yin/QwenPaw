@@ -26,6 +26,25 @@ export function getArtifactVersionMediaUrl(versionId: string): string {
   );
 }
 
+/** On-the-fly draft assembly of one timeline's existing clips (never persisted). */
+export function getTimelineRoughCutUrl(
+  projectId: string,
+  timelineId: string,
+): string {
+  return creatorAuthenticatedUrl(
+    `/projects/${encodeURIComponent(projectId)}/timelines/${encodeURIComponent(
+      timelineId,
+    )}/rough-cut`,
+  );
+}
+
+/** Interactive-bundle zip export (fails 409 until every branch has a final cut). */
+export function getInteractiveBundleUrl(projectId: string): string {
+  return creatorAuthenticatedUrl(
+    `/projects/${encodeURIComponent(projectId)}/interactive-bundle`,
+  );
+}
+
 export function getArtifactVersionFrameUrl(
   versionId: string,
   timestamp = 0,

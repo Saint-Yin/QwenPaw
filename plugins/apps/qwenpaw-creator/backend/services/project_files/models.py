@@ -276,7 +276,10 @@ ARTIFACT_SLOT_KINDS = frozenset(
         "cast_lineup_image",
         "element_video",
         "final_video",
+        "interactive_bundle",
         "r2v_storyboard_image",
+        "research_report",
+        "timeline_script",
         "visual_asset_image",
     },
 )
@@ -496,6 +499,9 @@ class CharacterVoice(StrictModel):
     target_model: str = Field(min_length=1)
     preferred_name: str = ""
     sample_source_version_id: EntityId | None = None
+    # Design-path timbre description; kept so the voice can be tweaked and
+    # regenerated from the asset library without re-deriving the prompt.
+    voice_prompt: str = ""
     enrollment_key: str = ""
     created_at: UtcDateTime
 
@@ -1094,6 +1100,47 @@ class AudioCreation(StrictModel):
         return value
 
 
+class InteractionOption(StrictModel):
+    """One tappable audience choice; copy/target derive from the edge."""
+
+    # Points at Project.narrative_edges[*].edge_id — the edge is the single
+    # source of truth for option label and target timeline.
+    edge_ref: str = Field(min_length=1)
+    # Tap hotspot in normalized canvas space; None = auto layout by the
+    # generated motion.
+    hotspot: ElementLocation | None = None
+
+
+class InteractionCreation(StrictModel):
+    """Audience-choice element: a clickable html_css motion rendered on the
+    last frame of the source episode. Exported through InteractiveManifest
+    (never baked into a plain mp4)."""
+
+    type: Literal["interaction"]
+    question: str = Field(min_length=1)
+    options: list[InteractionOption] = Field(min_length=1)
+    countdown_seconds: float | None = Field(default=None, gt=0)
+    # Edge taken when the countdown expires without a tap.
+    default_edge_ref: str | None = None
+    # Anchor frame: artifact-version ref of the source episode's last frame.
+    base_frame_ref: str | None = None
+    motion: MotionGraphic | None = None
+    fallback: Literal["static_endcard", "split_publish"] = "split_publish"
+
+    @model_validator(mode="after")
+    def _validate_options(self) -> InteractionCreation:
+        refs = [option.edge_ref for option in self.options]
+        if len(refs) != len(set(refs)):
+            raise ValueError("interaction options cannot repeat edge_ref")
+        if self.default_edge_ref is not None and (
+            self.default_edge_ref not in refs
+        ):
+            raise ValueError(
+                "interaction default_edge_ref must be one of its options",
+            )
+        return self
+
+
 ElementCreation = Annotated[
     R2VCreation
     | T2VCreation
@@ -1103,7 +1150,8 @@ ElementCreation = Annotated[
     | OverlayCreation
     | MotionClipCreation
     | TransitionCreation
-    | AudioCreation,
+    | AudioCreation
+    | InteractionCreation,
     Field(discriminator="type"),
 ]
 
@@ -1220,6 +1268,13 @@ class Timeline(StrictModel):
     """One time coordinate system containing freely overlapping Elements."""
 
     timeline_id: EntityId
+    # Narrative-node display fields consumed by the project blueprint: a
+    # Timeline doubles as one narrative node (episode / ending / the single
+    # video). All optional so pre-v9 projects stay valid untouched.
+    title: str = ""
+    synopsis: str = ""
+    planned_duration_seconds: float | None = Field(default=None, gt=0)
+    # Multi-timeline naming (A/B compare snapshots).
     name: str = ""
     description: str = ""
     ticks_per_second: int = Field(
@@ -1306,6 +1361,69 @@ class Timeline(StrictModel):
         )
 
 
+class NarrativeEdge(StrictModel):
+    """Branch link between two narrative nodes (Timelines). Linear projects
+    keep this empty; the blueprint derives its structure shape from
+    len(timelines) x bool(narrative_edges) — no extra enum."""
+
+    edge_id: EntityId
+    source_timeline_id: EntityId
+    target_timeline_id: EntityId
+    # Option label shown to the audience, e.g. "选择A · 揭发真相".
+    label: str = ""
+    # Choice question copy; edges sharing a source share the prompt.
+    prompt: str = ""
+
+
+class InteractionPoint(StrictModel):
+    """One choice point inside the interactive manifest."""
+
+    source_timeline_id: EntityId
+    at_seconds: float = Field(ge=0)
+    question: str = ""
+    options: list[InteractionOption] = Field(min_length=1)
+    countdown_seconds: float | None = Field(default=None, gt=0)
+    default_edge_ref: str | None = None
+
+
+class InteractiveManifest(StrictModel):
+    """Content of an interactive_bundle artifact: segment videos + choice
+    points. The final deliverable of a branching project is this bundle
+    (html player + manifest + segment mp4s), not a single mp4."""
+
+    schema_version: Literal[1] = 1
+    entry_timeline_id: EntityId
+    # timeline_id -> final_video ArtifactVersion ref for that segment.
+    segments: dict[EntityId, str] = Field(default_factory=dict)
+    interactions: list[InteractionPoint] = Field(default_factory=list)
+
+
+SNAPSHOT_TIMELINE_PREFIX = "snapshot:"
+
+
+def is_snapshot_timeline_id(timeline_id: str) -> bool:
+    """History snapshots are frozen copies, never live narrative nodes."""
+
+    return timeline_id.startswith(SNAPSHOT_TIMELINE_PREFIX)
+
+
+def narrative_timeline_ids(project: "Project") -> tuple[str, ...]:
+    """The live narrative timelines, in order.
+
+    Every "how many episodes / which timelines produce content" decision
+    must go through this filter: ``snapshot:*`` entries in
+    ``timelines.order`` are frozen version history, not episodes — they
+    must never receive script/storyboard/video/compose nodes, never count
+    toward multi-timeline checkpoints, and never enter narrative prompts.
+    """
+
+    return tuple(
+        timeline_id
+        for timeline_id in project.timelines.order
+        if not is_snapshot_timeline_id(timeline_id)
+    )
+
+
 class Project(StrictModel):
     schema_version: Literal[9] = CURRENT_PROJECT_SCHEMA_VERSION
     project_id: EntityId
@@ -1327,7 +1445,24 @@ class Project(StrictModel):
             order=[DEFAULT_TIMELINE_ID],
         ),
     )
+    narrative_edges: list[NarrativeEdge] = Field(default_factory=list)
     assets: AssetIndex = Field(default_factory=AssetIndex)
+
+    @model_validator(mode="after")
+    def _validate_narrative_edges(self) -> Project:
+        seen: set[str] = set()
+        for edge in self.narrative_edges:
+            if edge.edge_id in seen:
+                raise ValueError("narrative edge ids must be unique")
+            seen.add(edge.edge_id)
+            for ref in (edge.source_timeline_id, edge.target_timeline_id):
+                if ref not in self.timelines.items:
+                    raise ValueError(
+                        f"narrative edge references unknown timeline {ref!r}",
+                    )
+            if edge.source_timeline_id == edge.target_timeline_id:
+                raise ValueError("narrative edge cannot loop onto itself")
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -1604,6 +1739,13 @@ class Project(StrictModel):
                 element_timelines[element_id] = timeline
 
         for element_id, element in elements.items():
+            if element_timelines[element_id].timeline_id.startswith(
+                "snapshot:",
+            ):
+                # 历史快照是冻结副本：元素 id 带快照前缀，outputs/引用指向
+                # 拍摄当时的资产（slot 不随副本复制）。资产引用校验只对活
+                # 时间线成立；恢复快照时前缀被剥除，引用重新指回真实资产。
+                continue
             creation = element.creation
             if isinstance(creation, R2VCreation):
                 _require_version_refs(

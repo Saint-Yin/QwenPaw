@@ -267,7 +267,7 @@ def test_legacy_document_etag_survives_in_memory_schema_migration():
         # Pinned against the current schema dump: bump when Project gains
         # fields, the mechanism under test is that migration-added fields
         # stay out of the source-document hash.
-        "sha256:5fdf0b11c103902a2ef93f6c1edb244fa11046b4c117a7da54a32c8af3c7524e"
+        "sha256:8d459b41013b60918a66f5e2681f293cdd36bb3c6bbc8e0460374b22f5d2f212"
     )
     assert project_document_etag(raw, project=migrated) != project_etag(
         migrated,

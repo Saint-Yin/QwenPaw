@@ -113,6 +113,8 @@ class TaskKind(StrEnum):
     R2V_GENERATION = "r2v_generation"
     AI_EDIT_EXECUTE = "ai_edit_execute"
     COMPOSE = "compose"
+    SCRIPT_DRAFT = "script_draft"
+    INTERACTION_DRAFT = "interaction_draft"
 
 
 class CreatorProgressPhase(StrEnum):
@@ -152,6 +154,8 @@ class CreatorCommandType(StrEnum):
     SET_FINAL_COMPOSE_TRANSITION = "SET_FINAL_COMPOSE_TRANSITION"
     COMPOSE_FINAL_VIDEO = "COMPOSE_FINAL_VIDEO"
     ANALYZE_SOURCE_MEDIA = "ANALYZE_SOURCE_MEDIA"
+    GENERATE_TIMELINE_SCRIPT = "GENERATE_TIMELINE_SCRIPT"
+    GENERATE_INTERACTION_MOTION = "GENERATE_INTERACTION_MOTION"
 
 
 DETERMINISTIC_COMMANDS = frozenset(
