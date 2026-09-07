@@ -35,6 +35,7 @@ import {
   resolveElementVisualMeta,
 } from "@/selectors/timelineElementSelectors";
 import { outputLabel } from "@/lib/creatorPresentation";
+import { presentPromptEntityNames } from "@/lib/promptEntityNames";
 import { projectJsonPointer } from "@/lib/projectJsonPointer";
 import { storyboardOfOwner } from "@/components/workbench/referenceThumbs";
 import InlineReviewDiff from "@/components/agent/InlineReviewDiff";
@@ -456,16 +457,6 @@ export default function ElementDetail({
       return creation.vibe ? { intent: creation.vibe } : null;
     return null;
   })();
-  const r2vShots =
-    creation.type === "r2v"
-      ? creation.shots.order
-          .map((shotId) => creation.shots.items[shotId])
-          .filter((shot): shot is NonNullable<typeof shot> => Boolean(shot))
-      : [];
-  const r2vShotsTotal = r2vShots.reduce(
-    (total, shot) => total + (shot.duration_seconds ?? 0),
-    0,
-  );
   const r2vRefThumbs = (() => {
     if (creation.type !== "r2v") return [];
     if (referenceOrder?.references.length) {
@@ -605,11 +596,6 @@ export default function ElementDetail({
                 ? `z ${element.z_index}`
                 : t("elementDetail.fullFrameZ", { z: element.z_index })}
             </Pill>
-            {creation.type === "r2v" && r2vShots.length > 0 && (
-              <Pill>
-                {r2vShots.length} Shot · {r2vShotsTotal}s
-              </Pill>
-            )}
             {creation.type === "r2v" && r2vRefThumbs.length > 0 && (
               <Pill>
                 {t("elementDetail.refsPill", { count: r2vRefThumbs.length })}
@@ -620,15 +606,15 @@ export default function ElementDetail({
             <div data-element-overview-lead className="space-y-0.5 pt-0.5">
               {lead?.intent && (
                 <p className="text-xs leading-[1.7] text-[var(--color-text-primary)]">
-                  {lead.intent}
+                  {presentPromptEntityNames(lead.intent, project)}
                 </p>
               )}
               {lead?.continuity && (
                 <p
-                  title={lead.continuity}
+                  title={presentPromptEntityNames(lead.continuity, project)}
                   className="truncate text-xs leading-[1.7] text-[var(--color-text-tertiary)]"
                 >
-                  ↳ {lead.continuity}
+                  ↳ {presentPromptEntityNames(lead.continuity, project)}
                 </p>
               )}
             </div>
@@ -701,40 +687,17 @@ export default function ElementDetail({
           </div>
         )}
 
-        {creation.type === "r2v" && r2vShots.length > 0 && (
+        {creation.type === "r2v" && creation.narrative && (
           <div
-            data-element-overview-shots
-            data-creator-path={pointer("creation", "shots")}
+            data-creator-path={pointer("creation", "narrative")}
             className="space-y-1.5"
           >
-            <div className="flex items-baseline gap-1.5">
-              <span className="text-sm text-[var(--color-text-primary)]">
-                {t("elementDetail.shotsLabel")}
-              </span>
-              <span className="text-xs text-[var(--color-text-tertiary)]">
-                {t("elementDetail.shotsCount", {
-                  count: r2vShots.length,
-                  seconds: r2vShotsTotal,
-                })}
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {r2vShots.map((shot, index) => (
-                <span
-                  key={shot.shot_id}
-                  title={shot.description}
-                  className="flex w-[84px] flex-col gap-0.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]/50 px-2.5 py-2"
-                >
-                  <b className="truncate text-xs font-normal text-[var(--color-text-primary)]">
-                    {index + 1}.{shot.framing || t("r2v.shotFraming")}
-                  </b>
-                  <span className="truncate text-xs text-[var(--color-text-tertiary)]">
-                    {shot.camera || t("r2v.shotCamera")}{" "}
-                    {shot.duration_seconds ?? "-"}s
-                  </span>
-                </span>
-              ))}
-            </div>
+            <span className="text-sm text-[var(--color-text-primary)]">
+              {t("r2v.narrativeTitle")}
+            </span>
+            <p className="whitespace-pre-wrap text-xs leading-relaxed text-[var(--color-text-secondary)]">
+              {presentPromptEntityNames(creation.narrative, project)}
+            </p>
           </div>
         )}
         {creation.type === "r2v" && creation.video_prompt && (
@@ -747,7 +710,7 @@ export default function ElementDetail({
               {t("r2v.videoPrompt")}
             </span>
             <div className="max-h-[135px] overflow-y-auto rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-secondary)]/50 p-3 text-xs leading-[1.6] text-[var(--color-text-primary)]">
-              {creation.video_prompt}
+              {presentPromptEntityNames(creation.video_prompt, project)}
             </div>
           </div>
         )}
@@ -794,7 +757,7 @@ export default function ElementDetail({
                 {t("r2v.videoPrompt")}
               </span>
               <div className="max-h-[135px] overflow-y-auto rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-secondary)]/50 p-3 text-xs leading-[1.6] text-[var(--color-text-primary)]">
-                {creation.video_prompt}
+                {presentPromptEntityNames(creation.video_prompt, project)}
               </div>
             </div>
           )}

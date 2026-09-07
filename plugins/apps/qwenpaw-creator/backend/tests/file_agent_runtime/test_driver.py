@@ -599,8 +599,10 @@ def _edit_client(*, description: str):
             "browser_use",
             "elements_at",
             "delegate_to_agent",
+            "request_workgraph_execution",
         }
-        # The role prompt and static Pydantic schema form one stable system prompt.
+        # The role prompt and static Pydantic schema form one stable system
+        # prompt.
         assert messages[0]["content"] == render_creator_system_prompt(
             project_id=PROJECT_ID,
         )
@@ -892,7 +894,10 @@ def test_specialist_model_turn_has_a_wall_clock_timeout(tmp_path) -> None:
         return AgentModelTurn(content="剪辑模型超时，当前运行已结束。")
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="生成角色图")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="生成角色图",
+        )
         driver = _driver(
             services,
             callback,
@@ -934,7 +939,9 @@ def test_run_review_feedback_allows_one_successful_repair_delegation(
         names = {item["function"]["name"] for item in tools}
         if "delegate_to_agent" not in names:
             specialist_turns += 1
-            return AgentModelTurn(content="[SUCCESS] 修复产物已写入 selected output。")
+            return AgentModelTurn(
+                content="[SUCCESS] 修复产物已写入 selected output。",
+            )
         parent_turn += 1
         if parent_turn == 1:
             return _delegate_call(
@@ -945,7 +952,9 @@ def test_run_review_feedback_allows_one_successful_repair_delegation(
             )
         if parent_turn == 2:
             assert '"status":"ACCEPTED"' in messages[-1]["content"]
-            return AgentModelTurn(content="已委派修复，等待 Specialist 终态通知。")
+            return AgentModelTurn(
+                content="已委派修复，等待 Specialist 终态通知。",
+            )
         if parent_turn == 3:
             # The terminal-notification run: a misbehaving model retries the
             # same feedback target — the repair identity must follow the
@@ -1292,7 +1301,10 @@ def test_initial_creation_runs_auto_fix_tool_loop_without_review(
     monkeypatch.setenv("CREATOR_DATA_ROOT", str(tmp_path))
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="请完善项目说明")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="请完善项目说明",
+        )
         driver = _driver(services, _edit_client(description="由初始任务生成"))
         await _run_to_idle(driver, services)
         project = services.projects.read(PROJECT_ID)
@@ -1526,7 +1538,10 @@ def test_stream_persistence_failure_is_not_reported_as_a_model_failure(
         return AgentModelTurn(content="完整结果")
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="请生成结果")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="请生成结果",
+        )
         driver = _driver(services, callback)
         original_append_event = driver.sessions.append_event
 
@@ -1851,7 +1866,10 @@ def test_startup_sweep_never_resumes_interrupted_run(
 
 def test_interrupt_revokes_stale_run_before_late_tool_commit(tmp_path) -> None:
     async def scenario():
-        services, snapshot = _create_project(tmp_path, initial_goal="请修改项目")
+        services, snapshot = _create_project(
+            tmp_path,
+            initial_goal="请修改项目",
+        )
         started = asyncio.Event()
 
         async def stubborn_model(_messages, _tools):
@@ -1894,7 +1912,10 @@ def test_interrupt_revokes_stale_run_before_late_tool_commit(tmp_path) -> None:
 
 def test_interrupt_returns_before_slow_task_cleanup_finishes(tmp_path) -> None:
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="请修改项目")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="请修改项目",
+        )
         started = asyncio.Event()
         cleanup_started = asyncio.Event()
         release_cleanup = asyncio.Event()
@@ -1950,7 +1971,10 @@ def test_specialist_cancel_emits_terminal_event(
         _authorization_gate_modes(monkeypatch, authorization="allow_all")
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="生成角色图")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="生成角色图",
+        )
         blocked = asyncio.Event()
         cancel_entered = asyncio.Event()
 
@@ -2029,7 +2053,10 @@ def test_durable_interrupt_stops_remote_owner_without_restarting_message(
     tmp_path,
 ) -> None:
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="请修改项目")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="请修改项目",
+        )
         started = asyncio.Event()
         cancelled = asyncio.Event()
 
@@ -2116,7 +2143,10 @@ def test_failed_run_is_not_relaunched_after_restart_or_notify(
         return AgentModelTurn(content="不应被调用")
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="请修改项目")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="请修改项目",
+        )
         first = _driver(services, failing)
         if legacy_unconsumed_head:
             # Model the legacy failure path that never consumed the request.
@@ -2194,7 +2224,10 @@ def test_costly_specialist_tool_waits_for_file_authorization(
         return AgentModelTurn(content="AI 剪辑 Specialist 已完成。")
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="生成角色图")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="生成角色图",
+        )
         driver = _driver(services, callback)
 
         driver.specialist_tools.invoke = _succeeded_invoke  # type: ignore[method-assign]
@@ -2258,7 +2291,10 @@ def test_retired_r2v_specialist_cannot_request_paid_authorization(
         return AgentModelTurn(content="R2V prompt 改由主 Agent 直接负责。")
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="生成视频")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="生成视频",
+        )
         driver = _driver(services, callback)
 
         await _run_to_idle(driver, services)
@@ -2292,10 +2328,15 @@ def test_retired_visual_specialist_cannot_be_delegated(
                 target_refs=["asset:char:hero"],
                 task="为角色生成设计图",
             )
-        return AgentModelTurn(content="视觉资产 prompt 改由主 Agent 直接编写。")
+        return AgentModelTurn(
+            content="视觉资产 prompt 改由主 Agent 直接编写。",
+        )
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="生成角色图")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="生成角色图",
+        )
         driver = _driver(services, callback)
 
         await _run_to_idle(driver, services)
@@ -2394,7 +2435,10 @@ def test_prompt_gap_feedback_is_queued_outside_auto_approve(
     monkeypatch.setattr(
         driver_module,
         "derive_work_graph",
-        lambda _project, tasks: WorkGraph(nodes=(node,), generation=1),
+        lambda _project, tasks, *, media_models=None: WorkGraph(
+            nodes=(node,),
+            generation=1,
+        ),
     )
     wakes: list[str] = []
     monkeypatch.setattr(driver.work_scheduler, "wake", wakes.append)
@@ -2441,7 +2485,10 @@ def test_prompt_gap_repair_survives_retryable_failure_outside_auto_approve(
     monkeypatch.setattr(
         driver_module,
         "derive_work_graph",
-        lambda _project, tasks: WorkGraph(nodes=(node,), generation=1),
+        lambda _project, tasks, *, media_models=None: WorkGraph(
+            nodes=(node,),
+            generation=1,
+        ),
     )
     wakes: list[str] = []
     monkeypatch.setattr(driver.work_scheduler, "wake", wakes.append)
@@ -2487,7 +2534,10 @@ def test_manual_mode_failure_without_prompt_gap_waits_for_a_human(
     monkeypatch.setattr(
         driver_module,
         "derive_work_graph",
-        lambda _project, tasks: WorkGraph(nodes=(node,), generation=1),
+        lambda _project, tasks, *, media_models=None: WorkGraph(
+            nodes=(node,),
+            generation=1,
+        ),
     )
 
     asyncio.run(
@@ -2546,7 +2596,10 @@ def test_prompt_repair_fuse_is_independent_from_previous_yolo_mode(
     monkeypatch.setattr(
         driver_module,
         "derive_work_graph",
-        lambda _project, tasks: WorkGraph(nodes=(node,), generation=1),
+        lambda _project, tasks, *, media_models=None: WorkGraph(
+            nodes=(node,),
+            generation=1,
+        ),
     )
 
     asyncio.run(
@@ -2591,7 +2644,10 @@ def test_prompt_gap_feedback_does_not_depend_on_gap_wording(
     monkeypatch.setattr(
         driver_module,
         "derive_work_graph",
-        lambda _project, tasks: WorkGraph(nodes=(reworded,), generation=1),
+        lambda _project, tasks, *, media_models=None: WorkGraph(
+            nodes=(reworded,),
+            generation=1,
+        ),
     )
 
     asyncio.run(
@@ -2612,7 +2668,9 @@ def test_model_blocked_with_its_pending_review_is_a_neutral_pause(
     tmp_path,
     monkeypatch,
 ) -> None:
-    """A specialist may stop after creating a review without calling downstream."""
+    """
+    A specialist may stop after creating a review without calling downstream.
+    """
 
     monkeypatch.setenv("TTS_API_KEY", "sk-test")
 
@@ -2661,7 +2719,7 @@ def test_model_blocked_with_its_pending_review_is_a_neutral_pause(
         monkeypatch.setattr(
             services.reviews,
             "all_pending",
-            lambda _project_id: list(pending_reviews),
+            lambda _project_id, **_kwargs: list(pending_reviews),
         )
         driver = _driver(services, callback)
 
@@ -2813,7 +2871,10 @@ def test_yolo_resume_carries_quiet_digest_and_respects_fuse(
     monkeypatch.setattr(
         driver_module,
         "derive_work_graph",
-        lambda _project, tasks: WorkGraph(nodes=(node,), generation=1),
+        lambda _project, tasks, *, media_models=None: WorkGraph(
+            nodes=(node,),
+            generation=1,
+        ),
     )
 
     async def scenario():
@@ -2913,7 +2974,10 @@ def test_idle_session_flushes_parked_notification_and_consumes_it(
         return AgentModelTurn(content="收到。")
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="完成短剧")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="完成短剧",
+        )
         driver = _driver(services, callback)
         await _run_to_idle(driver, services)
         driver._specialist_tasks[PROJECT_ID] = {"spec-1": object()}
@@ -3048,7 +3112,10 @@ def test_batch_merges_notifications_but_stops_at_non_batchable(
     received: list[str] = []
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="初始目标")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="初始目标",
+        )
         services.sessions.mark_messages_consumed(
             PROJECT_ID,
             SESSION_ID,
@@ -3506,7 +3573,10 @@ def test_subagent_terminal_notification_is_never_batched(tmp_path) -> None:
     received: list[str] = []
 
     async def scenario():
-        services, _snapshot = _create_project(tmp_path, initial_goal="初始目标")
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="初始目标",
+        )
         services.sessions.mark_messages_consumed(
             PROJECT_ID,
             SESSION_ID,
@@ -3518,7 +3588,10 @@ def test_subagent_terminal_notification_is_never_batched(tmp_path) -> None:
             CONVERSATION_ID,
             role="user",
             content_parts=[
-                {"type": "text", "text": "【系统自动消息 · Runtime 通知】普通进度"},
+                {
+                    "type": "text",
+                    "text": "【系统自动消息 · Runtime 通知】普通进度",
+                },
             ],
             source=NOTIFICATION_SOURCE,
             channel=MessageChannel.RUNTIME,

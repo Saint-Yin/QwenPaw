@@ -14,12 +14,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Iterable, Mapping, Sequence
 
 from domain.enums import CreatorCommandType, TaskKind, TaskStatus
-from services.prompt_text import dialogue_match_key, dialogue_spoken_lines
+from services.prompt_text import missing_narrative_dialogue
+from services.project_files.prompt_sync import prompt_sync_status
+from services.project_files.blueprint_readiness import (
+    STORY_BEFORE_VISUAL_MESSAGE,
+    visual_story_missing,
+)
 from services.project_files.models import (
     ArtifactVersionRenderSource,
     narrative_timeline_ids,
@@ -78,6 +84,9 @@ class WorkNode:
     # these in every review mode because the repair costs no media call, so
     # it must not depend on the human-readable wording of ``missing``.
     authored_text_gap: bool = False
+    # Derived from the saved prompt provenance; the automatic executor can
+    # update hidden shot content before submitting media.
+    prompt_sync_required: bool = False
     locator: dict[str, Any] = field(default_factory=dict)
     # Dispatch recipe (command + targetRef) for scheduler / manual retry.
     command: str | None = None
@@ -87,6 +96,9 @@ class WorkNode:
     # node's prompt or upstream selections change, so a FAILED node is
     # not redispatched until something about its inputs actually moved.
     dispatch_fingerprint: str | None = None
+    # Selected obsolete artifact being replaced. This is derived, never a
+    # permission flag; it gives regeneration a distinct durable replay slot.
+    regeneration_of: str | None = None
 
 
 def _fingerprint(*parts: Any) -> str:
@@ -195,13 +207,39 @@ class WorkGraph:
             and node.command is not None
         )
 
-    def model_required_nodes(self) -> tuple[WorkNode, ...]:
+    def regeneration_nodes(self) -> tuple[WorkNode, ...]:
+        """Obsolete outputs with complete inputs, pending execution admission.
+
+        Callers must enforce authorization/review/budget gates. Keeping these
+        separate from READY prevents an edit from granting permission itself.
+        """
+        by_id = self.by_id
+        return tuple(
+            node
+            for node in self.nodes
+            if node.status is WorkNodeStatus.STALE
+            and node.kind in DISPATCHABLE_KINDS
+            and node.command is not None
+            and node.regeneration_of is not None
+            and not node.missing
+            and all(
+                dep in by_id and by_id[dep].status is WorkNodeStatus.DONE
+                for dep in node.deps
+            )
+        )
+
+    def model_required_nodes(
+        self,
+        *,
+        automatic_regeneration: bool = False,
+    ) -> tuple[WorkNode, ...]:
         """Nodes the scheduler cannot progress without a model turn.
 
         FAILED nodes need parameter changes; GATED nodes whose unmet
         dependencies are not themselves machine-dispatchable need
-        structural work (missing prompts, missing bindings); STALE nodes
-        need the model to regenerate content after upstream changes.
+        structural work (missing prompts, missing bindings). Authorized
+        automatic execution owns complete STALE media; other stale content
+        still needs the model to repair or explicitly request generation.
         """
 
         by_id = self.by_id
@@ -211,10 +249,23 @@ class WorkGraph:
                 blocked.append(node)
                 continue
             if node.status is WorkNodeStatus.STALE:
-                # STALE nodes always need model work to regenerate
+                # In authorized unattended execution, complete stale media
+                # and their machine-owned dependencies belong to scheduling.
+                if (
+                    automatic_regeneration
+                    and node.regeneration_of
+                    and all(
+                        miss in by_id
+                        and by_id[miss].kind in DISPATCHABLE_KINDS
+                        for miss in node.missing
+                    )
+                ):
+                    continue
                 blocked.append(node)
                 continue
             if node.status is not WorkNodeStatus.GATED:
+                continue
+            if automatic_regeneration and node.prompt_sync_required:
                 continue
             machine_solvable = True
             for miss in node.missing:
@@ -269,10 +320,22 @@ def _task_error_summary(task: Any) -> str | None:
     return None
 
 
+def _legacy_storyboard_task(node_id: str, task: Any) -> bool:
+    return bool(
+        task is not None
+        and node_id.startswith("storyboard:")
+        and (getattr(task, "metadata", {}) or {}).get(
+            "storyboardInputContract",
+        )
+        != 2,
+    )
+
+
 def _failure_inputs_changed(
     failure: Any,
     node_id: str,
     fingerprint: str,
+    media_models: tuple[str, str] | None = None,
 ) -> bool:
     """True when the parked failure was rendered from different inputs.
 
@@ -291,10 +354,15 @@ def _failure_inputs_changed(
     and stay parked.
     """
 
-    key = str(getattr(failure, "idempotency_key", "") or "")
-    if not key.startswith("dag-"):
+    if _legacy_storyboard_task(node_id, failure):
         return False
-    return not key.startswith(f"dag-{node_id}-{fingerprint}")
+    key = str(getattr(failure, "idempotency_key", "") or "")
+    return _dispatch_inputs_changed(
+        key,
+        node_id,
+        fingerprint,
+        media_models,
+    )
 
 
 def _variant_status(
@@ -329,83 +397,6 @@ def _upstream_missing(
     )
 
 
-def _video_prompt_dialogue_gaps(creation: R2VCreation) -> tuple[str, ...]:
-    """Shots whose spoken lines never reached the committed video prompt.
-
-    Field run 2026-08-12 (project f5ac): the mainline planned per-shot
-    dialogue in the shot list, then committed a two-sentence mood summary
-    as ``video_prompt``. The scheduler dispatched that summary verbatim and
-    the dialogue never reached the video provider — a silent film with a
-    written script. R2V doctrine requires quoting the spoken lines 原文
-    inside the video prompt, so the graph enforces it deterministically:
-    the video node stays GATED (naming the offending shots) until the
-    prompt quotes every planned line. Matching ignores whitespace, speaker
-    prefixes and stage directions so natural prompt phrasing never causes
-    a false gap.
-    """
-    prompt = dialogue_match_key(creation.video_prompt or "")
-    gaps: list[str] = []
-    for shot_id in creation.shots.order:
-        shot = creation.shots.items.get(shot_id)
-        if shot is None:
-            continue
-        for line in dialogue_spoken_lines(shot.dialogue or ""):
-            if dialogue_match_key(line) not in prompt:
-                gaps.append(f"video_prompt 缺台词原文：{shot_id}")
-                break
-    return tuple(gaps)
-
-
-def _element_dialogue_density_gap(
-    creation: R2VCreation,
-    scenario: str,
-) -> str | None:
-    """Element dialogue density below min_dialogue_ratio — gate the video.
-
-    Field run 2026-08-12 (project 4cd, amodei love story): the story
-    theme was "unspoken love" and the model interpreted it as "no one
-    speaks anywhere" — 6 elements, 26 shots, only 1 dialogue line.
-    The dialogue-coverage gate (_video_prompt_dialogue_gaps) only fires
-    when dialogue *exists* and is not quoted; it silently passes when
-    shot.dialogue is empty. This gate catches the other failure mode:
-    characters appear but the model wrote a silent film.
-
-    The threshold is per-element (``creation.min_dialogue_ratio``,
-    default 0.3 ≈ 1 line per 2–3 shots); the review UI may override it
-    per element for fine-grained control.
-
-    Exemptions:
-    - Non-narrative scenarios (video_edit, general) — no story doctrine.
-    - Elements without character_refs — nothing to speak.
-    - Elements whose narrative contains the explicit directorial note
-      "有意静默" — a deliberate silence choice, not an oversight.
-    - min_dialogue_ratio == 0 — the model (or user) explicitly opted out.
-    """
-    gap: str | None = None
-    if (
-        scenario == "short_drama"
-        and creation.character_refs
-        and creation.min_dialogue_ratio > 0
-        and "有意静默" not in (creation.narrative or "")
-    ):
-        shots = [creation.shots.items.get(sid) for sid in creation.shots.order]
-        shots = [s for s in shots if s is not None]
-        if shots:
-            dialogue_count = sum(
-                1 for s in shots if (s.dialogue or "").strip()
-            )
-            ratio = dialogue_count / len(shots)
-            if ratio < creation.min_dialogue_ratio:
-                gap = (
-                    f"element 对白密度 {dialogue_count}/{len(shots)}"
-                    f" ({ratio:.0%}) 低于目标"
-                    f" {creation.min_dialogue_ratio:.0%}；"
-                    "如确需静默请在 narrative 写明「有意静默」"
-                    "或将 min_dialogue_ratio 调低"
-                )
-    return gap
-
-
 def _slot_selected(project: Project, slot_id: str) -> str | None:
     slot = project.assets.artifact_slots_by_id.get(slot_id)
     if slot is None:
@@ -427,6 +418,54 @@ def dispatch_key_predates_digest_ledger(key: str) -> bool:
     return _LEGACY_LEDGER_KEY_MARKER in key
 
 
+def dispatch_ledger_fingerprint(
+    base: str,
+    media_models: tuple[str, str],
+) -> str:
+    """Pure input/model identity shared by admission and graph projection."""
+    models = hashlib.sha256(
+        "\x1f".join(model.strip() for model in media_models).encode("utf-8"),
+    ).hexdigest()[:16]
+    return f"{base}-m{models}"
+
+
+def dispatch_slot(fingerprint: str) -> str:
+    """Filesystem-safe durable slot for a dispatch ledger identity."""
+    base, separator, regeneration = fingerprint.partition("-regen-")
+    slot = hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
+    return f"{slot}-regen-{regeneration}" if separator else slot
+
+
+def _dispatch_inputs_changed(
+    key: str,
+    node_id: str,
+    fingerprint: str,
+    media_models: tuple[str, str] | None,
+) -> bool:
+    prefix = f"dag-{node_id}-"
+    if not key.startswith(prefix) or dispatch_key_predates_digest_ledger(key):
+        return False
+    # The original format stored the node digest, then base + model digest;
+    # current dispatches store SHA256(base + model digest). Strip only the
+    # documented retry suffix; arbitrary prefix matches hide real changes.
+    identity = re.sub(
+        r"(?:-regen-[a-f0-9]{16})?(?::transient-retry-\d+|-r\d+)?$",
+        "",
+        key.removeprefix(prefix),
+    )
+    if identity == fingerprint:
+        return False
+    if media_models is None:
+        # A bare 16-hex value may be either an old node digest or today's
+        # opaque dispatch slot. Without model context a mismatch proves
+        # nothing; retain the artifact/failure. Production supplies models.
+        if re.fullmatch(r"[a-f0-9]{16}(?:-m[a-f0-9]{16})?", identity):
+            return False
+        return True
+    ledger = dispatch_ledger_fingerprint(fingerprint, media_models)
+    return identity not in {ledger, dispatch_slot(ledger)}
+
+
 def _artifact_is_stale(
     project: Project,
     version_id: str | None,
@@ -435,11 +474,12 @@ def _artifact_is_stale(
     node_id: str = "",
     dispatch_fingerprint: str = "",
     tasks: Sequence[Any] = (),
+    media_models: tuple[str, str] | None = None,
 ) -> bool:
     """True when provenance or an automatic dispatch input changed since.
 
     An explicit lifecycle ``stale`` flag is authoritative for every artifact,
-    including manual ones, but returns the terminal STALE state rather than a
+    including manual ones, but returns the STALE state rather than a
     scheduler-dispatchable READY state. Otherwise this is conservative: it
     only flags recorded provenance mismatches. For scheduler-owned artifacts,
     the durable Task idempotency key also records the work-graph fingerprint;
@@ -491,11 +531,15 @@ def _artifact_is_stale(
             None,
         )
         key = str(getattr(task, "idempotency_key", "") or "")
-        graph_prefix = f"dag-{node_id}-"
-        if (
-            not dispatch_key_predates_digest_ledger(key)
-            and key.startswith(graph_prefix)
-            and not key.startswith(f"{graph_prefix}{dispatch_fingerprint}")
+        # Retired hashes alone cannot invalidate a completed artifact.
+        if not _legacy_storyboard_task(
+            node_id,
+            task,
+        ) and _dispatch_inputs_changed(
+            key,
+            node_id,
+            dispatch_fingerprint,
+            media_models,
         ):
             return True
     return False
@@ -504,6 +548,8 @@ def _artifact_is_stale(
 def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
     project: Project,
     tasks: Sequence[Any] = (),
+    *,
+    media_models: tuple[str, str] | None = None,
 ) -> WorkGraph:
     """Project the production DAG from durable facts. Pure function.
 
@@ -513,6 +559,7 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
     """
 
     active, failed = _active_task_index(tasks)
+    prompt_sync_document = project.model_dump(mode="json")
     nodes: list[WorkNode] = []
     statuses: dict[str, WorkNodeStatus] = {}
 
@@ -542,10 +589,18 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                 task,
                 node_id,
                 fingerprint,
+                media_models,
             ):
                 status, task = WorkNodeStatus.READY, None
             missing: tuple[str, ...] = ()
             authored_text_gap = False
+            if status is WorkNodeStatus.READY and visual_story_missing(
+                project,
+                entity_id,
+            ):
+                status = WorkNodeStatus.GATED
+                missing = (STORY_BEFORE_VISUAL_MESSAGE,)
+                authored_text_gap = True
             if (
                 status is WorkNodeStatus.READY
                 and not (variant.prompt or "").strip()
@@ -638,10 +693,17 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
             failure,
             node_id,
             fingerprint,
+            media_models,
         ):
             status = WorkNodeStatus.FAILED
         else:
             status = WorkNodeStatus.READY
+        story_missing = any(
+            visual_story_missing(project, ref) for ref in lineup.character_refs
+        )
+        if status is WorkNodeStatus.READY and story_missing:
+            status = WorkNodeStatus.GATED
+            missing = (STORY_BEFORE_VISUAL_MESSAGE,)
         add(
             WorkNode(
                 node_id=node_id,
@@ -658,6 +720,8 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                     else None
                 ),
                 missing=missing,
+                authored_text_gap=story_missing
+                and status is WorkNodeStatus.GATED,
                 locator={"page": "assets"},
                 command="GENERATE_CAST_LINEUP_IMAGE",
                 target_ref=f"lineup:{lineup_id}",
@@ -706,6 +770,7 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
             failure,
             node_id,
             fingerprint,
+            media_models,
         ):
             status = WorkNodeStatus.FAILED
         else:
@@ -734,8 +799,9 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
         script_node_by_timeline[timeline_id] = node_id
 
     # ---- Lanes per element: storyboard -> video ----------------------
-    video_node_ids: list[str] = []
+    video_nodes_by_timeline: dict[str, list[str]] = {}
     for timeline_id in live_timeline_ids:
+        video_node_ids = video_nodes_by_timeline.setdefault(timeline_id, [])
         timeline = project.timelines.items[timeline_id]
         script_node = script_node_by_timeline.get(timeline_id)
         for element_id, element in timeline.elements_by_id.items():
@@ -750,6 +816,17 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
             lane = f"element:{element_id}"
             label = element.label or element_id
             creation_type = getattr(creation, "type", "r2v")
+            prompt_sync_gap = None
+            if creation_type == "r2v" and not element_id.startswith(
+                "snapshot:",
+            ):
+                sync = prompt_sync_status(
+                    prompt_sync_document,
+                    timeline_id,
+                    element_id,
+                )
+                if sync["status"] in ("needs_update", "needs_confirmation"):
+                    prompt_sync_gap = "镜头与提示词待同步或待审阅确认"
 
             storyboard_id: str | None = None
             storyboard_slot: str | None = None
@@ -760,7 +837,7 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                 # no shots, storyboard prompt or reference stacks).
                 deps: list[str] = []
                 # 剧本流下分镜等待本 timeline 的剧本节点（方案 3.3：
-                # script 通过 → 该 timeline 的 shots/分镜/生成）。
+                # script 通过 → 该 timeline 的内容/分镜/生成）。
                 if script_node is not None:
                     deps.append(script_node)
                 for ref in creation.cast_lineup_refs:
@@ -806,7 +883,7 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                     storyboard_id,
                     creation.storyboard_prompt,
                     project.settings.aspect_ratio,
-                    len(creation.shots.order),
+                    "narrative-v1",
                     sorted(
                         selected for selected in storyboard_refs if selected
                     ),
@@ -823,6 +900,7 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                             node_id=storyboard_id,
                             dispatch_fingerprint=fingerprint,
                             tasks=tasks,
+                            media_models=media_models,
                         )
                         else WorkNodeStatus.DONE
                     )
@@ -832,6 +910,7 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                     failure,
                     storyboard_id,
                     fingerprint,
+                    media_models,
                 ):
                     status = WorkNodeStatus.FAILED
                 elif not (creation.storyboard_prompt or "").strip():
@@ -842,6 +921,26 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                     authored_text_gap = True
                 else:
                     status = WorkNodeStatus.READY
+                if status is WorkNodeStatus.STALE:
+                    if not (creation.storyboard_prompt or "").strip():
+                        status = WorkNodeStatus.GATED
+                        missing = (*missing, "storyboard_prompt 缺失")
+                        authored_text_gap = True
+                    elif (
+                        not missing
+                        and failure is not None
+                        and not _failure_inputs_changed(
+                            failure,
+                            storyboard_id,
+                            fingerprint,
+                            media_models,
+                        )
+                    ):
+                        status = WorkNodeStatus.FAILED
+                if prompt_sync_gap and task is None:
+                    status = WorkNodeStatus.GATED
+                    missing = (prompt_sync_gap,)
+                    authored_text_gap = True
                 add(
                     WorkNode(
                         node_id=storyboard_id,
@@ -860,10 +959,17 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                         ),
                         missing=missing,
                         authored_text_gap=authored_text_gap,
+                        prompt_sync_required=bool(prompt_sync_gap),
                         locator={"page": "plan", "elementId": element_id},
                         command="GENERATE_STORYBOARD_IMAGE",
                         target_ref=f"element:{element_id}",
                         dispatch_fingerprint=fingerprint,
+                        regeneration_of=(
+                            storyboard_slot
+                            if status
+                            in (WorkNodeStatus.STALE, WorkNodeStatus.FAILED)
+                            else None
+                        ),
                     ),
                 )
 
@@ -878,9 +984,8 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
             storyboard_done = True
             storyboard_dep: tuple[str, ...] = ()
             if creation_type == "r2v" and storyboard_id is not None:
-                storyboard_done = statuses[storyboard_id] in (
-                    WorkNodeStatus.DONE,
-                    WorkNodeStatus.STALE,
+                storyboard_done = (
+                    statuses[storyboard_id] is WorkNodeStatus.DONE
                 )
                 storyboard_dep = (storyboard_id,)
             upstream_selected = _video_upstream_refs(
@@ -903,6 +1008,17 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
             video_text_gap = False
             if task is not None:
                 status = WorkNodeStatus.RUNNING
+            elif creation_type in {"i2v", "s2v"} and (
+                input_gaps := _video_readiness_gates(
+                    creation_type,
+                    creation,
+                )
+            ):
+                # Removing a required input is an unfinished revision even
+                # when an old clip remains selected. Empty upstream refs
+                # cannot prove that clip current or authorize a new compose.
+                status = WorkNodeStatus.GATED
+                video_missing = input_gaps
             elif video_slot:
                 # T2V has no upstream references (upstream_selected is []),
                 # so _artifact_is_stale always returns False for T2V.
@@ -929,6 +1045,7 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                 failure,
                 video_id,
                 fingerprint,
+                media_models,
             ):
                 status = WorkNodeStatus.FAILED
             elif (
@@ -943,18 +1060,63 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                 gates = _video_readiness_gates(
                     creation_type,
                     creation,
-                    project,
                 )
                 if gates is not None:
                     status = WorkNodeStatus.GATED
                     video_missing = gates
-                    # R2V gates are prompt-authoring gaps (dialogue coverage
-                    # and density); S2V/I2V gates are missing asset inputs.
-                    video_text_gap = creation_type == "r2v"
+                    # S2V/I2V gates identify missing asset inputs.
                 else:
                     status = WorkNodeStatus.READY
 
+            if status is WorkNodeStatus.STALE:
+                video_missing = _upstream_missing(
+                    (*deps, *storyboard_dep),
+                    statuses,
+                )
+                if (
+                    creation_type != "s2v"
+                    and not (creation.video_prompt or "").strip()
+                ):
+                    status = WorkNodeStatus.GATED
+                    video_missing = (*video_missing, "video_prompt 缺失")
+                    video_text_gap = True
+                else:
+                    gates = _video_readiness_gates(
+                        creation_type,
+                        creation,
+                    )
+                    if gates:
+                        status = WorkNodeStatus.GATED
+                        video_missing = (*video_missing, *gates)
+                    elif (
+                        not video_missing
+                        and failure is not None
+                        and not _failure_inputs_changed(
+                            failure,
+                            video_id,
+                            fingerprint,
+                            media_models,
+                        )
+                    ):
+                        status = WorkNodeStatus.FAILED
+
             # Command and dispatch arguments based on creation type
+            if prompt_sync_gap and task is None:
+                status = WorkNodeStatus.GATED
+                video_missing = (prompt_sync_gap,)
+                video_text_gap = True
+            if (
+                task is None
+                and status in {WorkNodeStatus.READY, WorkNodeStatus.STALE}
+                and isinstance(creation, R2VCreation)
+                and missing_narrative_dialogue(
+                    creation.narrative,
+                    creation.video_prompt,
+                )
+            ):
+                status = WorkNodeStatus.GATED
+                video_missing = (*video_missing, "视频提示词遗漏了片段内容中的对白或旁白原文")
+                video_text_gap = True
             command, dispatch_arguments = _video_dispatch_command(
                 creation_type,
             )
@@ -981,11 +1143,18 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                     ),
                     missing=video_missing,
                     authored_text_gap=video_text_gap,
+                    prompt_sync_required=bool(prompt_sync_gap),
                     locator={"page": "plan", "elementId": element_id},
                     command=command,
                     target_ref=f"element:{element_id}",
                     dispatch_arguments=dispatch_arguments,
                     dispatch_fingerprint=fingerprint,
+                    regeneration_of=(
+                        video_slot
+                        if status
+                        in (WorkNodeStatus.STALE, WorkNodeStatus.FAILED)
+                        else None
+                    ),
                 ),
             )
             video_node_ids.append(video_id)
@@ -1027,6 +1196,9 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
         node_id = f"compose:{compose_timeline_id}"
         timeline_target = f"timeline:{compose_timeline_id}"
         timeline_render_slot_id = f"timeline:{compose_timeline_id}:render"
+        # A timeline render reads this timeline's enabled clips. Other
+        # episodes may still be generating without blocking this final cut.
+        video_node_ids = video_nodes_by_timeline[compose_timeline_id]
         missing = _upstream_missing(video_node_ids, statuses)
         scene_gaps: list[str] = []
         plan = getattr(timeline, "edit_plan", None)
@@ -1081,10 +1253,10 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                 final_slot = None
         if task is not None:
             status = WorkNodeStatus.RUNNING
-        elif final_slot:
-            status = WorkNodeStatus.DONE
         elif missing:
             status = WorkNodeStatus.GATED
+        elif final_slot:
+            status = WorkNodeStatus.DONE
         else:
             status = WorkNodeStatus.READY
         add(
@@ -1362,7 +1534,6 @@ def _video_upstream_refs(
 def _video_readiness_gates(
     creation_type: str,
     creation: R2VCreation | T2VCreation | I2VCreation | S2VCreation,
-    project: Project,
 ) -> tuple[str, ...] | None:
     """Return missing reasons if the video node is gated, else None.
 
@@ -1378,21 +1549,6 @@ def _video_readiness_gates(
         if not creation.audio_version_id:
             gaps.append("audio_version_id 缺失")
         return tuple(gaps) if gaps else None
-    if creation_type == "r2v":
-        assert isinstance(creation, R2VCreation)
-        if dialogue_gaps := _video_prompt_dialogue_gaps(creation):
-            # Planned dialogue must be quoted verbatim in the video
-            # prompt before dispatch — see _video_prompt_dialogue_gaps.
-            return dialogue_gaps
-        if absence_gap := _element_dialogue_density_gap(
-            creation,
-            project.scenario,
-        ):
-            # Element dialogue density below min_dialogue_ratio — the
-            # model wrote a silent film or too-sparse dialogue. See
-            # _element_dialogue_density_gap.
-            return (absence_gap,)
-        return None
     if creation_type == "i2v":
         assert isinstance(creation, I2VCreation)
         if not creation.first_frame_version_id:

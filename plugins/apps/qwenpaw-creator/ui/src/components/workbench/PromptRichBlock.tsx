@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Image, Input } from "antd";
+import { Image, Input, Tooltip } from "antd";
 import { Loader2, SquarePen, Wand2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import InlineReviewDiff from "@/components/agent/InlineReviewDiff";
 import PromptEditorModal from "@/components/workbench/PromptEditorModal";
-import type { ShotDocument } from "@/contracts/creator";
+import { presentPromptEntityNames } from "@/lib/promptEntityNames";
+import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
+import { promptTokenAt } from "./promptReferenceTokens";
 
 const { TextArea } = Input;
 
@@ -47,54 +49,13 @@ export interface PromptRichToken {
   name: string;
   thumbUrl: string | null;
   kind: "storyboard" | "artifact" | "source" | "entity";
+  /** Actual version identity; internal comparison only, never a public label. */
+  referenceId?: string;
+  /** Keep the index reserved when its referenced image cannot be resolved. */
+  missing?: boolean;
 }
 
-interface PromptSegment {
-  /** null = unmarked prompt (single block); 0 = overview; N = 【Shot N】 */
-  shotNumber: number | null;
-  text: string;
-}
-
-const SHOT_HL_CLASS = "workbench-shot-hl";
-
-/** 【Shot N】 is a text convention, not schema; prompts without it degrade to one block. */
-function splitSegments(value: string): {
-  marked: boolean;
-  segments: PromptSegment[];
-} {
-  const parts = value.split(/【Shot (\d+)】/);
-  if (parts.length === 1) {
-    return { marked: false, segments: [{ shotNumber: null, text: value }] };
-  }
-  const segments: PromptSegment[] = [];
-  const overview = parts[0].trim();
-  if (overview) segments.push({ shotNumber: 0, text: overview });
-  for (let i = 1; i < parts.length; i += 2) {
-    segments.push({
-      shotNumber: Number(parts[i]),
-      text: (parts[i + 1] ?? "").trim(),
-    });
-  }
-  return { marked: true, segments };
-}
-
-function shotRowElement(shotId: string): HTMLElement | null {
-  const escaped =
-    typeof CSS !== "undefined" && CSS.escape
-      ? CSS.escape(shotId)
-      : shotId.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
-  return document.querySelector<HTMLElement>(
-    `[data-creator-module="shot-row"][data-creator-module-id="${escaped}"]`,
-  );
-}
-
-/**
- * Prompt surface: the reference preview (with [Image N] citation tokens and
- * 【Shot N】 badges linked to the Shot list) is the only display mode; edits
- * go through the fullscreen editor opened from the 编辑 pill. A hidden
- * TextArea stays mounted so data-creator-* anchors, review focus and
- * controlled edits keep working.
- */
+/** Prompt text with actual reference previews and a full-screen editor. */
 export default function PromptRichBlock({
   label,
   value,
@@ -103,11 +64,11 @@ export default function PromptRichBlock({
   field,
   path,
   tokens,
-  shots,
   collapseHeight = 230,
   placeholder,
   onRegenerate,
   regenerating = false,
+  regenerateDisabled = false,
   regenerateLabel,
   onEditComplete,
 }: {
@@ -118,7 +79,6 @@ export default function PromptRichBlock({
   field: string;
   path: string;
   tokens: PromptRichToken[];
-  shots?: ShotDocument[];
   collapseHeight?: number;
   placeholder?: string;
   /** Design contract: the prompt card foots with one explicit regenerate
@@ -126,12 +86,15 @@ export default function PromptRichBlock({
       re-dispatches the generation. */
   onRegenerate?: () => void;
   regenerating?: boolean;
+  regenerateDisabled?: boolean;
   regenerateLabel?: string;
   /** Fired after the fullscreen editor's 完成 writes back — the editor lives
       in a portal, so the host's blur-capture auto-save never sees it. */
   onEditComplete?: () => void;
 }) {
   const { t } = useTranslation();
+  const project = useProjectSnapshotStore((state) => state.project);
+  const presentedValue = presentPromptEntityNames(value, project);
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
@@ -139,13 +102,7 @@ export default function PromptRichBlock({
   // 全屏编辑器（共享组件）：本地草稿，「完成」才写回。
   const [fullOpen, setFullOpen] = useState(false);
 
-  const charCount = value.replace(/\s/g, "").length;
-  const { marked, segments } = splitSegments(value);
-  const shotSegmentCount = segments.filter(
-    (segment) => (segment.shotNumber ?? 0) > 0,
-  ).length;
-  const segMismatch =
-    marked && shots && shots.length > 0 && shotSegmentCount !== shots.length;
+  const charCount = presentedValue.replace(/\s/g, "").length;
   const collapsed = overflowing && !expanded;
 
   // Measure after render (and when a hidden tab becomes visible) to decide
@@ -162,70 +119,68 @@ export default function PromptRichBlock({
     const observer = new ResizeObserver(check);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [value, collapseHeight]);
-
-  const clearShotHighlight = () => {
-    document
-      .querySelectorAll(`.${SHOT_HL_CLASS}`)
-      .forEach((el) => el.classList.remove(SHOT_HL_CLASS));
-  };
-  const shotOf = (shotNumber: number): ShotDocument | null =>
-    shots?.[shotNumber - 1] ?? null;
-  const highlightShot = (shotNumber: number) => {
-    const shot = shotOf(shotNumber);
-    if (shot) shotRowElement(shot.shot_id)?.classList.add(SHOT_HL_CLASS);
-  };
-  const scrollToShot = (shotNumber: number) => {
-    const shot = shotOf(shotNumber);
-    if (!shot) return;
-    shotRowElement(shot.shot_id)?.scrollIntoView({
-      behavior: "smooth",
-      block: "center",
-    });
-  };
-  useEffect(() => clearShotHighlight, []);
+  }, [presentedValue, collapseHeight]);
 
   const renderInline = (text: string) =>
     text.split(/(\[Image \d+\])/).map((part, partIndex) => {
       const match = /^\[Image (\d+)\]$/.exec(part);
       if (!match) return <span key={partIndex}>{part}</span>;
       const index = Number(match[1]);
-      const token = tokens.find((item) => item.index === index);
+      const token = promptTokenAt(tokens, index);
       if (!token) {
         return (
           <span
             key={partIndex}
+            data-prompt-token-missing={match[1]}
             className="mx-0.5 inline-flex items-center rounded-full border border-dashed border-[var(--color-danger)]/50 bg-[var(--color-bg-primary)] px-2 py-0.5 align-[-3px] font-mono text-[9px] font-bold leading-none text-[var(--color-danger)]"
           >
-            {t("r2v.tokenMissing", { index })}
+            {t("r2v.tokenMissing", { index: match[1] })}
           </span>
         );
       }
       return (
-        <button
+        <Tooltip
           key={partIndex}
-          type="button"
-          data-prompt-token={index}
-          title={token.name}
-          onClick={() =>
-            token.thumbUrl ? setPreviewSrc(token.thumbUrl) : undefined
+          trigger={["hover", "focus"]}
+          title={
+            token.thumbUrl ? (
+              <div className="max-w-[260px] space-y-1">
+                <img
+                  src={token.thumbUrl}
+                  alt={token.name}
+                  className="max-h-[220px] w-full rounded object-contain"
+                />
+                <div className="text-xs">{token.name}</div>
+              </div>
+            ) : (
+              token.name
+            )
           }
-          className="mx-0.5 inline-flex cursor-pointer select-none items-center gap-1 rounded-full border border-[color-mix(in_srgb,var(--color-accent)_35%,var(--color-border))] bg-[var(--color-bg-primary)] py-0.5 pl-0.5 pr-2 align-[-5px] text-[11px] leading-none shadow-xs transition-all hover:-translate-y-px hover:border-[var(--color-accent)] hover:shadow-[0_2px_8px_rgba(255,127,22,.18)]"
         >
-          {token.thumbUrl && (
-            <img
-              src={token.thumbUrl}
-              alt=""
-              className="h-5 w-5 rounded-full border border-[var(--color-border)] object-cover"
-            />
-          )}
-          <span className="font-mono text-[9px] font-bold text-[var(--color-accent)]">
-            IMG {index}
-          </span>
-          <span className="max-w-[108px] truncate font-medium text-[var(--color-text-primary)]">
-            {token.name}
-          </span>
-        </button>
+          <button
+            type="button"
+            data-prompt-token={index}
+            title={token.name}
+            onClick={() =>
+              token.thumbUrl ? setPreviewSrc(token.thumbUrl) : undefined
+            }
+            className="mx-0.5 inline-flex cursor-pointer select-none items-center gap-1 rounded-full border border-[color-mix(in_srgb,var(--color-accent)_35%,var(--color-border))] bg-[var(--color-bg-primary)] py-0.5 pl-0.5 pr-2 align-[-5px] text-[11px] leading-none shadow-xs transition-all hover:-translate-y-px hover:border-[var(--color-accent)] hover:shadow-[0_2px_8px_rgba(255,127,22,.18)]"
+          >
+            {token.thumbUrl && (
+              <img
+                src={token.thumbUrl}
+                alt=""
+                className="h-5 w-5 rounded-full border border-[var(--color-border)] object-cover"
+              />
+            )}
+            <span className="font-mono text-[9px] font-bold text-[var(--color-accent)]">
+              IMG {index}
+            </span>
+            <span className="max-w-[108px] truncate font-medium text-[var(--color-text-primary)]">
+              {token.name}
+            </span>
+          </button>
+        </Tooltip>
       );
     });
 
@@ -253,53 +208,12 @@ export default function PromptRichBlock({
           style={collapsed ? { maxHeight: collapseHeight } : undefined}
         >
           {value.trim() ? (
-            segments.map((segment, segmentIndex) => {
-              const shotNumber = segment.shotNumber;
-              const shot =
-                shotNumber && shotNumber > 0 ? shotOf(shotNumber) : null;
-              return (
-                <div
-                  key={segmentIndex}
-                  data-prompt-segment={shotNumber ?? "all"}
-                  className={`whitespace-pre-wrap break-words rounded-sm border-l-2 border-transparent ${
-                    marked ? "pl-2.5" : ""
-                  } ${segmentIndex > 0 ? "mt-1.5" : ""}`}
-                >
-                  {marked && shotNumber === 0 && (
-                    <span className="mr-1.5 inline-flex items-center rounded-full border border-dashed border-[var(--color-border-strong)] bg-[var(--color-bg-primary)] px-2 py-px align-[-2px] text-[10px] font-bold leading-normal text-[var(--color-text-secondary)]">
-                      {t("r2v.segOverview")}
-                    </span>
-                  )}
-                  {marked && shotNumber !== null && shotNumber > 0 && (
-                    <button
-                      type="button"
-                      data-shot-link={shotNumber}
-                      title={t("r2v.shotBadgeTitle")}
-                      onMouseEnter={() => highlightShot(shotNumber)}
-                      onMouseLeave={clearShotHighlight}
-                      onClick={() => scrollToShot(shotNumber)}
-                      className="mr-1.5 inline-flex items-center gap-1 rounded-full border border-[var(--color-border-strong)] bg-[var(--color-bg-primary)] px-2 py-px align-[-2px] text-[10px] font-bold leading-normal text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
-                    >
-                      SHOT {shotNumber}
-                      {shot && (
-                        <span className="font-medium text-[var(--color-text-tertiary)]">
-                          {[
-                            shot.framing?.trim(),
-                            shot.duration_seconds != null
-                              ? `${shot.duration_seconds}s`
-                              : null,
-                          ]
-                            .filter(Boolean)
-                            .map((meta) => `· ${meta}`)
-                            .join(" ")}
-                        </span>
-                      )}
-                    </button>
-                  )}
-                  {renderInline(segment.text)}
-                </div>
-              );
-            })
+            <div
+              data-prompt-segment="all"
+              className="whitespace-pre-wrap break-words"
+            >
+              {renderInline(presentedValue)}
+            </div>
           ) : (
             <span className="text-[var(--color-text-tertiary)]">
               {placeholder ?? t("r2v.generateAndEdit", { label })}
@@ -326,7 +240,7 @@ export default function PromptRichBlock({
 
         {/* Design 84:39555: the action row lives inside the prompt card,
             bottom-right, gap 12 — 编辑 pill left of the regenerate pill. */}
-        <div className="flex justify-end gap-3 px-3 pb-3 pt-1.5">
+        <div className="flex flex-wrap justify-end gap-3 px-3 pb-3 pt-1.5">
           <button
             type="button"
             data-prompt-edit={field}
@@ -342,7 +256,7 @@ export default function PromptRichBlock({
               field={field}
               label={regenerateLabel ?? ""}
               loading={regenerating}
-              disabled={disabled}
+              disabled={disabled || regenerateDisabled}
               onClick={onRegenerate}
             />
           )}
@@ -359,14 +273,6 @@ export default function PromptRichBlock({
             ? t("r2v.collapse")
             : t("r2v.expandAll", { count: charCount })}
         </button>
-      )}
-      {segMismatch && (
-        <p className="mt-1.5 text-[10px] text-[var(--color-warning)]">
-          {t("r2v.segMismatch", {
-            segments: shotSegmentCount,
-            shots: shots?.length ?? 0,
-          })}
-        </p>
       )}
       <InlineReviewDiff pointer={path} />
 
@@ -388,12 +294,16 @@ export default function PromptRichBlock({
       <PromptEditorModal
         open={fullOpen}
         label={label}
-        initialValue={value}
+        initialValue={presentedValue}
+        sourceValue={value}
+        sourceKey={path}
         tokens={tokens}
         disabled={disabled}
         onCancel={() => setFullOpen(false)}
         onDone={(next) => {
-          onChange(next);
+          // Opening and accepting an unchanged presentation must not rewrite
+          // the stored prompt or make an existing generated artifact stale.
+          onChange(next === presentedValue ? value : next);
           setFullOpen(false);
           onEditComplete?.();
         }}

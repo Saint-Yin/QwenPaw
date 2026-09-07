@@ -24,10 +24,15 @@ _INACTIVE_STATE_WORDS = {"已取消", "已禁用", "已删除", "review-disabled
 
 
 def _active_prompt_texts() -> list[str]:
+    from services.file_agent_runtime.workgraph_execution import (
+        request_workgraph_tool_manifest,
+    )
+
     project = Project.new(project_id="project-prompt-test", name="Prompt Test")
     texts = [
         render_creator_system_prompt(project_id=project.project_id),
         json.dumps(delegate_tool_manifest(), ensure_ascii=False),
+        json.dumps(request_workgraph_tool_manifest(), ensure_ascii=False),
     ]
     texts.extend(
         specialist_system_prompt(
@@ -147,14 +152,14 @@ def test_creator_compiles_dense_action_nodes_without_uniform_timestamps() -> (
 ):
     prompt = load_file_agent_prompt("creator_agent.system")
     assert "professional-media-prompts" in prompt
-    assert "动作密集、蒙太奇" in prompt
-    assert "6–15 个短动作节点" in prompt
-    assert "3–6 个核心电影段落" in prompt
+    assert "动作链可按准备 → 执行 → 完成 → 反应展开" in prompt
+    assert "完整的 `creation.narrative`" in prompt
+    assert "不要把面板数当成切镜数" in prompt
     assert "10 秒内的 12 个节点" in prompt
     assert "机械分配 12 个小数时间戳" in prompt
-    assert "不为每格/每个 Shot 设置 2–4 秒建议区间或 5 秒硬上限" in prompt
+    assert "不要为了凑网格增加剧情或改变片段时长" in prompt
     assert "单个常规 Shot 不超过 5 秒" not in prompt
-    assert "3–4 秒极短段通常只承载一个占主导的连续微动作" in prompt
+    assert "3–4 秒极短段通常承载一个主导微动作" in prompt
     assert "专业完整不等于重复冗长" in prompt
     assert "每一个分镜格内部画框" in prompt
     assert "正方形网格（N 列×N 行）" in prompt
@@ -181,10 +186,10 @@ def test_creator_duration_is_injected_from_the_active_video_model(
     assert "不设置统一的 8–10 秒、10 秒或 15 秒默认值" in prompt
     assert "`[Image 1]`、`[Image 2]`" in prompt
     assert "storyboard 固定为第一张，因此是 `[Image 1]`" in prompt
-    assert "你是 `video_prompt` 的唯一作者" in prompt
+    assert "你负责编写和维护 `video_prompt`" in prompt
     assert "R2V Specialist" not in prompt
-    assert "禁止套用“每段固定 5 Shot”" in prompt
-    assert "不设统一的 7 秒 Shot 上限" in prompt
+    assert "不得把整片机械改成固定时长" in prompt
+    assert "不设统一的 7 秒镜头上限" in prompt
     assert "`ops` 必须直接传原生 JSON 数组" in prompt
 
     monkeypatch.setattr(
@@ -201,16 +206,37 @@ def test_creator_duration_is_injected_from_the_active_video_model(
     assert "30 秒长段" in prompt
 
 
-def test_active_surfaces_never_mention_the_retired_r2v_specialist() -> None:
+@pytest.mark.parametrize(
+    ("role", "retired_terms"),
+    [
+        (
+            SpecialistRole.R2V_GENERATION_DIRECTOR,
+            (
+                "R2V Specialist",
+                "r2v_generation_director",
+                "Specialist 兜底",
+                "为媒体执行委派",
+            ),
+        ),
+        (
+            SpecialistRole.VISUAL_DEVELOPMENT,
+            (
+                "visual_development_agent",
+                "视觉开发 Specialist",
+                "委派视觉开发",
+            ),
+        ),
+    ],
+)
+def test_retired_specialists_have_no_delegation_or_prompt_surface(
+    role,
+    retired_terms,
+) -> None:
+    with pytest.raises(ValueError, match="no active prompt"):
+        _specialist_prompt(role)
     combined = "\n".join(_active_prompt_texts())
-    assert "R2V Specialist" not in combined
-    assert "r2v_generation_director" not in combined
-    assert "不可委派" not in combined
-    assert "已停用" not in combined
-    # Media execution belongs to the scheduler, not any specialist; text
-    # implying such a specialist exists is retired-R2V residue.
-    assert "Specialist 兜底" not in combined
-    assert "为媒体执行委派" not in combined
+    for term in (*retired_terms, "不可委派", "已停用"):
+        assert term not in combined
 
 
 def test_source_prompt_requires_outer_vlm_timeline_and_controlled_commit() -> (
@@ -330,23 +356,6 @@ def test_video_model_guidance_switches_on_configured_model(
     )
     assert "Wan3.0" in delegator
     assert "2–30 秒" in delegator
-
-
-def test_r2v_specialist_is_not_an_active_delegation_surface() -> None:
-    with pytest.raises(ValueError, match="no active prompt"):
-        _specialist_prompt(SpecialistRole.R2V_GENERATION_DIRECTOR)
-
-
-def test_visual_development_is_not_an_active_delegation_surface() -> None:
-    with pytest.raises(ValueError, match="no active prompt"):
-        _specialist_prompt(SpecialistRole.VISUAL_DEVELOPMENT)
-
-
-def test_active_surfaces_never_mention_the_retired_visual_specialist() -> None:
-    combined = "\n".join(_active_prompt_texts())
-    assert "visual_development_agent" not in combined
-    assert "视觉开发 Specialist" not in combined
-    assert "委派视觉开发" not in combined
 
 
 def _tts(monkeypatch, *, model: str, configured: bool = True) -> None:

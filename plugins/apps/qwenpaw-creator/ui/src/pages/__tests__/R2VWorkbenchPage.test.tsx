@@ -6,6 +6,7 @@ import PlanPage from "@/pages/PlanPage";
 import { NavigationRuntime } from "@/routing/navigation";
 import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
+import { useWorkGraphStore } from "@/store/workGraphStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { projectDocument } from "@/test/creatorFixtures";
@@ -55,6 +56,65 @@ function withSecondVideoVersion(project = cloneProject()): ProjectDocument {
 function modelRoutes(model: string): Parameters<typeof installMockFetch>[0] {
   return [
     {
+      match: "/projects/p1/tasks",
+      method: "GET",
+      response: { json: { items: [] } },
+    },
+    {
+      match: "/specialist-runs",
+      method: "GET",
+      response: { json: { items: [] } },
+    },
+    {
+      match: "/work-graph",
+      method: "GET",
+      response: {
+        json: {
+          projectId: "p1",
+          generation: 3,
+          counts: {},
+          nodes: [],
+          mediaCalls: 0,
+          mediaCallBudget: 20,
+        },
+      },
+    },
+    {
+      match: "/projects/p1/project",
+      method: "GET",
+      response: {
+        get json() {
+          const current = useProjectSnapshotStore.getState();
+          return {
+            projectId: "p1",
+            generation: current.generation,
+            etag: current.etag,
+            syncStatus: "healthy",
+            project: current.project,
+          };
+        },
+      },
+    },
+    {
+      match: "/prompt-sync",
+      method: "GET",
+      response: {
+        json: {
+          status: "current",
+          baselineToken: "verified-current",
+          narrative: (
+            projectDocument.timelines.items["timeline:main"].elements_by_id[
+              "r2v-window"
+            ].creation as { narrative: string }
+          ).narrative,
+          changedSources: [],
+          suggestedSource: null,
+          storyboardPrompt: "暖色餐厅窗外的橘猫",
+          videoPrompt: "镜头缓慢推近，橘猫眨眼",
+        },
+      },
+    },
+    {
       match: "/models/resolved",
       response: { json: { video: { provider: "wan", model } } },
     },
@@ -65,6 +125,7 @@ function modelRoutes(model: string): Parameters<typeof installMockFetch>[0] {
 function patchRoutes(updated: ProjectDocument) {
   updated.generation = 4;
   const { calls } = installMockFetch([
+    ...modelRoutes("wan2.7-r2v"),
     {
       match: "/projects/p1/project",
       method: "PATCH",
@@ -114,6 +175,7 @@ describe("R2V Workbench page", () => {
   beforeEach(() => {
     useProjectSnapshotStore.getState().reset();
     useCreatorTaskViewStore.getState().reset();
+    useWorkGraphStore.getState().reset();
     useCreatorInteractionStore.getState().reset();
     useAgentDockUiStore.getState().reset();
     seedProject();
@@ -131,7 +193,7 @@ describe("R2V Workbench page", () => {
     expect(
       container.querySelector('[data-generation-mode="r2v"]'),
     ).toHaveTextContent("参考生视频");
-    expect(screen.getByDisplayValue("橘猫隔窗看向午饭")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("橘猫隔窗看向午饭")).toBeNull();
     expect(
       container.querySelector('[data-artifact-version="r2v-window-v1"]'),
     ).toBeInTheDocument();
@@ -197,10 +259,10 @@ describe("R2V Workbench page", () => {
       "/timelines/items/timeline:main/elements_by_id/r2v-window/creation/video_prompt",
     ],
     [
-      "shot",
-      "橘猫隔窗看向午饭",
+      "storyboard prompt",
+      "暖色餐厅窗外的橘猫",
       "橘猫扒着窗台",
-      "/timelines/items/timeline:main/elements_by_id/r2v-window/creation/shots/items/shot:window/description",
+      "/timelines/items/timeline:main/elements_by_id/r2v-window/creation/storyboard_prompt",
     ],
   ])(
     "auto-saves %s edits through the Project CAS Patch endpoint on blur",
@@ -448,6 +510,7 @@ describe("R2V Workbench page", () => {
     expect(calls.some((call) => call.method === "PATCH")).toBe(false);
 
     // 点选素材候选（橘猫原始视频）并确认 → 一次性静默落盘。
+    fireEvent.click(container.querySelector('[data-stage-tab="vd"]')!);
     fireEvent.click(container.querySelector("[data-add-asset]")!);
     fireEvent.click(
       document.querySelector('[data-picker-asset="cat-video-v1"]')!,

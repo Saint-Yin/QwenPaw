@@ -192,15 +192,6 @@ export interface GenerationRecipeDocument extends ProjectJsonRecord {
   candidate_count: number;
 }
 
-export interface ShotDocument extends ProjectJsonRecord {
-  shot_id: string;
-  description: string;
-  camera: string | null;
-  framing: string | null;
-  duration_seconds: number | null;
-  dialogue?: string;
-}
-
 export type VideoGenerationMode = "r2v" | "t2v" | "i2v" | "s2v";
 
 export interface R2VCreationDocument extends ProjectJsonRecord {
@@ -213,12 +204,18 @@ export interface R2VCreationDocument extends ProjectJsonRecord {
   prop_refs: string[];
   visual_variant_refs: Record<string, string>;
   cast_lineup_refs?: string[];
-  shots: ProjectEntityCollection<ShotDocument>;
   recipe: GenerationRecipeDocument | null;
   storyboard_prompt: string;
   storyboard_reference_version_ids: string[];
   video_prompt: string;
   video_reference_version_ids: string[];
+  /** Server-owned provenance. Presentation consumes the prompt-sync API. */
+  prompt_sync?: {
+    contract_version: 2;
+    plan_fingerprint: string;
+    storyboard_prompt_fingerprint: string;
+    video_prompt_fingerprint: string;
+  } | null;
 }
 
 export interface T2VCreationDocument extends ProjectJsonRecord {
@@ -508,12 +505,18 @@ export interface R2VReferenceOrderItem {
   versionId: string;
   kind: "storyboard" | "source" | "artifact";
   name: string;
+  available?: boolean;
 }
 
 export interface R2VReferenceOrderResponse {
   elementId: string;
   storyboardSelected: boolean;
   references: R2VReferenceOrderItem[];
+  stage?: "storyboard" | "video";
+  ready?: boolean;
+  referenceLimit?: number | null;
+  invalidMarkerIndices?: number[];
+  budgetDroppedVersionIds?: string[];
 }
 
 export interface ProjectPatchResponse {

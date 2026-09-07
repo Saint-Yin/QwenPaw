@@ -6,6 +6,9 @@ import { NavigationRuntime } from "@/routing/navigation";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { useWorkGraphStore } from "@/store/workGraphStore";
+import { useCreatorSessionStore } from "@/store/creatorSessionStore";
+import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
+import { useFileProjectReviewStore } from "@/store/fileProjectReviewStore";
 import { projectDocument } from "@/test/creatorFixtures";
 import type { ProjectDocument } from "@/contracts/creator";
 
@@ -45,6 +48,9 @@ function renderPage(entry = "/project/p1") {
 
 describe("BlueprintPage narrative shapes", () => {
   beforeEach(() => {
+    useCreatorSessionStore.getState().reset();
+    useCreatorTaskViewStore.getState().reset();
+    useFileProjectReviewStore.getState().reset();
     useProjectSnapshotStore.getState().reset();
     useCreatorInteractionStore.getState().reset();
     useWorkGraphStore.getState().reset();
@@ -63,7 +69,7 @@ describe("BlueprintPage narrative shapes", () => {
     ).not.toBeInTheDocument();
     // Legacy read-only mapping (project predates timeline_script).
     expect(
-      screen.getAllByText("本项目创建于剧本功能之前，以下为既有信息的只读映射")
+      screen.getAllByText("当前没有独立剧本，以下为项目现有内容的只读映射")
         .length,
     ).toBeGreaterThan(0);
     // Overview rail keeps the referenced visual entity reachable.
@@ -186,9 +192,9 @@ describe("BlueprintPage narrative shapes", () => {
     expect(
       first.container.querySelector('[data-blueprint-shape="single"]'),
     ).not.toBeInTheDocument();
-    // Legacy read-only mapping (no timeline_script slot on this path).
+    // Read-only content mapping (no timeline_script slot on this path).
     expect(
-      screen.getAllByText("本项目创建于剧本功能之前，以下为既有信息的只读映射")
+      screen.getAllByText("当前没有独立剧本，以下为项目现有内容的只读映射")
         .length,
     ).toBeGreaterThan(0);
     // Rough-cut strip: the render_source clip counts as a final frame.

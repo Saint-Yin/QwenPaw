@@ -12,7 +12,6 @@ import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { projectDocument } from "@/test/creatorFixtures";
 import { installMockFetch } from "@/test/mockFetch";
 import type { ProjectDocument, TaskView } from "@/contracts/creator";
-import i18n from "@/i18n";
 
 function cloneProject(): ProjectDocument {
   return structuredClone(projectDocument);

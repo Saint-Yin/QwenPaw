@@ -36,21 +36,44 @@ def dialogue_match_key(text: str) -> str:
     return "".join(text.split()).translate(_PUNCTUATION_FOLD)
 
 
-# Speaker prefixes ("老板娘：…" / "Regular: …") and stage directions
-# ("（回头）") belong to the shot plan, not to the spoken line itself. Prompt
-# prose may wrap the same spoken words in a sentence, so the contract compares
-# only the dialogue that must reach the provider verbatim.
-_DIALOGUE_SPEAKER_PREFIX = re.compile(r"^[^：:]{1,20}[：:]\s*")
-_DIALOGUE_STAGE_DIRECTION = re.compile(r"[（(][^）)]*[）)]")
+_QUOTED_TEXT = re.compile(
+    r'“([^”\n]+)”|‘([^’\n]+)’|「([^」\n]+)」|『([^』\n]+)』|"([^"\n]+)"',
+)
+_SPEECH_CUE = re.compile(
+    r"(?:对白|台词|旁白|画外音|独白|说(?!明|法|服)|问(?!题)|回答|喊|嘀咕|"
+    r"\b(?:dialogue|narration|voice[- ]?over|says?|asks?|"
+    r"replies|whispers?|shouts?)\b)"
+    r'(?=[^。！？!?\n“”‘’「」『』"]{0,12}$)',
+    re.IGNORECASE,
+)
+_NON_SPEECH_PREFIX = re.compile(
+    r"(?:没(?:有)?|不(?:再|曾|会|肯|要|必|是)?|未(?:曾)?|无需|无须|禁止)"
+    r"(?:\s|再|开口|出声|继续|大声){0,3}$"
+    r"|\b(?:not|never|without|no(?:\s+longer)?|\w+n['’]t)"
+    r"\s+(?:(?:\w+ly|ever)\s+){0,2}$"
+    r"|\b(?:sign|label|caption|title|screen|notice|poster)\s*$",
+    re.IGNORECASE,
+)
 
 
-def dialogue_spoken_lines(dialogue: str) -> tuple[str, ...]:
-    """Return the spoken sentences of a shot dialogue field, one per line."""
+def missing_narrative_dialogue(
+    narrative: str,
+    video_prompt: str,
+) -> tuple[str, ...]:
+    """Only explicit quoted speech is enforceable; titles/signs are not speech.
 
-    lines: list[str] = []
-    for raw in dialogue.splitlines():
-        line = _DIALOGUE_SPEAKER_PREFIX.sub("", raw.strip())
-        line = _DIALOGUE_STAGE_DIRECTION.sub("", line).strip()
-        if line:
-            lines.append(line)
-    return tuple(lines)
+    Free-form action and unquoted prose remain semantic review concerns. This
+    check neither prescribes how much dialogue a story needs nor reads shots.
+    """
+    prompt_key = dialogue_match_key(video_prompt)
+    missing: list[str] = []
+    for match in _QUOTED_TEXT.finditer(narrative):
+        prefix = re.split(r"[。！？!?\n]", narrative[: match.start()])[-1]
+        cues = list(_SPEECH_CUE.finditer(prefix))
+        if not cues or _NON_SPEECH_PREFIX.search(prefix[: cues[-1].start()]):
+            continue
+        line = next(value for value in match.groups() if value).strip()
+        key = dialogue_match_key(line).strip(".,!?:;")
+        if key and key not in prompt_key:
+            missing.append(line)
+    return tuple(dict.fromkeys(missing))
