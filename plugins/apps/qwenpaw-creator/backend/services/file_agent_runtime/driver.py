@@ -4011,6 +4011,7 @@ class FileCreatorAgentRuntime:
                             reopen_terminal=False,
                         )
                     )
+                    identity["executionAuthorizationId"] = authorization_id
                 fence.assert_alive()
                 (
                     fresh,
@@ -4056,7 +4057,10 @@ class FileCreatorAgentRuntime:
                     return {
                         **identity,
                         "status": "BLOCKED",
-                        "reason": "INPUTS_NOT_READY",
+                        "reason": current_blocked.get(
+                            node.node_id,
+                            "INPUTS_NOT_READY",
+                        ),
                     }
                 current_plan = requested_work_node(fresh, current_node)
                 if (

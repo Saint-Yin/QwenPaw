@@ -24,7 +24,11 @@ from services.runtime_files.execution_models import (
     TaskRecord,
     ExecutionAuthorizationStatus,
 )
-from services.runtime_files.models import MessageChannel, MessageClassification
+from services.runtime_files.models import (
+    MessageChannel,
+    MessageClassification,
+    ReviewBoundary,
+)
 from domain.enums import TaskKind, TaskStatus
 
 
@@ -224,6 +228,87 @@ def test_required_approval_and_repeated_tool_only_one_real_admission(
                 await wait_for(lambda: turns >= 5)
                 await runtime.wait_until_idle("probe-project")
                 assert len(calls) == 1
+        finally:
+            await runtime.stop()
+
+    asyncio.run(scenario())
+
+
+def test_review_opened_during_authorization_keeps_its_wait_reason(
+    tmp_path,
+    monkeypatch,
+):
+    pin(monkeypatch)
+
+    async def scenario():
+        services = create(tmp_path)
+
+        async def model(_messages, _tools):
+            return AgentModelTurn(
+                tool_calls=(
+                    AgentToolCall(
+                        call_id="pending-approval",
+                        name="request_workgraph_execution",
+                        arguments={
+                            "projectId": "probe-project",
+                            "targetRefs": ["asset:hero"],
+                            "kinds": ["visual"],
+                        },
+                    ),
+                ),
+            )
+
+        runtime = FileCreatorAgentRuntime(
+            services,
+            model_client=CallbackAgentChatClient(model),
+            poll_interval_seconds=0.01,
+        )
+        calls = []
+        fake_dispatch(runtime, calls)
+        try:
+            await runtime.start()
+            runtime.notify("probe-project")
+            await wait_for(
+                lambda: runtime.executions.list_execution_authorizations(
+                    "probe-project",
+                ),
+            )
+            authorization = runtime.executions.list_execution_authorizations(
+                "probe-project",
+            )[0]
+            base = services.projects.read("probe-project")
+            candidate = base.project.model_dump(mode="json")
+            candidate["description"] = "Another edit awaits human review."
+            await services.commit_candidate(
+                base=base,
+                candidate=candidate,
+                origin="agentdock_idle_goal",
+                review_policy="require_review",
+                review_boundary=ReviewBoundary(
+                    request_message_seq=2,
+                    request_id="other-edit",
+                    accepted_generation=base.generation,
+                    accepted_etag=base.etag,
+                ),
+                caused_by_request_id="other-edit",
+                caused_by_message_seq=2,
+            )
+            approve(runtime, authorization)
+            await runtime.wait_until_idle("probe-project")
+            results = [
+                json.loads(message.content_parts[0].text)
+                for message in services.sessions.list_messages(
+                    "probe-project",
+                    "probe-session",
+                )
+                if message.role == "tool"
+            ]
+            assert results[0]["items"][0]["reason"] == "WAITING_REVIEW"
+            assert results[0]["items"][0]["executionAuthorizationId"] == (
+                authorization.authorization_id
+            )
+            assert not calls
+            assert services.reviews.active("probe-project") is not None
         finally:
             await runtime.stop()
 
