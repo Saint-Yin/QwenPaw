@@ -158,10 +158,11 @@ class TestAutoSnapshotTimelines:
         assert "主时间轴" in snapshot["name"]
         remapped = f"{sid}:{ELEM}"
         assert remapped in snapshot["elements_by_id"]
-        assert snapshot["elements_by_id"][remapped]["label"] == "Modified"
+        # The snapshot freezes the PRE-change base state, not the edit.
+        assert snapshot["elements_by_id"][remapped]["label"] == "Shot 1"
         assert sid in candidate["timelines"]["order"]
 
-    def test_snapshot_preserves_candidate_not_base(self):
+    def test_snapshot_freezes_base_not_candidate(self):
         base = _minimal_project(elements={ELEM: _element(ELEM)})
         candidate = copy.deepcopy(base)
         _elems(candidate)[ELEM]["label"] = "Modified"
@@ -171,20 +172,37 @@ class TestAutoSnapshotTimelines:
         sid = "snapshot:timeline:main:1"
         snapshot = candidate["timelines"]["items"][sid]
         remapped = f"{sid}:{ELEM}"
-        assert snapshot["elements_by_id"][remapped]["label"] == "Modified"
+        assert snapshot["elements_by_id"][remapped]["label"] == "Shot 1"
 
-    def test_original_timeline_reverted_to_base(self):
+    def test_live_timeline_keeps_edits_snapshot_holds_base(self):
         base = _minimal_project(elements={ELEM: _element(ELEM)})
         candidate = copy.deepcopy(base)
         _elems(candidate)[ELEM]["label"] = "Modified"
 
         auto_snapshot_timelines(base, candidate)
 
+        # The live timeline keeps the agent's edit; the snapshot holds the
+        # pre-change base. Reverting this (the #173 inversion) strands new
+        # elements in a snapshot the work graph ignores and empties the live
+        # timeline — the deadlock observed on a real interactive project.
+        assert _elems(candidate)[ELEM]["label"] == "Modified"
+        sid = "snapshot:timeline:main:1"
+        snapshot = candidate["timelines"]["items"][sid]
+        remapped = f"{sid}:{ELEM}"
+        assert snapshot["elements_by_id"][remapped]["label"] == "Shot 1"
+
+    def test_add_into_empty_timeline_makes_no_snapshot(self):
+        base = _minimal_project()
+        candidate = copy.deepcopy(base)
+        _elems(candidate)[ELEM] = _element(ELEM)
+
+        auto_snapshot_timelines(base, candidate)
+
+        # Nothing lived in base, so there is no prior state to freeze — and
+        # critically the agent's new element stays on the live timeline.
+        items = candidate["timelines"]["items"]
+        assert list(items) == [TL]
         assert _elems(candidate)[ELEM]["label"] == "Shot 1"
-        sid = "snapshot:timeline:main:1"
-        snapshot = candidate["timelines"]["items"][sid]
-        remapped = f"{sid}:{ELEM}"
-        assert snapshot["elements_by_id"][remapped]["label"] == "Modified"
 
     def test_multiple_snapshots_increment(self):
         base = _minimal_project(elements={ELEM: _element(ELEM)})
@@ -291,7 +309,11 @@ class TestSnapshotProjectValidation:
         Project.model_validate(raw)  # live baseline is valid
 
         base = copy.deepcopy(raw)
-        base["timelines"]["items"]["timeline:main"]["elements_by_id"] = {}
+        # A real element edit (base holds the element, candidate renames it)
+        # freezes base into a snapshot carrying the remapped output slot.
+        raw["timelines"]["items"]["timeline:main"]["elements_by_id"][
+            "element-1"
+        ]["label"] = "Renamed"
         auto_snapshot_timelines(base, raw)
         snapshot_ids = [
             tid

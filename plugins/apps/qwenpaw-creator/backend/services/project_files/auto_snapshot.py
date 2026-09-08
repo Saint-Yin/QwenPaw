@@ -130,12 +130,15 @@ def auto_snapshot_timelines(
 
     Mutates *candidate_data* in place. For each timeline whose elements
     changed between *base_data* and *candidate_data*, a frozen copy of the
-    **candidate** (post-change) timeline is inserted into the candidate with
-    a versioned name, preserving the latest modifications in the snapshot.
+    **base** (pre-change) timeline is inserted into the candidate with a
+    versioned name, so the user can compare against and roll back to the
+    state before the modification. The live timeline keeps the candidate's
+    edits — the user always modifies the live timeline, never a snapshot.
 
     Only fires when elements are added, removed, or modified inside
     ``elements_by_id``.  Timeline-level property changes (name, description,
-    order) do not trigger a snapshot.
+    order) do not trigger a snapshot, and a timeline whose base holds no
+    elements has nothing to preserve, so it is skipped.
     """
     changed_ids = _timeline_element_changes(base_data, candidate_data)
     if not changed_ids:
@@ -154,33 +157,32 @@ def auto_snapshot_timelines(
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
 
     for timeline_id in sorted(changed_ids):
-        candidate_timeline = candidate_items.get(timeline_id)
-        if candidate_timeline is None:
+        # Snapshots are frozen copies: re-snapshotting one would mint
+        # "snapshot:snapshot:..." ids that never bound.
+        if timeline_id.startswith(_SNAPSHOT_PREFIX):
             continue
-        elements = candidate_timeline.get("elements_by_id", {})
-        if not elements:
+        base_timeline = base_items.get(timeline_id)
+        if base_timeline is None:
+            continue
+        # Nothing lived here before, so there is no "previous state" worth
+        # freezing — an add into an empty timeline must NOT be snapshotted
+        # (that used to strand the agent's new elements in a snapshot the
+        # work graph ignores, emptying the live timeline in the process).
+        if not base_timeline.get("elements_by_id", {}):
             continue
 
         snapshot_id = _next_snapshot_id(candidate_items, timeline_id)
-        original_name = candidate_timeline.get("name") or timeline_id
+        original_name = base_timeline.get("name") or timeline_id
         snapshot_name = f"快照 · {original_name} · {now}"
 
-        snapshot_timeline = copy.deepcopy(candidate_timeline)
+        # Freeze the pre-change base copy; the live candidate timeline is left
+        # untouched so it keeps the agent's edits and stays producible.
+        snapshot_timeline = copy.deepcopy(base_timeline)
         snapshot_timeline["timeline_id"] = snapshot_id
         snapshot_timeline["name"] = snapshot_name
-        snapshot_timeline["description"] = "自动快照：Agent 修改后的时间轴副本"
+        snapshot_timeline["description"] = "自动快照：Agent 修改前的时间轴副本"
         _remap_snapshot_elements(snapshot_timeline, snapshot_id)
 
         candidate_items[snapshot_id] = snapshot_timeline
         if snapshot_id not in candidate_order:
             candidate_order.append(snapshot_id)
-
-        base_timeline = base_items.get(timeline_id)
-        if base_timeline is not None:
-            candidate_timeline["elements_by_id"] = copy.deepcopy(
-                base_timeline.get("elements_by_id", {}),
-            )
-            if "edit_plan" in base_timeline:
-                candidate_timeline["edit_plan"] = copy.deepcopy(
-                    base_timeline["edit_plan"],
-                )
