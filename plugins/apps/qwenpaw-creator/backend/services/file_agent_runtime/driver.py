@@ -3229,8 +3229,9 @@ class FileCreatorAgentRuntime:
         while turn_number < effective_max_turns:
             turn_number += 1
             self._assert_epoch(project_id, run_id, epoch)
-            # Ordinary user input joins the next model turn. The agent decides
-            # what it means; delivering it does not cancel or redirect work.
+            # Human input, including undo-and-redo feedback, joins the next
+            # model turn. The agent decides how to revise the work; automated
+            # review repairs retain their separate request identity below.
             incoming = (
                 []
                 if turn_number == 1
@@ -3250,7 +3251,6 @@ class FileCreatorAgentRuntime:
                     or item.review_boundary is not None
                     or item.source
                     in {
-                        "review_rejection_feedback",
                         "run_review_feedback",
                         "render_review_feedback",
                     }
@@ -8792,7 +8792,7 @@ def _running_message_text(
         project=project,
         project_root=project_root,
     )
-    if message.source != "user":
+    if message.source not in {"user", "review_rejection_feedback"}:
         return content
     return (
         "用户在任务运行期间补充了以下反馈。请先用简短的公开回复确认你对反馈"

@@ -3638,11 +3638,13 @@ def test_subagent_terminal_notification_is_never_batched(tmp_path) -> None:
     "notification_kind",
     [None, "node_succeeded", "subagent_terminal"],
 )
+@pytest.mark.parametrize("source", ["user", "review_rejection_feedback"])
 def test_running_user_message_joins_current_run_once(
     tmp_path,
     notification_kind,
+    source,
 ) -> None:
-    """Earlier progress/completion must not starve an ordinary correction."""
+    """Human input and undo-and-redo feedback reach the live run exactly once."""
     from services.runtime_files.execution_models import (
         SpecialistRole,
         SpecialistRunRecord,
@@ -3718,9 +3720,13 @@ def test_running_user_message_joins_current_run_once(
                     role="user",
                     content_parts=[{"type": "text", "text": correction}],
                     client_message_id="running-correction",
-                    source="user",
+                    source=source,
                     channel=MessageChannel.AGENTDOCK,
-                    classification=MessageClassification.MUTATION_INSTRUCTION,
+                    classification=(
+                        MessageClassification.REVIEW_REVISE
+                        if source == "review_rejection_feedback"
+                        else MessageClassification.MUTATION_INSTRUCTION
+                    ),
                     metadata={
                         "context": {
                             "panel": "assets",
