@@ -2246,6 +2246,7 @@
     "productionOutcome": {
       "waiting_review": "Not started · Awaiting review",
       "not_started": "This production request has not started",
+      "cancelled": "Production cancelled",
       "unconfirmed": "Production result unconfirmed",
       "incomplete": "Some work remains unfinished"
     }

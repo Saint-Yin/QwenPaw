@@ -2246,6 +2246,7 @@
     "productionOutcome": {
       "waiting_review": "尚未开始 · 等待审阅",
       "not_started": "本次制作尚未开始",
+      "cancelled": "已取消制作",
       "unconfirmed": "制作结果尚未确认",
       "incomplete": "部分内容尚未完成"
     }

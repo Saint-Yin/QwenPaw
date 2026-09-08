@@ -631,8 +631,20 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                 # the model-required lane until the committed Variant owns a
                 # deliberate prompt, just as storyboards already do.
                 status = WorkNodeStatus.GATED
-                missing = ("visual_prompt 缺失",)
-                authored_text_gap = True
+                parent = entity.variants.items.get(
+                    variant.derived_from_variant_id,
+                )
+                if (
+                    parent is not None
+                    and not parent.selected_artifact_version_id
+                ):
+                    # The agent explicitly declared a derived variant and
+                    # intentionally left its prompt for the selected base.
+                    # Do not send a premature prompt-repair notification.
+                    missing = (f"visual:{entity_id}:{parent.variant_id}",)
+                else:
+                    missing = ("visual_prompt 缺失",)
+                    authored_text_gap = True
             add(
                 WorkNode(
                     node_id=node_id,

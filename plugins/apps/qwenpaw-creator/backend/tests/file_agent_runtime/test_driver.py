@@ -1568,10 +1568,14 @@ def test_stream_persistence_failure_is_not_reported_as_a_model_failure(
     assert failed[-1].payload["error"]["code"] == "STREAM_PERSISTENCE_FAILED"
 
 
-@pytest.mark.parametrize("queued_notification", [False, True])
+@pytest.mark.parametrize(
+    ("queued_notification", "decide_during_run"),
+    [(False, False), (True, False), (True, True)],
+)
 def test_intervention_completion_queues_mainline_resume(
     tmp_path,
     queued_notification,
+    decide_during_run,
 ) -> None:
     async def scenario():
         services, snapshot = _create_project(tmp_path, initial_goal=None)
@@ -1583,7 +1587,17 @@ def test_intervention_completion_queues_mainline_resume(
         )
         _consume_and_activate(services, through_seq=first.message_seq)
         _write_runtime_state(services, snapshot)
-        driver = _driver(services, _edit_client(description="支线修改已完成"))
+        edit = _edit_client(description="支线修改已完成")
+
+        async def model(messages, tools):
+            turn = await edit.complete(messages=messages, tools=tools)
+            if decide_during_run and not turn.tool_calls:
+                review = services.reviews.active(PROJECT_ID)
+                if review is not None:
+                    _accept_review(services, review)
+            return turn
+
+        driver = _driver(services, model)
         # Durable record of the interrupted mainline run (as _cancel_run
         # leaves it after a real supersede).
         driver.runs.create(
@@ -1659,13 +1673,22 @@ def test_intervention_completion_queues_mainline_resume(
             ), "an older completion notification ran ahead of the intervention"
         resume = _resume_messages()[0]
         await asyncio.sleep(0.05)
-        assert not any(
-            run.caused_by_message_seq == resume.message_seq
-            for run in driver.runs.list(PROJECT_ID)
-        ), "mainline resumed before the intervention Review was accepted"
-        review = services.reviews.active(PROJECT_ID)
-        assert review is not None
-        _accept_review(services, review)
+        if decide_during_run:
+            run = next(
+                run
+                for run in driver.runs.list(PROJECT_ID)
+                if run.caused_by_message_seq == admitted.message.message_seq
+            )
+            assert run.final_summary == "项目说明已更新。"
+            assert not run.review_ids
+        else:
+            assert not any(
+                run.caused_by_message_seq == resume.message_seq
+                for run in driver.runs.list(PROJECT_ID)
+            ), "mainline resumed before the intervention Review was accepted"
+            review = services.reviews.active(PROJECT_ID)
+            assert review is not None
+            _accept_review(services, review)
         driver.notify(PROJECT_ID)
         await _wait_for(
             lambda: any(

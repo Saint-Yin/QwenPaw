@@ -137,6 +137,13 @@ def summarize_workgraph_results(items: list[dict[str, Any]]) -> str:
         and not item.get("taskId")
         for item in items
     )
+    unauthorized = sum(
+        item.get("status") == "BLOCKED"
+        and item.get("reason")
+        in {"AUTHORIZATION_REJECTED", "AUTHORIZATION_EXPIRED"}
+        and not item.get("taskId")
+        for item in items
+    )
     if known_unstarted == len(items):
         detail = []
         if review:
@@ -177,7 +184,18 @@ def summarize_workgraph_results(items: list[dict[str, Any]]) -> str:
     )
     if failed:
         details.append(f"{failed} 项未能完成")
-    unresolved = len(items) - completed - reused - known_unstarted - failed
+    if unauthorized:
+        details.append(
+            f"{unauthorized} 项生成授权已取消或过期，未调用生成模型；" "不要自行重试，用户重新要求制作后才可再次请求授权",
+        )
+    unresolved = (
+        len(items)
+        - completed
+        - reused
+        - known_unstarted
+        - failed
+        - unauthorized
+    )
     if unresolved:
         details.append(f"{unresolved} 项执行结果尚未确认")
     return "；".join(details) + "。"

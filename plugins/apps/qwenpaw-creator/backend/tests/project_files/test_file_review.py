@@ -32,6 +32,7 @@ from services.runtime_files.models import (
 from .conftest import (
     make_pending_review,
     make_store,
+    read_round,
     read_state,
     review_boundary,
     review_commit_kwargs,
@@ -108,6 +109,25 @@ def test_accept_does_not_rewrite_project_and_reject_is_compensating_cas(
     assert current.project.description == base.project.description
     assert current.generation == committed.snapshot.generation + 1
     assert read_state(store).accepted_generation == current.generation
+
+    # A later edit in the same running round starts from the value the user
+    # already kept, not from the original pre-round value.
+    candidate = current.project.model_dump(mode="json")
+    candidate["name"] = "Further revision"
+    revised = ProjectCommitBoundary(store).commit(
+        base=current,
+        candidate=candidate,
+        round_id=review.round_id,
+        **review_commit_kwargs(
+            read_round(store, review.round_id).review_boundary,
+        ),
+    )
+    _decide(
+        service,
+        revised.review,
+        [_item(_operation(revised.review, "/name"))],
+    )
+    assert store.read("project-1").project.name == "After"
 
 
 def test_rejection_feedback_is_durable_and_idempotent(tmp_path) -> None:

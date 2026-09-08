@@ -56,6 +56,36 @@ const actionMeta = (tool: string, args: Record<string, unknown>) => ({
 });
 
 describe("Creator conversation presentation", () => {
+  it.each([
+    ["AUTHORIZATION_REJECTED", "cancelled"],
+    ["AUTHORIZATION_EXPIRED", "not_started"],
+    ["EXECUTION_NOT_COMPLETED", "unconfirmed"],
+  ])("presents production authorization outcome %s", (reason, outcome) => {
+    const calls = toolCallPresentations(
+      [
+        creatorMessage({
+          role: "tool",
+          source: "runtime_action_result",
+          metadata: {
+            actionId: "production",
+            tool: "request_workgraph_execution",
+          },
+          content: text(
+            JSON.stringify({
+              status: "BLOCKED",
+              items: [
+                { status: "BLOCKED", reason: "GATED" },
+                { status: "BLOCKED", reason },
+              ],
+            }),
+          ),
+        }),
+      ],
+      [],
+    );
+    expect(calls).toMatchObject([{ productionOutcome: outcome }]);
+  });
+
   it("keeps actual user authority sources and rejects Runtime control rows as user bubbles", () => {
     const userSources = [
       "initial_goal",

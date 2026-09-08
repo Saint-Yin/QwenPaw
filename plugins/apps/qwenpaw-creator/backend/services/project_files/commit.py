@@ -1264,7 +1264,10 @@ class ProjectCommitBoundary:
                     else derive_ui_locator(pointer, project_data)
                 ),
             )
-            if previous is not None:
+            if (
+                previous is not None
+                and previous.decision is ReviewOperationDecision.PENDING
+            ):
                 operation = operation.model_copy(
                     update={
                         "before": previous.before,

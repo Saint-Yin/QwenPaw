@@ -73,7 +73,7 @@ export function isUserAuthorityMessage(message: CreatorMessage): boolean {
   const source = message.source;
   return Boolean(
     source &&
-      (USER_AUTHORITY_SOURCES.has(source) || source.startsWith("frontend_")),
+    (USER_AUTHORITY_SOURCES.has(source) || source.startsWith("frontend_")),
   );
 }
 
@@ -514,7 +514,7 @@ function publicVersionCodeNames(
       return line.replace(
         /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>]+|(?<![`\\])(`+)([^`\n]+)\1(?!`)/gu,
         (token, _delimiter: string | undefined, id: string | undefined) =>
-          id === undefined ? token : names.get(id) ?? token,
+          id === undefined ? token : (names.get(id) ?? token),
       );
     })
     .join("\n");
@@ -790,6 +790,7 @@ export interface ToolCallPresentation {
   productionOutcome?:
     | "waiting_review"
     | "not_started"
+    | "cancelled"
     | "unconfirmed"
     | "incomplete";
   /** True only after execution started, never inferred from argument bytes. */
@@ -865,6 +866,7 @@ const BEFORE_PRODUCTION_REASONS = new Set([
   "MODEL_RENDER_REVIEW_ENABLED",
   "INPUTS_NOT_READY",
   "APPROVED_INPUTS_CHANGED",
+  "AUTHORIZATION_EXPIRED",
 ]);
 
 function productionOutcome(
@@ -881,6 +883,20 @@ function productionOutcome(
   if (status === "PARTIAL") return "incomplete";
   if (status !== "BLOCKED") return undefined;
   if (!Array.isArray(items) || items.length === 0) return "unconfirmed";
+  if (
+    items.some(
+      (item) => isRecord(item) && item.reason === "AUTHORIZATION_REJECTED",
+    ) &&
+    items.every(
+      (item) =>
+        isRecord(item) &&
+        item.status === "BLOCKED" &&
+        !item.taskId &&
+        (item.reason === "AUTHORIZATION_REJECTED" ||
+          BEFORE_PRODUCTION_REASONS.has(String(item.reason))),
+    )
+  )
+    return "cancelled";
   if (
     items.every(
       (item) =>
@@ -940,8 +956,8 @@ export function toolCallPresentations(
           typeof toolCall.id === "string"
             ? toolCall.id
             : typeof toolCall.toolCallId === "string"
-            ? toolCall.toolCallId
-            : undefined;
+              ? toolCall.toolCallId
+              : undefined;
         if (!actionId) return;
         const call = ensure(actionId, message.messageSeq + index / 1_000);
         if (typeof message.metadata?.runId === "string")
@@ -967,8 +983,8 @@ export function toolCallPresentations(
         typeof message.metadata?.actionId === "string"
           ? message.metadata.actionId
           : typeof message.metadata?.toolCallId === "string"
-          ? message.metadata.toolCallId
-          : undefined;
+            ? message.metadata.toolCallId
+            : undefined;
       if (!actionId) return;
       const call = ensure(actionId, message.messageSeq);
       if (typeof message.metadata?.runId === "string")
@@ -1062,8 +1078,8 @@ export function toolCallPresentations(
           typeof event.data.rejectedAssistantMessageId === "string"
             ? event.data.rejectedAssistantMessageId
             : typeof event.data.assistantMessageId === "string"
-            ? event.data.assistantMessageId
-            : undefined;
+              ? event.data.assistantMessageId
+              : undefined;
         if (rejectedMessageId) {
           for (const [actionId, call] of calls) {
             if (call.anchorMessageId === rejectedMessageId)
@@ -1087,8 +1103,8 @@ export function toolCallPresentations(
         typeof event.data.toolCallId === "string"
           ? event.data.toolCallId
           : typeof event.data.actionId === "string"
-          ? event.data.actionId
-          : undefined;
+            ? event.data.actionId
+            : undefined;
       if (!actionId) return;
       const call = ensure(
         actionId,
@@ -1141,8 +1157,8 @@ export function toolCallPresentations(
             typeof event.data.error === "string"
               ? event.data.error
               : typeof event.data.errorType === "string"
-              ? event.data.errorType
-              : call.error;
+                ? event.data.errorType
+                : call.error;
         }
       }
     });
@@ -1172,10 +1188,10 @@ export function toolCallPresentations(
           call.failed || terminalRun?.failed
             ? "failed"
             : call.completed
-            ? "succeeded"
-            : terminalRun
-            ? "cancelled"
-            : "started",
+              ? "succeeded"
+              : terminalRun
+                ? "cancelled"
+                : "started",
         ...(terminalRun?.superseded ? { superseded: true } : {}),
         ...(productionOutcome(call)
           ? { productionOutcome: productionOutcome(call) }

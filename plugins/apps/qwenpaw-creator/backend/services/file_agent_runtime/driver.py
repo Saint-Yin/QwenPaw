@@ -1016,6 +1016,17 @@ class FileAgentRuntimeError(RuntimeError):
     pass
 
 
+class ExecutionAuthorizationBlocked(FileAgentRuntimeError):
+    """An explicit authorization outcome, before any provider dispatch."""
+
+    def __init__(self, authorization: ExecutionAuthorizationRecord) -> None:
+        self.authorization_id = authorization.authorization_id
+        self.status = authorization.status
+        super().__init__(
+            f"execution authorization {authorization.status.value.lower()}",
+        )
+
+
 def _require_actionable_takes(
     outcome: LiveOperationRun,
     *,
@@ -3454,6 +3465,15 @@ class FileCreatorAgentRuntime:
                     "Creator Agent returned no final content or tool calls",
                 )
             if not turn.tool_calls and review_ids:
+                pending = await asyncio.to_thread(
+                    self.services.reviews.all_pending,
+                    project_id,
+                )
+                pending_ids = {review.review_id for review in pending}
+                review_ids = [
+                    item for item in review_ids if item in pending_ids
+                ]
+            if not turn.tool_calls and review_ids:
                 canonical_summary = _agent_waiting_review_summary(
                     waiting_review_summary,
                 )
@@ -4101,6 +4121,13 @@ class FileCreatorAgentRuntime:
                     "taskId": task_id,
                     "executionAuthorizationId": authorization_id,
                     "outputRefs": list(task.output_refs),
+                }
+            except ExecutionAuthorizationBlocked as exc:
+                return {
+                    **identity,
+                    "status": "BLOCKED",
+                    "reason": f"AUTHORIZATION_{exc.status.value}",
+                    "executionAuthorizationId": exc.authorization_id,
                 }
             except (asyncio.CancelledError, StaleAgentRun):
                 raise
@@ -7221,10 +7248,15 @@ class FileCreatorAgentRuntime:
                 ExecutionAuthorizationStatus.REJECTED,
                 ExecutionAuthorizationStatus.EXPIRED,
             ):
-                if not reopen_terminal:
-                    raise FileAgentRuntimeError(
-                        "该制作请求未获授权；不要重复提交相同输入。",
-                    )
+                renewed_by_user = (
+                    request.source in {"user", "review_rejection_feedback"}
+                    and request.message_seq
+                    > (record.caused_by_message_seq or 0)
+                    and request.created_at
+                    > (record.decided_at or record.created_at)
+                )
+                if not reopen_terminal and not renewed_by_user:
+                    raise ExecutionAuthorizationBlocked(record)
                 attempt += 1
                 continue
             existing = record
@@ -7368,9 +7400,7 @@ class FileCreatorAgentRuntime:
             authorization.status.value,
         )
         if authorization.status is not ExecutionAuthorizationStatus.APPROVED:
-            raise FileAgentRuntimeError(
-                f"execution authorization {authorization.status.value.lower()}",
-            )
+            raise ExecutionAuthorizationBlocked(authorization)
         return authorization.authorization_id
 
     async def _await_specialist_task(

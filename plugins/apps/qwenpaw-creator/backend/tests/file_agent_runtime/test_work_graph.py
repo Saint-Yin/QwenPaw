@@ -325,21 +325,36 @@ def test_missing_storyboard_prompt_is_a_model_required_gap() -> None:
     assert storyboard in graph.model_required_nodes()
 
 
-def test_missing_visual_prompt_is_a_model_required_gap() -> None:
+@pytest.mark.parametrize("base_state", ["none", "waiting", "selected"])
+def test_missing_visual_prompt_is_a_model_required_gap(base_state) -> None:
     project = _project()
-    entity = _entity("char:hero", {"var:default": None})
+    variants = {"var:default": None}
+    if base_state != "none":
+        variants["var:base"] = (
+            "artifact:base" if base_state == "selected" else None
+        )
+    entity = _entity("char:hero", variants)
     entity.variants.items["var:default"].prompt = ""
+    if base_state != "none":
+        entity.variants.items[
+            "var:default"
+        ].derived_from_variant_id = "var:base"
     project.visual.entities.items[entity.entity_id] = entity
     project.visual.entities.order.append(entity.entity_id)
 
     graph = derive_work_graph(project)
     visual = graph.by_id["visual:char:hero:var:default"]
     assert visual.status is WorkNodeStatus.GATED
-    assert visual.missing == ("visual_prompt 缺失",)
-    assert visual.authored_text_gap
+    if base_state == "waiting":
+        assert visual.missing == ("visual:char:hero:var:base",)
+        assert not visual.authored_text_gap
+        assert visual not in graph.model_required_nodes()
+    else:
+        assert visual.missing == ("visual_prompt 缺失",)
+        assert visual.authored_text_gap
+        assert visual in graph.model_required_nodes()
     # A one-line entity description fallback must never start a paid image
     # task before visual development has committed its production prompt.
-    assert visual in graph.model_required_nodes()
     assert visual not in graph.ready_media_nodes()
 
 
