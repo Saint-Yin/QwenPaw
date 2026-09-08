@@ -242,6 +242,7 @@ BATCHABLE_NOTIFICATION_SOURCES = frozenset(
         "yolo_auto_resume",
         "prompt_contract_resume",
         "mainline_resume",
+        "review_approval_resume",
     },
 )
 

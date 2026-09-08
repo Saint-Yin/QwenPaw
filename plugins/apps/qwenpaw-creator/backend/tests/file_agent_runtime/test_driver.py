@@ -3713,7 +3713,10 @@ def test_subagent_terminal_notification_is_never_batched(tmp_path) -> None:
     "notification_kind",
     [None, "node_succeeded", "subagent_terminal"],
 )
-@pytest.mark.parametrize("source", ["user", "review_rejection_feedback"])
+@pytest.mark.parametrize(
+    "source",
+    ["user", "review_rejection_feedback", "review_approval_resume"],
+)
 def test_running_user_message_joins_current_run_once(
     tmp_path,
     notification_kind,
@@ -3799,7 +3802,7 @@ def test_running_user_message_joins_current_run_once(
                     channel=MessageChannel.AGENTDOCK,
                     classification=(
                         MessageClassification.REVIEW_REVISE
-                        if source == "review_rejection_feedback"
+                        if source != "user"
                         else MessageClassification.MUTATION_INSTRUCTION
                     ),
                     metadata={
@@ -3843,7 +3846,9 @@ def test_running_user_message_joins_current_run_once(
         for item in received[1]
         if item["role"] == "user" and correction in str(item["content"])
     )
-    assert "请先用简短的公开回复确认" in correction_message
+    assert ("请先用简短的公开回复确认" in correction_message) == (
+        source != "review_approval_resume"
+    )
     assert (
         '"selected":{"ref":"visual-variant:char:lulu@variant:lulu-id"}'
         in correction_message
