@@ -11,6 +11,7 @@ identities, dependency edges and all seven states.
 
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +20,8 @@ from domain.enums import TaskStatus
 from services.file_agent_runtime.work_graph import (
     WorkNodeStatus,
     derive_work_graph,
+    dispatch_ledger_fingerprint,
+    dispatch_slot,
 )
 from services.project_files.models import (
     ArtifactSlot,
@@ -462,21 +465,35 @@ def test_stale_manual_storyboard_is_visible_but_not_dispatched() -> None:
 
 
 @pytest.mark.parametrize(
-    "changed_input",
-    ["aspect_ratio", "storyboard_prompt"],
+    ("changed_input", "legacy", "expected"),
+    [
+        ("aspect_ratio", False, WorkNodeStatus.STALE),
+        ("storyboard_prompt", False, WorkNodeStatus.STALE),
+        ("media_models", False, WorkNodeStatus.DONE),
+        ("media_models", True, WorkNodeStatus.DONE),
+    ],
 )
-def test_completed_storyboard_stales_when_implicit_prompt_input_changes(
+def test_completed_storyboard_reacts_only_to_its_content_inputs(
     changed_input,
+    legacy,
+    expected,
 ) -> None:
     project = _project()
     _add_element(project, _element("elem:one"))
     node_id = "storyboard:elem:one"
     original = derive_work_graph(project).by_id[node_id].dispatch_fingerprint
+    models = ("old-image", "old-video")
+    ledger = dispatch_ledger_fingerprint(original, models)
+    slot = (
+        hashlib.sha256(ledger.encode()).hexdigest()[:16]
+        if legacy
+        else dispatch_slot(ledger)
+    )
     task = _task(
         "image_generation",
         "element:elem:one",
         TaskStatus.SUCCEEDED,
-        idempotency_key=f"dag-{node_id}-{original}",
+        idempotency_key=f"dag-{node_id}-{slot}",
     )
     _select_slot(
         project,
@@ -490,7 +507,7 @@ def test_completed_storyboard_stales_when_implicit_prompt_input_changes(
         derive_work_graph(
             project,
             tasks=[task],
-            media_models=("image", "video"),
+            media_models=models,
         )
         .by_id[node_id]
         .status
@@ -499,24 +516,28 @@ def test_completed_storyboard_stales_when_implicit_prompt_input_changes(
 
     if changed_input == "aspect_ratio":
         project.settings.aspect_ratio = "9:16"
-    else:
+    elif changed_input == "storyboard_prompt":
         creation = (
             project.timelines.items["timeline:main"]
             .elements_by_id["elem:one"]
             .creation
         )
         creation.storyboard_prompt += "主角挥手。"
+    else:
+        models = ("new-image", "new-video")
 
-    assert (
-        derive_work_graph(
-            project,
-            tasks=[task],
-            media_models=("image", "video"),
-        )
-        .by_id[node_id]
-        .status
-        is WorkNodeStatus.STALE
+    before = project.model_dump(mode="json")
+    graph = derive_work_graph(
+        project,
+        tasks=[task],
+        media_models=models,
     )
+    assert graph.by_id[node_id].status is expected
+    if expected is WorkNodeStatus.DONE:
+        assert node_id not in {
+            node.node_id for node in graph.regeneration_nodes()
+        }
+    assert project.model_dump(mode="json") == before
 
 
 def test_failed_storyboard_reopens_when_aspect_ratio_changes() -> None:
