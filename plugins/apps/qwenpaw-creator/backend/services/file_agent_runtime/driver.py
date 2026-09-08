@@ -2470,6 +2470,30 @@ class FileCreatorAgentRuntime:
                 await self._maybe_flush_idle_notifications(project_id)
             return
         message = user_messages[0]
+        # An interruption replaces the old mainline request. Routine results
+        # queued just before it belong in the replacement's conversation
+        # history, not in a new autonomous run ahead of the human request.
+        # Keep separately budgeted review repairs and other conversations in
+        # their original order.
+        for candidate in user_messages:
+            if candidate.conversation_id != message.conversation_id:
+                break
+            if candidate.review_boundary is not None:
+                if candidate.source in {"user", "review_rejection_feedback"}:
+                    message = candidate
+                break
+            if candidate.source not in BATCHABLE_NOTIFICATION_SOURCES:
+                break
+            origin_source, _ = await self._delegation_origin(
+                project_id,
+                candidate,
+            )
+            if origin_source in {
+                "run_review_feedback",
+                "render_review_feedback",
+                "review_rejection_feedback",
+            }:
+                break
         if self._blocked_heads.get(project_id) == message.message_seq:
             return
         # Durable variant of the in-memory guard above: sessions written

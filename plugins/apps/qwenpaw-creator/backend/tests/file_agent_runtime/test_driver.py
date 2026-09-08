@@ -1568,7 +1568,11 @@ def test_stream_persistence_failure_is_not_reported_as_a_model_failure(
     assert failed[-1].payload["error"]["code"] == "STREAM_PERSISTENCE_FAILED"
 
 
-def test_intervention_completion_queues_mainline_resume(tmp_path) -> None:
+@pytest.mark.parametrize("queued_notification", [False, True])
+def test_intervention_completion_queues_mainline_resume(
+    tmp_path,
+    queued_notification,
+) -> None:
     async def scenario():
         services, snapshot = _create_project(tmp_path, initial_goal=None)
         first = _append_initial_request(
@@ -1611,6 +1615,18 @@ def test_intervention_completion_queues_mainline_resume(tmp_path) -> None:
             expected_status=AgentRunStatus.RUNNING,
             status=AgentRunStatus.CANCELLED,
         )
+        notification = None
+        if queued_notification:
+            notification = services.sessions.append_message(
+                PROJECT_ID,
+                SESSION_ID,
+                CONVERSATION_ID,
+                role="user",
+                source="runtime_notification",
+                channel=MessageChannel.RUNTIME,
+                content_parts=[{"type": "text", "text": "素材理解已完成"}],
+                metadata={"notificationKind": "subagent_terminal"},
+            ).message
         admitted = _admit_agentdock_request(
             services,
             request_id="interrupt-request",
@@ -1636,6 +1652,11 @@ def test_intervention_completion_queues_mainline_resume(tmp_path) -> None:
             ]
 
         await _wait_for(lambda: len(_resume_messages()) == 1)
+        if notification is not None:
+            assert not any(
+                run.caused_by_message_seq == notification.message_seq
+                for run in driver.runs.list(PROJECT_ID)
+            ), "an older completion notification ran ahead of the intervention"
         resume = _resume_messages()[0]
         await asyncio.sleep(0.05)
         assert not any(
