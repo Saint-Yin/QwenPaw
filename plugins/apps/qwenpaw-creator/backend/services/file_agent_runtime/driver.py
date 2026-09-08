@@ -7727,6 +7727,14 @@ class FileCreatorAgentRuntime:
         """
 
         auto_approve = get_media_review_mode() == MEDIA_REVIEW_AUTO_APPROVE
+        if not auto_approve and await asyncio.to_thread(
+            self.services.reviews.all_pending,
+            project_id,
+        ):
+            # A selected candidate is not yet an accepted reference. Let the
+            # human decision settle before inferring missing follow-up work;
+            # its normal review follow-up will resume the agent afterwards.
+            return
         try:
             snapshot = await asyncio.to_thread(
                 self.services.projects.read,

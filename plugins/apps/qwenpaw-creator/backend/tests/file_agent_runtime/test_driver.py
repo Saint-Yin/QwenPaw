@@ -56,6 +56,7 @@ from services.runtime_files.models import (
     MessageChannel,
     MessageClassification,
     RuntimeProjectState,
+    ReviewBoundary,
 )
 from services.runtime_files.execution_models import (
     ExecutionAuthorizationStatus,
@@ -2447,13 +2448,37 @@ def test_mainline_character_voice_waits_for_authorization(
     assert specialists == []
 
 
+@pytest.mark.parametrize("review_state", ["none", "pending", "accepted"])
 def test_prompt_gap_feedback_is_queued_outside_auto_approve(
     tmp_path,
     monkeypatch,
+    review_state,
 ) -> None:
     """A false completion gets a free repair turn, never a media dispatch."""
 
-    services, _snapshot = _create_project(tmp_path, initial_goal="完成短剧")
+    services, snapshot = _create_project(tmp_path, initial_goal="完成短剧")
+    if review_state != "none":
+        candidate = snapshot.project.model_dump(mode="json")
+        candidate["description"] = "等待确认的创作改动"
+        review = services.commits.commit(
+            base=snapshot,
+            candidate=candidate,
+            round_id="round-pending-review",
+            origin="agentdock_interrupt",
+            review_policy="require_review",
+            review_boundary=ReviewBoundary(
+                request_message_seq=1,
+                request_id="request-review",
+                interrupted_run_id="agent-run-review",
+                accepted_generation=snapshot.generation,
+                accepted_etag=snapshot.etag,
+            ),
+            caused_by_request_id="request-review",
+            caused_by_message_seq=1,
+        ).review
+        assert review is not None
+        if review_state == "accepted":
+            _accept_review(services, review)
     driver = _driver(services, lambda _messages, _tools: AgentModelTurn())
     node = WorkNode(
         node_id="video:ep1",
@@ -2489,12 +2514,18 @@ def test_prompt_gap_feedback_is_queued_outside_auto_approve(
     )
 
     messages = services.sessions.list_messages(PROJECT_ID, SESSION_ID)
+    assert wakes == [], "non-auto prompt repair must not wake paid scheduling"
+    if review_state == "pending":
+        assert not any(
+            message.source == driver.PROMPT_CONTRACT_RESUME_SOURCE
+            for message in messages
+        ), "pending human review must settle before automatic prompt repair"
+        return
     feedback = messages[-1]
     assert feedback.source == driver.PROMPT_CONTRACT_RESUME_SOURCE
     assert "video_prompt 缺失" in feedback.content_parts[0].text
     assert "没有提交任何对应的付费媒体任务" in feedback.content_parts[0].text
     assert feedback.metadata["modelRequiredNodes"] == ["video:ep1"]
-    assert wakes == [], "non-auto prompt repair must not wake paid scheduling"
 
 
 def test_prompt_gap_repair_survives_retryable_failure_outside_auto_approve(
