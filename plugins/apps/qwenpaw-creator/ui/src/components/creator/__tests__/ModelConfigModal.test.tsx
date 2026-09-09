@@ -219,6 +219,43 @@ function configRoutes(json: unknown, testJson?: Record<string, unknown>) {
 }
 
 describe("ModelConfigModal configuration lifecycle", () => {
+  it("preserves the saved governance mode when returning to full confirmation", async () => {
+    const { calls } = installMockFetch(
+      configRoutes({
+        ...speechBaseConfig,
+        creationCheckpoints: { mode: "skip", executionMode: "delegated" },
+      }),
+    );
+    render(<ModelConfigModal open onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: /执行模式/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /^全程确认/ }));
+
+    await waitFor(() =>
+      expect(
+        calls.some((call) =>
+          call.url.endsWith("/models/config/permission-mode"),
+        ),
+      ).toBe(true),
+    );
+    expect(screen.getByRole("radio", { name: /^委派/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("radio", { name: /^共创/ })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: /^共创/ }));
+    await waitFor(() =>
+      expect(
+        calls.find((call) =>
+          call.url.endsWith("/models/config/creation-checkpoints"),
+        )?.body,
+      ).toEqual({ mode: "required", execution_mode: "co_creation" }),
+    );
+  });
+
   it("keeps a VLM that reuses the LLM enabled after an LLM connectivity test", async () => {
     // A successful test flips llm.enabled via updateItem; that update must
     // not cascade into vlm.use_llm/enabled=false before a save.

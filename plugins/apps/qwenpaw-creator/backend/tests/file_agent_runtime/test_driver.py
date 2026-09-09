@@ -56,6 +56,7 @@ from services.runtime_files.models import (
     MessageChannel,
     MessageClassification,
     RuntimeProjectState,
+    ReviewBoundary,
 )
 from services.runtime_files.execution_models import (
     ExecutionAuthorizationStatus,
@@ -1568,7 +1569,15 @@ def test_stream_persistence_failure_is_not_reported_as_a_model_failure(
     assert failed[-1].payload["error"]["code"] == "STREAM_PERSISTENCE_FAILED"
 
 
-def test_intervention_completion_queues_mainline_resume(tmp_path) -> None:
+@pytest.mark.parametrize(
+    ("queued_notification", "decide_during_run"),
+    [(False, False), (True, False), (True, True)],
+)
+def test_intervention_completion_queues_mainline_resume(
+    tmp_path,
+    queued_notification,
+    decide_during_run,
+) -> None:
     async def scenario():
         services, snapshot = _create_project(tmp_path, initial_goal=None)
         first = _append_initial_request(
@@ -1579,7 +1588,17 @@ def test_intervention_completion_queues_mainline_resume(tmp_path) -> None:
         )
         _consume_and_activate(services, through_seq=first.message_seq)
         _write_runtime_state(services, snapshot)
-        driver = _driver(services, _edit_client(description="支线修改已完成"))
+        edit = _edit_client(description="支线修改已完成")
+
+        async def model(messages, tools):
+            turn = await edit.complete(messages=messages, tools=tools)
+            if decide_during_run and not turn.tool_calls:
+                review = services.reviews.active(PROJECT_ID)
+                if review is not None:
+                    _accept_review(services, review)
+            return turn
+
+        driver = _driver(services, model)
         # Durable record of the interrupted mainline run (as _cancel_run
         # leaves it after a real supersede).
         driver.runs.create(
@@ -1611,6 +1630,18 @@ def test_intervention_completion_queues_mainline_resume(tmp_path) -> None:
             expected_status=AgentRunStatus.RUNNING,
             status=AgentRunStatus.CANCELLED,
         )
+        notification = None
+        if queued_notification:
+            notification = services.sessions.append_message(
+                PROJECT_ID,
+                SESSION_ID,
+                CONVERSATION_ID,
+                role="user",
+                source="runtime_notification",
+                channel=MessageChannel.RUNTIME,
+                content_parts=[{"type": "text", "text": "素材理解已完成"}],
+                metadata={"notificationKind": "subagent_terminal"},
+            ).message
         admitted = _admit_agentdock_request(
             services,
             request_id="interrupt-request",
@@ -1636,15 +1667,29 @@ def test_intervention_completion_queues_mainline_resume(tmp_path) -> None:
             ]
 
         await _wait_for(lambda: len(_resume_messages()) == 1)
+        if notification is not None:
+            assert not any(
+                run.caused_by_message_seq == notification.message_seq
+                for run in driver.runs.list(PROJECT_ID)
+            ), "an older completion notification ran ahead of the intervention"
         resume = _resume_messages()[0]
         await asyncio.sleep(0.05)
-        assert not any(
-            run.caused_by_message_seq == resume.message_seq
-            for run in driver.runs.list(PROJECT_ID)
-        ), "mainline resumed before the intervention Review was accepted"
-        review = services.reviews.active(PROJECT_ID)
-        assert review is not None
-        _accept_review(services, review)
+        if decide_during_run:
+            run = next(
+                run
+                for run in driver.runs.list(PROJECT_ID)
+                if run.caused_by_message_seq == admitted.message.message_seq
+            )
+            assert run.final_summary == "项目说明已更新。"
+            assert not run.review_ids
+        else:
+            assert not any(
+                run.caused_by_message_seq == resume.message_seq
+                for run in driver.runs.list(PROJECT_ID)
+            ), "mainline resumed before the intervention Review was accepted"
+            review = services.reviews.active(PROJECT_ID)
+            assert review is not None
+            _accept_review(services, review)
         driver.notify(PROJECT_ID)
         await _wait_for(
             lambda: any(
@@ -2403,13 +2448,37 @@ def test_mainline_character_voice_waits_for_authorization(
     assert specialists == []
 
 
+@pytest.mark.parametrize("review_state", ["none", "pending", "accepted"])
 def test_prompt_gap_feedback_is_queued_outside_auto_approve(
     tmp_path,
     monkeypatch,
+    review_state,
 ) -> None:
     """A false completion gets a free repair turn, never a media dispatch."""
 
-    services, _snapshot = _create_project(tmp_path, initial_goal="完成短剧")
+    services, snapshot = _create_project(tmp_path, initial_goal="完成短剧")
+    if review_state != "none":
+        candidate = snapshot.project.model_dump(mode="json")
+        candidate["description"] = "等待确认的创作改动"
+        review = services.commits.commit(
+            base=snapshot,
+            candidate=candidate,
+            round_id="round-pending-review",
+            origin="agentdock_interrupt",
+            review_policy="require_review",
+            review_boundary=ReviewBoundary(
+                request_message_seq=1,
+                request_id="request-review",
+                interrupted_run_id="agent-run-review",
+                accepted_generation=snapshot.generation,
+                accepted_etag=snapshot.etag,
+            ),
+            caused_by_request_id="request-review",
+            caused_by_message_seq=1,
+        ).review
+        assert review is not None
+        if review_state == "accepted":
+            _accept_review(services, review)
     driver = _driver(services, lambda _messages, _tools: AgentModelTurn())
     node = WorkNode(
         node_id="video:ep1",
@@ -2445,12 +2514,18 @@ def test_prompt_gap_feedback_is_queued_outside_auto_approve(
     )
 
     messages = services.sessions.list_messages(PROJECT_ID, SESSION_ID)
+    assert wakes == [], "non-auto prompt repair must not wake paid scheduling"
+    if review_state == "pending":
+        assert not any(
+            message.source == driver.PROMPT_CONTRACT_RESUME_SOURCE
+            for message in messages
+        ), "pending human review must settle before automatic prompt repair"
+        return
     feedback = messages[-1]
     assert feedback.source == driver.PROMPT_CONTRACT_RESUME_SOURCE
     assert "video_prompt 缺失" in feedback.content_parts[0].text
     assert "没有提交任何对应的付费媒体任务" in feedback.content_parts[0].text
     assert feedback.metadata["modelRequiredNodes"] == ["video:ep1"]
-    assert wakes == [], "non-auto prompt repair must not wake paid scheduling"
 
 
 def test_prompt_gap_repair_survives_retryable_failure_outside_auto_approve(
@@ -3638,11 +3713,16 @@ def test_subagent_terminal_notification_is_never_batched(tmp_path) -> None:
     "notification_kind",
     [None, "node_succeeded", "subagent_terminal"],
 )
+@pytest.mark.parametrize(
+    "source",
+    ["user", "review_rejection_feedback", "review_approval_resume"],
+)
 def test_running_user_message_joins_current_run_once(
     tmp_path,
     notification_kind,
+    source,
 ) -> None:
-    """Earlier progress/completion must not starve an ordinary correction."""
+    """Human input and undo-and-redo feedback reach the live run exactly once."""
     from services.runtime_files.execution_models import (
         SpecialistRole,
         SpecialistRunRecord,
@@ -3718,9 +3798,13 @@ def test_running_user_message_joins_current_run_once(
                     role="user",
                     content_parts=[{"type": "text", "text": correction}],
                     client_message_id="running-correction",
-                    source="user",
+                    source=source,
                     channel=MessageChannel.AGENTDOCK,
-                    classification=MessageClassification.MUTATION_INSTRUCTION,
+                    classification=(
+                        MessageClassification.REVIEW_REVISE
+                        if source != "user"
+                        else MessageClassification.MUTATION_INSTRUCTION
+                    ),
                     metadata={
                         "context": {
                             "panel": "assets",
@@ -3762,7 +3846,9 @@ def test_running_user_message_joins_current_run_once(
         for item in received[1]
         if item["role"] == "user" and correction in str(item["content"])
     )
-    assert "请先用简短的公开回复确认" in correction_message
+    assert ("请先用简短的公开回复确认" in correction_message) == (
+        source != "review_approval_resume"
+    )
     assert (
         '"selected":{"ref":"visual-variant:char:lulu@variant:lulu-id"}'
         in correction_message

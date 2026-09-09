@@ -1439,7 +1439,10 @@ export default function ModelConfigModal({ open, onClose }: Props) {
       setConfig((previous) => ({
         ...previous,
         executionAuthorization: { mode: target.execution },
-        creationCheckpoints: { mode: target.checkpoints },
+        creationCheckpoints: {
+          ...previous.creationCheckpoints,
+          mode: target.checkpoints,
+        },
         mediaReview: { mode: target.mediaReview },
       }));
       if (state.inflight) {

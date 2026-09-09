@@ -242,6 +242,7 @@ BATCHABLE_NOTIFICATION_SOURCES = frozenset(
         "yolo_auto_resume",
         "prompt_contract_resume",
         "mainline_resume",
+        "review_approval_resume",
     },
 )
 
@@ -1014,6 +1015,17 @@ _TERMINAL_GOAL_STATUSES = frozenset(
 
 class FileAgentRuntimeError(RuntimeError):
     pass
+
+
+class ExecutionAuthorizationBlocked(FileAgentRuntimeError):
+    """An explicit authorization outcome, before any provider dispatch."""
+
+    def __init__(self, authorization: ExecutionAuthorizationRecord) -> None:
+        self.authorization_id = authorization.authorization_id
+        self.status = authorization.status
+        super().__init__(
+            f"execution authorization {authorization.status.value.lower()}",
+        )
 
 
 def _require_actionable_takes(
@@ -2470,6 +2482,30 @@ class FileCreatorAgentRuntime:
                 await self._maybe_flush_idle_notifications(project_id)
             return
         message = user_messages[0]
+        # An interruption replaces the old mainline request. Routine results
+        # queued just before it belong in the replacement's conversation
+        # history, not in a new autonomous run ahead of the human request.
+        # Keep separately budgeted review repairs and other conversations in
+        # their original order.
+        for candidate in user_messages:
+            if candidate.conversation_id != message.conversation_id:
+                break
+            if candidate.review_boundary is not None:
+                if candidate.source in {"user", "review_rejection_feedback"}:
+                    message = candidate
+                break
+            if candidate.source not in BATCHABLE_NOTIFICATION_SOURCES:
+                break
+            origin_source, _ = await self._delegation_origin(
+                project_id,
+                candidate,
+            )
+            if origin_source in {
+                "run_review_feedback",
+                "render_review_feedback",
+                "review_rejection_feedback",
+            }:
+                break
         if self._blocked_heads.get(project_id) == message.message_seq:
             return
         # Durable variant of the in-memory guard above: sessions written
@@ -3229,8 +3265,9 @@ class FileCreatorAgentRuntime:
         while turn_number < effective_max_turns:
             turn_number += 1
             self._assert_epoch(project_id, run_id, epoch)
-            # Ordinary user input joins the next model turn. The agent decides
-            # what it means; delivering it does not cancel or redirect work.
+            # Human input, including undo-and-redo feedback, joins the next
+            # model turn. The agent decides how to revise the work; automated
+            # review repairs retain their separate request identity below.
             incoming = (
                 []
                 if turn_number == 1
@@ -3250,7 +3287,6 @@ class FileCreatorAgentRuntime:
                     or item.review_boundary is not None
                     or item.source
                     in {
-                        "review_rejection_feedback",
                         "run_review_feedback",
                         "render_review_feedback",
                     }
@@ -3429,6 +3465,15 @@ class FileCreatorAgentRuntime:
                 raise AgentModelError(
                     "Creator Agent returned no final content or tool calls",
                 )
+            if not turn.tool_calls and review_ids:
+                pending = await asyncio.to_thread(
+                    self.services.reviews.all_pending,
+                    project_id,
+                )
+                pending_ids = {review.review_id for review in pending}
+                review_ids = [
+                    item for item in review_ids if item in pending_ids
+                ]
             if not turn.tool_calls and review_ids:
                 canonical_summary = _agent_waiting_review_summary(
                     waiting_review_summary,
@@ -3966,6 +4011,7 @@ class FileCreatorAgentRuntime:
                             reopen_terminal=False,
                         )
                     )
+                    identity["executionAuthorizationId"] = authorization_id
                 fence.assert_alive()
                 (
                     fresh,
@@ -4011,7 +4057,10 @@ class FileCreatorAgentRuntime:
                     return {
                         **identity,
                         "status": "BLOCKED",
-                        "reason": "INPUTS_NOT_READY",
+                        "reason": current_blocked.get(
+                            node.node_id,
+                            "INPUTS_NOT_READY",
+                        ),
                     }
                 current_plan = requested_work_node(fresh, current_node)
                 if (
@@ -4077,6 +4126,13 @@ class FileCreatorAgentRuntime:
                     "taskId": task_id,
                     "executionAuthorizationId": authorization_id,
                     "outputRefs": list(task.output_refs),
+                }
+            except ExecutionAuthorizationBlocked as exc:
+                return {
+                    **identity,
+                    "status": "BLOCKED",
+                    "reason": f"AUTHORIZATION_{exc.status.value}",
+                    "executionAuthorizationId": exc.authorization_id,
                 }
             except (asyncio.CancelledError, StaleAgentRun):
                 raise
@@ -7197,10 +7253,15 @@ class FileCreatorAgentRuntime:
                 ExecutionAuthorizationStatus.REJECTED,
                 ExecutionAuthorizationStatus.EXPIRED,
             ):
-                if not reopen_terminal:
-                    raise FileAgentRuntimeError(
-                        "该制作请求未获授权；不要重复提交相同输入。",
-                    )
+                renewed_by_user = (
+                    request.source in {"user", "review_rejection_feedback"}
+                    and request.message_seq
+                    > (record.caused_by_message_seq or 0)
+                    and request.created_at
+                    > (record.decided_at or record.created_at)
+                )
+                if not reopen_terminal and not renewed_by_user:
+                    raise ExecutionAuthorizationBlocked(record)
                 attempt += 1
                 continue
             existing = record
@@ -7344,9 +7405,7 @@ class FileCreatorAgentRuntime:
             authorization.status.value,
         )
         if authorization.status is not ExecutionAuthorizationStatus.APPROVED:
-            raise FileAgentRuntimeError(
-                f"execution authorization {authorization.status.value.lower()}",
-            )
+            raise ExecutionAuthorizationBlocked(authorization)
         return authorization.authorization_id
 
     async def _await_specialist_task(
@@ -7673,6 +7732,14 @@ class FileCreatorAgentRuntime:
         """
 
         auto_approve = get_media_review_mode() == MEDIA_REVIEW_AUTO_APPROVE
+        if not auto_approve and await asyncio.to_thread(
+            self.services.reviews.all_pending,
+            project_id,
+        ):
+            # A selected candidate is not yet an accepted reference. Let the
+            # human decision settle before inferring missing follow-up work;
+            # its normal review follow-up will resume the agent afterwards.
+            return
         try:
             snapshot = await asyncio.to_thread(
                 self.services.projects.read,
@@ -8792,7 +8859,7 @@ def _running_message_text(
         project=project,
         project_root=project_root,
     )
-    if message.source != "user":
+    if message.source not in {"user", "review_rejection_feedback"}:
         return content
     return (
         "用户在任务运行期间补充了以下反馈。请先用简短的公开回复确认你对反馈"

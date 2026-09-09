@@ -1243,12 +1243,19 @@ class ProjectRuntimeSessionStore:
 
                 boundary: ReviewBoundary | None = None
                 project_state: RuntimeProjectState | None = None
-                requires_review = self._requires_review(
-                    session,
-                    channel=resolved_channel,
-                    classification=resolved_classification,
-                    initial_creation=initial_creation,
-                    hard_stop=hard_stop,
+                # Approval is a continuation of existing work, not a new
+                # revision. Capturing an interrupt here cancels sibling media
+                # still generating when the first output is accepted. Keep
+                # its durable user-message envelope and legacy replay hash.
+                requires_review = (
+                    source != "review_approval_resume"
+                    and self._requires_review(
+                        session,
+                        channel=resolved_channel,
+                        classification=resolved_classification,
+                        initial_creation=initial_creation,
+                        hard_stop=hard_stop,
+                    )
                 )
                 if requires_review:
                     self._assert_review_active_goal_unlocked(

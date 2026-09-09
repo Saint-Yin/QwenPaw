@@ -609,15 +609,29 @@ class CreatorFileServices:
         if journal.rejection_feedback is not None:
             return render_rejection_feedback_message(journal)
         accepted_targets = self._accepted_artifact_targets(journal)
-        if not accepted_targets or not all(
+        if not all(
             item.decision == "ACCEPT" for item in journal.decisions
+        ) or (
+            not accepted_targets
+            and journal.review_before.interrupted_run_id is not None
         ):
+            # Interrupted text changes already have a mainline-resume
+            # message queued behind the review; do not duplicate it.
             return None
         # A batch can expose several media Reviews at once. Queue exactly
         # one continuation, after the last pending Review resolves, so a
         # multi-image approval does not fan out into duplicate Agent runs.
         if self.reviews.active(project_id) is not None:
             return None
+        if not accepted_targets:
+            return (
+                "【系统自动消息 · 审阅已通过】\n"
+                "用户已保留本轮创作修改。请回顾原始请求和最近的反馈，"
+                "从因审阅而暂停的下一步继续，不要重复改写已保留内容。"
+                "如果原始请求已经完成，请简短确认；如果还需要生成媒体，"
+                "请继续提交生成请求并遵守现有的生成授权与产物审阅要求，"
+                "不要把保留创作修改当作付费生成的授权。"
+            )
         return self._render_review_approval_message(
             accepted_targets,
             auto_continued=auto_continued or [],
