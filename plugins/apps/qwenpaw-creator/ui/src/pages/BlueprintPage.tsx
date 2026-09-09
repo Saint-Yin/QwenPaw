@@ -13,6 +13,7 @@ import {
 import {
   isVoiceOnlyVisualEntity,
   hasBlueprintContent,
+  selectNarrativeEdges,
   selectResearchSlots,
   selectTimelineSummaries,
 } from "@/selectors/blueprintSelectors";
@@ -60,6 +61,7 @@ export default function BlueprintPage() {
     () => (project ? selectTimelineSummaries(project) : []),
     [project],
   );
+  const edges = useMemo(() => selectNarrativeEdges(project), [project]);
   const researchSlots = useMemo(
     () => (project ? selectResearchSlots(project) : []),
     [project],
@@ -236,6 +238,7 @@ export default function BlueprintPage() {
             project={project}
             shape={shape}
             summaries={summaries}
+            edges={edges}
             selectedTimelineId={scriptOpen ? selectedTimelineId : null}
             onSelectTimeline={openScript}
             onOpenTimeline={openTimeline}
