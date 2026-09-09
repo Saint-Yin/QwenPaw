@@ -126,6 +126,11 @@ class TestNextSnapshotId:
         result = _next_snapshot_id(items, "timeline:b")
         assert result == "snapshot:timeline:b:1"
 
+    def test_gap_after_deletion_never_collides(self):
+        # :1 was deleted; count+1 would mint :2 again and collide.
+        items = {TL: {}, "snapshot:timeline:main:2": {}}
+        assert _next_snapshot_id(items, TL) == "snapshot:timeline:main:3"
+
 
 class TestAutoSnapshotTimelines:
     def test_no_change_no_snapshot(self):
@@ -158,51 +163,81 @@ class TestAutoSnapshotTimelines:
         assert "主时间轴" in snapshot["name"]
         remapped = f"{sid}:{ELEM}"
         assert remapped in snapshot["elements_by_id"]
-        # The snapshot freezes the PRE-change base state, not the edit.
-        assert snapshot["elements_by_id"][remapped]["label"] == "Shot 1"
         assert sid in candidate["timelines"]["order"]
 
-    def test_snapshot_freezes_base_not_candidate(self):
+    def test_snapshot_freezes_base_and_live_keeps_the_edit(self):
+        """铁律①：用户修改的永远是 live timeline —— 快照只冻结修改前
+        的底稿，绝不吞掉 candidate 的变更。"""
         base = _minimal_project(elements={ELEM: _element(ELEM)})
         candidate = copy.deepcopy(base)
         _elems(candidate)[ELEM]["label"] = "Modified"
 
         auto_snapshot_timelines(base, candidate)
 
-        sid = "snapshot:timeline:main:1"
-        snapshot = candidate["timelines"]["items"][sid]
-        remapped = f"{sid}:{ELEM}"
-        assert snapshot["elements_by_id"][remapped]["label"] == "Shot 1"
-
-    def test_live_timeline_keeps_edits_snapshot_holds_base(self):
-        base = _minimal_project(elements={ELEM: _element(ELEM)})
-        candidate = copy.deepcopy(base)
-        _elems(candidate)[ELEM]["label"] = "Modified"
-
-        auto_snapshot_timelines(base, candidate)
-
-        # The live timeline keeps the agent's edit; the snapshot holds the
-        # pre-change base. Reverting this (the #173 inversion) strands new
-        # elements in a snapshot the work graph ignores and empties the live
-        # timeline — the deadlock observed on a real interactive project.
         assert _elems(candidate)[ELEM]["label"] == "Modified"
         sid = "snapshot:timeline:main:1"
         snapshot = candidate["timelines"]["items"][sid]
         remapped = f"{sid}:{ELEM}"
         assert snapshot["elements_by_id"][remapped]["label"] == "Shot 1"
 
-    def test_add_into_empty_timeline_makes_no_snapshot(self):
-        base = _minimal_project()
+    def test_snapshot_name_never_leaks_internal_ids(self):
+        base = _minimal_project(
+            name="",
+            elements={ELEM: _element(ELEM)},
+        )
         candidate = copy.deepcopy(base)
-        _elems(candidate)[ELEM] = _element(ELEM)
+        _elems(candidate)[ELEM]["label"] = "Modified"
 
         auto_snapshot_timelines(base, candidate)
 
-        # Nothing lived in base, so there is no prior state to freeze — and
-        # critically the agent's new element stays on the live timeline.
+        snapshot = candidate["timelines"]["items"]["snapshot:timeline:main:1"]
+        assert "timeline:main" not in snapshot["name"]
+        assert "时间线" in snapshot["name"]
+
+    def test_snapshot_timeline_is_never_resnapshotted(self):
+        """快照是冻结副本：改动落在快照线上也不再留底，否则会生成
+        ``snapshot:snapshot:...`` 这种永不绑定的 id。"""
+        sid = "snapshot:timeline:main:1"
+        snapped = f"{sid}:{ELEM}"
+        base = _minimal_project(elements={ELEM: _element(ELEM)})
+        base["timelines"]["items"][sid] = {
+            "timeline_id": sid,
+            "name": "快照 · 主时间轴 · 2026-09-04 10:00",
+            "description": "自动快照：修改前的时间轴副本",
+            "ticks_per_second": 30,
+            "elements_by_id": {snapped: _element(snapped)},
+            "order": [snapped],
+        }
+        base["timelines"]["order"].append(sid)
+        candidate = copy.deepcopy(base)
+        _elems(candidate, sid)[snapped]["label"] = "Edited in snapshot"
+
+        auto_snapshot_timelines(base, candidate)
+
         items = candidate["timelines"]["items"]
-        assert list(items) == [TL]
-        assert _elems(candidate)[ELEM]["label"] == "Shot 1"
+        assert not any(k.startswith("snapshot:snapshot:") for k in items)
+        assert _elems(candidate, sid)[snapped]["label"] == (
+            "Edited in snapshot"
+        )
+
+    def _age_snapshot(self, doc: dict, sid: str) -> None:
+        snapshot = doc["timelines"]["items"][sid]
+        snapshot["name"] = f"{snapshot['name'][:-16]}2020-01-01 00:00"
+
+    def test_fresh_auto_snapshot_suppresses_resnapshot(self):
+        base = _minimal_project(elements={ELEM: _element(ELEM)})
+        c1 = copy.deepcopy(base)
+        _elems(c1)[ELEM]["label"] = "V2"
+        auto_snapshot_timelines(base, c1)
+        assert "snapshot:timeline:main:1" in c1["timelines"]["items"]
+
+        # 十分钟内的第二次编辑不再重复留底。
+        base2 = copy.deepcopy(c1)
+        c2 = copy.deepcopy(base2)
+        _elems(c2)[ELEM]["label"] = "V3"
+        auto_snapshot_timelines(base2, c2)
+        assert "snapshot:timeline:main:2" not in c2["timelines"]["items"]
+        assert _elems(c2)[ELEM]["label"] == "V3"
 
     def test_multiple_snapshots_increment(self):
         base = _minimal_project(elements={ELEM: _element(ELEM)})
@@ -212,6 +247,8 @@ class TestAutoSnapshotTimelines:
         auto_snapshot_timelines(base, c1)
         assert "snapshot:timeline:main:1" in c1["timelines"]["items"]
 
+        # 窗口外（把首个快照的时间戳做旧）再次编辑会继续编号留底。
+        self._age_snapshot(c1, "snapshot:timeline:main:1")
         base2 = copy.deepcopy(c1)
         c2 = copy.deepcopy(base2)
         _elems(c2)[ELEM]["label"] = "V3"
@@ -309,11 +346,9 @@ class TestSnapshotProjectValidation:
         Project.model_validate(raw)  # live baseline is valid
 
         base = copy.deepcopy(raw)
-        # A real element edit (base holds the element, candidate renames it)
-        # freezes base into a snapshot carrying the remapped output slot.
-        raw["timelines"]["items"]["timeline:main"]["elements_by_id"][
-            "element-1"
-        ]["label"] = "Renamed"
+        # The candidate drops the element; the frozen base copy carries the
+        # remapped slot reference under test.
+        raw["timelines"]["items"]["timeline:main"]["elements_by_id"] = {}
         auto_snapshot_timelines(base, raw)
         snapshot_ids = [
             tid
