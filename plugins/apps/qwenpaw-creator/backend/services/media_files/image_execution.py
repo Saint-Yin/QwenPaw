@@ -68,7 +68,10 @@ from services.project_files.models import (
     VisualVariant,
 )
 from services.media_files.call_budget import ensure_media_call_budget
-from services.media_files.publication_retry import commit_with_lock_retry
+from services.media_files.publication_retry import (
+    commit_with_lock_retry,
+    record_materialized_result,
+)
 from services.media_files.element_adapter import (
     bind_candidate_output,
     find_timeline_element,
@@ -745,6 +748,42 @@ def _lineup_character_reference_ids(
     return version_ids, missing
 
 
+def _lineup_reference_ids(
+    project: Project,
+    anchors: Sequence[str],
+    authored: Sequence[str],
+) -> list[str]:
+    """Keep authored image numbers and reuse proven lineup identity inputs.
+
+    A previously generated lineup may carry several current identity anchors.
+    Expanding those anchors again both exceeds provider limits and shifts the
+    author's [Image N] roles. Only non-stale lineup artifacts can substitute
+    for the exact versions recorded in their immutable source lineage.
+    """
+    explicit = list(dict.fromkeys(authored))
+    covered = set(explicit)
+    pending = list(explicit)
+    while pending:
+        version = project.assets.artifact_versions_by_id.get(pending.pop())
+        if (
+            version is None
+            or version.kind != "cast_lineup_image"
+            or version.stale
+        ):
+            continue
+        for ref in version.provenance_refs:
+            if not ref.startswith("artifact-version:"):
+                continue
+            ancestor_id = ref.removeprefix("artifact-version:")
+            if ancestor_id not in covered:
+                covered.add(ancestor_id)
+                pending.append(ancestor_id)
+    return [
+        *explicit,
+        *(anchor for anchor in anchors if anchor not in covered),
+    ]
+
+
 def _resolve_request(
     *,
     snapshot: ProjectSnapshot,
@@ -832,7 +871,10 @@ def _resolve_request(
             element_id,
             stage="storyboard",
         )
-        assert_visual_design_ready_for_storyboards(project)
+        assert_visual_design_ready_for_storyboards(
+            project,
+            element_id=element_id,
+        )
         prompt = explicit_prompt or creation.storyboard_prompt.strip()
         if not prompt:
             prompt = "，".join(
@@ -941,8 +983,13 @@ def _resolve_request(
             for ref in lineup.character_refs
         ]
         prompt_parts = [
-            "一张多角色阵容对比图（cast lineup）：所有角色全身站立并排，"
-            "同一地平线，从左到右依次为：" + "、".join(character_names) + "。",
+            f"一张多角色阵容参考图（cast lineup）：画面总共只有"
+            f" {len(character_names)} 人，分别是："
+            + "、".join(character_names)
+            + "。每个角色只出现一次，不复制参考身份板中的其他角度或姿态。",
+            "角色的坐站、位置与道具归属以下面的创作说明和相对关系为准；"
+            "只有未指定姿态时才采用中性全身并排站姿，"
+            "不得在指定坐姿之外再增加同一人的站姿。",
             "严格保持各角色之间真实的身高与体型比例，风格、光照、色彩基准完全统一。",
         ]
         if prompt:
@@ -958,12 +1005,16 @@ def _resolve_request(
             "no watermarks, no annotation text in the image.",
         )
         prompt = "\n".join(prompt_parts)
-        version_ids = [
-            *anchor_ids,
+        explicit_version_ids = [
             *lineup.reference_asset_version_ids,
             *lineup.reference_artifact_version_ids,
             *explicit_version_ids,
         ]
+        version_ids = _lineup_reference_ids(
+            project,
+            anchor_ids,
+            explicit_version_ids,
+        )
         resolved = _ResolvedRequest(
             command=command,
             target_ref=f"lineup:{lineup_id}",
@@ -1825,45 +1876,16 @@ class FileImageExecutionService:
                 ids=ids,
                 output=provider_output,
             )
-            latest = await asyncio.to_thread(
-                self.executions.get_task,
-                project_id,
-                task.task_id,
+            task = await record_materialized_result(
+                self.executions,
+                project_id=project_id,
+                task_id=task.task_id,
+                result=published_result,
+                progress=0.9,
             )
-            if latest.status is TaskStatus.CANCELLED:
+            if task.status is TaskStatus.CANCELLED:
                 await self._quarantine(
-                    task=latest,
-                    ids=ids,
-                    reason="TASK_CANCELLED_BEFORE_IMPORT",
-                    result=published_result,
-                    run_status=SpecialistRunStatus.CANCELLED,
-                )
-                raise ConflictError("图片 Task 已取消，迟到结果已隔离")
-            try:
-                task = await asyncio.to_thread(
-                    self.executions.transition_task,
-                    project_id,
-                    task.task_id,
-                    expected_status=TaskStatus.RUNNING,
-                    status=TaskStatus.RUNNING,
-                    updates={
-                        "progress": 0.9,
-                        "result": published_result,
-                        "output_refs": [
-                            f"artifact-version:{ids['artifact_version_id']}",
-                        ],
-                    },
-                )
-            except ExecutionStateConflict:
-                latest = await asyncio.to_thread(
-                    self.executions.get_task,
-                    project_id,
-                    task.task_id,
-                )
-                if latest.status is not TaskStatus.CANCELLED:
-                    raise
-                await self._quarantine(
-                    task=latest,
+                    task=task,
                     ids=ids,
                     reason="TASK_CANCELLED_BEFORE_IMPORT",
                     result=published_result,
@@ -2644,31 +2666,16 @@ class FileImageExecutionService:
         # Record the immutable result on the Task, then converge it exactly
         # like the in-process path does, so the Task reaches SUCCEEDED and
         # the Project commit becomes visible.
-        try:
-            task = await asyncio.to_thread(
-                self.executions.transition_task,
-                task.project_id,
-                task.task_id,
-                expected_status=TaskStatus.RUNNING,
-                status=TaskStatus.RUNNING,
-                updates={
-                    "progress": 0.9,
-                    "result": published_result,
-                    "output_refs": [
-                        f"artifact-version:{ids['artifact_version_id']}",
-                    ],
-                },
-            )
-        except ExecutionStateConflict:
-            latest = await asyncio.to_thread(
-                self.executions.get_task,
-                task.project_id,
-                task.task_id,
-            )
-            if latest.status is not TaskStatus.CANCELLED:
-                raise
+        task = await record_materialized_result(
+            self.executions,
+            project_id=task.project_id,
+            task_id=task.task_id,
+            result=published_result,
+            progress=0.9,
+        )
+        if task.status is TaskStatus.CANCELLED:
             await self._quarantine(
-                task=latest,
+                task=task,
                 ids=ids,
                 reason="TASK_CANCELLED_BEFORE_IMPORT",
                 result=published_result,

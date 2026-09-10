@@ -267,7 +267,7 @@ def test_element_lane_storyboard_then_video() -> None:
     project = _project()
     project.visual.entities.items["char:a"] = _entity(
         "char:a",
-        {"var:x": "art:a"},
+        {"var:x": "art:a", "var:later-state": None},
     )
     project.visual.entities.order.append("char:a")
     _add_element(
@@ -372,11 +372,8 @@ def _element_with_landed_storyboard(
     )
 
 
-def test_declared_pending_lineup_gates_every_storyboard() -> None:
-    """Field run 2026-08-12 (27dc): a single-character closing scene
-    derived READY while another element's declared lineup was pending;
-    the executor's project-wide gate rejected the dispatch and the node
-    stalled READY-but-undispatchable until a restart."""
+def test_pending_lineup_only_gates_storyboards_that_reference_it() -> None:
+    """The graph and executor both scope readiness to actual shot inputs."""
 
     project = _project()
     for ref in ("char:a", "char:b"):
@@ -412,10 +409,11 @@ def test_declared_pending_lineup_gates_every_storyboard() -> None:
 
     graph = derive_work_graph(project)
     solo = graph.by_id["storyboard:elem:solo"]
-    assert solo.status is WorkNodeStatus.GATED
-    assert "lineup:lineup:duo" in solo.missing
+    assert solo.status is WorkNodeStatus.READY
+    assert "lineup:lineup:duo" not in solo.deps
+    assert graph.by_id["storyboard:elem:pair"].status is WorkNodeStatus.GATED
 
-    # The lineup lands: every storyboard unblocks together.
+    # Its consuming pair opens only after the required group anchor lands.
     project.visual.cast_lineups.items[
         "lineup:duo"
     ].selected_artifact_version_id = "art:lineup"
@@ -831,161 +829,63 @@ def test_upgrade_does_not_restale_artifacts_from_the_old_ledger() -> None:
     )
 
 
-def test_t2v_element_produces_only_video_node() -> None:
-    """T2V elements skip storyboard and produce only a video node."""
-    from services.project_files.models import T2VCreation
-
+@pytest.mark.parametrize(
+    "mode,inputs,command",
+    [
+        ("t2v", {"video_prompt": "A beautiful sunset"}, "GENERATE_R2V_VIDEO"),
+        (
+            "i2v",
+            {
+                "video_prompt": "A beautiful sunset",
+                "first_frame_version_id": "img:first-frame",
+            },
+            "GENERATE_R2V_VIDEO",
+        ),
+        (
+            "s2v",
+            {
+                "portrait_version_id": "img:portrait",
+                "audio_version_id": "aud:voice",
+            },
+            "GENERATE_S2V_VIDEO",
+        ),
+    ],
+)
+@pytest.mark.parametrize("ready", [True, False])
+def test_non_r2v_modes_schedule_video_only_when_inputs_ready(
+    mode,
+    inputs,
+    command,
+    ready,
+):
     project = _project()
-    element = TimelineElement(
-        element_id="elem:t2v",
-        label="T2V Element",
-        span=TimelineSpan(start_tick=0, duration_tick=4_000),
-        location=ElementLocation(),
-        creation=T2VCreation(
-            video_prompt="A beautiful sunset",
+    _add_element(
+        project,
+        TimelineElement.model_validate(
+            {
+                "element_id": "elem:video",
+                "label": "Video",
+                "span": {"start_tick": 0, "duration_tick": 4000},
+                "location": {},
+                "creation": {"type": mode, **(inputs if ready else {})},
+            },
         ),
     )
-    _add_element(project, element)
-
     graph = derive_work_graph(project)
-    by_id = graph.by_id
-
-    # No storyboard node for T2V
-    assert "storyboard:elem:t2v" not in by_id
-
-    # Video node exists and is READY (prompt is set)
-    video_node = by_id["video:elem:t2v"]
-    assert video_node.status is WorkNodeStatus.READY
-    assert video_node.command == "GENERATE_R2V_VIDEO"
-    assert video_node.dispatch_arguments == {"mode": "t2v"}
-
-
-def test_t2v_element_gated_without_prompt() -> None:
-    """T2V elements are GATED when video_prompt is missing."""
-    from services.project_files.models import T2VCreation
-
-    project = _project()
-    element = TimelineElement(
-        element_id="elem:t2v",
-        label="T2V Element",
-        span=TimelineSpan(start_tick=0, duration_tick=4_000),
-        location=ElementLocation(),
-        creation=T2VCreation(video_prompt=""),
-    )
-    _add_element(project, element)
-
-    graph = derive_work_graph(project)
-    video_node = graph.by_id["video:elem:t2v"]
-    assert video_node.status is WorkNodeStatus.GATED
-    assert "video_prompt 缺失" in video_node.missing
-
-
-def test_i2v_element_produces_only_video_node() -> None:
-    """I2V elements skip storyboard and depend on first_frame."""
-    from services.project_files.models import I2VCreation
-
-    project = _project()
-    element = TimelineElement(
-        element_id="elem:i2v",
-        label="I2V Element",
-        span=TimelineSpan(start_tick=0, duration_tick=4_000),
-        location=ElementLocation(),
-        creation=I2VCreation(
-            video_prompt="A beautiful sunset",
-            first_frame_version_id="img:first-frame",
-        ),
-    )
-    _add_element(project, element)
-
-    graph = derive_work_graph(project)
-    by_id = graph.by_id
-
-    # No storyboard node for I2V
-    assert "storyboard:elem:i2v" not in by_id
-
-    # Video node exists and is READY (prompt + first_frame are set)
-    video_node = by_id["video:elem:i2v"]
-    assert video_node.status is WorkNodeStatus.READY
-    assert video_node.command == "GENERATE_R2V_VIDEO"
-    assert video_node.dispatch_arguments == {"mode": "i2v"}
-
-
-def test_i2v_element_gated_without_first_frame() -> None:
-    """I2V elements are GATED when first_frame_version_id is missing."""
-    from services.project_files.models import I2VCreation
-
-    project = _project()
-    element = TimelineElement(
-        element_id="elem:i2v",
-        label="I2V Element",
-        span=TimelineSpan(start_tick=0, duration_tick=4_000),
-        location=ElementLocation(),
-        creation=I2VCreation(
-            video_prompt="A beautiful sunset",
-            first_frame_version_id=None,
-        ),
-    )
-    _add_element(project, element)
-
-    graph = derive_work_graph(project)
-    video_node = graph.by_id["video:elem:i2v"]
-    assert video_node.status is WorkNodeStatus.GATED
-    assert "first_frame_version_id 缺失" in video_node.missing
-
-
-def test_s2v_element_produces_only_video_node() -> None:
-    """S2V elements skip storyboard and depend on portrait + audio."""
-    from services.project_files.models import S2VCreation
-
-    project = _project()
-    element = TimelineElement(
-        element_id="elem:s2v",
-        label="S2V Element",
-        span=TimelineSpan(start_tick=0, duration_tick=4_000),
-        location=ElementLocation(),
-        creation=S2VCreation(
-            portrait_version_id="img:portrait",
-            audio_version_id="aud:voice",
-        ),
-    )
-    _add_element(project, element)
-
-    graph = derive_work_graph(project)
-    by_id = graph.by_id
-
-    # No storyboard node for S2V
-    assert "storyboard:elem:s2v" not in by_id
-
-    # Video node exists and is READY (portrait + audio are set)
-    video_node = by_id["video:elem:s2v"]
-    assert video_node.status is WorkNodeStatus.READY
-    assert video_node.command == "GENERATE_S2V_VIDEO"
-    assert video_node.dispatch_arguments == {}
-
-
-def test_s2v_element_gated_without_portrait_or_audio() -> None:
-    """S2V elements are GATED when portrait or audio is missing."""
-    from services.project_files.models import S2VCreation
-
-    project = _project()
-    # Missing both portrait and audio
-    element = TimelineElement(
-        element_id="elem:s2v",
-        label="S2V Element",
-        span=TimelineSpan(start_tick=0, duration_tick=4_000),
-        location=ElementLocation(),
-        creation=S2VCreation(
-            portrait_version_id=None,
-            audio_version_id=None,
-        ),
-    )
-    _add_element(project, element)
-
-    graph = derive_work_graph(project)
-    video_node = graph.by_id["video:elem:s2v"]
-    assert video_node.status is WorkNodeStatus.GATED
-    assert "portrait_version_id 缺失" in video_node.missing
-    assert "audio_version_id 缺失" in video_node.missing
+    assert "storyboard:elem:video" not in graph.by_id
+    node = graph.by_id["video:elem:video"]
+    if ready:
+        assert node.status is WorkNodeStatus.READY
+        assert node.command == command
+        assert node.dispatch_arguments == (
+            {} if mode == "s2v" else {"mode": mode}
+        )
+    else:
+        assert node.status is WorkNodeStatus.GATED
+        for field in inputs:
+            if mode == "i2v" and field == "video_prompt":
+                continue  # I2V can animate the first frame without extra text.
+            assert f"{field} 缺失" in node.missing
 
 
 def test_mixed_timeline_compose_includes_t2v_i2v_s2v() -> None:
@@ -1048,6 +948,99 @@ def test_mixed_timeline_compose_includes_t2v_i2v_s2v() -> None:
     assert "video:elem:t2v" in compose.deps
     assert "video:elem:i2v" in compose.deps
     assert "video:elem:s2v" in compose.deps
+
+
+@pytest.mark.parametrize(
+    "command_name",
+    ["COMPOSE_FINAL_VIDEO", "EXECUTE_EDIT"],
+)
+def test_episode_compilation_reuses_artifacts_with_original_audio(
+    command_name: str,
+) -> None:
+    """Saved Edit facts must reach a render recipe without new generation."""
+    from domain.enums import CreatorCommandType
+    from pydantic import ValidationError
+    from services.media_files.local_execution import _timeline_execution
+    from services.project_files.models import (
+        ArtifactVersionRenderSource,
+        EditCreation,
+    )
+
+    project = _project()
+    for episode in range(1, 7):
+        version_id = f"art:episode-{episode}"
+        _select_slot(
+            project,
+            slot_id=f"timeline:timeline:ep{episode}:render",
+            kind="final_video",
+            owner_ref=f"timeline:timeline:ep{episode}",
+            version_id=version_id,
+        )
+        project.assets.files_by_id[
+            f"file-{version_id}"
+        ].media_type = "video/mp4"
+        project.assets.artifact_versions_by_id[
+            version_id
+        ].duration_seconds = 10.0
+        _add_element(
+            project,
+            TimelineElement(
+                element_id=f"elem:episode-{episode}",
+                location=ElementLocation(),
+                span=TimelineSpan(
+                    start_tick=(episode - 1) * 3000,
+                    duration_tick=3000,
+                ),
+                creation=EditCreation(intent="按集序复用已有成片"),
+                render_source=ArtifactVersionRenderSource(
+                    version_id=version_id,
+                    source_in_tick=1000,
+                    source_out_tick=7000,
+                    playback_rate=2.0,
+                ),
+            ),
+        )
+    project = Project.model_validate(project.model_dump(mode="json"))
+    graph = derive_work_graph(project)
+    compose = graph.by_id["compose:timeline:main"]
+    assert compose.status is WorkNodeStatus.READY
+    assert compose.deps == ()
+    assert not any(
+        node.kind in {"storyboard", "video"} for node in graph.nodes
+    )
+
+    resolved = _timeline_execution(
+        project=project,
+        timeline=project.timelines.items["timeline:main"],
+        target_ref="timeline:timeline:main",
+        command=CreatorCommandType[command_name],
+    )
+    assert [item.version_id for item in resolved.inputs] == [
+        f"art:episode-{episode}" for episode in range(1, 7)
+    ]
+    for item in resolved.inputs:
+        assert (item.start_seconds, item.end_seconds) == (1.0, 7.0)
+        assert item.playback_rate == 2.0
+        assert item.original_sound == "preserve"
+    assert all(
+        item["ref"].startswith("artifact-version:")
+        for item in resolved.read_set
+    )
+    assert [item["startTick"] for item in resolved.source_selections] == list(
+        range(0, 18000, 3000),
+    )
+
+    # Allowing generated inputs must retain the exact trim/span contract.
+    raw = project.model_dump(mode="json")
+    source = raw["timelines"]["items"]["timeline:main"]["elements_by_id"][
+        "elem:episode-1"
+    ]["render_source"]
+    source["source_out_tick"] = None
+    with pytest.raises(ValidationError, match="requires source_out_tick"):
+        Project.model_validate(raw)
+    source["source_out_tick"] = 5000
+    with pytest.raises(ValidationError, match="duration mismatch"):
+        Project.model_validate(raw)
 
 
 def test_stale_nodes_are_model_required() -> None:
@@ -1158,6 +1151,7 @@ def test_multi_timeline_project_derives_script_nodes_gating_elements() -> None:
 def test_stale_script_version_marks_script_node_stale() -> None:
     project = _project()
     _add_second_timeline(project)
+    project.timelines.items["timeline:ep2"].description = "已有旧正文"
     _select_slot(
         project,
         slot_id="script:timeline:ep2",
@@ -1172,6 +1166,33 @@ def test_stale_script_version_marks_script_node_stale() -> None:
     assert node.status is WorkNodeStatus.STALE
     # STALE is terminal for the scheduler: not READY, not dispatched.
     assert node not in graph.ready_media_nodes()
+
+
+@pytest.mark.parametrize("body", ["已发布正文：孙老四端茶，说完台词。", "", "  \n"])
+def test_authored_episode_body_satisfies_script_dependency(body: str) -> None:
+    project = _project()
+    _add_second_timeline(project)
+    project.timelines.items["timeline:main"].description = body
+    project.timelines.items["timeline:main"].synopsis = "仅梗概不足以制作"
+    _add_element(project, _element("elem:one"))
+
+    graph = derive_work_graph(project)
+    script = graph.by_id["script:timeline:main"]
+    storyboard = graph.by_id["storyboard:elem:one"]
+    assert (script.status is WorkNodeStatus.DONE) == bool(body.strip())
+    assert (storyboard.status is WorkNodeStatus.READY) == bool(body.strip())
+    assert graph.by_id["script:timeline:ep2"].status is WorkNodeStatus.READY
+
+    # Once artifact versioning is used, deselecting/rejecting its result
+    # must not silently fall back to an older inline body.
+    project.assets.artifact_slots_by_id["script:timeline:main"] = ArtifactSlot(
+        slot_id="script:timeline:main",
+        kind="timeline_script",
+        owner_ref="timeline:timeline:main",
+    )
+    graph = derive_work_graph(project)
+    assert graph.by_id["script:timeline:main"].status is WorkNodeStatus.READY
+    assert graph.by_id["storyboard:elem:one"].status is WorkNodeStatus.GATED
 
 
 def test_single_timeline_with_script_slot_opts_into_script_flow() -> None:

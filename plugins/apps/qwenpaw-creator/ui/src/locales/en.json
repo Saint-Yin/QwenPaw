@@ -1154,6 +1154,7 @@
     "dialogue": "Dialogue",
     "storyboard": "Storyboard",
     "characterVisual": "Character / Visual asset image",
+    "castLineup": "Cast lineup image",
     "video": "Video",
     "content": "Content",
     "asset": "Asset",
@@ -2025,13 +2026,13 @@
     "episodeState": {
       "done": "Final cut ready",
       "run": "Generating",
-      "wait": "Script ready",
+      "wait": "Script written",
       "idle": "Planning"
     },
     "episodeStatus": {
       "done": "Final cut ready",
       "run": "Generating",
-      "wait": "Script in review",
+      "wait": "Script written",
       "scriptStale": "Script stale",
       "idle": "To draft"
     },
@@ -2170,6 +2171,7 @@
     },
     "continuity": "Continuity",
     "variantCount": "Variants",
+    "variantSelector": "Appearance / state",
     "designPrompt": "Design prompt (editable; save then ask to regenerate)",
     "savePrompt": "Save prompt",
     "promptSaved": "Prompt saved",
@@ -2231,7 +2233,7 @@
     "reconnecting": "Reconnecting",
     "connectionHint": "Latest progress is unavailable. Updates will resume when the connection returns.",
     "retryHint": "Waiting to retry the model service. No need to send again.",
-    "failureHint": "This step could not finish. Adjust your request and try again.",
+    "failureHint": "Execution did not finish. You can retry to continue.",
     "toolFailed": "Attempt unsuccessful",
     "toolFailureHint": "This operation was unsuccessful. Execution feedback has been returned to the Agent.",
     "reviewHint": "The result is ready to review below.",
