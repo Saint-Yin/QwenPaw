@@ -20,6 +20,7 @@ import {
   type ProjectEditOperation,
 } from "@/store/projectSnapshotStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
+import { nodeGenerating } from "@/lib/generationActivity";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
 import { useTimelineStore } from "@/store/timelineStore";
 import {
@@ -34,6 +35,7 @@ import {
 import { dispatchWorkGraphNode } from "@/api/creator/workGraph";
 import {
   acceptPromptProposal,
+  confirmCurrentPrompts,
   createPromptProposal,
   getPromptSync,
 } from "@/api/creator/promptSync";
@@ -129,7 +131,6 @@ function PromptTextArea({
   field,
   path,
   disabled = false,
-  placeholder,
   onChange,
   onRegenerate,
   regenerating = false,
@@ -147,6 +148,12 @@ function PromptTextArea({
   regenerateLabel?: string;
 }) {
   const { t } = useTranslation();
+  // An empty prompt is a planned-but-unwritten field only until someone
+  // writes it: a user clearing the draft to rewrite must not lock the box,
+  // so the awaiting state is sticky-off once the value has been non-empty.
+  const everWritten = useRef(!!value.trim());
+  if (value.trim()) everWritten.current = true;
+  const awaitingAgent = !everWritten.current;
   return (
     <div
       data-creator-field={field}
@@ -159,10 +166,14 @@ function PromptTextArea({
       <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
         <TextArea
           value={value}
-          disabled={disabled}
+          disabled={disabled || awaitingAgent}
           onChange={(event) => onChange(event.target.value)}
           autoSize={{ minRows: 2, maxRows: 10 }}
-          placeholder={placeholder ?? t("r2v.generateAndEdit", { label })}
+          placeholder={
+            awaitingAgent
+              ? t("r2v.awaitAgentPrompt")
+              : t("r2v.generateAndEdit", { label })
+          }
           className="!rounded-none !border-0 !bg-transparent !text-xs !shadow-none"
         />
         {onRegenerate && (
@@ -171,7 +182,7 @@ function PromptTextArea({
               field={field}
               label={regenerateLabel ?? ""}
               loading={regenerating}
-              disabled={disabled}
+              disabled={disabled || awaitingAgent}
               onClick={onRegenerate}
             />
           </div>
@@ -469,6 +480,8 @@ export function WorkbenchSurface({
       return;
     }
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let retryAttempt = 0;
     // Prompt-only edits do not change reference identities. Keep their
     // verified images during refresh; actual binding changes clear them.
     if (previousReferenceIdentity.current !== referenceIdentity) {
@@ -476,17 +489,28 @@ export function WorkbenchSurface({
       setStoryboardReferenceOrder(null);
       previousReferenceIdentity.current = referenceIdentity;
     }
-    Promise.allSettled([
-      getR2VReferenceOrder(projectId, elementId),
-      getR2VReferenceOrder(projectId, elementId, "storyboard"),
-    ])
-      .then(([video, storyboard]) => {
-        if (cancelled) return;
+    const refresh = async () => {
+      const [video, storyboard] = await Promise.allSettled([
+        getR2VReferenceOrder(projectId, elementId),
+        getR2VReferenceOrder(projectId, elementId, "storyboard"),
+      ]);
+      if (cancelled) return;
+      const retryable = (result: PromiseSettledResult<unknown>) =>
+        result.status === "rejected" &&
+        (!(result.reason instanceof CreatorHttpError) ||
+          result.reason.retryable ||
+          result.reason.status >= 500 ||
+          result.reason.status === 429 ||
+          (result.reason.status === 404 && result.reason.code !== "NOT_FOUND"));
+      // A temporarily unavailable backend does not unbind verified media.
+      // Retry without requiring another project edit or reopening the page.
+      if (!retryable(video))
         setReferenceOrder(
           video.status === "fulfilled" && Array.isArray(video.value?.references)
             ? video.value
             : null,
         );
+      if (!retryable(storyboard))
         setStoryboardReferenceOrder(
           storyboard.status === "fulfilled" &&
             storyboard.value?.stage === "storyboard" &&
@@ -494,12 +518,16 @@ export function WorkbenchSurface({
             ? storyboard.value
             : null,
         );
-      })
-      .catch(() => {
-        if (!cancelled) setReferenceOrder(null);
-      });
+      if ((retryable(video) || retryable(storyboard)) && retryAttempt < 8)
+        retryTimer = setTimeout(
+          () => void refresh(),
+          Math.min(30_000, 1000 * 2 ** retryAttempt++),
+        );
+    };
+    void refresh();
     return () => {
       cancelled = true;
+      clearTimeout(retryTimer);
     };
   }, [projectId, elementId, generationMode, generation, referenceIdentity]);
 
@@ -738,7 +766,10 @@ export function WorkbenchSurface({
   // Apply the draft and verify its synchronization before dispatching. The
   // response distinguishes an existing running task from an up-to-date result;
   // a newly dispatched request can finish only after provider execution.
-  const regenerateNode = async (kind: "storyboard" | "video") => {
+  const regenerateNode = async (
+    kind: "storyboard" | "video",
+    opts?: { keepCurrent?: boolean },
+  ) => {
     if (regenerationRequest.current) {
       message.info(t("r2v.regenRunning"));
       return;
@@ -775,7 +806,9 @@ export function WorkbenchSurface({
           timelineId: timeline.timeline_id,
           elementId: element.element_id,
         };
-        let sync = await getPromptSync(scope);
+        // Use the same stage boundary as Work Graph. A ready storyboard
+        // must not wait for a separate video/narrative rewrite.
+        let sync = await getPromptSync(scope, undefined, kind);
         if (!isCurrent() || submittedInput !== inputSignature()) return;
         if (sync.validationMessage) throw new Error(sync.validationMessage);
         if (
@@ -783,31 +816,46 @@ export function WorkbenchSurface({
           sync.status === "needs_confirmation"
         ) {
           setSynchronizing(true);
-          const proposal = await createPromptProposal(
-            scope,
-            sync.suggestedSource ??
-              (sync.narrative.trim() ? "currentPlan" : "videoPrompt"),
-          );
-          // A new edit or route change cancels this generation intent before
-          // the proposal can publish. The backend also checks its saved baseline.
-          if (!isCurrent() || submittedInput !== inputSignature()) return;
-          await acceptPromptProposal(scope, proposal.proposalId);
-          if (!isCurrent()) return;
-          await pollOnce(projectId);
-          if (!isCurrent()) return;
-          submittedInput = inputSignature();
-          sync = await getPromptSync(scope);
-          if (!isCurrent() || submittedInput !== inputSignature()) return;
-          // Dispatch only the exact synchronized content returned by this
-          // operation; an unrelated concurrent edit must not inherit its click.
-          if (
-            sync.status !== "current" ||
-            sync.storyboardPrompt !== proposal.storyboardPrompt ||
-            sync.videoPrompt !== proposal.videoPrompt ||
-            sync.narrative !== proposal.narrative
-          )
-            throw new Error(t("r2v.sync.changedBeforeGeneration"));
-          setSynchronizing(false);
+          if (opts?.keepCurrent) {
+            // Keep the user's existing plan/prompts verbatim; only re-stamp the
+            // sync baseline so the gate clears without an AI rewrite (#7720).
+            await confirmCurrentPrompts(scope);
+            if (!isCurrent()) return;
+            await pollOnce(projectId);
+            if (!isCurrent()) return;
+            submittedInput = inputSignature();
+            sync = await getPromptSync(scope, undefined, kind);
+            if (!isCurrent() || submittedInput !== inputSignature()) return;
+            if (sync.status !== "current")
+              throw new Error(t("r2v.sync.changedBeforeGeneration"));
+            setSynchronizing(false);
+          } else {
+            const proposal = await createPromptProposal(
+              scope,
+              sync.suggestedSource ??
+                (sync.narrative.trim() ? "currentPlan" : "videoPrompt"),
+            );
+            // A new edit or route change cancels this generation intent before
+            // the proposal can publish. The backend also checks its saved baseline.
+            if (!isCurrent() || submittedInput !== inputSignature()) return;
+            await acceptPromptProposal(scope, proposal.proposalId);
+            if (!isCurrent()) return;
+            await pollOnce(projectId);
+            if (!isCurrent()) return;
+            submittedInput = inputSignature();
+            sync = await getPromptSync(scope, undefined, kind);
+            if (!isCurrent() || submittedInput !== inputSignature()) return;
+            // Dispatch only the exact synchronized content returned by this
+            // operation; an unrelated concurrent edit must not inherit its click.
+            if (
+              sync.status !== "current" ||
+              sync.storyboardPrompt !== proposal.storyboardPrompt ||
+              sync.videoPrompt !== proposal.videoPrompt ||
+              sync.narrative !== proposal.narrative
+            )
+              throw new Error(t("r2v.sync.changedBeforeGeneration"));
+            setSynchronizing(false);
+          }
         }
       }
       // This endpoint can remain pending through the provider execution.
@@ -1231,7 +1279,8 @@ export function WorkbenchSurface({
                       onChange={(value) => updateModeField("script", value)}
                       onRegenerate={() => void regenerateNode("video")}
                       regenerating={
-                        regeneratingNode === `video:${element.element_id}`
+                        regeneratingNode === `video:${element.element_id}` ||
+                        nodeGenerating(tasks, `video:${element.element_id}`)
                       }
                       regenerateLabel={t("r2v.regenerateVideo")}
                     />
@@ -1290,7 +1339,8 @@ export function WorkbenchSurface({
                       }
                       onRegenerate={() => void regenerateNode("video")}
                       regenerating={
-                        regeneratingNode === `video:${element.element_id}`
+                        regeneratingNode === `video:${element.element_id}` ||
+                        nodeGenerating(tasks, `video:${element.element_id}`)
                       }
                       regenerateLabel={t("r2v.regenerateVideo")}
                     />
@@ -1641,6 +1691,20 @@ export function WorkbenchSurface({
     ),
   );
 
+  // Show "keep current & generate" only where the work graph actually flags a
+  // prompt-sync gate; when sync is current it would just duplicate the
+  // "regenerate" action already offered above.
+  const storyboardSyncRequired = useWorkGraphStore(
+    (s) =>
+      s.graph?.nodes.find((n) => n.id === `storyboard:${element.element_id}`)
+        ?.promptSyncRequired === true,
+  );
+  const videoSyncRequired = useWorkGraphStore(
+    (s) =>
+      s.graph?.nodes.find((n) => n.id === `video:${element.element_id}`)
+        ?.promptSyncRequired === true,
+  );
+
   // The storyboard the backend will lock as [Image 1] is the *selected*
   // version, not whichever one is being viewed.
   const currentStoryboard =
@@ -1900,7 +1964,8 @@ export function WorkbenchSurface({
                     collapseHeight={230}
                     onRegenerate={() => void regenerateNode("storyboard")}
                     regenerating={
-                      regeneratingNode === `storyboard:${element.element_id}`
+                      regeneratingNode === `storyboard:${element.element_id}` ||
+                      nodeGenerating(tasks, `storyboard:${element.element_id}`)
                     }
                     regenerateLabel={t("r2v.regenerateImage")}
                     onEditComplete={scheduleSilentApply}
@@ -1911,6 +1976,29 @@ export function WorkbenchSurface({
                       })
                     }
                   />
+                  {storyboardSyncRequired && (
+                    <div className="mt-2 flex justify-end">
+                      <Button
+                        size="small"
+                        disabled={
+                          patching ||
+                          synchronizing ||
+                          referenceDraftChanged ||
+                          storyboardReferenceOrder?.ready === false ||
+                          regeneratingNode ===
+                            `storyboard:${element.element_id}`
+                        }
+                        onClick={() =>
+                          void regenerateNode("storyboard", {
+                            keepCurrent: true,
+                          })
+                        }
+                        className="!text-[11px]"
+                      >
+                        {t("r2v.keepCurrentAndGenerate")}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1973,7 +2061,8 @@ export function WorkbenchSurface({
                     collapseHeight={460}
                     onRegenerate={() => void regenerateNode("video")}
                     regenerating={
-                      regeneratingNode === `video:${element.element_id}`
+                      regeneratingNode === `video:${element.element_id}` ||
+                      nodeGenerating(tasks, `video:${element.element_id}`)
                     }
                     regenerateLabel={t("r2v.regenerateVideo")}
                     onEditComplete={scheduleSilentApply}
@@ -1984,6 +2073,25 @@ export function WorkbenchSurface({
                       })
                     }
                   />
+                  {videoSyncRequired && (
+                    <div className="mt-2 flex justify-end">
+                      <Button
+                        size="small"
+                        disabled={
+                          patching ||
+                          synchronizing ||
+                          referenceDraftChanged ||
+                          regeneratingNode === `video:${element.element_id}`
+                        }
+                        onClick={() =>
+                          void regenerateNode("video", { keepCurrent: true })
+                        }
+                        className="!text-[11px]"
+                      >
+                        {t("r2v.keepCurrentAndGenerate")}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
