@@ -242,6 +242,7 @@ BATCHABLE_NOTIFICATION_SOURCES = frozenset(
         "yolo_auto_resume",
         "prompt_contract_resume",
         "mainline_resume",
+        "review_approval_resume",
     },
 )
 
@@ -1014,6 +1015,17 @@ _TERMINAL_GOAL_STATUSES = frozenset(
 
 class FileAgentRuntimeError(RuntimeError):
     pass
+
+
+class ExecutionAuthorizationBlocked(FileAgentRuntimeError):
+    """An explicit authorization outcome, before any provider dispatch."""
+
+    def __init__(self, authorization: ExecutionAuthorizationRecord) -> None:
+        self.authorization_id = authorization.authorization_id
+        self.status = authorization.status
+        super().__init__(
+            f"execution authorization {authorization.status.value.lower()}",
+        )
 
 
 def _require_actionable_takes(
@@ -2075,16 +2087,22 @@ class FileCreatorAgentRuntime:
                 handle.run_id,
                 handle.epoch,
             )
-            self.work_scheduler.cancel_project(project_id)
-            self._cancel_project_specialists(project_id, reason=reason)
+            if not superseded:
+                self.work_scheduler.cancel_project(project_id)
+                self._cancel_project_specialists(project_id, reason=reason)
             handle.task.cancel()
             self.notify(project_id)
             return True
         # Signal cancellation first. Revoke may need to wait behind an atomic
         # publication already holding the in-process commit boundary; stop and
         # delete must not keep the caller waiting for that completed decision.
-        self.work_scheduler.cancel_project(project_id)
-        self._cancel_project_specialists(project_id, reason=reason)
+        # Replacing the mainline with user feedback leaves already admitted
+        # media and specialists running. Their own input guards reject stale
+        # results; cancelling the scheduler here loses synchronous provider
+        # requests while leaving their durable Tasks RUNNING forever.
+        if not superseded:
+            self.work_scheduler.cancel_project(project_id)
+            self._cancel_project_specialists(project_id, reason=reason)
         handle.task.cancel()
         cleanup = asyncio.create_task(
             asyncio.to_thread(
@@ -2350,9 +2368,9 @@ class FileCreatorAgentRuntime:
     ) -> Any | None:
         """Settle durable pauses before reconcile may dispatch anything.
 
-        Returns the converged Session, or ``None`` while the Session is
-        paused — a durable interrupt is being served, or an active Review
-        keeps the mainline waiting for the user.
+        Returns the converged Session, or ``None`` during a durable stop.
+        Review admission depends on the queued message: an explicit human
+        revision must be readable while its draft is still under review.
         """
 
         if session.status is CreatorSessionStatus.INTERRUPT_REQUESTED:
@@ -2369,11 +2387,6 @@ class FileCreatorAgentRuntime:
                 )
             return None
         session = await self._converge_resolved_review(project_id, session)
-        # Pending Review is a durable, recoverable pause. Messages may be
-        # queued while the user decides, but none may start until every active
-        # Review is resolved and the Session projection has converged.
-        if session.status is CreatorSessionStatus.PENDING_REVIEW:
-            return None
         return session
 
     async def _reconcile_project(self, project_id: str) -> None:
@@ -2470,6 +2483,27 @@ class FileCreatorAgentRuntime:
                 await self._maybe_flush_idle_notifications(project_id)
             return
         message = user_messages[0]
+        # An explicit human revision supersedes earlier automated followups
+        # in this conversation, including reviews of the now-rejected output.
+        # Their evidence remains in conversation history; starting their old
+        # repair requests first would hide the user's correction from the LLM.
+        # Coalesce queued revisions into the latest request: earlier human
+        # feedback and intervening evidence remain in chronological history.
+        # Without a human revision, automated repairs still keep their own
+        # run identities/budgets. Never cross another conversation.
+        for candidate in user_messages:
+            if candidate.conversation_id != message.conversation_id:
+                break
+            if candidate.source in {"user", "review_rejection_feedback"}:
+                if candidate.review_boundary is None:
+                    break
+                message = candidate
+                continue
+            if candidate.source not in BATCHABLE_NOTIFICATION_SOURCES | {
+                "run_review_feedback",
+                "render_review_feedback",
+            }:
+                break
         if self._blocked_heads.get(project_id) == message.message_seq:
             return
         # Durable variant of the in-memory guard above: sessions written
@@ -2497,9 +2531,10 @@ class FileCreatorAgentRuntime:
             return
         # A detached specialist can create a Review after its mainline run
         # already finished, so the Session never transitioned to
-        # PENDING_REVIEW. Gate on the durable Review record itself
-        # (read-only, and only when a run is about to launch): queued
-        # messages wait and are consumed once the user decides.
+        # PENDING_REVIEW. Gate automated continuations on the durable record.
+        # Human feedback may revise a still-pending draft without accepting
+        # it first. Commits keep their review policy, and production retains
+        # its separate review and execution-authorization gates.
         try:
             active_review = await asyncio.to_thread(
                 self.services.reviews.active,
@@ -2514,7 +2549,10 @@ class FileCreatorAgentRuntime:
                 project_id,
             )
             return
-        if active_review is not None:
+        if active_review is not None and message.source not in {
+            "user",
+            "review_rejection_feedback",
+        }:
             return
         run_id = f"agent-run-{uuid4().hex}"
         epoch = self._begin_epoch(project_id, run_id)
@@ -3229,11 +3267,15 @@ class FileCreatorAgentRuntime:
         while turn_number < effective_max_turns:
             turn_number += 1
             self._assert_epoch(project_id, run_id, epoch)
-            # Ordinary user input joins the next model turn. The agent decides
-            # what it means; delivering it does not cancel or redirect work.
+            # Human feedback already waiting at run start must also reach
+            # the first model turn. An intervening automated finding cannot
+            # hide a newer human revision; it becomes evidence for that
+            # revision, just as it does in idle admission above.
             incoming = (
                 []
                 if turn_number == 1
+                and request.source
+                not in {"initial_goal", "user", "review_rejection_feedback"}
                 else await asyncio.to_thread(
                     self.sessions.list_messages,
                     project_id,
@@ -3242,22 +3284,33 @@ class FileCreatorAgentRuntime:
                     limit=None,
                 )
             )
+            revision_seq = input_cursor
             for item in incoming:
                 if item.role != "user":
                     continue
+                if item.conversation_id != request.conversation_id:
+                    break
                 if (
-                    item.conversation_id != request.conversation_id
-                    or item.review_boundary is not None
+                    item.review_boundary is not None
+                    and item.review_boundary.interrupted_run_id == run_id
+                ):
+                    break
+                if item.source in {"user", "review_rejection_feedback"}:
+                    revision_seq = item.message_seq
+            for item in incoming:
+                if item.role != "user":
+                    continue
+                if item.conversation_id != request.conversation_id:
+                    break
+                if item.message_seq > revision_seq and (
+                    item.review_boundary is not None
                     or item.source
-                    in {
-                        "review_rejection_feedback",
-                        "run_review_feedback",
-                        "render_review_feedback",
-                    }
+                    in {"run_review_feedback", "render_review_feedback"}
                 ):
                     break
                 if (
-                    item.source == NOTIFICATION_SOURCE
+                    item.message_seq > revision_seq
+                    and item.source == NOTIFICATION_SOURCE
                     and item.metadata.get("notificationKind")
                     == RuntimeEventKind.SUBAGENT_TERMINAL.value
                     and await self._delegation_origin(project_id, item)
@@ -3429,6 +3482,15 @@ class FileCreatorAgentRuntime:
                 raise AgentModelError(
                     "Creator Agent returned no final content or tool calls",
                 )
+            if not turn.tool_calls and review_ids:
+                pending = await asyncio.to_thread(
+                    self.services.reviews.all_pending,
+                    project_id,
+                )
+                pending_ids = {review.review_id for review in pending}
+                review_ids = [
+                    item for item in review_ids if item in pending_ids
+                ]
             if not turn.tool_calls and review_ids:
                 canonical_summary = _agent_waiting_review_summary(
                     waiting_review_summary,
@@ -3736,8 +3798,8 @@ class FileCreatorAgentRuntime:
                     )
                     if pending:
                         self._assert_epoch(project_id, run_id, epoch)
-                        summary = "当前制作尚未开始。" + _agent_waiting_review_summary(
-                            None,
+                        summary = _agent_waiting_review_summary(
+                            "这项制作请求正在等待相关内容的审阅，请先完成审阅。",
                         )
                         assistant_message_id = f"message-{uuid4().hex}"
                         delta_index = 0
@@ -3966,6 +4028,7 @@ class FileCreatorAgentRuntime:
                             reopen_terminal=False,
                         )
                     )
+                    identity["executionAuthorizationId"] = authorization_id
                 fence.assert_alive()
                 (
                     fresh,
@@ -4011,7 +4074,10 @@ class FileCreatorAgentRuntime:
                     return {
                         **identity,
                         "status": "BLOCKED",
-                        "reason": "INPUTS_NOT_READY",
+                        "reason": current_blocked.get(
+                            node.node_id,
+                            "INPUTS_NOT_READY",
+                        ),
                     }
                 current_plan = requested_work_node(fresh, current_node)
                 if (
@@ -4040,7 +4106,7 @@ class FileCreatorAgentRuntime:
 
                     # Deliberately bypass the unattended adapter's optional
                     # motion-design model call; all local admission remains.
-                    result = await execute_file_local_media_command(
+                    execution = execute_file_local_media_command(
                         self.services,
                         project_id=project_id,
                         command=current_node.command,
@@ -4052,7 +4118,7 @@ class FileCreatorAgentRuntime:
                         ),
                     )
                 else:
-                    result = await self.work_scheduler.dispatch_node(
+                    execution = self.work_scheduler.dispatch_node(
                         project_id,
                         current_node,
                         dispatch_fingerprint,
@@ -4060,6 +4126,11 @@ class FileCreatorAgentRuntime:
                             f"project:{fresh.etag}:work-graph",
                         ),
                     )
+                result = await self.work_scheduler.await_admitted_execution(
+                    project_id,
+                    current_node.node_id,
+                    execution,
+                )
                 task_id = getattr(result, "task_id", None)
                 if task_id is None and isinstance(result, Mapping):
                     task_id = result.get("taskId")
@@ -4077,6 +4148,13 @@ class FileCreatorAgentRuntime:
                     "taskId": task_id,
                     "executionAuthorizationId": authorization_id,
                     "outputRefs": list(task.output_refs),
+                }
+            except ExecutionAuthorizationBlocked as exc:
+                return {
+                    **identity,
+                    "status": "BLOCKED",
+                    "reason": f"AUTHORIZATION_{exc.status.value}",
+                    "executionAuthorizationId": exc.authorization_id,
                 }
             except (asyncio.CancelledError, StaleAgentRun):
                 raise
@@ -7197,10 +7275,15 @@ class FileCreatorAgentRuntime:
                 ExecutionAuthorizationStatus.REJECTED,
                 ExecutionAuthorizationStatus.EXPIRED,
             ):
-                if not reopen_terminal:
-                    raise FileAgentRuntimeError(
-                        "该制作请求未获授权；不要重复提交相同输入。",
-                    )
+                renewed_by_user = (
+                    request.source in {"user", "review_rejection_feedback"}
+                    and request.message_seq
+                    > (record.caused_by_message_seq or 0)
+                    and request.created_at
+                    > (record.decided_at or record.created_at)
+                )
+                if not reopen_terminal and not renewed_by_user:
+                    raise ExecutionAuthorizationBlocked(record)
                 attempt += 1
                 continue
             existing = record
@@ -7344,9 +7427,7 @@ class FileCreatorAgentRuntime:
             authorization.status.value,
         )
         if authorization.status is not ExecutionAuthorizationStatus.APPROVED:
-            raise FileAgentRuntimeError(
-                f"execution authorization {authorization.status.value.lower()}",
-            )
+            raise ExecutionAuthorizationBlocked(authorization)
         return authorization.authorization_id
 
     async def _await_specialist_task(
@@ -7491,7 +7572,8 @@ class FileCreatorAgentRuntime:
                     },
                 },
             )
-        appended = await asyncio.to_thread(
+        appended = await self._persist_session_append(
+            f"{project_id}: assistant message",
             self.sessions.append_message,
             project_id,
             session_id,
@@ -7538,7 +7620,8 @@ class FileCreatorAgentRuntime:
             result,
             failed=failed,
         )
-        appended = await asyncio.to_thread(
+        appended = await self._persist_session_append(
+            f"{project_id}: tool result",
             self.sessions.append_message,
             project_id,
             session_id,
@@ -7673,6 +7756,14 @@ class FileCreatorAgentRuntime:
         """
 
         auto_approve = get_media_review_mode() == MEDIA_REVIEW_AUTO_APPROVE
+        if not auto_approve and await asyncio.to_thread(
+            self.services.reviews.all_pending,
+            project_id,
+        ):
+            # A selected candidate is not yet an accepted reference. Let the
+            # human decision settle before inferring missing follow-up work;
+            # its normal review follow-up will resume the agent afterwards.
+            return
         try:
             snapshot = await asyncio.to_thread(
                 self.services.projects.read,
@@ -8604,6 +8695,35 @@ class FileCreatorAgentRuntime:
             )
             return
 
+    async def _persist_session_append(
+        self,
+        description: str,
+        func: Callable[..., Any],
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        # Session appends acquire their locks before writing the record.
+        # Keep already received model/tool output while waiting for a burst
+        # of Project commits; retry only the local append, never execution.
+        # Real I/O errors propagate and the bounded backoff is cancellable.
+        delays = (0.25, 0.5, 1.0, 2.0, 2.0)
+        attempts = len(delays) + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                return await asyncio.to_thread(func, *args, **kwargs)
+            except LockTimeoutError:
+                if attempt == attempts:
+                    raise
+                logger.warning(
+                    "session append lock contention (attempt %d/%d) "
+                    "(%s); retrying",
+                    attempt,
+                    attempts,
+                    description,
+                )
+                await asyncio.sleep(delays[attempt - 1])
+
     async def _event(
         self,
         project_id: str,
@@ -8613,36 +8733,17 @@ class FileCreatorAgentRuntime:
         request: CreatorMessageRecord,
         payload: Mapping[str, Any],
     ) -> None:
-        # A lock timeout means the append never started (the exclusive
-        # project lock was never acquired), so retrying is safe. Bursts of
-        # serial Project commits (e.g. scene auto-rereview) can hold the
-        # lock beyond one wait and must not kill the whole agent run.
-        attempts = 3
-        for attempt in range(1, attempts + 1):
-            try:
-                await asyncio.to_thread(
-                    self.sessions.append_event,
-                    project_id,
-                    session_id,
-                    event_type=event_type,
-                    actor="file_agent_runtime",
-                    round_id=f"agent-round-{run_id}",
-                    message_id=request.message_id,
-                    payload=dict(payload),
-                )
-                break
-            except LockTimeoutError:
-                if attempt == attempts:
-                    raise
-                logger.warning(
-                    "event append lock contention (attempt %d/%d) "
-                    "project=%s type=%s; retrying",
-                    attempt,
-                    attempts,
-                    project_id,
-                    event_type,
-                )
-                await asyncio.sleep(attempt)
+        await self._persist_session_append(
+            f"{project_id}: {event_type}",
+            self.sessions.append_event,
+            project_id,
+            session_id,
+            event_type=event_type,
+            actor="file_agent_runtime",
+            round_id=f"agent-round-{run_id}",
+            message_id=request.message_id,
+            payload=dict(payload),
+        )
         if not event_type.endswith("_delta"):
             trace_event(
                 f"creator.{event_type}",
@@ -8792,7 +8893,7 @@ def _running_message_text(
         project=project,
         project_root=project_root,
     )
-    if message.source != "user":
+    if message.source not in {"user", "review_rejection_feedback"}:
         return content
     return (
         "用户在任务运行期间补充了以下反馈。请先用简短的公开回复确认你对反馈"
