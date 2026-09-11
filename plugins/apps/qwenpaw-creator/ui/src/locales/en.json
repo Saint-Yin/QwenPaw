@@ -1154,6 +1154,7 @@
     "creativeBrief": "Creative Brief",
     "creativeDirection": "Creative Direction",
     "prompt": "Prompt",
+    "nativeAudio": "Native video audio",
     "camera": "Camera",
     "framing": "Framing",
     "duration": "Duration",
@@ -2212,7 +2213,7 @@
     "previewPosition": "Preview position",
     "playFullInteractive": "Play full interactive story",
     "exportBundle": "Export interactive bundle",
-    "exportBundleFailed": "Bundle not ready: every reachable branch needs its final cut first",
+    "exportBundleFailed": "Interactive bundle export failed",
     "downloadBundleTitle": "Export interactive bundle or project",
     "previewChoice": "Choose a path"
   },
