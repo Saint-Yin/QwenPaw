@@ -468,6 +468,27 @@ describe("ModelConfigModal model presets", () => {
     }
   });
 
+  it("points every AgentScope preset at the proxy API root", () => {
+    // The look-alikes are traps: /compatible-mode/v1 is not deployed on
+    // platform-pre (it answers the frontend shell with a 200 HTML page), and
+    // /api/v1 only half works. Either one yields a parse failure far from
+    // its cause, and the media sections additionally pick their reference
+    // transport from this URL.
+    const seen: string[] = [];
+    for (const [type, presets] of Object.entries(PRESETS_BY_TYPE)) {
+      const preset = presets["AgentScope Platform"];
+      if (!preset) continue;
+      seen.push(type);
+      expect(
+        preset.base_url,
+        `${type} preset must use the proxy API root`,
+      ).toBe("https://platform-pre.agentscope.io/v1");
+    }
+    // Sections measured to work on the proxy; a new one silently dropping
+    // its preset would leave the dropdown pointing at Bailian.
+    expect(seen.sort()).toEqual(["asr", "image", "tts", "video"]);
+  });
+
   it("does NOT change protocol or base_url when model_name is changed", async () => {
     // Users must explicitly select the protocol they want.
     mountModal(presetsBaseConfig);
