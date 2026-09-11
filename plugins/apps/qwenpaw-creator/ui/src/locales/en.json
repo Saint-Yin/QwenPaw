@@ -1148,6 +1148,7 @@
     "creativeBrief": "Creative Brief",
     "creativeDirection": "Creative Direction",
     "prompt": "Prompt",
+    "nativeAudio": "Native video audio",
     "camera": "Camera",
     "framing": "Framing",
     "duration": "Duration",
@@ -2208,7 +2209,12 @@
     "sourceResultFailed": "Could not load understanding",
     "sourceResultLoading": "Loading understanding",
     "pausePreview": "Pause preview",
-    "previewPosition": "Preview position"
+    "previewPosition": "Preview position",
+    "playFullInteractive": "Play full interactive story",
+    "exportBundle": "Export interactive bundle",
+    "exportBundleFailed": "Interactive bundle export failed",
+    "downloadBundleTitle": "Export interactive bundle or project",
+    "previewChoice": "Choose a path"
   },
   "sidebar": {
     "assistant": "Assistant",
