@@ -11,6 +11,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from models.provider_errors import classify_gateway_error
+
 TRANSIENT_ERROR_MARKERS = (
     "connection",
     "timeout",
@@ -50,6 +52,15 @@ MAX_TRANSIENT_RETRY_SLOTS = 3
 
 
 def is_transient_error_message(message: str) -> bool:
+    # A provider gateway envelope outranks the substring table: the AgentScope
+    # proxy stamps ``retryable: true`` on deterministic failures (measured:
+    # a missing required field and an unresolvable reference host both return
+    # ASP.UPSTREAM.ERROR in 0.1s), and its 502 text would otherwise match the
+    # "bad gateway" marker below and burn every retry slot on a request that
+    # can never succeed.
+    classified = classify_gateway_error(message)
+    if classified:
+        return classified == "transient"
     folded = message.casefold()
     return any(marker in folded for marker in TRANSIENT_ERROR_MARKERS)
 
@@ -57,9 +68,18 @@ def is_transient_error_message(message: str) -> bool:
 def is_transient_task_error(error: Mapping[str, Any] | None) -> bool:
     if not isinstance(error, Mapping):
         return False
+    message = str(error.get("message") or "")
+    # The persisted flag is whatever the raising layer believed, and a
+    # gateway envelope outranks it: the AgentScope proxy stamps
+    # ``retryable: true`` on deterministic failures, so honouring the flag
+    # first would re-open a retry slot for a request that can never
+    # succeed - and an image or video render is billed even when it fails.
+    classified = classify_gateway_error(message)
+    if classified:
+        return classified == "transient"
     if error.get("retryable") is True:
         return True
-    return is_transient_error_message(str(error.get("message") or ""))
+    return is_transient_error_message(message)
 
 
 def transient_retry_slot_key(idempotency_key: str, attempt: int) -> str:

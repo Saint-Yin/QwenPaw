@@ -2,10 +2,14 @@
 """Text model protocol dispatch and keyless free-tier support."""
 
 # pylint: disable=protected-access
+# The response doubles have to expose httpx's ``json()`` method, which
+# shadows the stdlib module this file also imports.
+# pylint: disable=redefined-outer-name
 
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -40,11 +44,13 @@ def _patch_config(monkeypatch, *, protocol: str, api_key: str) -> None:
 
 def _fake_httpx(monkeypatch, captured: dict) -> None:
     class FakeResponse:
+        # The chat decoder reads what httpx exposes (media type + body).
+        headers = {"content-type": "application/json"}
         status_code = 200
 
         @property
         def text(self) -> str:
-            return ""
+            return json.dumps(self.json())
 
         def json(self) -> dict:
             return {
@@ -128,11 +134,13 @@ def test_anthropic_protocol_dispatches_to_messages_endpoint(
     captured: dict = {}
 
     class FakeResponse:
+        # The chat decoder reads what httpx exposes (media type + body).
+        headers = {"content-type": "application/json"}
         status_code = 200
 
         @property
         def text(self) -> str:
-            return ""
+            return json.dumps(self.json())
 
         def json(self) -> dict:
             return {"content": [{"type": "text", "text": "pong"}]}

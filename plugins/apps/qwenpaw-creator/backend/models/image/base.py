@@ -29,6 +29,7 @@ import httpx
 
 from models import config as model_config
 from models.concurrency import model_slot
+from models.provider_errors import retryable_for_status
 from models.reference_markers import ReferenceMarkerSpec
 from services.runtime_files.atomic_store import atomic_replace_bytes
 from utils.logger import setup_logger
@@ -811,6 +812,14 @@ class BaseImageModel(ABC):
                     else "Check creator_image_model configuration."
                 ),
                 model_name=self.model_name,
+                # 4xx are permanent, and a gateway error code beats the
+                # status: the AgentScope proxy answers a deterministic
+                # client fault with 502 + retryable:true, and every retry
+                # of an image render is a paid upstream call.
+                retryable=retryable_for_status(
+                    e.response.status_code,
+                    detail,
+                ),
             )
         except Exception as e:
             raise _logged_model_error(

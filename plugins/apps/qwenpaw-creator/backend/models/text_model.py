@@ -19,6 +19,8 @@ import httpx
 
 from models import config as model_config
 from models.concurrency import model_slot
+from models.provider_errors import is_gateway_quota_error, retryable_for_status
+from models.sse import decode_chat_response
 from utils.exceptions import ModelError, redact_url, upstream_status_hint
 
 
@@ -55,6 +57,11 @@ def _http_error(
     the upstream response excerpt plus a status-specific hint.
     """
     hint = upstream_status_hint(response.status_code)
+    if is_gateway_quota_error(response.text):
+        # A Credits-exhausted account is answered with a 403 whose body reads
+        # like a permission failure; name the real cause and keep a stable
+        # token so the task error is searchable.
+        hint = "CREDITS_INSUFFICIENT: 模型额度已用尽，重试无效；请充值后再继续"
     detail = f"上游响应: {response.text[:500]}" if response.text else "上游未返回响应体"
     message = (
         f"Text model 请求失败 [protocol={protocol} model={model_name} "
@@ -63,11 +70,16 @@ def _http_error(
     )
     if hint:
         message = f"{message}。{hint}"
-    # Upstream 4xx client errors are permanent: retrying will not help.
+    # Upstream 4xx client errors are permanent: retrying will not help. A
+    # gateway envelope overrides the status, because some gateways report a
+    # deterministic 5xx as retryable.
     return ModelError(
         message,
         model_name=model_name,
-        retryable=response.status_code >= 500,
+        retryable=retryable_for_status(
+            response.status_code,
+            response.text,
+        ),
     )
 
 
@@ -107,7 +119,15 @@ async def _call_openai(
             model_name=model_name,
             url=url,
         )
-    payload = response.json()
+    # Some gateways answer with text/event-stream even though this request
+    # never asked to stream; decode both shapes into one chat.completion.
+    payload = decode_chat_response(
+        status_code=response.status_code,
+        text=response.text,
+        content_type=str(response.headers.get("content-type") or ""),
+        model_name=model_name,
+        url=url,
+    )
     choices = payload.get("choices") or []
     content = (
         choices[0].get("message", {}).get("content")

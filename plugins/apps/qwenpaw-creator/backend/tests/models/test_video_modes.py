@@ -15,6 +15,7 @@ from PIL import Image
 import pytest
 
 from models import config as model_config
+from models import media_transport
 from models import video_model
 from models.video_capabilities import (
     configured_mode_segment,
@@ -1041,6 +1042,18 @@ def test_wan_reference_media_uses_dashscope_temp_upload(
         lambda: "wan2.7-r2v",
     )
     monkeypatch.setattr(model_config, "get_video_api_key", lambda: "video-key")
+    # The transport is chosen from the endpoint, so pin the section to Bailian:
+    # this case is about the model-bound temporary upload staying available.
+    monkeypatch.setattr(
+        model_config,
+        "get_video_protocol",
+        lambda: "DashScope（百炼）",
+    )
+    monkeypatch.setattr(
+        model_config,
+        "get_video_base_url",
+        lambda: "https://dashscope.aliyuncs.com/api/v1",
+    )
 
     observed = {}
 
@@ -1056,7 +1069,7 @@ def test_wan_reference_media_uses_dashscope_temp_upload(
         return "oss://dashscope-instant/ref.png"
 
     monkeypatch.setattr(
-        video_model,
+        media_transport,
         "upload_local_file_to_dashscope_temp",
         fake_upload,
     )

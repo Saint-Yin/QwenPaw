@@ -20,8 +20,9 @@ from models.media_transport import (
     SEEDANCE_REFERENCE_IMAGE_MAX_BYTES,
     read_reference_media,
     reference_media_data_url,
-    upload_local_file_to_dashscope_temp,
+    upload_reference_file_for_provider,
 )
+from models.provider_errors import retryable_for_status
 from models.video_capabilities import (
     HAPPYHORSE_MAX_DURATION_SECONDS,
     HAPPYHORSE_MAX_REFERENCE_IMAGES,
@@ -165,14 +166,16 @@ async def _resolve_reference_media_url(
                 if url.startswith("/generated/")
                 else Path(urlparse(url).path)
             )
-            resolved_url = await upload_local_file_to_dashscope_temp(
+            resolved_url = await upload_reference_file_for_provider(
                 media_path,
                 api_key=model_config.get_video_api_key(),
                 model_name=model_name,
                 media_type=media_type,
+                base_url=model_config.get_video_base_url(),
+                protocol=model_config.get_video_protocol(),
             )
             logger.info(
-                f"Uploaded reference media to DashScope temp storage | backend={backend}, "
+                f"Uploaded reference media to provider storage | backend={backend}, "
                 f"filename={filename}, url={resolved_url[:100]}",
             )
             return resolved_url, kind
@@ -1134,8 +1137,14 @@ async def submit_video_task(
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
             "X-DashScope-Async": "enable",
-            "X-DashScope-OssResourceResolve": "enable",
         }
+        if not model_config.is_agentscope_gateway(
+            protocol=model_config.get_video_protocol(),
+            base_url=model_config.get_video_base_url(),
+        ):
+            # References are public HTTPS URLs on the proxy transport, so the
+            # oss:// resolve header has nothing to resolve there.
+            submit_headers["X-DashScope-OssResourceResolve"] = "enable"
         default_resolution = resolution.upper() if resolution else "720P"
         active_resolution = (
             happyhorse_resolution or wan3_resolution or default_resolution
@@ -1306,6 +1315,9 @@ async def submit_video_task(
                 "上没有这个模式。请把 creator_video_model.model 换成支持该模式的"
                 "模型族（可先用零成本健康检查确认模型名可用），或改用其他 mode",
                 model_name=effective_model,
+                # A name the endpoint does not publish will not appear on a
+                # retry, and each submit attempt costs a provider round trip.
+                retryable=False,
             )
         # Keep a long enough response body: error codes such as content
         # moderation appear after ~200 characters, and truncating too short
@@ -1314,6 +1326,13 @@ async def submit_video_task(
         raise ModelError(
             f"Video task submission failed with status {e.response.status_code}: {e.response.text[:600]}",
             model_name=model_name,
+            # 4xx are permanent; a gateway error code is a better signal than
+            # the status alone, because this proxy reports deterministic
+            # failures as 502 with retryable:true.
+            retryable=retryable_for_status(
+                e.response.status_code,
+                e.response.text,
+            ),
         )
     except ModelError:
         raise
@@ -1510,11 +1529,12 @@ async def check_task_status(task_id: str) -> dict:
             f"{e.response.text[:500]}",
         )
         # 4xx are client/permanent errors → not retryable; 5xx and 429 are
-        # transient and retryable.
+        # transient and retryable - unless the body carries a gateway error
+        # code, which is a more reliable signal than the status alone.
         raise ModelError(
             f"Task status check failed with status {status_code}",
             model_name=model_name,
-            retryable=status_code >= 500 or status_code == 429,
+            retryable=retryable_for_status(status_code, e.response.text),
         )
     except Exception as e:
         logger.error(f"Task status check failed | task_id={task_id}: {e}")

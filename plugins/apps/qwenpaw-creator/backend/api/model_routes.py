@@ -770,6 +770,7 @@ def _image_backend_for_protocol(protocol: str) -> str:
         or "百炼" in protocol
         or "token plan" in lowered
         or "tokenplan" in lowered
+        or "agentscope" in lowered
     ):
         return "DASHSCOPE"
     if "gemini" in lowered:
@@ -1583,6 +1584,23 @@ def _openai_model_probe(
     )
 
 
+def _gateway_models_probe(
+    body: ModelConnectionTestRequest,
+    headers: dict[str, str],
+) -> tuple[str, dict[str, str], dict[str, Any]]:
+    """AgentScope proxy probe: ``GET {origin}/v1/models`` (zero cost).
+
+    Every other probe for these sections issues a real completion (even at
+    ``max_tokens=8``), which on this gateway both spends Credits and cannot
+    tell a bad credential from an empty balance: running out of Credits is
+    answered with a 403 that reads like a permission failure. The model list
+    validates the key and the allowlist in one free request.
+    """
+    parsed = urlparse(body.base_url)
+    url = f"{parsed.scheme}://{parsed.netloc}/v1/models"
+    return url, headers, {"_get_probe": True}
+
+
 def _token_plan_models_probe(
     body: ModelConnectionTestRequest,
     headers: dict[str, str],
@@ -1684,6 +1702,15 @@ def _probe_payload(
     # route before probing).
     if body.api_key:
         headers["Authorization"] = f"Bearer {body.api_key}"
+    if body.type in {"llm", "vlm", "image", "asr", "tts"} and (
+        model_config.is_agentscope_gateway(
+            protocol=body.protocol,
+            base_url=body.base_url,
+        )
+    ):
+        # Video keeps its per-type branch below: the local capability table
+        # rejects an unknown model id before anything leaves the machine.
+        return _gateway_models_probe(body, headers)
     if body.type == "asr":
         provider = body.provider or (
             "whisper" if "whisper" in body.protocol.casefold() else "fun-asr"
@@ -1795,6 +1822,15 @@ def _probe_payload(
                 "VIDEO_MODEL_CAPABILITY_UNKNOWN: 精确模型 ID 与协议组合" + "未收录，已停止连接探测"
             )
             raise ValueError(unknown_capability_error)
+        if model_config.is_agentscope_gateway(
+            protocol=body.protocol,
+            base_url=body.base_url,
+        ):
+            # The Bailian fall-through below probes the temporary-upload
+            # policy API, which answers ``401 InvalidApiKey`` for a proxy key -
+            # every video connection test would fail against an endpoint that
+            # has nothing to do with video generation.
+            return _gateway_models_probe(body, headers)
         if video_backend == "veo":
             headers.pop("Authorization", None)
             headers["x-goog-api-key"] = body.api_key
