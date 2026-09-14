@@ -18,11 +18,11 @@ import type { ProjectDocument, TimelineDocument } from "@/contracts/creator";
 import {
   getArtifactVersionMediaUrl,
   getAssetVersionMediaUrl,
-  getTimelineRoughCutUrl,
 } from "@/api/creator";
 import {
   selectFinalFilmVersionId,
   selectRoughCutFrames,
+  hasTimelinePreviewContent,
   type RoughCutSource,
 } from "@/selectors/blueprintSelectors";
 import {
@@ -46,9 +46,20 @@ function DraftTimelinePlayer({
   const [playing, setPlaying] = useState(true);
   const duration = timelineEndTick(timeline);
   const tps = timeline.ticks_per_second || 1000;
+  const available = hasTimelinePreviewContent(project, timeline);
   useEffect(() => {
-    if (duration > 0 && tick >= duration) onEnded();
-  }, [tick, duration, onEnded]);
+    if (available && duration > 0 && tick >= duration) onEnded();
+  }, [tick, duration, onEnded, available]);
+  if (!available)
+    return (
+      <div
+        role="status"
+        data-roughcut-unavailable
+        className="flex h-[min(68vh,720px)] w-[min(88vw,1000px)] items-center justify-center px-8 text-center text-sm text-white/75"
+      >
+        {t("blueprint.previewUnavailable")}
+      </div>
+    );
   return (
     <div data-roughcut-live className="w-[min(88vw,1000px)] pt-10">
       <div className="h-[min(68vh,720px)]">
@@ -99,7 +110,6 @@ function DraftTimelinePlayer({
 const SOURCE_STYLE: Record<RoughCutSource, string> = {
   final: "bg-[var(--color-success)]/90",
   storyboard: "bg-[var(--color-primary,#3b82f6)]/90",
-  design: "bg-[var(--color-warning)]/90",
   none: "bg-black/50",
 };
 
@@ -154,13 +164,10 @@ function PreviewCinema({
   /** Intrinsic aspect ratio of the playing video; lets the frame hug it. */
   const [aspectRatio, setAspectRatio] = useState<number | null>(null);
 
-  // A branching story is followed by the audience's clicks, so the DOM draft
-  // player can't carry it across a fork: fall back to the on-the-fly
-  // rough-cut assembly. Linear projects keep null so DraftTimelinePlayer
-  // previews planned-duration design frames instead.
-  const srcFor = (timelineId: string) =>
-    srcOf(timelineId) ??
-    (branching ? getTimelineRoughCutUrl(project.project_id, timelineId) : null);
+  // Both story shapes use the same checked storyboard / shot preview. This
+  // component already follows narrative edges when the draft segment ends.
+  // A server rough cut may still substitute character reference sheets.
+  const srcFor = srcOf;
 
   useEffect(() => {
     setCurrentId(initialId);
@@ -416,7 +423,7 @@ interface BlueprintRoughCutStripProps {
 /**
  * Rough-cut preview strip (plan §4.8): one frame per enabled element, sourced
  * purely from existing artifacts — selected element_video ▸ storyboard image ▸
- * referenced entity design ▸ placeholder. Clicking a frame opens the owning
+ * empty placeholder. Clicking a frame opens the owning
  * timeline's script panel; play chips open the floating cinema overlay.
  */
 export default function BlueprintRoughCutStrip({
@@ -442,7 +449,10 @@ export default function BlueprintRoughCutStrip({
     : null;
   const hasSegment = selectLiveTimelineIds(project).some((id) => {
     const slot = project.assets.artifact_slots_by_id[`timeline:${id}:render`];
-    return slot?.kind === "final_video" && Boolean(slot.selected_version_id);
+    const version = slot?.selected_version_id
+      ? project.assets.artifact_versions_by_id[slot.selected_version_id]
+      : null;
+    return slot?.kind === "final_video" && Boolean(version && !version.stale);
   });
   if (!frames.length && !filmUrl && !hasSegment) return null;
 
@@ -457,10 +467,20 @@ export default function BlueprintRoughCutStrip({
     const slot =
       project.assets.artifact_slots_by_id[`timeline:${timelineId}:render`];
     if (slot?.kind !== "final_video" || !slot.selected_version_id) return null;
-    if (project.assets.artifact_versions_by_id[slot.selected_version_id]?.stale)
-      return null;
+    const version =
+      project.assets.artifact_versions_by_id[slot.selected_version_id];
+    if (!version || version.stale) return null;
     return getArtifactVersionMediaUrl(slot.selected_version_id);
   };
+
+  const canPreview = (id: string) =>
+    Boolean(
+      finalCutUrlOf(id) ||
+        (project.timelines.items[id] &&
+          hasTimelinePreviewContent(project, project.timelines.items[id])),
+    );
+  const entryId = selectLiveTimelineIds(project)[0];
+  const canPreviewEntry = Boolean(entryId && canPreview(entryId));
 
   const togglePlay = (timelineId: string) => {
     setPlayingId((current) => (current === timelineId ? null : timelineId));
@@ -479,10 +499,16 @@ export default function BlueprintRoughCutStrip({
         <button
           type="button"
           data-roughcut-preview-all
+          disabled={!canPreviewEntry}
+          title={
+            !canPreviewEntry
+              ? t("blueprint.previewUnavailable")
+              : t("blueprint.previewAll")
+          }
           onClick={() =>
             setPlayingId(selectLiveTimelineIds(project)[0] ?? null)
           }
-          className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-[var(--color-text-primary)] px-2.5 py-1 text-[10px] font-bold text-[var(--color-bg-primary)] shadow-[0_2px_8px_rgba(0,0,0,.2)] transition-all hover:-translate-y-px hover:opacity-90"
+          className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-[var(--color-text-primary)] px-2.5 py-1 text-[10px] font-bold text-[var(--color-bg-primary)] shadow-[0_2px_8px_rgba(0,0,0,.2)] transition-all enabled:hover:-translate-y-px enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Play className="h-3 w-3" />
           {t("blueprint.previewAll")}
@@ -500,13 +526,16 @@ export default function BlueprintRoughCutStrip({
             <button
               type="button"
               data-roughcut-play-film
+              disabled={isBranching && !canPreviewEntry}
               onClick={() => togglePlay(FULL_FILM_ID)}
               title={
-                isBranching
+                isBranching && !canPreviewEntry
+                  ? t("blueprint.previewUnavailable")
+                  : isBranching
                   ? t("blueprint.playFullInteractive")
                   : t("blueprint.playFullFilm")
               }
-              className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold transition-colors ${
+              className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                 playingId === FULL_FILM_ID
                   ? "border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
                   : "border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
@@ -541,6 +570,15 @@ export default function BlueprintRoughCutStrip({
           </button>
         </span>
       </div>
+      {!canPreviewEntry && !hasSegment && (
+        <p
+          role="status"
+          data-roughcut-empty
+          className="mt-2 text-xs text-[var(--color-text-tertiary)]"
+        >
+          {t("blueprint.previewUnavailable")}
+        </p>
+      )}
       {playingId === FULL_FILM_ID && isBranching
         ? createPortal(
             <div
@@ -595,9 +633,14 @@ export default function BlueprintRoughCutStrip({
                   <button
                     type="button"
                     data-roughcut-play={timelineId}
+                    disabled={!canPreview(timelineId)}
                     onClick={() => togglePlay(timelineId)}
-                    title={t("blueprint.playRoughCut")}
-                    className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors ${
+                    title={t(
+                      canPreview(timelineId)
+                        ? "blueprint.playRoughCut"
+                        : "blueprint.previewUnavailable",
+                    )}
+                    className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
                       playingId === timelineId
                         ? "text-[var(--color-accent)]"
                         : "text-[var(--color-text-secondary)] hover:text-[var(--color-accent)]"
