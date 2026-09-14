@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 
 import pytest
 
@@ -18,8 +19,12 @@ from services.media_files.script_execution import (
     execute_file_script_command,
 )
 from services.project_files.facade import CreatorFileServices
+from services.project_files.agent_tools import (
+    AgentProjectToolContext,
+    AgentProjectTools,
+)
 from services.project_files.edit_impact import apply_frontend_edit_impacts
-from services.project_files.models import Project, Timeline
+from services.project_files.models import NarrativeEdge, Project, Timeline
 from services.runtime_files.models import ChangeOrigin, ReviewPolicy
 
 pytestmark = pytest.mark.unit
@@ -137,6 +142,177 @@ def test_same_inputs_replay_without_second_model_call(
         ),
     )
 
+    assert replay.replayed
+    assert replay.artifact_version_id == first.artifact_version_id
+    assert len(calls) == 1
+
+
+def _branching_services(tmp_path):
+    services = _services(tmp_path)
+    base = services.projects.read(PROJECT_ID)
+    project = base.project.model_copy(deep=True)
+    project.timelines.items["timeline:main"].description = "Saved ending A"
+    project.timelines.items["ending-b"] = Timeline(
+        timeline_id="ending-b",
+        title="Ending B",
+        description="Saved ending B",
+    )
+    project.timelines.order.append("ending-b")
+    project.narrative_edges = [
+        NarrativeEdge(
+            edge_id="ending-choice",
+            source_timeline_id="timeline:main",
+            target_timeline_id="ending-b",
+            label="Look for more evidence",
+        ),
+    ]
+    services.commits.commit(
+        base=base,
+        candidate=project.model_dump(mode="json"),
+        origin=ChangeOrigin.INITIAL_CREATION,
+        review_policy=ReviewPolicy.AUTO_FIX,
+    )
+    return services
+
+
+@pytest.mark.parametrize("tool_name", ["jq_project", "patch_project"])
+def test_initial_agent_ending_edit_keeps_script_and_replays_without_model(
+    tmp_path,
+    monkeypatch,
+    tool_name,
+):
+    services = _branching_services(tmp_path)
+    calls = _mock_chat(monkeypatch, [DRAFT])
+    first = _draft(services, key="first")
+    tools = AgentProjectTools(
+        services.projects,
+        context=AgentProjectToolContext(
+            origin=ChangeOrigin.INITIAL_CREATION,
+            review_policy=ReviewPolicy.AUTO_FIX,
+            caused_by_message_seq=1,
+        ),
+    )
+    tools.read_project(PROJECT_ID)
+    base = services.projects.read(PROJECT_ID)
+    # A concurrent production commit must survive the Agent's cached base.
+    candidate = base.project.model_dump(mode="json")
+    candidate["settings"]["aspect_ratio"] = "9:16"
+    services.commits.commit(
+        base=base,
+        candidate=candidate,
+        origin=ChangeOrigin.RUNTIME_TASK,
+        review_policy=ReviewPolicy.AUTO_FIX,
+    )
+    edge = NarrativeEdge(
+        edge_id="revised-ending-choice",
+        source_timeline_id="ending-b",
+        target_timeline_id="timeline:main",
+        label="Keep the evidence",
+    ).model_dump(mode="json")
+    if tool_name == "jq_project":
+        result = tools.jq_project(
+            project_id=PROJECT_ID,
+            program=".narrative_edges = $edges",
+            json_args={"edges": [edge]},
+        )
+    else:
+        result = tools.patch_project(
+            project_id=PROJECT_ID,
+            ops=[
+                {"op": "replace", "path": "/narrative_edges", "value": [edge]},
+            ],
+        )
+    project = result.project
+    assert project.settings.aspect_ratio == "9:16"
+    assert script_execution._build_script_prompt(
+        base.project,
+        base.project.timelines.items["timeline:ep2"],
+        "",
+    ) == script_execution._build_script_prompt(
+        project,
+        project.timelines.items["timeline:ep2"],
+        "",
+    )
+    slot = project.assets.artifact_slots_by_id[first.slot_id]
+    version = project.assets.artifact_versions_by_id[first.artifact_version_id]
+    assert not version.stale
+    assert slot.version_ids == [first.artifact_version_id]
+    indexed = project.assets.files_by_id[first.file_id]
+    payload = (
+        services.projects.project_root(PROJECT_ID) / indexed.relative_uri
+    ).read_bytes()
+    assert hashlib.sha256(payload).hexdigest() == version.checksum
+    graph = derive_work_graph(project)
+    assert graph.by_id["script:timeline:ep2"].status is WorkNodeStatus.DONE
+    assert graph.by_id["script:timeline:ep2"].regeneration_of is None
+    replay = _draft(services, key="retry-after-remote-edit")
+    assert replay.replayed
+    assert replay.artifact_version_id == first.artifact_version_id
+    assert len(calls) == 1
+
+
+def test_remote_branch_edit_during_model_call_keeps_valid_result(
+    tmp_path,
+    monkeypatch,
+):
+    services = _branching_services(tmp_path)
+    calls = []
+
+    async def finish_ending_then_return(prompt, **_kwargs):
+        calls.append(prompt)
+        tools = AgentProjectTools(
+            services.projects,
+            context=AgentProjectToolContext(
+                origin=ChangeOrigin.INITIAL_CREATION
+            ),
+        )
+        tools.read_project(PROJECT_ID)
+        tools.patch_project(
+            project_id=PROJECT_ID,
+            ops=[
+                {"op": "remove", "path": "/narrative_edges/0"},
+            ],
+        )
+        return DRAFT
+
+    monkeypatch.setattr(
+        script_execution.text_model,
+        "chat_completion",
+        finish_ending_then_return,
+    )
+    first = _draft(services, key="in-flight")
+    assert not first.replayed
+    replay = _draft(services, key="retry")
+    assert replay.replayed
+    assert replay.artifact_version_id == first.artifact_version_id
+    assert len(calls) == 1
+
+
+def test_unused_default_duration_does_not_redraft_script(
+    tmp_path, monkeypatch
+):
+    services = _services(tmp_path)
+    calls = _mock_chat(monkeypatch, [DRAFT])
+    first = _draft(services, key="first")
+    tools = AgentProjectTools(
+        services.projects,
+        context=AgentProjectToolContext(origin=ChangeOrigin.INITIAL_CREATION),
+    )
+    tools.read_project(PROJECT_ID)
+    result = tools.patch_project(
+        project_id=PROJECT_ID,
+        ops=[
+            {
+                "op": "replace",
+                "path": "/settings/target_duration_seconds",
+                "value": 90,
+            },
+        ],
+    )
+    assert not result.project.assets.artifact_versions_by_id[
+        first.artifact_version_id
+    ].stale
+    replay = _draft(services, key="retry")
     assert replay.replayed
     assert replay.artifact_version_id == first.artifact_version_id
     assert len(calls) == 1
