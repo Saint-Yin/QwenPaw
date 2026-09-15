@@ -4,6 +4,7 @@ export * from "./events";
 export * from "./fileProjectReviews";
 export * from "./media";
 export * from "./models";
+export * from "./platform";
 export * from "./projects";
 export * from "./sessions";
 export * from "./tasks";

@@ -349,6 +349,16 @@
     "paneReviewDesc": "由模型代替人工评估产物质量并驱动修改迭代。与「执行模式」联动：自动化程度越高，越建议开启。",
     "paneGuide": "配置指南",
     "paneGuideDesc": "不知道该配什么？按创作场景对照下表配置对应模型。",
+    "panePlatform": "一键配置",
+    "panePlatformDesc": "从 AgentScope Platform 拉取本子域的模型密钥与端点，一次写入平台可代理的全部服务。",
+    "platform": {
+      "action": "拉取并配置",
+      "credits": "可用 Credits {{value}}",
+      "coverage": "覆盖语言与理解、图片生成、视频生成、语音合成与语音识别。数字人、向量化与联网检索不由平台代理提供，仍需单独配置。",
+      "endpoint": "已写入端点 {{url}}",
+      "needsModel": "未选择模型",
+      "applyFailed": "一键配置失败"
+    },
     "modeLevel": "档位 {{level}}",
     "gateCheckpoints": "创作检查点",
     "gateExecution": "高花费授权",

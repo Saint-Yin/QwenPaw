@@ -349,6 +349,16 @@
     "paneReviewDesc": "Model-driven quality review with revision loops. Linked to Execution Mode: the more automated you run, the more it is recommended.",
     "paneGuide": "Setup Guide",
     "paneGuideDesc": "Not sure what to configure? Match your creation scenario against the table below.",
+    "panePlatform": "One-Click Setup",
+    "panePlatformDesc": "Fetch this subdomain's model key and endpoint from AgentScope Platform, then write them into every service the platform proxies.",
+    "platform": {
+      "action": "Fetch and configure",
+      "credits": "Credits available: {{value}}",
+      "coverage": "Covers language and understanding, image, video, speech synthesis and transcription. Digital human, embedding and web grounding are not proxied by the platform and still need their own configuration.",
+      "endpoint": "Endpoint written: {{url}}",
+      "needsModel": "No model chosen",
+      "applyFailed": "One-click setup failed"
+    },
     "modeLevel": "Stop {{level}}",
     "gateCheckpoints": "Creation checkpoints",
     "gateExecution": "High-cost authorization",
