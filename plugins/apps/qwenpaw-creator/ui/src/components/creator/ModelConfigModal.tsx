@@ -47,6 +47,8 @@ import {
 import type {
   HostProviderInfo,
   TtsCapabilities,
+  TtsModelCapability,
+  TtsProvider,
   VideoModelCapabilities,
 } from "@/api/creator";
 import type {
@@ -335,6 +337,30 @@ const ASR_PRESETS: Record<string, ProtocolPreset> = {
     models: ["qwen-audio-3.0-asr-flash"],
   },
 };
+
+/**
+ * Which endpoint a TTS protocol talks to, matching `providers` in the
+ * capability table. Only the proxy narrows the choice: it publishes its own
+ * model list and rejects anything outside it with MODEL_NOT_ALLOWED, while a
+ * Bailian or custom base is assumed to serve every listed speech model.
+ */
+const ttsProviderFor = (protocol: string): TtsProvider =>
+  protocol === "AgentScope Platform" ? "gateway" : "bailian";
+
+/**
+ * Speech models the given protocol can actually drive, in table order.
+ *
+ * Exported so the narrowing itself is testable: offering a Bailian-only name
+ * under the proxy is not a cosmetic slip but a guaranteed
+ * ``MODEL_NOT_ALLOWED`` on every synthesis attempt.
+ */
+export function ttsModelChoices(
+  protocol: string,
+  models: TtsModelCapability[],
+): TtsModelCapability[] {
+  const provider = ttsProviderFor(protocol);
+  return models.filter((item) => item.providers.includes(provider));
+}
 
 const TTS_PRESETS: Record<string, ProtocolPreset> = {
   "DashScope（百炼）": {
@@ -2049,10 +2075,11 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     if (type === "tts") {
       const preset = TTS_PRESETS[protocol];
       if (!preset) return null;
-      // Supported speech models come from the backend capability table.
+      // Supported speech models come from the backend capability table, kept
+      // to the ones this endpoint actually serves.
       return {
         ...preset,
-        models: ttsModels.map((item) => item.model),
+        models: ttsModelChoices(protocol, ttsModels).map((item) => item.model),
       };
     }
     if (type === "embedding") return EMBEDDING_PRESETS[protocol] || null;
@@ -2100,7 +2127,7 @@ export default function ModelConfigModal({ open, onClose }: Props) {
     if (type === "tts") {
       // Label each speech model with what it can do, so the choice between
       // "has system voices" and "must design a voice first" is visible.
-      return ttsModels.map((item) => ({
+      return ttsModelChoices(protocol, ttsModels).map((item) => ({
         value: item.model,
         label: item.label,
       }));

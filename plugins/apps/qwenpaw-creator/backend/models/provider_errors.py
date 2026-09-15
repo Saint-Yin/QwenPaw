@@ -33,9 +33,15 @@ import re
 
 # The envelope may be embedded in a larger message (callers append their own
 # context and the raw provider body), so the code is extracted by pattern
-# rather than by parsing the whole string as JSON.
-_CODE_RE = re.compile(r'"code"\s*:\s*"(ASP\.[A-Z0-9_.]+)"')
-_REQUEST_ID_RE = re.compile(r'"request_id"\s*:\s*"([0-9a-fA-F-]{8,})"')
+# rather than by parsing the whole string as JSON. Both quote styles are
+# accepted because an OpenAI-compatible client re-serialises the body as a
+# Python repr when it raises: ``Error code: 403 - {'error': {'code': ...}}``.
+# Matching only JSON quotes silently classified every main-loop model failure
+# as "no envelope", which threw away the provider's own ``retryable`` answer.
+_CODE_RE = re.compile(r"""['"]code['"]\s*:\s*['"](ASP\.[A-Z0-9_.]+)['"]""")
+_REQUEST_ID_RE = re.compile(
+    r"""['"]request_id['"]\s*:\s*['"]([0-9a-fA-F-]{8,})['"]""",
+)
 
 # Only errors that are transient *because of the code itself* are retried.
 GATEWAY_TRANSIENT_CODES = frozenset(

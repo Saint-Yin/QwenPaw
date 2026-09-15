@@ -1177,6 +1177,9 @@ async def get_tts_capabilities() -> dict[str, Any]:
                 "transport": item.transport,
                 "systemVoices": list(item.system_voices),
                 "supportsDesign": item.supports_design,
+                # Which endpoint actually serves the model, so the UI can hide
+                # names this provider would reject outright.
+                "providers": list(item.providers),
             }
             for item in supported_models()
         ],

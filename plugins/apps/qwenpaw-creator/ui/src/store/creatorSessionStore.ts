@@ -24,6 +24,11 @@ import {
   isUserAuthorityMessage,
 } from "@/lib/creatorMessagePresentation";
 import i18n from "@/i18n";
+import {
+  clearCreditsNotice,
+  isQuotaErrorCode,
+  markCreditsExhausted,
+} from "@/store/modelCreditsStore";
 
 const conversationRetryIds = new Map<string, string>();
 
@@ -493,6 +498,12 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
       );
       if (response.session.lastEventSeq < currentEventSeq) return {};
       const patch: Partial<CreatorSessionState> = { session: response.session };
+      // The Credits notice lives across projects while this snapshot belongs to
+      // one of them, so re-adopting a session that still carries the refusal is
+      // what keeps the navigation bar honest after a reload.
+      if (isQuotaErrorCode(response.session.error?.code)) {
+        markCreditsExhausted(response.session.projectId);
+      }
       const currentProgressSeq =
         current.agentStatusBar?.progress.sourceEventSeq ?? -1;
       if (
@@ -1500,6 +1511,12 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
               event.type === "agent.run.completed"
             ) {
               const terminalRunId = eventString(event.data, "runId");
+              if (event.type === "agent.run.completed") {
+                // A run that reaches its end spent Credits, so the balance
+                // recovered: leaving the notice up would accuse every other
+                // project of a condition that just stopped being true.
+                clearCreditsNotice();
+              }
               if (rateLimitRetry?.runId === terminalRunId)
                 rateLimitRetry = null;
               if (terminalRunId) {
@@ -1534,6 +1551,9 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
                       details?: Record<string, unknown>;
                     },
                   };
+                }
+                if (isQuotaErrorCode(errorPayload?.code)) {
+                  markCreditsExhausted(session.projectId);
                 }
               }
             }

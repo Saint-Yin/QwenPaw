@@ -17,6 +17,7 @@ from api.file_asset_routes import _AssetInput, _ingest_many_sync
 from domain.enums import TaskKind, TaskStatus
 from services.file_agent_runtime import (
     AgentModelConfigurationError,
+    AgentModelError,
     AgentModelTurn,
     AgentRunStatus,
     AgentToolCall,
@@ -1315,6 +1316,73 @@ def test_repeated_malformed_jq_project_arguments_stop_after_two_retries(
         True,
     ]
     assert "Do not resend it" in errors[-1]["recovery"]
+
+
+@pytest.mark.parametrize(
+    ("detail", "expected_code", "expected_retryable"),
+    [
+        (
+            "Creator AgentScope model request failed: Error code: 403 - "
+            "{'error': {'code': 'ASP.BIZ.CREDITS_INSUFFICIENT', "
+            "'message': '模型 Credits 不足，请先使用贡献值兑换', "
+            "'retryable': False, 'type': 'BUSINESS'}, 'request_id': "
+            "'70491bf2-9f12-4e43-82c1-bab4a321f647'}",
+            "MODEL_QUOTA_EXCEEDED",
+            False,
+        ),
+        (
+            "Creator AgentScope model request failed: Error code: 503 - "
+            "upstream connect error",
+            "MODEL_REQUEST_FAILED",
+            True,
+        ),
+    ],
+)
+def test_model_request_failure_defers_to_the_provider_retry_verdict(
+    tmp_path,
+    monkeypatch,
+    detail: str,
+    expected_code: str,
+    expected_retryable: bool,
+) -> None:
+    """A refused request is not automatically a retriable one.
+
+    Measured on a project that died on its last shot: every turn answered 403
+    ``ASP.BIZ.CREDITS_INSUFFICIENT`` with ``retryable: false``, but this branch
+    hardcoded ``retryable=True``, so nine identical failures landed inside two
+    seconds and the only on-screen words were that the feedback had gone back
+    to the Agent. Nothing the Agent can send fixes an empty balance, so the
+    run has to stop and say what is missing.
+    """
+
+    async def callback(_messages, _tools):
+        raise AgentModelError(detail)
+
+    async def scenario():
+        services, _snapshot = _create_project(
+            tmp_path,
+            initial_goal="请生成结果",
+        )
+        driver = _driver(services, callback)
+        resumes: list[bool] = []
+
+        async def spy(**kwargs) -> None:
+            resumes.append(bool(kwargs.get("after_failure")))
+
+        monkeypatch.setattr(driver, "_queue_yolo_completion_resume", spy)
+        await _run_to_idle(driver, services, error=True)
+        session = services.sessions.get_project_session(PROJECT_ID)
+        await driver.stop()
+        return session, resumes
+
+    session, resumes = asyncio.run(scenario())
+
+    assert session.error["code"] == expected_code
+    assert session.error["retryable"] is expected_retryable
+    assert session.error["message"] == detail
+    # The flag is not only carried to the UI: it is the sole gate on handing an
+    # unattended project back to the Agent, so a quota refusal must not queue.
+    assert resumes == ([True] if expected_retryable else [])
 
 
 def test_initial_creation_runs_auto_fix_tool_loop_without_review(
