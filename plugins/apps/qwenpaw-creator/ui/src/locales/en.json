@@ -179,6 +179,9 @@
     "replayTour": "Replay tutorial",
     "breadcrumb": "Breadcrumb",
     "productionWorkbench": "Production Workbench",
+    "creditsExhausted": "Out of Credits",
+    "creditsExhaustedHint": "The model Credits balance is empty, so the provider refuses model calls in every project. Redeem Credits with contribution points on the platform's Model Calls page, then return to the project that failed and continue.",
+    "creditsDismiss": "Hide the Credits notice for now",
     "blueprint": "Video script"
   },
   "modelConfig": {
@@ -948,6 +951,9 @@
     "rateLimitExhausted": "Model rate-limited, still unavailable after {{retries}} retries",
     "rateLimitContinue": "Continue",
     "rateLimitResumeMessage": "Continue the task that was interrupted by model rate limiting",
+    "quotaExhausted": "Not enough model Credits, so automatic retries stopped. Redeem Credits with contribution points on the platform's Model Calls page, then continue.",
+    "quotaContinue": "Redeemed — continue",
+    "quotaResumeMessage": "I have redeemed Credits; please continue the task that was interrupted",
     "mentionHint": "Type @ to reference storyboards, assets etc. as context; currently selected objects are also auto-included.",
     "clearAll": "Clear all references, selected text and @ mentions",
     "clear": "Clear",

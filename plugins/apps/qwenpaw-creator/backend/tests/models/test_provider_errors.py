@@ -57,6 +57,18 @@ SIZE_ENVELOPE = (
     '"retryable": true}'
 )
 
+# Same refusal as CREDITS_ENVELOPE, but as an OpenAI-compatible client raises
+# it on the Agent main loop: the body is re-serialised as a Python repr, so
+# every quote is a single quote and ``False`` is capitalised. Captured from a
+# run whose project session died in a retry loop.
+CREDITS_REPR_ENVELOPE = (
+    "Creator AgentScope model request failed: Error code: 403 - "
+    "{'error': {'code': 'ASP.BIZ.CREDITS_INSUFFICIENT', "
+    "'message': '模型 Credits 不足，请先使用贡献值兑换', "
+    "'retryable': False, 'type': 'BUSINESS'}, 'request_id': "
+    "'70491bf2-9f12-4e43-82c1-bab4a321f647'}"
+)
+
 
 def test_deterministic_upstream_error_is_not_transient() -> None:
     """A 0.1s rejection must not spend a retry slot on a billed render."""
@@ -79,6 +91,25 @@ def test_credits_refusal_is_its_own_class() -> None:
     # Permanent for this request, but not a reason to wall the node: the fix
     # is a top-up, not an edit to the prompt.
     assert is_transient_error_message(CREDITS_ENVELOPE) is False
+
+
+def test_a_repr_serialised_envelope_still_classifies() -> None:
+    """The main loop hands over a repr, not JSON, and must not read as blank.
+
+    A regex that only accepts double quotes finds no envelope here, so the
+    caller falls back to its status rule and the provider's own
+    ``retryable: False`` is discarded - which is how one Credits refusal
+    turned into repeated failures inside two seconds.
+    """
+    assert gateway_error_code(CREDITS_REPR_ENVELOPE) == (
+        "ASP.BIZ.CREDITS_INSUFFICIENT"
+    )
+    assert classify_gateway_error(CREDITS_REPR_ENVELOPE) == CLASS_QUOTA
+    assert is_gateway_quota_error(CREDITS_REPR_ENVELOPE) is True
+    assert gateway_request_id(CREDITS_REPR_ENVELOPE) == (
+        "70491bf2-9f12-4e43-82c1-bab4a321f647"
+    )
+    assert retryable_for_status(403, CREDITS_REPR_ENVELOPE) is False
 
 
 @pytest.mark.parametrize(
