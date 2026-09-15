@@ -82,7 +82,6 @@ function modelRoutes(model: string): Parameters<typeof installMockFetch>[0] {
           counts: {},
           nodes: [],
           mediaCalls: 0,
-          mediaCallBudget: 20,
         },
       },
     },
