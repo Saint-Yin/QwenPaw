@@ -1246,6 +1246,80 @@ async def update_model_config(
     return {"ok": True}
 
 
+# The proxy serves these six sections. ``s2v`` and ``embedding`` only speak
+# DashScope and ``grounding`` needs a search-vendor credential, so writing the
+# proxy key into them would leave sections that look configured and 401 on
+# every call.
+_PLATFORM_PROXY_SECTIONS = ("llm", "vlm", "image", "video", "tts", "asr")
+_PLATFORM_PROTOCOL = "AgentScope Platform"
+_CHAT_COMPLETIONS_SUFFIX = "/chat/completions"
+
+
+def _platform_api_root(chat_completions_url: str) -> str:
+    """Derive the proxy API root from the chat-completions endpoint.
+
+    ``https://host/v1/chat/completions`` becomes ``https://host/v1``. The host
+    is verified rather than trusted because this value selects the media
+    transport and the retry verdict of every section it lands in, through
+    ``models.config.is_agentscope_gateway``.
+    """
+    if not model_config.is_agentscope_endpoint(chat_completions_url):
+        raise ValidationError(
+            "chat_completions_url 不是 AgentScope Platform 端点，已拒绝写入",
+        )
+    parsed = urlparse(chat_completions_url)
+    path = parsed.path.rstrip("/")
+    if path.endswith(_CHAT_COMPLETIONS_SUFFIX):
+        path = path[: -len(_CHAT_COMPLETIONS_SUFFIX)]
+    return f"{parsed.scheme}://{parsed.netloc}{path}".rstrip("/")
+
+
+@router.post("/platform-autoconfigure")
+async def platform_autoconfigure(
+    data: dict[str, Any] = Body(...),
+) -> dict[str, Any]:
+    """Apply the platform-issued key to every section the proxy serves.
+
+    The platform hands the browser one key and one chat endpoint, while a
+    fresh container starts with nine empty sections. Model names are
+    deliberately not invented here: an id the account cannot serve reaches the
+    proxy as an upstream 400 that the proxy re-reports as a retryable 502, so
+    a section still missing its model is reported back for the operator to
+    choose instead of being filled with a guess.
+    """
+    api_key = str(data.get("api_key") or "").strip()
+    chat_url = str(data.get("chat_completions_url") or "").strip()
+    if not api_key:
+        raise ValidationError("平台未返回 api_key")
+    if not chat_url:
+        raise ValidationError("平台未返回 chat_completions_url")
+    base_url = _platform_api_root(chat_url)
+
+    def mutate(current: ModelConfigData) -> ModelConfigData:
+        for name in _PLATFORM_PROXY_SECTIONS:
+            item = getattr(current, name)
+            item.protocol = _PLATFORM_PROTOCOL
+            item.base_url = base_url
+            item.api_key = api_key
+            # Enabling a section with no model would only turn a missing
+            # setting into a failed generation task.
+            item.enabled = bool(str(item.model_name or "").strip())
+        return current
+
+    updated = await asyncio.to_thread(mutate_model_config, mutate)
+    sections: list[dict[str, Any]] = []
+    for name in _PLATFORM_PROXY_SECTIONS:
+        model_name = str(getattr(updated, name).model_name or "").strip()
+        sections.append(
+            {
+                "section": name,
+                "model_name": model_name,
+                "ready": bool(model_name),
+            },
+        )
+    return {"ok": True, "base_url": base_url, "sections": sections}
+
+
 @router.patch("/config/creation-checkpoints")
 async def patch_creation_checkpoints(
     data: dict[str, Any] = Body(...),
