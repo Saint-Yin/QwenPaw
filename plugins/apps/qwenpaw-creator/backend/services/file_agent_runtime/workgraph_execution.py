@@ -25,7 +25,6 @@ from services.file_agent_runtime.work_scheduler import (
     _blocked_by_active_media_review,
     _blocked_by_active_sync_review,
 )
-from services.media_files.call_budget import ensure_media_call_budget
 from services.media_files.review_admission import assert_media_review_admission
 from services.project_files import frontend_edit_hold
 from services.project_files.models import ArtifactVersion
@@ -605,8 +604,6 @@ async def ready_request_context(
     services: Any,
     executions: Any,
     project_id: str,
-    *,
-    check_media_budget: bool = True,
 ):
     """Read the gates for every new request and approved dispatch."""
     from services.run_review import admission
@@ -698,6 +695,4 @@ async def ready_request_context(
                 )
             except ReviewPendingError:
                 blocked[node.node_id] = "WAITING_REVIEW"
-    if check_media_budget:
-        await asyncio.to_thread(ensure_media_call_budget, services, project_id)
     return snapshot, tasks, graph, blocked
