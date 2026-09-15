@@ -7,6 +7,7 @@ import ModelConfigModal, {
   LLM_PROTOCOLS,
   OPENCODE_BASE_URL_OPTIONS,
   OPENCODE_MODELS,
+  llmPresetFor,
   PRESETS_BY_TYPE,
   PROTOCOL_LABEL_KEYS,
   S2V_PROTOCOLS,
@@ -470,6 +471,60 @@ describe("ModelConfigModal model presets", () => {
         ).toContain(protocol);
       }
     }
+  });
+
+  it("points every AgentScope preset at the proxy API root", () => {
+    // The look-alikes are traps: /compatible-mode/v1 is not deployed on
+    // platform-pre (it answers the frontend shell with a 200 HTML page), and
+    // /api/v1 only half works. Either one yields a parse failure far from
+    // its cause, and the media sections additionally pick their reference
+    // transport from this URL.
+    const seen: string[] = [];
+    for (const [type, presets] of Object.entries(PRESETS_BY_TYPE)) {
+      const preset = presets["AgentScope Platform"];
+      if (!preset) continue;
+      seen.push(type);
+      expect(
+        preset.base_url,
+        `${type} preset must use the proxy API root`,
+      ).toBe("https://platform-pre.agentscope.io/v1");
+    }
+    // Sections measured to work on the proxy; a new one silently dropping
+    // its preset would leave the dropdown pointing at Bailian.
+    expect(seen.sort()).toEqual(["asr", "image", "tts", "video"]);
+  });
+
+  it("resolves an LLM endpoint for a protocol the host does not publish", () => {
+    // The proxy is deliberately absent from the host provider catalog, so it
+    // resolves to no provider id. The lookup used to give up there and leave
+    // the field holding the URL of whatever provider had been selected
+    // before, which sent an sk-as key off to Bailian.
+    expect(llmPresetFor("AgentScope Platform", undefined, [])).toEqual({
+      base_url: "https://platform-pre.agentscope.io/v1",
+      models: [],
+    });
+
+    // A provider the host does publish still wins over the static table,
+    // because its endpoint is the one the host holds the key for.
+    const dashscope: HostProviderInfo = {
+      id: "dashscope",
+      name: "DashScope",
+      base_url: "https://host.example/v1",
+      freeze_url: false,
+      models: [{ id: "qwen3.8-flash", name: "Qwen3.8 Flash" }],
+      extra_models: [],
+    };
+    expect(llmPresetFor("DashScope（百炼）", "dashscope", [dashscope])).toEqual(
+      {
+        base_url: "https://host.example/v1",
+        models: ["qwen3.8-flash"],
+        base_url_options: undefined,
+      },
+    );
+
+    // A protocol with no endpoint of its own offers nothing, so the field is
+    // left as the user set it rather than being filled with a guess.
+    expect(llmPresetFor("自定义", undefined, [])).toBeNull();
   });
 
   it("does NOT change protocol or base_url when model_name is changed", async () => {
