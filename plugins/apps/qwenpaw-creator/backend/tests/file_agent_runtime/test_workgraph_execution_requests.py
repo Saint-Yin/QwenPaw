@@ -567,10 +567,9 @@ def test_prompt_sync_gated_request_surfaces_diagnostic_fields(
         )
         graph = WorkGraph(nodes=(node,), generation=1)
 
-        async def fake_context(svcs, _execs, pid, **_kwargs):
+        async def fake_context(svcs, _execs, pid):
             # Only the request path reads this; hand back the GATED node and
-            # its pre-dispatch block reason (extra kwargs like
-            # ``check_media_budget`` are irrelevant to this canned graph).
+            # its pre-dispatch block reason.
             return (
                 svcs.projects.read(pid),
                 [],
@@ -669,12 +668,11 @@ def test_post_approval_prompt_sync_gate_surfaces_diagnostic_fields(
         real_context = dm.ready_request_context
         reads = {"n": 0}
 
-        async def fake_context(svcs, execs, pid, *, check_media_budget=True):
+        async def fake_context(svcs, execs, pid):
             snapshot, tasks, graph, blocked = await real_context(
                 svcs,
                 execs,
                 pid,
-                check_media_budget=check_media_budget,
             )
             reads["n"] += 1
             if reads["n"] == 1:
