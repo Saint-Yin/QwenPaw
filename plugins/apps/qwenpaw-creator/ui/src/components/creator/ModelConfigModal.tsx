@@ -29,7 +29,6 @@ import {
   ThunderboltOutlined,
   SafetyOutlined,
   ReadOutlined,
-  CloudServerOutlined,
   TranslationOutlined,
 } from "@ant-design/icons";
 import {
@@ -58,7 +57,6 @@ import type {
   ModelConfigItem,
 } from "@/contracts/creator";
 import ModelSetupGuide from "@/components/onboarding/ModelSetupGuide";
-import PlatformAutoConfigPane from "@/components/creator/PlatformAutoConfigPane";
 
 export const LLM_PROTOCOLS = [
   "Anthropic Claude",
@@ -3802,11 +3800,6 @@ export default function ModelConfigModal({ open, onClose }: Props) {
             <ReadOutlined style={{ fontSize: 14 }} />,
             t("modelConfig.paneGuide"),
           )}
-          {navButton(
-            "platform",
-            <CloudServerOutlined style={{ fontSize: 14 }} />,
-            t("modelConfig.panePlatform"),
-          )}
         </nav>
 
         <div
@@ -4901,12 +4894,6 @@ export default function ModelConfigModal({ open, onClose }: Props) {
                 </>
               );
             })()}
-
-          {activePane === "platform" && (
-            <PlatformAutoConfigPane
-              onJumpToModel={(section) => jumpToModel(section as TabType)}
-            />
-          )}
 
           {activePane === "guide" && (
             <>

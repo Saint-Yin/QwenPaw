@@ -723,18 +723,3 @@ describe("ModelConfigModal OpenCode support", () => {
     ).toBeUndefined();
   });
 });
-
-describe("ModelConfigModal platform pane", () => {
-  it("offers one-click setup and opens its own pane", async () => {
-    // Wiring guard: the pane is only reachable through the navigation entry,
-    // and that entry is meant to be unconditional - a deployment that cannot
-    // reach the platform should show a failing button, not a missing one.
-    mountModal(speechBaseConfig);
-    fireEvent.click(await screen.findByRole("button", { name: /一键配置/ }));
-
-    const action = await screen.findByRole("button", {
-      name: "拉取并配置",
-    });
-    expect(action).toBeInTheDocument();
-  });
-});

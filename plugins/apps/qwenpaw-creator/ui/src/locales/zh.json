@@ -1,4 +1,12 @@
 {
+  "feedback": {
+    "action": "意见反馈",
+    "title": "意见反馈",
+    "placeholder": "你的意见将成为我们改进的依据",
+    "submit": "提交",
+    "sent": "已收到，谢谢你的反馈",
+    "failed": "反馈提交失败"
+  },
   "common": {
     "close": "关闭",
     "cancel": "取消",
