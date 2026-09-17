@@ -30,6 +30,10 @@ FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS creator-ui-builder
 WORKDIR /app
 COPY plugins/apps/qwenpaw-creator/ui /app/creator-ui
 COPY plugins/apps/qwenpaw-creator/templates /app/templates
+# The Creator UI imports the shared player runtime via ../../../../player/... ,
+# which resolves outside ui/. Stage 1 needs it at /app/player or rollup cannot
+# resolve the import.
+COPY plugins/apps/qwenpaw-creator/player /app/player
 RUN cd /app/creator-ui && npm ci --include=dev && npm run build
 
 # -----------------------------------------------------------------------------
