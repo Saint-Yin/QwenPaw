@@ -1254,6 +1254,32 @@ _PLATFORM_PROXY_SECTIONS = ("llm", "vlm", "image", "video", "tts", "asr")
 _PLATFORM_PROTOCOL = "AgentScope Platform"
 _CHAT_COMPLETIONS_SUFFIX = "/chat/completions"
 
+# Model names are preset from the platform's own contract
+# (docs/platform/platform proxy.html), first entry being the default. They
+# are not discovered at runtime: GET /v1/models only lists the chat
+# namespace, while media models are proxied but missing from it, so the
+# endpoint cannot decide what a section should call.
+_CHAT_MODELS = (
+    "qwen3.8-flash",
+    "qwen3.8-max",
+    "qwen3.7-plus",
+    "deepseek-v4-flash",
+    "kimi-k3",
+    "glm-5.2",
+)
+_PLATFORM_MODELS_BY_SECTION: dict[str, tuple[str, ...]] = {
+    "llm": _CHAT_MODELS,
+    "vlm": _CHAT_MODELS,
+    "image": ("qwen-image-3.0",),
+    "video": (
+        "wan3.0-video",
+        "happyhorse-1.1",
+        "happyhorse-1.0-video-edit",
+    ),
+    "tts": ("qwen-audio-3.0-tts-flash", "qwen-audio-3.0-tts-plus"),
+    "asr": ("qwen-audio-3.0-asr-flash",),
+}
+
 
 def _platform_api_root(chat_completions_url: str) -> str:
     """Derive the proxy API root from the chat-completions endpoint.
@@ -1278,14 +1304,13 @@ def _platform_api_root(chat_completions_url: str) -> str:
 async def platform_autoconfigure(
     data: dict[str, Any] = Body(...),
 ) -> dict[str, Any]:
-    """Apply the platform-issued key to every section the proxy serves.
+    """Apply the platform-issued key and the preset model to each section.
 
     The platform hands the browser one key and one chat endpoint, while a
-    fresh container starts with nine empty sections. Model names are
-    deliberately not invented here: an id the account cannot serve reaches the
-    proxy as an upstream 400 that the proxy re-reports as a retryable 502, so
-    a section still missing its model is reported back for the operator to
-    choose instead of being filled with a guess.
+    fresh container starts with nine empty sections. Each proxied section is
+    pinned to a model measured from the platform contract, because a name
+    belonging to another provider (``fun-asr``, ``wan2.7``, a Bailian-only
+    image id) reaches the proxy as a call that cannot be served.
     """
     api_key = str(data.get("api_key") or "").strip()
     chat_url = str(data.get("chat_completions_url") or "").strip()
@@ -1294,16 +1319,22 @@ async def platform_autoconfigure(
     if not chat_url:
         raise ValidationError("平台未返回 chat_completions_url")
     base_url = _platform_api_root(chat_url)
+    previous = await asyncio.to_thread(
+        lambda: load_model_config(include_environment=False),
+    )
 
     def mutate(current: ModelConfigData) -> ModelConfigData:
         for name in _PLATFORM_PROXY_SECTIONS:
             item = getattr(current, name)
+            allowed = _PLATFORM_MODELS_BY_SECTION[name]
+            chosen = str(item.model_name or "").strip()
+            # A name the proxy does serve is left alone: it is an operator
+            # choice, not a leftover. Anything else is reset to the default.
+            item.model_name = chosen if chosen in allowed else allowed[0]
             item.protocol = _PLATFORM_PROTOCOL
             item.base_url = base_url
             item.api_key = api_key
-            # Enabling a section with no model would only turn a missing
-            # setting into a failed generation task.
-            item.enabled = bool(str(item.model_name or "").strip())
+            item.enabled = True
         return current
 
     updated = await asyncio.to_thread(mutate_model_config, mutate)
@@ -1315,6 +1346,10 @@ async def platform_autoconfigure(
                 "section": name,
                 "model_name": model_name,
                 "ready": bool(model_name),
+                "replaced": str(
+                    getattr(previous, name).model_name or "",
+                ).strip()
+                != model_name,
             },
         )
     return {"ok": True, "base_url": base_url, "sections": sections}

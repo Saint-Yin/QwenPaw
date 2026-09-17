@@ -3,8 +3,9 @@
 # pylint: disable=redefined-outer-name,unused-argument
 # ``config_path`` is an environmental fixture: the test body never reads it,
 # but without it these writes would land on the developer's real config.
-"""Platform one-click configuration: the browser-fetched key lands on the
-proxy-served sections only, and never on a section the proxy cannot serve."""
+"""Platform one-click configuration: the browser-fetched key and the preset
+model land on the proxy-served sections only, and never on a section the
+proxy cannot serve."""
 
 from __future__ import annotations
 
@@ -95,23 +96,56 @@ def test_the_issued_key_reaches_every_proxied_section(config_path) -> None:
     assert persisted["video"]["base_url"].endswith("/v1")
 
 
-def test_only_a_section_with_a_model_is_switched_on(config_path) -> None:
-    # Enabling a section with no model would turn a missing setting into a
-    # failed generation task, so the report is what tells the operator.
+def test_every_proxied_section_lands_on_a_preset_model(config_path) -> None:
+    # A fresh container only has the text lane filled. Without a preset the
+    # other five would be written as "configured" with no model behind them.
     result = _apply()
 
     loaded = model_routes.load_model_config(include_environment=False)
-    assert loaded.llm.enabled is True
-    assert loaded.video.enabled is False
+    for name in _PROXIED:
+        assert getattr(loaded, name).enabled is True, name
+    assert loaded.llm.model_name == "qwen3.8-flash"
+    assert loaded.vlm.model_name == "qwen3.8-flash"
+    assert loaded.image.model_name == "qwen-image-3.0"
+    assert loaded.video.model_name == "wan3.0-video"
+    assert loaded.tts.model_name == "qwen-audio-3.0-tts-flash"
+    assert loaded.asr.model_name == "qwen-audio-3.0-asr-flash"
 
     by_section = {row["section"]: row for row in result["sections"]}
     assert by_section["llm"] == {
         "section": "llm",
         "model_name": "qwen3.8-flash",
         "ready": True,
+        "replaced": False,
     }
-    assert by_section["tts"]["ready"] is False
-    assert by_section["tts"]["model_name"] == ""
+    # ``vlm`` resolves to the text lane while use_llm is on, so it never reads
+    # as moved. The sections that started empty all take their preset.
+    assert by_section["vlm"]["replaced"] is False
+    assert by_section["image"]["replaced"] is True
+    assert by_section["tts"]["replaced"] is True
+    assert by_section["tts"]["ready"] is True
+
+
+def test_a_foreign_model_is_reset_while_a_valid_choice_survives(
+    config_path,
+) -> None:
+    # ``fun-asr`` is a leftover from the Bailian lane and is not proxied, so
+    # keeping it would fail on the first call. ``happyhorse-1.1`` is on the
+    # platform, just not the default: that is an operator choice.
+    stored = json.loads(config_path.read_text(encoding="utf-8"))
+    stored["asr"]["model_name"] = "fun-asr"
+    stored["video"]["model_name"] = "happyhorse-1.1"
+    config_path.write_text(json.dumps(stored), encoding="utf-8")
+
+    result = _apply()
+
+    loaded = model_routes.load_model_config(include_environment=False)
+    assert loaded.asr.model_name == "qwen-audio-3.0-asr-flash"
+    assert loaded.video.model_name == "happyhorse-1.1"
+
+    by_section = {row["section"]: row for row in result["sections"]}
+    assert by_section["asr"]["replaced"] is True
+    assert by_section["video"]["replaced"] is False
 
 
 def test_sections_the_proxy_cannot_serve_keep_their_own_backend(

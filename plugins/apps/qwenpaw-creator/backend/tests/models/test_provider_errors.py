@@ -182,3 +182,55 @@ def test_model_error_from_a_gateway_4xx_is_marked_permanent() -> None:
         retryable=retryable_for_status(503, "upstream busy"),
     )
     assert transient.retryable is True
+
+
+# Measured on 2026-09-17: the proxy invented a name for an old condition.
+# Concurrency throttling arrives as a 429 whose text says "please retry
+# later", while the envelope reports retryable:false. No table can hold a
+# code that did not exist when the table was written, so an unlisted code
+# defers to the status the proxy now passes through.
+CONCURRENCY_ENVELOPE = (
+    "Text model 请求失败 [protocol=OpenAI-compatible "
+    "model=qwen3.8-flash] HTTP 429: "
+    '{"error":{"code":"ASP.BIZ.TOO_MANY_CONCURRENT_REQUESTS",'
+    '"message":"并发计费任务过多，请稍后重试","retryable":false,'
+    '"type":"BUSINESS"},'
+    '"request_id":"96eebdd1-76fd-4b94-b668-3ac889244b83"}'
+)
+
+
+def test_an_unlisted_code_defers_to_the_passed_through_status() -> None:
+    assert classify_gateway_error(CONCURRENCY_ENVELOPE) == CLASS_TRANSIENT
+    assert is_transient_error_message(CONCURRENCY_ENVELOPE) is True
+    assert retryable_for_status(429, CONCURRENCY_ENVELOPE) is True
+
+
+def test_a_4xx_status_still_walls_an_unlisted_code() -> None:
+    # Only the status changes: a 4xx for an unknown code stays a wall, so
+    # deferring to the status does not turn into "retry everything".
+    assert (
+        classify_gateway_error(
+            CONCURRENCY_ENVELOPE.replace("HTTP 429", "HTTP 400"),
+        )
+        == CLASS_UNKNOWN
+    )
+
+
+def test_a_measured_wrapper_keeps_walling_even_at_502() -> None:
+    # Both the status and the provider's flag say retry; measured behaviour
+    # says the request can never succeed, so the code still wins.
+    assert classify_gateway_error(UPSTREAM_ENVELOPE) == CLASS_UNKNOWN
+    assert is_transient_error_message(UPSTREAM_ENVELOPE) is False
+
+
+def test_a_severed_stream_is_transient_without_any_envelope() -> None:
+    # An httpx transport error carries no body: nothing was billed because the
+    # response never completed, which is what makes the retry safe.
+    assert (
+        is_transient_error_message(
+            "Text model request failed [protocol=AgentScope Platform] "
+            "RemoteProtocolError: peer closed connection without sending "
+            "complete message body (incomplete chunked read)",
+        )
+        is True
+    )

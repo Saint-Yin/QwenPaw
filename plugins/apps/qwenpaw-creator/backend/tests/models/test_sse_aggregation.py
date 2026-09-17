@@ -263,3 +263,32 @@ def test_empty_or_unreadable_stream_fails_instead_of_returning_nothing() -> (
 
     completion = aggregate_stream_to_completion([])
     assert completion["choices"][0]["message"]["content"] == ""
+
+
+def test_a_folded_stream_records_how_a_contentless_reply_ended() -> None:
+    # Diagnosing "the reply had no text" needs the frame count and an honest
+    # note about whether the upstream ever said how it ended. ``finish_reason``
+    # keeps its "stop" default because the parsers outside this file expect the
+    # non-streaming shape; the side channel is what tells a clean stop from a
+    # stream the gateway never closed.
+    answered = aggregate_stream_to_completion(
+        [
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "hi"},
+                        "finish_reason": "length",
+                    },
+                ],
+            },
+        ],
+    )
+    assert answered["_frame_count"] == 1
+    assert answered["choices"][0]["finish_reason"] == "length"
+    assert "_finish_reason_missing" not in answered
+
+    silent = aggregate_stream_to_completion([])
+    assert silent["choices"][0]["finish_reason"] == "stop"
+    assert silent["_finish_reason_missing"] is True
+    assert silent["_frame_count"] == 0
