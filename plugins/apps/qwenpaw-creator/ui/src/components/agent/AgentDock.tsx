@@ -15,7 +15,11 @@ import type {
 } from "react";
 import { Button, Tooltip, message } from "antd";
 import { useShallow } from "zustand/react/shallow";
-import { ArrowUpOutlined, MenuFoldOutlined } from "@ant-design/icons";
+import {
+  ArrowUpOutlined,
+  CommentOutlined,
+  MenuFoldOutlined,
+} from "@ant-design/icons";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -97,6 +101,7 @@ import AgentProgressOverview from "./AgentProgressOverview";
 import AgentWaitHint from "./AgentWaitHint";
 import AgentActivityIndicator from "./AgentActivityIndicator";
 import DecisionTray from "./DecisionTray";
+import FeedbackModal from "@/components/creator/FeedbackModal";
 import MentionInput, { type MentionInputHandle } from "./MentionInput";
 import { reviewPendingUnits } from "./FileProjectReviewPanel";
 import OnboardingHint from "@/components/onboarding/OnboardingHint";
@@ -1122,6 +1127,9 @@ export default function AgentDock({
     (state) => state.loadOlderMessages,
   );
   const sendMessage = useCreatorSessionStore((state) => state.sendMessage);
+  // Feedback lives here because this is where a run is watched: the person
+  // complains about what they can see failing, and only types the reason.
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const stopping = useCreatorSessionStore((state) => state.stopping);
   const isReplaying = useCreatorSessionStore((state) => state.isReplaying);
   const stopAllAgents = useCreatorSessionStore((state) => state.stopAllAgents);
@@ -2502,6 +2510,17 @@ export default function AgentDock({
                       </span>
                     </span>
                   )}
+                <Button
+                  type="text"
+                  size="small"
+                  data-agent-feedback
+                  aria-label={t("feedback.action")}
+                  icon={<CommentOutlined />}
+                  className="shrink-0 !h-6 !px-1.5 !text-[11px]"
+                  onClick={() => setFeedbackOpen(true)}
+                >
+                  {t("feedback.action")}
+                </Button>
               </div>
               <AgentWaitHint
                 projectId={projectId}
@@ -2815,6 +2834,11 @@ export default function AgentDock({
           </>
         </div>
       )}
+      <FeedbackModal
+        open={feedbackOpen}
+        projectId={projectId}
+        onClose={() => setFeedbackOpen(false)}
+      />
     </>
   );
 }

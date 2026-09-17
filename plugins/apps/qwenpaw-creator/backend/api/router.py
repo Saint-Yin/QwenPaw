@@ -19,6 +19,7 @@ from services.runtime_files.runtime_dependencies import (
 
 from .file_asset_routes import router as file_assets_router
 from .example_routes import router as examples_router
+from .feedback_routes import router as feedback_router
 from .file_execution_routes import router as file_execution_router
 from .file_media_routes import router as file_media_router
 from .file_session_routes import router as file_sessions_router
@@ -64,6 +65,7 @@ configured_router.include_router(interactive_bundle_router)
 configured_router.include_router(prompt_sync_router)
 configured_router.include_router(model_router)
 configured_router.include_router(observability_router)
+configured_router.include_router(feedback_router)
 configured_router.include_router(video_templates_router)
 configured_router.include_router(voice_router)
 router.include_router(configured_router)

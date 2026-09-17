@@ -6,6 +6,14 @@
     "allowMedia": "Confirm and continue",
     "failed": "Could not confirm the script. Refresh and try again."
   },
+  "feedback": {
+    "action": "Feedback",
+    "title": "Feedback",
+    "placeholder": "Your input will guide what we improve next",
+    "submit": "Submit",
+    "sent": "Received — thank you for the feedback",
+    "failed": "Failed to submit feedback"
+  },
   "common": {
     "close": "Close",
     "cancel": "Cancel",
