@@ -203,6 +203,13 @@ def aggregate_stream_to_completion(frames: list[dict]) -> dict:
     if usage:
         completion["usage"] = usage
     completion.update(envelope)
+    # Side channel for a reply that carries no text: the folded
+    # ``finish_reason`` keeps its "stop" default so every existing parser
+    # still sees the shape it expects, while these keys record that the
+    # upstream never said how it ended, and how many frames were seen.
+    completion["_frame_count"] = len(frames)
+    if not finish_reason:
+        completion["_finish_reason_missing"] = True
     if reasoning_seen:
         completion["_reasoning_content_dropped"] = True
     return completion

@@ -18,13 +18,15 @@ deterministic. Measured samples (all of them returned in ~0.1s):
 
 Trusting the field means an unattended run re-sends requests that can never
 succeed - each of which may still be billed upstream.  So classification here
-keys on ``code`` alone and **fails closed**: an unknown code is treated as
-non-retryable, because a wrong "retry" costs money while a wrong "don't retry"
-only costs one user-visible failure.
+keys on ``code``, and a code whose semantics are known (configuration, quota,
+or the two measured-above wrappers) never defers to the status.
 
-Substring matching over message text is deliberately avoided: the same body
-text appears for a broken configuration and for an exhausted balance, and the
-403 Credits error reads like a permission failure.
+For a code that is not in any table the status code decides: the proxy now
+passes the upstream status through, so 429/5xx is retryable. Inventing a new
+name for a retryable condition used to wall the node - ``429
+ASP.BIZ.TOO_MANY_CONCURRENT_REQUESTS`` arrived with ``retryable: false`` and
+the wording "please retry later", and no table row can be expected for a code
+that was not yet issued.
 """
 
 from __future__ import annotations
@@ -41,6 +43,19 @@ import re
 _CODE_RE = re.compile(r"""['"]code['"]\s*:\s*['"](ASP\.[A-Z0-9_.]+)['"]""")
 _REQUEST_ID_RE = re.compile(
     r"""['"]request_id['"]\s*:\s*['"]([0-9a-fA-F-]{8,})['"]""",
+)
+# The status the caller appended (``HTTP 429: …``) or the provider's own
+# wording (``… failed with status 502 …``). Message-only callers have no other
+# way back to the status, because a persisted task error keeps just text.
+_STATUS_RE = re.compile(r"\b(?:http|status)\s+(\d{3})\b", re.IGNORECASE)
+
+# Wrappers that were measured stamping a 5xx on a client-side mistake, so they
+# stay non-retryable even though their status would say otherwise.
+GATEWAY_DETERMINISTIC_CODES = frozenset(
+    {
+        "ASP.UPSTREAM.ERROR",
+        "ASP.SYS.INTERNAL_ERROR",
+    },
 )
 
 # Only errors that are transient *because of the code itself* are retried.
@@ -85,6 +100,17 @@ def gateway_request_id(text: str) -> str:
     return match.group(1) if match else ""
 
 
+def status_code_in_text(text: str) -> int:
+    """The HTTP status a message carries, or 0 when it carries none."""
+    match = _STATUS_RE.search(text or "")
+    return int(match.group(1)) if match else 0
+
+
+def is_retryable_status(status_code: int) -> bool:
+    """Whether a passed-through status describes a temporary condition."""
+    return status_code == 429 or status_code >= 500
+
+
 def classify_gateway_error(text: str) -> str:
     """Classify by code: transient / permanent / quota / unknown / "".
 
@@ -96,13 +122,19 @@ def classify_gateway_error(text: str) -> str:
         return ""
     if code in GATEWAY_QUOTA_CODES:
         return CLASS_QUOTA
-    if code in GATEWAY_TRANSIENT_CODES:
-        return CLASS_TRANSIENT
     if code in GATEWAY_PERMANENT_CODES:
         return CLASS_PERMANENT
-    # ASP.UPSTREAM.ERROR / ASP.SYS.INTERNAL_ERROR / anything unlisted: measured
-    # samples show these carry deterministic client-side causes, so no retry.
-    return CLASS_UNKNOWN
+    if code in GATEWAY_DETERMINISTIC_CODES:
+        return CLASS_UNKNOWN
+    if code in GATEWAY_TRANSIENT_CODES:
+        return CLASS_TRANSIENT
+    # Anything else: the code is a name this build has not seen. Defer to the
+    # status the proxy passes through instead of defaulting to a wall.
+    return (
+        CLASS_TRANSIENT
+        if is_retryable_status(status_code_in_text(text))
+        else CLASS_UNKNOWN
+    )
 
 
 def is_gateway_quota_error(text: str) -> bool:
@@ -116,16 +148,16 @@ def is_gateway_transient(text: str) -> bool:
 
 
 def retryable_for_status(status_code: int, body: str = "") -> bool:
-    """Retry decision for one HTTP failure, gateway code winning over status.
+    """Retry decision for one HTTP failure.
 
-    Keeps the existing "5xx and 429 are transient" rule for providers that
-    publish no envelope, while refusing to retry a gateway error that reports
-    itself as retryable.
+    A code with known semantics overrides the status - the proxy stamps
+    ``retryable: true`` on deterministic failures - while an unlisted code or
+    no envelope at all defers to the status, which the proxy passes through.
     """
-    classified = classify_gateway_error(body)
-    if classified:
-        return classified == CLASS_TRANSIENT
-    return status_code >= 500 or status_code == 429
+    code = gateway_error_code(body)
+    if code:
+        return classify_gateway_error(body) == CLASS_TRANSIENT
+    return is_retryable_status(status_code)
 
 
 __all__ = [
@@ -133,6 +165,7 @@ __all__ = [
     "CLASS_QUOTA",
     "CLASS_TRANSIENT",
     "CLASS_UNKNOWN",
+    "GATEWAY_DETERMINISTIC_CODES",
     "GATEWAY_PERMANENT_CODES",
     "GATEWAY_QUOTA_CODES",
     "GATEWAY_TRANSIENT_CODES",
@@ -141,5 +174,7 @@ __all__ = [
     "gateway_request_id",
     "is_gateway_quota_error",
     "is_gateway_transient",
+    "is_retryable_status",
     "retryable_for_status",
+    "status_code_in_text",
 ]

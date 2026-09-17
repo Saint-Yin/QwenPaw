@@ -15,6 +15,7 @@ The protocol is read from the persisted ``llm`` section of
 
 from __future__ import annotations
 
+import os
 from urllib.parse import urlsplit
 
 import httpx
@@ -24,6 +25,57 @@ from models.concurrency import model_slot
 from models.provider_errors import is_gateway_quota_error, retryable_for_status
 from models.sse import decode_chat_response
 from utils.exceptions import ModelError, redact_url, upstream_status_hint
+
+
+# Opt-in detail on a reply that carried no text. Off by default: the numbers
+# below are for reproducing a field failure and they land in a message the
+# operator sees, so nobody has to read provider bookkeeping unasked.
+DIAGNOSTICS_ENV = "CREATOR_MODEL_DIAGNOSTICS"
+
+
+def _diagnostics_enabled() -> bool:
+    return str(os.environ.get(DIAGNOSTICS_ENV, "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _finish_reason_of(payload: dict) -> str:
+    """The provider's own ending reason, across the three reply shapes."""
+
+    for key, field in (
+        ("choices", "finish_reason"),
+        ("candidates", "finishReason"),
+    ):
+        rows = payload.get(key) or []
+        if rows and isinstance(rows[0], dict):
+            reason = str(rows[0].get(field) or "")
+            if reason:
+                return reason
+    return str(payload.get("stop_reason") or "")
+
+
+def _empty_content_detail(payload: dict) -> str:
+    """Why a 2xx reply held no text, when diagnostics are switched on.
+
+    Without this the failure is undecidable: a reasoning model that spent the
+    whole budget on its thinking trace, a stream the gateway ended without a
+    closing frame, and a refusal all look like the same empty string.
+    """
+    if not _diagnostics_enabled():
+        return ""
+    reason = _finish_reason_of(payload) or "none"
+    if payload.get("_finish_reason_missing"):
+        reason += "(never_reported)"
+    fields = [
+        f"finish_reason={reason}",
+        f"frames={payload.get('_frame_count', 'n/a')}",
+        f"reasoning_dropped={bool(payload.get('_reasoning_content_dropped'))}",
+        f"usage={payload.get('usage') or payload.get('usageMetadata') or 'none'}",
+    ]
+    return " [" + " ".join(fields) + "]"
 
 
 def _openai_chat_url() -> str:
@@ -148,7 +200,10 @@ async def _call_openai(
         else None
     )
     if not isinstance(content, str) or not content.strip():
-        raise ModelError("Text model 返回空内容", model_name=model_name)
+        raise ModelError(
+            "Text model 返回空内容" + _empty_content_detail(payload),
+            model_name=model_name,
+        )
     return content.strip()
 
 
@@ -209,7 +264,10 @@ async def _call_anthropic(
     ]
     content = "\n".join(text_parts)
     if not content.strip():
-        raise ModelError("Text model 返回空内容", model_name=model_name)
+        raise ModelError(
+            "Text model 返回空内容" + _empty_content_detail(payload),
+            model_name=model_name,
+        )
     return content.strip()
 
 
@@ -264,7 +322,10 @@ async def _call_gemini(
     payload = response.json()
     candidates = payload.get("candidates") or []
     if not candidates:
-        raise ModelError("Text model 返回空内容", model_name=model_name)
+        raise ModelError(
+            "Text model 返回空内容" + _empty_content_detail(payload),
+            model_name=model_name,
+        )
     candidate = candidates[0] if isinstance(candidates[0], dict) else {}
     content_obj = candidate.get("content") or {}
     parts = content_obj.get("parts") or []
@@ -275,7 +336,10 @@ async def _call_gemini(
     ]
     content = "\n".join(text_parts)
     if not content.strip():
-        raise ModelError("Text model 返回空内容", model_name=model_name)
+        raise ModelError(
+            "Text model 返回空内容" + _empty_content_detail(payload),
+            model_name=model_name,
+        )
     return content.strip()
 
 

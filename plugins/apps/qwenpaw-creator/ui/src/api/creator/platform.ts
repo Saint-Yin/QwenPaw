@@ -31,6 +31,8 @@ export interface PlatformApplySection {
   section: string;
   model_name: string;
   ready: boolean;
+  /** True when the preset replaced whatever the section held before. */
+  replaced?: boolean;
 }
 
 export interface PlatformApplyResult {

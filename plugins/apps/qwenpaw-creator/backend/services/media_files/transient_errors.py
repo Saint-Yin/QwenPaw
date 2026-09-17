@@ -38,6 +38,12 @@ TRANSIENT_ERROR_MARKERS = (
     "status 502",
     "status 503",
     "status 504",
+    # The gateway severing a response mid-flight leaves an httpx transport
+    # error with no body, so there is no envelope and no status to read: the
+    # wording is the only signal. Nothing was billed - the request never
+    # completed - which is what makes a bounded retry safe here.
+    "peer closed connection",
+    "incomplete chunked read",
     # Legacy empty-detail records: before the provider labelled
     # httpx transport errors, WriteError/ReadError/ConnectError
     # stringified to nothing and persisted this exact degenerate
