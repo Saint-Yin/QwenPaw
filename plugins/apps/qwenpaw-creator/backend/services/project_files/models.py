@@ -1539,6 +1539,7 @@ class Project(StrictModel):
     created_at: UtcDateTime
     updated_at: UtcDateTime
     name: str = Field(min_length=1)
+    name_source: Literal["user", "auto"] | None = None
     description: str = ""
     scenario: Literal["short_drama", "video_edit", "general"] = "general"
     settings: ProjectSettings = Field(default_factory=ProjectSettings)
