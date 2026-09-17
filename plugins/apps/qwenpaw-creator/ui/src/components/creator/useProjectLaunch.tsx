@@ -405,8 +405,8 @@ export function useProjectLaunch(options?: {
       scenario === "short_drama" && !scriptFirst
         ? ["llm", "vlm", "image", "video"]
         : scenario === "video_edit" || hasAttachments
-        ? ["llm", "vlm"]
-        : ["llm"];
+          ? ["llm", "vlm"]
+          : ["llm"];
     const missing: string[] = [];
     for (const type of required) {
       const item = config[type];
@@ -539,6 +539,7 @@ export function useProjectLaunch(options?: {
         // Resolve the stage from the saved permission mode on the server,
         // so a stale client snapshot cannot override the user's choice.
         name: resolvedProjectName,
+        nameSource: projectName.trim() ? ("user" as const) : ("auto" as const),
         description: projectDescription.trim(),
         scenario,
         resolution,
