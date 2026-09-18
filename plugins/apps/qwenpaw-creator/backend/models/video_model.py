@@ -23,6 +23,7 @@ from models.media_transport import (
     upload_reference_file_for_provider,
 )
 from models.provider_errors import retryable_for_status
+from models.retry_timing import backoff_seconds
 from models.video_capabilities import (
     HAPPYHORSE_MAX_DURATION_SECONDS,
     HAPPYHORSE_MAX_REFERENCE_IMAGES,
@@ -1239,14 +1240,27 @@ async def submit_video_task(
                         headers=submit_headers,
                         json=body,
                     )
-                    if resp.status_code == 429:
-                        wait = RETRY_BACKOFF_BASE * (attempt + 1)
-                        logger.warning(
-                            f"Video submit rate limited (429), retrying in {wait}s (attempt {attempt+1}/{MAX_RETRIES})",
+                    # A gateway error code decides when the body carries one and
+                    # the status decides otherwise, so an nginx 503 is retried
+                    # rather than ending the task on its first attempt.
+                    if (
+                        not retryable_for_status(
+                            resp.status_code,
+                            resp.text,
                         )
-                        await asyncio.sleep(wait)
-                        continue
-                    break
+                        or attempt == MAX_RETRIES - 1
+                    ):
+                        break
+                    wait = backoff_seconds(
+                        attempt,
+                        base=RETRY_BACKOFF_BASE,
+                        headers=resp.headers,
+                    )
+                    logger.warning(
+                        f"Video submit retryable HTTP {resp.status_code}, "
+                        f"retrying in {wait}s (attempt {attempt+1}/{MAX_RETRIES})",
+                    )
+                    await asyncio.sleep(wait)
             resp.raise_for_status()
             data = resp.json()
 

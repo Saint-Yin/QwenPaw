@@ -387,7 +387,14 @@ def test_same_inputs_are_never_redispatched(tmp_path, monkeypatch):
     async def scenario():
         await scheduler.tick(PROJECT_ID)
         await _drain()
-        record = _failed_record(dispatch, error="provider down")
+        record = _failed_record(
+            dispatch,
+            # A settled failure, not an unknown one: an unrecognised wording is
+            # retried on purpose (see _is_transient_dispatch_error), which is
+            # what keeps a gateway timeout from walling a project forever.
+            error="Image generation failed: check creator_image_model "
+            "configuration.",
+        )
         monkeypatch.setattr(
             scheduler.executions,
             "list_tasks",
@@ -1308,6 +1315,69 @@ def test_credits_breaker_is_tripped_once_and_cleared_by_cancel(
     # a Credits-exhausted run is that they just paid for more.
     scheduler.cancel_project(PROJECT_ID)
     assert not scheduler._quota_breaker_open(PROJECT_ID)
+
+
+# The image lane's own summary once its in-request budget is spent. Measured on
+# platform-pre: sixteen nodes each exhausted three attempts inside 31 seconds,
+# because every node retried on the same second and spent its own budget.
+RATE_LIMIT_ERROR = "Image generation failed: rate limited after all retries"
+
+
+def test_rate_limit_breaker_holds_the_fan_out_and_expires(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    services = _services(tmp_path, monkeypatch, ready_variants=1)
+    scheduler = WorkGraphScheduler(services)
+
+    assert scheduler._trip_rate_limit_breaker(
+        PROJECT_ID,
+        Exception(RATE_LIMIT_ERROR),
+    )
+    assert scheduler._rate_limit_breaker_open(PROJECT_ID)
+    # One window produces one line: the rest of the fan-out would hear the same
+    # refusal, so repeating it tells the agent nothing new.
+    assert not scheduler._trip_rate_limit_breaker(
+        PROJECT_ID,
+        Exception(RATE_LIMIT_ERROR),
+    )
+
+    # A bare status says the same thing in the provider's own words.
+    scheduler.cancel_project(PROJECT_ID)
+    assert not scheduler._rate_limit_breaker_open(PROJECT_ID)
+    assert scheduler._trip_rate_limit_breaker(
+        PROJECT_ID,
+        Exception("Image generation failed with status 429: too many requests"),
+    )
+
+    # Credits is the better diagnosis when a refusal looks like both: its
+    # remedy is the user's and its window is far longer, so the short hold
+    # would only delay the message that can actually be acted on.
+    scheduler.cancel_project(PROJECT_ID)
+    assert not scheduler._trip_rate_limit_breaker(
+        PROJECT_ID,
+        Exception(CREDITS_ERROR),
+    )
+    assert not scheduler._rate_limit_breaker_open(PROJECT_ID)
+
+    # An unrelated transient fault must not wall the whole project - it says
+    # nothing about the other nodes' inputs.
+    assert not scheduler._trip_rate_limit_breaker(
+        PROJECT_ID,
+        Exception(UPSTREAM_ERROR),
+    )
+    assert not scheduler._rate_limit_breaker_open(PROJECT_ID)
+
+    # The window is a TTL, so a throttle that clears resumes dispatch without
+    # a restart; the first node through learns whether it really did.
+    assert scheduler._trip_rate_limit_breaker(
+        PROJECT_ID,
+        Exception(RATE_LIMIT_ERROR),
+    )
+    scheduler._rate_limited_tripped[PROJECT_ID] -= (
+        work_scheduler._RATE_LIMIT_BREAKER_SECONDS + 1
+    )
+    assert not scheduler._rate_limit_breaker_open(PROJECT_ID)
 
 
 def test_credits_breaker_also_holds_prompt_preparation(

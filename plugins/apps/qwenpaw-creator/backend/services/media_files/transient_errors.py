@@ -11,7 +11,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from models.provider_errors import classify_gateway_error
+from models.provider_errors import (
+    classify_gateway_error,
+    is_retryable_status,
+    status_code_in_text,
+)
 
 TRANSIENT_ERROR_MARKERS = (
     "connection",
@@ -54,21 +58,72 @@ TRANSIENT_ERROR_MARKERS = (
     "image generation failed: . check",
 )
 
+# Causes a retry cannot fix, for the failures that carry neither a gateway
+# envelope nor an HTTP status - configuration and capability problems, which
+# have no status to read precisely because no request ever left the machine.
+# :func:`is_unclassified_failure` treats them as settled, so the scheduler's
+# retry-by-default floor never re-opens a misconfigured node.
+PERMANENT_ERROR_MARKERS = (
+    "api key",
+    "configuration",
+    "未配置",
+    "does not support",
+    "refusing resubmission",
+    "never resubmit",
+)
+
 MAX_TRANSIENT_RETRY_SLOTS = 3
 
 
 def is_transient_error_message(message: str) -> bool:
-    # A provider gateway envelope outranks the substring table: the AgentScope
-    # proxy stamps ``retryable: true`` on deterministic failures (measured:
-    # a missing required field and an unresolvable reference host both return
-    # ASP.UPSTREAM.ERROR in 0.1s), and its 502 text would otherwise match the
-    # "bad gateway" marker below and burn every retry slot on a request that
-    # can never succeed.
+    """Whether a failure is worth another attempt.
+
+    Three signals, most trusted first: a gateway error code, then an HTTP
+    status the message names, then a short list of causes no retry can fix.
+    Anything left over counts as transient.
+    """
+
+    # A provider gateway envelope outranks everything below: the AgentScope
+    # proxy stamps ``retryable: true`` on deterministic failures (measured: a
+    # missing required field and an unresolvable reference host both return
+    # ASP.UPSTREAM.ERROR in 0.1s), so a status or wording guess would burn
+    # every retry slot on a request that can never succeed.
     classified = classify_gateway_error(message)
     if classified:
         return classified == "transient"
+    status = status_code_in_text(message)
+    if status:
+        # A message that names its own status needs no substring guess. The
+        # old allowlist missed nginx's hyphenated "504 Gateway Time-out" - its
+        # entries read "gateway timeout" and "status 504", and the lane writes
+        # "HTTP 504" - so a gateway that merely took too long walled every
+        # presentation node as deterministic.
+        return is_retryable_status(status)
     folded = message.casefold()
+    if any(marker in folded for marker in PERMANENT_ERROR_MARKERS):
+        return False
     return any(marker in folded for marker in TRANSIENT_ERROR_MARKERS)
+
+
+def is_unclassified_failure(message: str) -> bool:
+    """Whether a failure carries no signal at all about its cause.
+
+    True only when there is no gateway code, no HTTP status in the wording, and
+    no match in either marker table - which means the caller has learned
+    nothing, as opposed to having learned that the fault is permanent. The
+    scheduler retries exactly these, so that an unrecognised wording costs a
+    bounded budget instead of walling a node forever: nginx writes "504 Gateway
+    Time-out" with a hyphen, and that one character stalled a whole project.
+    """
+
+    text = str(message or "")
+    if classify_gateway_error(text) or status_code_in_text(text):
+        return False
+    folded = text.casefold()
+    return not any(
+        marker in folded
+        for marker in (*TRANSIENT_ERROR_MARKERS, *PERMANENT_ERROR_MARKERS)
+    )
 
 
 def is_transient_task_error(error: Mapping[str, Any] | None) -> bool:
@@ -98,8 +153,10 @@ def transient_retry_slot_key(idempotency_key: str, attempt: int) -> str:
 
 __all__ = [
     "MAX_TRANSIENT_RETRY_SLOTS",
+    "PERMANENT_ERROR_MARKERS",
     "TRANSIENT_ERROR_MARKERS",
     "is_transient_error_message",
     "is_transient_task_error",
+    "is_unclassified_failure",
     "transient_retry_slot_key",
 ]

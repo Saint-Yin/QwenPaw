@@ -96,6 +96,24 @@ def parse_sse_frames(text: str) -> list[dict]:
     return frames
 
 
+def sse_stream_terminated(text: str) -> bool:
+    """Whether the stream carried the closing ``[DONE]`` sentinel.
+
+    :func:`parse_sse_frames` consumes the sentinel and stops there, so the
+    aggregator cannot tell a politely-ended stream from one the gateway severed
+    mid-flight. This reads the raw body for it, which is what makes a
+    truncation claim safe rather than a guess.
+    """
+
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line.startswith("data:"):
+            continue
+        if line[len("data:") :].strip() == _EVENT_DONE:
+            return True
+    return False
+
+
 def _fold_tool_calls(
     accumulated: list[dict],
     streamed: list[dict],
@@ -157,7 +175,11 @@ def _fold_choice(choice: dict, state: dict) -> None:
         state["finish_reason"] = str(choice["finish_reason"])
 
 
-def aggregate_stream_to_completion(frames: list[dict]) -> dict:
+def aggregate_stream_to_completion(
+    frames: list[dict],
+    *,
+    terminated: bool = True,
+) -> dict:
     """Fold streamed chunks into one non-streaming ``chat.completion`` dict."""
     state: dict[str, Any] = {
         "content_parts": [],
@@ -210,6 +232,11 @@ def aggregate_stream_to_completion(frames: list[dict]) -> dict:
     completion["_frame_count"] = len(frames)
     if not finish_reason:
         completion["_finish_reason_missing"] = True
+    # Neither an ending reason nor a closing sentinel means the gateway stopped
+    # talking mid-answer: what was folded is a prefix. Providers that end
+    # politely without ever reporting a finish_reason stay out of this branch.
+    if not finish_reason and not terminated:
+        completion["_stream_truncated"] = True
     if reasoning_seen:
         completion["_reasoning_content_dropped"] = True
     return completion
@@ -253,7 +280,10 @@ def decode_chat_response(
                 model_name=model_name,
             )
         _raise_for_streamed_error(frames)
-        return aggregate_stream_to_completion(frames)
+        return aggregate_stream_to_completion(
+            frames,
+            terminated=sse_stream_terminated(text),
+        )
     if _looks_like_html(text):
         raise ModelError(
             f"HTTP {status_code} returned an HTML page instead of a chat "
