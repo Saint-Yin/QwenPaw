@@ -72,7 +72,6 @@ export default function FeedbackModal({
             placeholder={t("feedback.placeholder")}
             autoSize={{ minRows: 4, maxRows: 10 }}
             maxLength={FEEDBACK_LIMIT}
-            showCount
           />
           {error && (
             <Alert

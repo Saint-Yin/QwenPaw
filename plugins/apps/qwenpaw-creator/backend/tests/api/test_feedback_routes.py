@@ -85,6 +85,43 @@ def test_the_pointer_prefers_the_newest_error(
     assert draft["stage"] == "unknown"
 
 
+def test_the_stage_walks_back_past_a_generic_newest_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The newest failure is a bare api/CONFLICT that names no step; the image
+    # error one line earlier does. The stage reads back the real signal while
+    # the pointer still cites the newest record, which is what actually happened
+    # last.
+    monkeypatch.setattr(
+        feedback_routes,
+        "read_trace_records",
+        lambda **_: [
+            {
+                "traceId": "t-old",
+                "traceFile": "creator-trace-2026-09-17.jsonl",
+                "traceLine": 10,
+                "timestamp": "2026-09-17T01:00:00+00:00",
+                "name": "creator.error.reported",
+                "component": "model.image",
+                "attributes": {"errorCode": "IMAGE_GENERATION_FAILED"},
+            },
+            {
+                "traceId": "t-new",
+                "traceFile": "creator-trace-2026-09-17.jsonl",
+                "traceLine": 20,
+                "timestamp": "2026-09-17T02:00:00+00:00",
+                "name": "creator.error.reported",
+                "component": "api",
+                "attributes": {"errorCode": "CONFLICT"},
+            },
+        ],
+    )
+
+    draft = _draft({"project_id": PROJECT, "feedback": "图片老失败"})
+    assert draft["stage"] == "media_generation"
+    assert draft["trace_line"] == 20
+
+
 def test_an_absent_trace_still_yields_a_submittable_record(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
