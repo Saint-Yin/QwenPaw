@@ -190,6 +190,7 @@ _S2V_COMMANDS = {CreatorCommandType.GENERATE_S2V_VIDEO.value}
 _COMPOSE_COMMANDS = {CreatorCommandType.COMPOSE_FINAL_VIDEO.value}
 _SCRIPT_COMMANDS = {CreatorCommandType.GENERATE_TIMELINE_SCRIPT.value}
 _INTERACTION_COMMANDS = {CreatorCommandType.GENERATE_INTERACTION_MOTION.value}
+_COVER_COMMANDS = {CreatorCommandType.GENERATE_COVER.value}
 
 # Publication stays non-blocking, but dependent unattended work waits for the
 # asynchronous reviewer to settle. Otherwise a short image review can replace
@@ -1836,6 +1837,8 @@ class WorkGraphScheduler:
             dispatch = _default_script_dispatch
         elif node.command in _INTERACTION_COMMANDS:
             dispatch = _default_interaction_dispatch
+        elif node.command in _COVER_COMMANDS:
+            dispatch = _default_cover_dispatch
         else:
             dispatch = self._image_dispatch or _default_image_dispatch
         return await dispatch(
@@ -1937,6 +1940,34 @@ async def _default_interaction_dispatch(
     # Single-command entry point: no command kwarg to forward.
     del command
     return await execute_file_interaction_command(
+        services,
+        project_id=project_id,
+        target_ref=target_ref,
+        arguments=arguments,
+        idempotency_key=idempotency_key,
+        expected_object_versions=expected_object_versions,
+    )
+
+
+async def _default_cover_dispatch(
+    services: CreatorFileServices,
+    *,
+    project_id: str,
+    command: str | None = None,
+    target_ref: str,
+    arguments: dict[str, Any],
+    idempotency_key: str,
+    expected_object_versions: Sequence[str] = (),
+) -> Any:
+    """Render the whole-piece cover poster (image model, no review)."""
+
+    # pylint: disable=import-outside-toplevel
+    from services.media_files.cover_execution import (
+        execute_file_cover_command,
+    )
+
+    del command
+    return await execute_file_cover_command(
         services,
         project_id=project_id,
         target_ref=target_ref,
