@@ -1536,6 +1536,23 @@ def _draft_presentation(project: Project) -> None:
     )
 
 
+def _make_cover_current(project: Project) -> None:
+    """Mark the whole-piece cover as generated and current for the graph."""
+
+    from services.media_files.cover_generation import cover_input_fingerprint
+
+    fingerprint = cover_input_fingerprint(project)
+    project.interactive_presentation = (
+        project.interactive_presentation.model_copy(
+            update={
+                "cover_file_id": "file-cover-test",
+                "cover_checksum": "a" * 64,
+                "cover_fingerprint": f"input_fingerprint={fingerprint}",
+            },
+        )
+    )
+
+
 def _select_final_video(project: Project, timeline_id: str) -> None:
     _select_slot(
         project,
@@ -1965,6 +1982,7 @@ def test_completed_branching_graph_has_no_permanent_ready_bundle():
         _select_final_video(project, timeline_id)
     _draft_choice_motion(project)
     _draft_presentation(project)
+    _make_cover_current(project)
     graph = derive_work_graph(project)
     assert not graph.unfinished(), [
         (n.node_id, n.status) for n in graph.unfinished()
