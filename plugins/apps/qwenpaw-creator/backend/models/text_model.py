@@ -151,6 +151,12 @@ async def _call_openai(
         "model": model_name,
         "messages": messages,
         "temperature": temperature,
+        # Asked to stream although the caller wants one answer. A gateway in
+        # front of a slow model reads a silent connection as a dead one and
+        # kills it at 180s (measured: nginx 504 on a four-screen presentation,
+        # where our own budget was 600s). Bytes flowing resets that clock, and
+        # ``decode_chat_response`` folds the stream back into one completion.
+        "stream": True,
     }
     # Free-tier gateways (e.g. OpenCode Zen ``*-free``) accept requests
     # without an Authorization header; an empty Bearer value would be
@@ -215,6 +221,18 @@ async def _call_openai(
         raise ModelError(
             detail + _empty_content_detail(payload),
             model_name=model_name,
+        )
+    if payload.get("_stream_truncated"):
+        # The gateway stopped talking without ever saying how the answer ended.
+        # What arrived is a prefix, and a half-written HTML page accepted as a
+        # finished work screen is worse than the 504 this replaces, because it
+        # fails silently. Nothing was completed, so asking again is safe.
+        raise ModelError(
+            "Text model 响应流被截断"
+            f"（结束原因未上报，输出 token：{_completion_tokens_of(payload)}，"
+            f"已收到 {len(content)} 字符但不完整）",
+            model_name=model_name,
+            retryable=True,
         )
     return content.strip()
 

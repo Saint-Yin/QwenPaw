@@ -19,6 +19,7 @@ from models.sse import (
     decode_chat_response,
     is_event_stream,
     parse_sse_frames,
+    sse_stream_terminated,
 )
 from utils.exceptions import ModelError
 
@@ -292,3 +293,58 @@ def test_a_folded_stream_records_how_a_contentless_reply_ended() -> None:
     assert silent["choices"][0]["finish_reason"] == "stop"
     assert silent["_finish_reason_missing"] is True
     assert silent["_frame_count"] == 0
+
+
+def test_a_stream_with_neither_ending_signal_is_marked_truncated() -> None:
+    # The gateway stopped talking mid-answer: no finish reason and no closing
+    # sentinel. Once callers ask to stream, this is the only thing that keeps a
+    # half-written document from being accepted as a finished answer.
+    body = 'data: {"choices": [{"delta": {"content": "<html>"}}]}\n\n'
+    folded = aggregate_stream_to_completion(
+        parse_sse_frames(body),
+        terminated=sse_stream_terminated(body),
+    )
+
+    assert folded["_stream_truncated"] is True
+    assert folded["choices"][0]["message"]["content"] == "<html>"
+
+
+def test_a_polite_close_without_a_finish_reason_is_not_truncated() -> None:
+    # Some compatible servers never report a finish reason yet still end with
+    # [DONE]. Counting that as truncation would reject good answers.
+    body = (
+        'data: {"choices": [{"delta": {"content": "pong"}}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    folded = aggregate_stream_to_completion(
+        parse_sse_frames(body),
+        terminated=sse_stream_terminated(body),
+    )
+
+    assert "_stream_truncated" not in folded
+    # The older side channel still records the absent reason, because that is
+    # what the empty-content hint reads.
+    assert folded["_finish_reason_missing"] is True
+
+
+def test_a_reported_finish_reason_survives_a_missing_sentinel() -> None:
+    body = (
+        'data: {"choices": [{"delta": {"content": "x"}, '
+        '"finish_reason": "stop"}]}\n\n'
+    )
+    folded = aggregate_stream_to_completion(
+        parse_sse_frames(body),
+        terminated=sse_stream_terminated(body),
+    )
+
+    assert "_stream_truncated" not in folded
+    assert "_finish_reason_missing" not in folded
+
+
+def test_sentinel_detection_tolerates_spacing_and_crlf() -> None:
+    assert sse_stream_terminated("data:[DONE]\r\n") is True
+    assert sse_stream_terminated("data:   [DONE]  \n") is True
+    assert sse_stream_terminated('{"choices": []}\n') is False
+    assert sse_stream_terminated("data: {\"x\": 1}\n\n") is False
+    assert sse_stream_terminated("") is False
+    assert sse_stream_terminated(None) is False

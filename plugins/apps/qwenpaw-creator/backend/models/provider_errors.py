@@ -49,6 +49,11 @@ _REQUEST_ID_RE = re.compile(
 # way back to the status, because a persisted task error keeps just text.
 _STATUS_RE = re.compile(r"\b(?:http|status)\s+(\d{3})\b", re.IGNORECASE)
 
+_RATE_LIMIT_PHRASE_RE = re.compile(
+    r"\brate[- ]limit(?:ed|ing|s)?\b",
+    re.IGNORECASE,
+)
+
 # Wrappers that were measured stamping a 5xx on a client-side mistake, so they
 # stay non-retryable even though their status would say otherwise.
 GATEWAY_DETERMINISTIC_CODES = frozenset(
@@ -109,6 +114,21 @@ def status_code_in_text(text: str) -> int:
 def is_retryable_status(status_code: int) -> bool:
     """Whether a passed-through status describes a temporary condition."""
     return status_code == 429 or status_code >= 500
+
+
+def is_rate_limit_text(text: str) -> bool:
+    """Whether a failure reports throttling rather than a fault.
+
+    Narrower than :func:`is_retryable_status` on purpose: a throttle is
+    account-wide and expected to clear, while a 5xx says nothing about the
+    other nodes in the same fan-out. Providers phrase it both ways - a bare
+    status, or a lane-specific "rate limited" summary after their own retries -
+    so both forms are recognised here.
+    """
+
+    if status_code_in_text(text) == 429:
+        return True
+    return bool(_RATE_LIMIT_PHRASE_RE.search(text or ""))
 
 
 def classify_gateway_error(text: str) -> str:
@@ -174,6 +194,7 @@ __all__ = [
     "gateway_request_id",
     "is_gateway_quota_error",
     "is_gateway_transient",
+    "is_rate_limit_text",
     "is_retryable_status",
     "retryable_for_status",
     "status_code_in_text",

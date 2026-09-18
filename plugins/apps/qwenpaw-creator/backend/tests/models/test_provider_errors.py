@@ -32,6 +32,7 @@ from services.file_agent_runtime.work_scheduler import (
 from services.media_files.transient_errors import (
     is_transient_error_message,
     is_transient_task_error,
+    is_unclassified_failure,
 )
 from utils.exceptions import ModelError
 
@@ -231,6 +232,163 @@ def test_a_severed_stream_is_transient_without_any_envelope() -> None:
             "Text model request failed [protocol=AgentScope Platform] "
             "RemoteProtocolError: peer closed connection without sending "
             "complete message body (incomplete chunked read)",
+        )
+        is True
+    )
+
+
+# Verbatim from a stalled project: the lane writes its status as "HTTP 504" and
+# nginx words its page as "504 Gateway Time-out".
+GATEWAY_TIMEOUT_504 = (
+    "Text model 请求失败 [protocol=OpenAI-compatible model=qwen3.8-flash "
+    "endpoint=https://platform-pre.agentscope.io/v1/chat/completions] "
+    "HTTP 504: 上游响应: <html>\n<head><title>504 Gateway Time-out</title>"
+    "</head>\n<body bgcolor=\"white\">\n<center><h1>504 Gateway Time-out"
+    "</h1></center>\n<hr><center>nginx</center>\n</body>\n</html>"
+)
+
+
+def test_a_gateway_timeout_is_transient_despite_the_hyphen() -> None:
+    """The one character that walled a whole project.
+
+    The marker table carried "gateway timeout" and "status 504", but nginx
+    writes "Gateway Time-out" and the lane prefixes its message with "HTTP 504",
+    so nothing matched. The scheduler filed the node as a deterministic failure
+    it would never retry - while the retryable flag persisted on that same
+    failure said true, because that path reads the status properly. A message
+    that names its own status now decides by status, not by substring.
+    """
+
+    assert is_transient_error_message(GATEWAY_TIMEOUT_504) is True
+
+
+def test_a_named_status_does_not_rescue_a_client_error() -> None:
+    # The status rule only speaks for temporary codes; a 4xx stays permanent
+    # whether or not the message names it.
+    assert (
+        is_transient_error_message(
+            "Image generation failed with status 400: Green net check failed",
+        )
+        is False
+    )
+    assert (
+        is_transient_error_message(
+            "Text model 请求失败 HTTP 403: 上游响应: forbidden",
+        )
+        is False
+    )
+
+
+# What nginx actually writes for a read timeout, verbatim in its wording.
+NGINX_504_PAGE = (
+    "<html>\r\n<head><title>504 Gateway Time-out</title></head>\r\n"
+    "<body bgcolor=\"white\">\r\n<center><h1>504 Gateway Time-out</h1>"
+    "</center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+)
+
+
+def test_the_text_lane_wording_still_reads_back_as_transient() -> None:
+    """A contract between the error wording and the retry classifier.
+
+    The rule reads a status back out of prose, so the prose is load-bearing.
+    Rewording ``HTTP {code}`` - the exact kind of edit that let a gateway
+    timeout be filed as a deterministic failure and wall a project - would make
+    the classifier stop seeing a status at all, and the regression would show up
+    as a stalled project rather than a failing test. Building the real error
+    here turns that edit into a red test.
+    """
+    from models.text_model import _http_error
+
+    class _Response:
+        status_code = 504
+        text = NGINX_504_PAGE
+
+    error = _http_error(
+        _Response(),
+        protocol="OpenAI-compatible",
+        model_name="qwen3.8-flash",
+        url="https://platform-pre.agentscope.io/v1/chat/completions",
+    )
+
+    assert "HTTP 504" in str(error)
+    assert is_transient_error_message(str(error)) is True
+    # The flag persisted alongside the message has to agree with the classifier,
+    # because the two used to contradict each other on this very failure.
+    assert error.retryable is True
+
+
+def test_an_unrecognised_failure_is_retried_by_the_scheduler_only() -> None:
+    """The floor, placed exactly where it belongs.
+
+    The two verdicts are not symmetric at the dispatch wall: a wrong
+    "transient" spends a bounded budget and then stops with an honest message,
+    while a wrong "deterministic" walls a paid node until somebody notices -
+    that is how one hyphen in nginx's "504 Gateway Time-out" stalled a project.
+    A durable media slot is not the same bet, so an unknown wording still does
+    not reopen one there: resubmitting an interrupted one-shot paid render is
+    spend with no possible outcome.
+    """
+    unknown = "provider answered something we have never seen"
+
+    assert is_unclassified_failure(unknown) is True
+    assert _is_transient_dispatch_error(Exception(unknown)) is True
+    # The media-side verdict stays conservative.
+    assert is_transient_error_message(unknown) is False
+
+
+def test_a_structural_refusal_is_never_retried_however_worded() -> None:
+    # The floor must not swallow the codes that name an input the model cannot
+    # accept; they used to be checked only after the transient branch, which the
+    # permissive default would have made unreachable.
+    exc = ModelError("provider refused this request", retryable=False)
+    exc.code = "IMAGE_REFERENCE_BUDGET_EXCEEDED"  # type: ignore[attr-defined]
+
+    assert is_unclassified_failure(str(exc)) is True
+    assert _is_transient_dispatch_error(exc) is False
+
+
+def test_configuration_and_capability_failures_stay_deterministic() -> None:
+    """What the floor must not swallow: causes with no request behind them.
+
+    These carry no HTTP status precisely because nothing was sent, so no
+    structured signal exists to veto them and the wording is all there is.
+    Retrying a missing key is pure spend with no possible outcome.
+    """
+
+    for message in (
+        "Creator text model API key 未配置：请在模型配置弹窗中填写。",
+        "Image generation failed: check creator_image_model configuration.",
+        "Anthropic Messages protocol does not support video input.",
+        "Never resubmit an interrupted one-shot image provider call.",
+    ):
+        assert is_transient_error_message(message) is False
+        assert is_unclassified_failure(message) is False
+        assert _is_transient_dispatch_error(Exception(message)) is False
+
+
+def test_a_persisted_flag_is_read_as_a_claim_not_a_veto() -> None:
+    """``retryable`` means "the lane believed this was retryable".
+
+    The executors persist ``bool(getattr(exc, "retryable", False))``, so a bare
+    exception that never carried the attribute lands as ``false`` exactly like a
+    refusal the lane did call permanent. Treating that as a veto would close
+    retry slots on plain connection failures, so only a true counts as an answer
+    and anything else falls back to the wording.
+    """
+
+    assert (
+        is_transient_task_error({"message": "All connection attempts failed"})
+        is True
+    )
+    assert (
+        is_transient_task_error(
+            {"message": "All connection attempts failed", "retryable": False},
+        )
+        is True
+    )
+    assert (
+        is_transient_task_error(
+            {"message": "provider answered something odd", "retryable": True},
         )
         is True
     )
