@@ -2292,6 +2292,11 @@
     "exportBundle": "导出互动包",
     "exportBundleFailed": "互动包暂时无法导出",
     "downloadBundleTitle": "导出互动包或导出项目",
+    "uploadBundle": "上传发布",
+    "uploadBundleTitle": "上传互动包到平台发布，进度在 Platform 查看",
+    "uploading": "上传中…",
+    "uploadBundleSubmitted": "已提交，正在打开发布进度",
+    "uploadBundleFailed": "互动包上传失败",
     "previewChoice": "选择故事走向"
   },
   "sidebar": {
