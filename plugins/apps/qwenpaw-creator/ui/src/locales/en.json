@@ -2271,6 +2271,11 @@
     "exportBundle": "Export interactive bundle",
     "exportBundleFailed": "Interactive bundle export failed",
     "downloadBundleTitle": "Export interactive bundle or project",
+    "uploadBundle": "Publish",
+    "uploadBundleTitle": "Upload the interactive bundle to the platform; track progress on Platform",
+    "uploading": "Uploading…",
+    "uploadBundleSubmitted": "Submitted — opening publish progress",
+    "uploadBundleFailed": "Interactive bundle upload failed",
     "previewChoice": "Choose a path"
   },
   "sidebar": {

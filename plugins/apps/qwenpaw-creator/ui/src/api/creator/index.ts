@@ -2,6 +2,7 @@ export * from "./assets";
 export * from "./client";
 export * from "./events";
 export * from "./fileProjectReviews";
+export * from "./ivbUpload";
 export * from "./media";
 export * from "./models";
 export * from "./platform";
