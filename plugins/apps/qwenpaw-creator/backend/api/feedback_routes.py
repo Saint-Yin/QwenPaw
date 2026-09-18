@@ -34,6 +34,10 @@ router = APIRouter(
 PROJECT_ID_LIMIT = 128
 FEEDBACK_LIMIT = 4000
 
+# How far back to scan for a stage signal. The newest failure is frequently a
+# generic api/CONFLICT, so a single record too often reads as "unknown".
+STAGE_SCAN = 20
+
 # Creator's generation ladder, so the platform can group complaints by step.
 # Which step is read back off the cited trace rather than asked of the person:
 # the wording is a heuristic, and "unknown" is an honest answer when the
@@ -90,16 +94,35 @@ def _pointer(record: dict[str, Any] | None) -> dict[str, Any]:
     return pointer
 
 
-def _newest(project_id: str, status: str | None) -> dict[str, Any] | None:
+def _records(
+    project_id: str,
+    status: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """The newest ``limit`` trace records for a project, ascending."""
+
     filters: dict[str, str] = {"projectId": project_id}
     if status:
         filters["status"] = status
     try:
-        records = read_trace_records(filters=filters, limit=1)
+        return list(read_trace_records(filters=filters, limit=limit))
     except Exception:  # noqa: BLE001 - diagnostics must never block feedback
-        return None
-    # Ascending by timestamp, so the tail is the record worth citing.
-    return records[-1] if records else None
+        return []
+
+
+def _stage_of_records(records: list[dict[str, Any]]) -> str:
+    """The stage named by the newest record that names one.
+
+    The single most recent error is often a generic ``api``/CONFLICT that says
+    nothing about which step broke, so walk back until a record does rather
+    than reporting "unknown" over a real signal a few lines earlier.
+    """
+
+    for record in reversed(records):  # ascending, so tail is newest
+        stage = _stage_of(record)
+        if stage != "unknown":
+            return stage
+    return "unknown"
 
 
 @router.post("/draft")
@@ -119,12 +142,15 @@ async def build_feedback_draft(
     if len(feedback) > FEEDBACK_LIMIT:
         raise ValidationError(f"反馈内容超过 {FEEDBACK_LIMIT} 字符")
 
-    # A complaint usually follows a failure, so prefer the newest error and
-    # fall back to the newest record of any kind.
-    record = _newest(project_id, "error") or _newest(project_id, None)
+    # A complaint usually follows a failure, so cite the newest error and
+    # derive the stage from the newest error that actually names a stage.
+    errors = _records(project_id, "error", STAGE_SCAN)
+    recent = errors or _records(project_id, None, STAGE_SCAN)
+    record = recent[-1] if recent else None
+    stage = stage or _stage_of_records(errors) or _stage_of_records(recent)
     return {
         "project_id": project_id,
-        "stage": stage or _stage_of(record),
+        "stage": stage or "unknown",
         "feedback": feedback,
         **_pointer(record),
     }
