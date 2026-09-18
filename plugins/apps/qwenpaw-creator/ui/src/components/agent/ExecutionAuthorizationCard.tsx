@@ -18,6 +18,7 @@ import { resolveCreatorLocator } from "@/routing/locatorTargets";
 import {
   projectJsonPointer,
   readProjectPointer,
+  type ProjectPointerRead,
 } from "@/lib/projectJsonPointer";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import i18n from "@/i18n";
@@ -303,6 +304,9 @@ export default function ExecutionAuthorizationCard({
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [editBaseline, setEditBaseline] = useState<ProjectPointerRead | null>(
+    null,
+  );
   const [saving, setSaving] = useState(false);
   if (authorization.status !== "PENDING") return null;
 
@@ -318,35 +322,37 @@ export default function ExecutionAuthorizationCard({
   const promptEditable = Boolean(promptField && project);
   const promptRead =
     promptField && project ? readProjectPointer(project, promptField) : null;
-  const promptPresent = promptRead?.present ?? false;
   const promptText =
     promptRead && typeof promptRead.value === "string" ? promptRead.value : "";
-  const promptDirty = editing && draft !== promptText;
+  const baselineText =
+    typeof editBaseline?.value === "string" ? editBaseline.value : "";
+  const promptDirty = editing && draft !== baselineText;
 
   const startEditPrompt = () => {
     setDraft(promptText);
+    setEditBaseline(promptRead);
     setEditing(true);
   };
   const cancelEditPrompt = () => {
     setEditing(false);
+    setEditBaseline(null);
     setDraft("");
   };
   const savePrompt = async () => {
-    if (!projectId || !promptField) return;
+    if (!projectId || !promptField || !editBaseline) return;
     setSaving(true);
     try {
       await patchProject(projectId, [
         {
-          op: promptPresent ? "replace" : "add",
+          op: editBaseline.present ? "replace" : "add",
           path: promptField,
-          before: promptPresent ? promptText : undefined,
-          missingBefore: !promptPresent,
+          before: editBaseline.value,
+          missingBefore: !editBaseline.present,
           value: draft,
         },
       ]);
       message.success(t("executionAuth.promptSaved"));
-      setEditing(false);
-      setDraft("");
+      cancelEditPrompt();
     } catch {
       message.error(t("executionAuth.promptSaveFailed"));
     } finally {
@@ -366,12 +372,23 @@ export default function ExecutionAuthorizationCard({
   };
 
   const continueRun = async () => {
+    if (promptDirty || saving || patching || busy) return;
     setBusy(true);
     try {
-      await approve(
-        authorization.id,
-        authorizationApprovalPayload(authorization),
-      );
+      const payload = authorizationApprovalPayload(authorization);
+      const snapshot = useProjectSnapshotStore.getState();
+      const workGraph = authorization.scope.workGraph;
+      if (
+        workGraph &&
+        typeof workGraph === "object" &&
+        !Array.isArray(workGraph) &&
+        snapshot.projectId === projectId &&
+        snapshot.project === project &&
+        snapshot.etag
+      ) {
+        payload.projectEtag = snapshot.etag;
+      }
+      await approve(authorization.id, payload);
       message.success(
         t(
           checkpoint
@@ -451,6 +468,7 @@ export default function ExecutionAuthorizationCard({
             {promptEditable && !editing && (
               <button
                 type="button"
+                disabled={busy || saving || patching}
                 onClick={startEditPrompt}
                 aria-label={t("executionAuth.editPrompt")}
                 title={t("executionAuth.editPrompt")}
@@ -504,7 +522,7 @@ export default function ExecutionAuthorizationCard({
           <textarea
             value={draft}
             rows={4}
-            disabled={saving || patching}
+            disabled={busy || saving || patching}
             onChange={(event) => setDraft(event.target.value)}
             className="w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-1.5 text-[11px] leading-4 text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"
           />
@@ -514,7 +532,7 @@ export default function ExecutionAuthorizationCard({
           <div className="flex items-center gap-1.5">
             <button
               type="button"
-              disabled={!promptDirty || saving || patching}
+              disabled={!promptDirty || busy || saving || patching}
               onClick={() => void savePrompt()}
               className={BUTTON_PRIMARY}
             >
@@ -522,7 +540,7 @@ export default function ExecutionAuthorizationCard({
             </button>
             <button
               type="button"
-              disabled={saving || patching}
+              disabled={busy || saving || patching}
               onClick={cancelEditPrompt}
               className={BUTTON_GHOST}
             >
@@ -534,7 +552,7 @@ export default function ExecutionAuthorizationCard({
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <button
           type="button"
-          disabled={busy || saving || patching}
+          disabled={busy || saving || patching || promptDirty}
           onClick={() => void continueRun()}
           className={`flex-1 ${BUTTON_PRIMARY}`}
         >

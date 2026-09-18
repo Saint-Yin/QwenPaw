@@ -794,6 +794,15 @@ class PromptSyncService:
         model_fingerprint,
     ):
         def validate_context(_latest: dict) -> None:
+            from services.file_agent_runtime.manual_regeneration_hold import (
+                check_automatic,
+            )
+
+            check_automatic(
+                self.services.root,
+                snapshot.project.project_id,
+                _lifecycle_lock_held=True,
+            )
             # The commit's exact ETag guard already proves the entire Project
             # (including references) unchanged. Only external model settings
             # remain to recheck under the write lock.

@@ -127,6 +127,51 @@ def test_sync_preserves_edited_source_and_commits_related_content(
     asyncio.run(run())
 
 
+def test_late_manual_hold_blocks_automatic_publication_but_not_manual_accept(
+    services,
+    monkeypatch,
+):
+    from services.file_agent_runtime.manual_regeneration_hold import (
+        ManualRegenerationHoldStore,
+        automatic_node,
+    )
+    from services.file_agent_runtime.work_graph import WorkNode
+
+    edit(services, "narrative", UPDATED["narrative"])
+    service = sync_service(services)
+    store = ManualRegenerationHoldStore(services.root)
+    node = WorkNode(
+        node_id=f"storyboard:{EID}",
+        kind="storyboard",
+        label="Storyboard",
+        status=WorkNodeStatus.DONE,
+    )
+    original = type(services).commit_candidate
+
+    async def commit_with_late_hold(self, **kwargs):
+        await asyncio.to_thread(store.begin, PID, node, (node,))
+        return await original(self, **kwargs)
+
+    async def scenario():
+        proposal = await service.propose(PID, TID, EID)
+        before = services.projects.read(PID)
+        monkeypatch.setattr(
+            type(services),
+            "commit_candidate",
+            commit_with_late_hold,
+        )
+        with automatic_node(services.root, PID, node.node_id):
+            with pytest.raises(ConflictError):
+                await service.accept(PID, TID, EID, proposal["proposalId"])
+        assert services.projects.read(PID).etag == before.etag
+        monkeypatch.setattr(type(services), "commit_candidate", original)
+        result = await service.accept(PID, TID, EID, proposal["proposalId"])
+        assert result["generation"] == before.generation + 1
+        assert store.is_held(PID, node.node_id)
+
+    asyncio.run(scenario())
+
+
 def test_stale_sync_cannot_overwrite_later_edit(services):
     edit(services, "narrative", UPDATED["narrative"])
     service = sync_service(services)

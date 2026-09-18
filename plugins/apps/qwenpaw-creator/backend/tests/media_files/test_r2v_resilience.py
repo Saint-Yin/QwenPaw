@@ -542,7 +542,7 @@ def test_local_contention_preserves_the_same_provider_task(
                 raise LockTimeoutError(tmp_path / "project.lock", 10.0)
             return get_task(*args, **kwargs)
 
-        def update(project_id, task_id, change):
+        def update(project_id, task_id, change, **kwargs):
             nonlocal blocked
             target = {"polled": "success", "heartbeat": "heartbeat"}.get(
                 phase,
@@ -554,7 +554,7 @@ def test_local_contention_preserves_the_same_provider_task(
             ):
                 blocked = True
                 raise LockTimeoutError(tmp_path / "project.lock", 10.0)
-            return update_state(project_id, task_id, change)
+            return update_state(project_id, task_id, change, **kwargs)
 
         monkeypatch.setattr(worker.executions, "get_task", read)
         monkeypatch.setattr(worker, "_update_state_sync", update)

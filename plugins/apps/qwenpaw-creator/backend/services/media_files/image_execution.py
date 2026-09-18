@@ -1829,7 +1829,11 @@ class FileImageExecutionService:
             raise ValueError("max_output_bytes must be positive")
         self.services = services
         self.provider = provider or ExistingImageProvider()
-        self.executions = ProjectExecutionStore(services.root)
+        from services.file_agent_runtime.manual_regeneration_hold import (
+            HoldAwareExecutionStore,
+        )
+
+        self.executions = HoldAwareExecutionStore(services.root)
         self.max_output_bytes = max_output_bytes
         self.resume_poll_interval_seconds = resume_poll_interval_seconds
         self.resume_poll_budget_seconds = resume_poll_budget_seconds
@@ -2606,9 +2610,21 @@ class FileImageExecutionService:
         }
 
         def claim_sync():
-            with self.services.projects.lifecycle_lock(
-                task.project_id,
-                shared=True,
+            from services.file_agent_runtime.manual_regeneration_hold import (
+                admission_guard,
+            )
+
+            with (
+                self.services.projects.lifecycle_lock(
+                    task.project_id,
+                    shared=True,
+                ),
+                admission_guard(
+                    self.services.root,
+                    task.project_id,
+                    node_id=task.metadata.get("automaticWorkNodeId"),
+                    _lifecycle_lock_held=True,
+                ),
             ):
                 latest = self.services.projects.read(task.project_id)
                 self._assert_visual_anchors_ready(

@@ -116,23 +116,23 @@ def _canonical_type_roles(creation: Mapping[str, Any]) -> list[str]:
 
 
 def _bound_entity_roles(creation: Mapping[str, Any]) -> dict[str, str]:
-    """Map each entity this Element binds to its semantic reference role."""
+    """Map bound asset/lineup owner references to semantic reference roles."""
 
     roles: dict[str, str] = {}
     for ref in creation.get("cast_lineup_refs") or []:
-        roles[str(ref)] = "lineup"
+        roles[f"lineup:{ref}"] = "lineup"
     for ref in creation.get("character_refs") or []:
-        roles[str(ref)] = "character"
+        roles[f"asset:{ref}"] = "character"
     scene_ref = creation.get("scene_ref")
     if scene_ref:
-        roles[str(scene_ref)] = "scene"
+        roles[f"asset:{scene_ref}"] = "scene"
     for ref in creation.get("prop_refs") or []:
-        roles[str(ref)] = "prop"
+        roles[f"asset:{ref}"] = "prop"
     return roles
 
 
 def _version_owner_entities(project_json: Mapping[str, Any]) -> dict[str, str]:
-    """Map every asset-owned version ID to its owner entity ID."""
+    """Map version IDs to qualified asset/lineup owner references."""
 
     assets = project_json.get("assets")
     assets = assets if isinstance(assets, Mapping) else {}
@@ -145,8 +145,10 @@ def _version_owner_entities(project_json: Mapping[str, Any]) -> dict[str, str]:
             if not isinstance(version, Mapping):
                 continue
             owner = version.get("owner_ref")
-            if isinstance(owner, str) and owner.startswith("asset:"):
-                owners[str(version_id)] = owner.removeprefix("asset:")
+            if isinstance(owner, str) and owner.startswith(
+                ("asset:", "lineup:"),
+            ):
+                owners[str(version_id)] = owner
     return owners
 
 
@@ -158,12 +160,12 @@ def _expected_reference_roles(
 ) -> list[str | None]:
     """Resolve the role actually bound to each runtime ``[Image N]`` slot.
 
-    An explicit ``video_reference_version_ids`` list is submitted exactly as
-    authored (this Element's storyboard reserved first, its own storyboard
-    versions dropped), so the canonical type order no longer predicts the
-    positions. Mirror that authored order and label each slot from its owner
-    entity; a slot whose owner cannot be resolved stays ``None`` and is never
-    gated, because a false block on a paid call is worse than a missed label.
+    An explicit ``video_reference_version_ids`` list preserves authored order,
+    with this Element's storyboard reserved first even before generation and
+    its own storyboard versions dropped. The canonical type order therefore
+    no longer predicts the positions. Label each slot from its bound owner;
+    a slot whose owner cannot be resolved stays ``None`` and is never gated,
+    because a false block on a paid call is worse than a missed label.
     """
 
     explicit = list(
@@ -200,19 +202,11 @@ def _expected_reference_roles(
     if storyboard_id:
         own_versions.add(storyboard_id)
 
-    order: list[str] = []
-    if storyboard_id:
-        order.append(storyboard_id)
-    order.extend(
-        version_id for version_id in explicit if version_id not in own_versions
-    )
-
     entity_roles = _bound_entity_roles(creation)
     version_owners = _version_owner_entities(project_json)
-    roles: list[str | None] = []
-    for version_id in order:
-        if storyboard_id and version_id == storyboard_id:
-            roles.append("storyboard")
+    roles: list[str | None] = ["storyboard"]
+    for version_id in explicit:
+        if version_id in own_versions:
             continue
         entity = version_owners.get(version_id)
         roles.append(entity_roles.get(entity) if entity else None)

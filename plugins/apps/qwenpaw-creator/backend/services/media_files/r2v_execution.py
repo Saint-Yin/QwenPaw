@@ -124,7 +124,6 @@ from services.runtime_files.execution_models import (
 from services.runtime_files.execution_store import (
     ExecutionPayloadConflict,
     ExecutionStateConflict,
-    ProjectExecutionStore,
 )
 from services.runtime_files.models import ChangeOrigin, ReviewPolicy
 from services.runtime_files.reconciliation import reconcile_terminal_task_runs
@@ -1643,7 +1642,11 @@ class FileR2VExecutionService:
             raise ValueError("max_output_bytes must be positive")
         self.services = services
         self.provider = provider or ExistingR2VProvider()
-        self.executions = ProjectExecutionStore(services.root)
+        from services.file_agent_runtime.manual_regeneration_hold import (
+            HoldAwareExecutionStore,
+        )
+
+        self.executions = HoldAwareExecutionStore(services.root)
         self.poll_interval_seconds = float(poll_interval_seconds)
         self.poll_lease_seconds = float(poll_lease_seconds)
         self.poll_timeout_seconds = float(
@@ -1695,6 +1698,8 @@ class FileR2VExecutionService:
         project_id: str,
         task_id: str,
         mutator: Callable[[R2VTaskState], R2VTaskState | Mapping[str, Any]],
+        *,
+        admission: bool = False,
     ) -> R2VTaskState:
         with self.services.projects.lifecycle_lock(project_id, shared=True):
             self.services.projects.read(project_id)
@@ -1715,6 +1720,23 @@ class FileR2VExecutionService:
                 dumped["updated_at"] = datetime.now(UTC)
                 return dumped
 
+            if admission:
+                from services.file_agent_runtime.manual_regeneration_hold import (
+                    admission_guard,
+                )
+
+                task = self.executions.get_task(project_id, task_id)
+                with admission_guard(
+                    self.services.root,
+                    project_id,
+                    node_id=task.metadata.get("automaticWorkNodeId"),
+                    _lifecycle_lock_held=True,
+                ):
+                    return (
+                        self._state_store(project_id, task_id)
+                        .update(update)
+                        .value
+                    )
             return self._state_store(project_id, task_id).update(update).value
 
     @staticmethod
@@ -3121,12 +3143,20 @@ class FileR2VExecutionService:
             )
             return dumped
 
-        claimed = await asyncio.to_thread(
-            self._update_state_sync,
-            task.project_id,
-            task.task_id,
-            claim,
+        from services.file_agent_runtime.manual_regeneration_hold import (
+            ManualHoldConflict,
         )
+
+        try:
+            claimed = await asyncio.to_thread(
+                self._update_state_sync,
+                task.project_id,
+                task.task_id,
+                claim,
+                admission=True,
+            )
+        except ManualHoldConflict:
+            return False
         if (
             claimed.phase != "SUBMIT_CLAIMED"
             or claimed.submit_owner != self.owner_id

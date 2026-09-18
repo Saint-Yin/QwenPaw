@@ -1,4 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ExecutionAuthorizationCard from "@/components/agent/ExecutionAuthorizationCard";
 import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationStore";
@@ -29,6 +36,7 @@ function seed(patch: PatchFn) {
 }
 
 afterEach(() => {
+  cleanup();
   useExecutionAuthorizationStore.getState().reset();
   useProjectSnapshotStore.getState().reset();
 });
@@ -129,5 +137,200 @@ describe("ExecutionAuthorizationCard inline prompt editing", () => {
       screen.queryByRole("button", { name: "编辑提示词" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("keeps the original edit baseline after a concurrent snapshot update", async () => {
+    const patchMock = vi.fn().mockRejectedValue(new Error("conflict"));
+    seed(patchMock);
+    const authorization = makePendingAuthorization({
+      targetRef: "element:r2v-window",
+      scope: { operation: "image_generation" },
+    });
+    const view = render(
+      <ExecutionAuthorizationCard
+        authorization={authorization}
+        project={projectDocument}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "编辑提示词" }));
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "我的草稿" },
+    });
+    const newer = structuredClone(projectDocument);
+    Object.assign(
+      newer.timelines.items["timeline:main"].elements_by_id["r2v-window"]
+        .creation,
+      {
+        storyboard_prompt: "另一位编辑的新提示词",
+      },
+    );
+    act(() =>
+      useProjectSnapshotStore.setState({
+        project: newer,
+        generation: 4,
+        etag: "etag-4",
+      }),
+    );
+    view.rerender(
+      <ExecutionAuthorizationCard
+        authorization={authorization}
+        project={newer}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1));
+    expect(patchMock).toHaveBeenCalledWith("p1", [
+      expect.objectContaining({
+        path: STORYBOARD_POINTER,
+        before: "暖色餐厅窗外的橘猫",
+        value: "我的草稿",
+      }),
+    ]);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "保存" })).toBeEnabled(),
+    );
+    expect(screen.getByRole("textbox")).toHaveValue("我的草稿");
+    expect(useProjectSnapshotStore.getState().project).toBe(newer);
+  });
+
+  it("does not approve an unsaved draft", () => {
+    seed(vi.fn());
+    const approve = vi.fn();
+    useExecutionAuthorizationStore.setState({ approve });
+    render(
+      <ExecutionAuthorizationCard
+        authorization={makePendingAuthorization({
+          targetRef: "element:r2v-window",
+          scope: { operation: "image_generation" },
+        })}
+        project={projectDocument}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "编辑提示词" }));
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "尚未保存" },
+    });
+    const proceed = screen.getByRole("button", { name: "继续" });
+    expect(proceed).toBeDisabled();
+    fireEvent.click(proceed);
+    expect(approve).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "放弃" }));
+    expect(proceed).toBeEnabled();
+  });
+
+  it("approves the saved snapshot even after the card is remounted", async () => {
+    const newer = structuredClone(projectDocument);
+    Object.assign(
+      newer.timelines.items["timeline:main"].elements_by_id["r2v-window"]
+        .creation,
+      {
+        storyboard_prompt: "已保存的新提示词",
+      },
+    );
+    const patchMock = vi.fn(async () => {
+      useProjectSnapshotStore.setState({
+        project: newer,
+        generation: 4,
+        etag: "etag-4",
+      });
+      return { project: newer, generation: 4, etag: "etag-4" };
+    });
+    seed(patchMock as unknown as PatchFn);
+    const approve = vi.fn().mockResolvedValue(undefined);
+    useExecutionAuthorizationStore.setState({ approve });
+    const authorization = makePendingAuthorization({
+      targetRef: "element:r2v-window",
+      scope: {
+        operation: "image_generation",
+        workGraph: { nodeId: "storyboard:r2v-window" },
+      },
+    });
+    const view = render(
+      <ExecutionAuthorizationCard
+        authorization={authorization}
+        project={projectDocument}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "编辑提示词" }));
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "已保存的新提示词" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox")).not.toBeInTheDocument(),
+    );
+    view.unmount();
+    render(
+      <ExecutionAuthorizationCard
+        authorization={authorization}
+        project={newer}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    await waitFor(() =>
+      expect(approve).toHaveBeenCalledWith(
+        authorization.id,
+        expect.objectContaining({ projectEtag: "etag-4" }),
+      ),
+    );
+  });
+
+  it.each(["non-workgraph", "stale-card"])(
+    "does not rebind a %s confirmation",
+    async (kind) => {
+      seed(vi.fn());
+      const approve = vi.fn().mockResolvedValue(undefined);
+      useExecutionAuthorizationStore.setState({ approve });
+      const authorization = makePendingAuthorization({
+        targetRef: "element:r2v-window",
+        scope: {
+          operation: "image_generation",
+          ...(kind === "stale-card"
+            ? { workGraph: { nodeId: "storyboard:r2v-window" } }
+            : {}),
+        },
+      });
+      if (kind === "stale-card") {
+        useProjectSnapshotStore.setState({
+          project: structuredClone(projectDocument),
+          etag: "etag-4",
+        });
+      }
+      render(
+        <ExecutionAuthorizationCard
+          authorization={authorization}
+          project={projectDocument}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "继续" }));
+      await waitFor(() => expect(approve).toHaveBeenCalledTimes(1));
+      expect(approve.mock.calls[0][1]).not.toHaveProperty("projectEtag");
+    },
+  );
+
+  it("locks the open editor while approval is in flight", async () => {
+    seed(vi.fn());
+    let finish!: () => void;
+    const approve = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    useExecutionAuthorizationStore.setState({ approve });
+    render(
+      <ExecutionAuthorizationCard
+        authorization={makePendingAuthorization({
+          targetRef: "element:r2v-window",
+          scope: { operation: "image_generation" },
+        })}
+        project={projectDocument}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "编辑提示词" }));
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "放弃" })).toBeDisabled();
+    await act(async () => finish());
   });
 });

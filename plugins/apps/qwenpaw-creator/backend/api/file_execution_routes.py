@@ -98,6 +98,12 @@ class ExecutionAuthorizationApprovalRequest(
     model: str = Field(min_length=1)
     max_cost: float = Field(alias="maxCost", ge=0)
     max_candidates: int = Field(alias="maxCandidates", ge=1)
+    project_etag: str | None = Field(
+        default=None,
+        alias="projectEtag",
+        min_length=1,
+        strict=True,
+    )
 
 
 _ROLE_LABELS = {
@@ -699,6 +705,74 @@ async def get_execution_authorization(
     return _authorization_view(record)
 
 
+async def _rebind_workgraph_authorization(
+    services: CreatorFileServices,
+    store: ProjectExecutionStore,
+    current: ExecutionAuthorizationRecord,
+    project_etag: str,
+) -> dict[str, str]:
+    from services.file_agent_runtime.driver import _execution_provider_model
+    from services.file_agent_runtime.work_scheduler import WorkGraphScheduler
+    from services.file_agent_runtime.workgraph_execution import (
+        ready_request_context,
+        requested_work_node,
+    )
+
+    scope = current.scope
+    workgraph = scope.get("workGraph")
+    if not isinstance(workgraph, dict) or any(
+        not isinstance(workgraph.get(key), str) or not workgraph[key].strip()
+        for key in ("nodeId", "fingerprint", "provider", "model")
+    ):
+        raise ConflictError("此授权不支持绑定已保存的 WorkGraph 快照")
+    if (
+        len(workgraph["fingerprint"]) != 64
+        or any(c not in "0123456789abcdef" for c in workgraph["fingerprint"])
+        or (scope.get("operation"), scope.get("targetRefs"))
+        != (current.operation, current.target_scope)
+        or not isinstance(scope.get("parameters"), dict)
+        or (workgraph["provider"], workgraph["model"])
+        != (current.requested_provider, current.requested_model)
+    ):
+        raise ConflictError("此授权不支持绑定已保存的 WorkGraph 快照")
+    snapshot, _, graph, blocked = await ready_request_context(
+        services,
+        store,
+        current.project_id,
+        check_media_budget=False,
+        confirmed_project_etag=project_etag,
+        confirmed_node_id=workgraph["nodeId"],
+    )
+    if snapshot.etag != project_etag:
+        raise ConflictError("已保存的项目快照已改变，请重新保存后批准")
+    node = graph.by_id.get(workgraph["nodeId"])
+    if (
+        node is None
+        or node.kind not in {"visual", "lineup", "storyboard", "video"}
+        or current.target_scope != [node.target_ref]
+        or node.node_id in blocked
+    ):
+        raise ConflictError("授权的 WorkGraph 目标已改变或尚未就绪")
+    plan = requested_work_node(snapshot, node)
+    if (
+        plan.spec.name != current.operation
+        or plan.parameters != scope["parameters"]
+        or _execution_provider_model(plan.spec, plan.parameters)
+        != (current.requested_provider, current.requested_model)
+    ):
+        raise ConflictError(
+            "执行参数或 provider/model 已改变，必须重新请求授权",
+        )
+    return {
+        "nodeId": node.node_id,
+        "etag": snapshot.etag,
+        "fingerprint": plan.fingerprint,
+        # Rebinding must use the same ledger identity as scheduler dispatch.
+        # pylint: disable-next=protected-access
+        "ledgerFingerprint": WorkGraphScheduler._ledger_fingerprint(node),
+    }
+
+
 async def _decide_authorization(
     *,
     project_id: str,
@@ -732,6 +806,13 @@ async def _decide_authorization(
             requested_candidates = current.requested_candidates or 1
             if int(decision.get("maxCandidates") or 0) > requested_candidates:
                 raise ConflictError("批准的候选数量不能超过原执行请求")
+            if decision.get("projectEtag") is not None:
+                decision["workGraph"] = await _rebind_workgraph_authorization(
+                    services,
+                    store,
+                    current,
+                    decision["projectEtag"],
+                )
         record = await asyncio.to_thread(
             store.decide_execution_authorization,
             project_id,
@@ -764,6 +845,11 @@ async def approve_execution_authorization(
             "model": request.model,
             "maxCost": request.max_cost,
             "maxCandidates": request.max_candidates,
+            **(
+                {"projectEtag": request.project_etag}
+                if request.project_etag is not None
+                else {}
+            ),
         },
         services=services,
     )

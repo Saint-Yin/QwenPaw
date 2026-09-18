@@ -1034,6 +1034,12 @@
     "summarySeparator": ": "
   },
   "workGraph": {
+    "manuallyHeld": "Manually paused",
+    "manualHoldNotice": "Manual regeneration has paused downstream automatic production.",
+    "resume": "Resume automatic production",
+    "resumeConfirm": "Resuming will restart downstream automatic generation and may incur media generation costs. Resume automatic production?",
+    "resumeStale": "The pause has changed. Review the latest state and confirm resume again.",
+    "resumeFailed": "Could not resume automatic production. Please try again.",
     "laneVisual": "Visual Assets",
     "laneLineup": "Lineup",
     "laneCompose": "Final Composition",

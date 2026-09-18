@@ -4072,6 +4072,9 @@ class FileCreatorAgentRuntime:
                 if is_compose
                 else _execution_provider_model(plan.spec, plan.parameters)
             )
+            approved_fingerprint = plan.fingerprint
+            confirmed_project_etag = None
+            confirmed_node_id = None
             dispatch_fingerprint = self.work_scheduler._ledger_fingerprint(
                 node,
             )
@@ -4088,6 +4091,7 @@ class FileCreatorAgentRuntime:
                     "targetRef": node.target_ref,
                     "arguments": plan.parameters,
                     "workGraph": {
+                        "nodeId": node.node_id,
                         "fingerprint": plan.fingerprint,
                         "provider": provider,
                         "model": model,
@@ -4117,6 +4121,36 @@ class FileCreatorAgentRuntime:
                         )
                     )
                     identity["executionAuthorizationId"] = authorization_id
+                    authorization = await asyncio.to_thread(
+                        self.executions.get_execution_authorization,
+                        project_id,
+                        authorization_id,
+                    )
+                    rebound = (authorization.decision or {}).get("workGraph")
+                    if rebound is not None:
+                        if (
+                            not isinstance(rebound, dict)
+                            or rebound.get("nodeId") != node.node_id
+                            or any(
+                                not isinstance(rebound.get(field), str)
+                                or not rebound[field]
+                                for field in (
+                                    "fingerprint",
+                                    "ledgerFingerprint",
+                                    "etag",
+                                )
+                            )
+                        ):
+                            raise FileAgentRuntimeError("无效的 WorkGraph 授权快照")
+                        approved_fingerprint = rebound["fingerprint"]
+                        dispatch_fingerprint = rebound["ledgerFingerprint"]
+                        confirmed_project_etag = rebound["etag"]
+                        confirmed_node_id = rebound["nodeId"]
+                        # Replays must use the saved snapshot's slot too.
+                        key = (
+                            f"dag-{node.node_id}-"
+                            f"{self.work_scheduler._dispatch_slot(dispatch_fingerprint)}"
+                        )
                 fence.assert_alive()
                 (
                     fresh,
@@ -4128,6 +4162,8 @@ class FileCreatorAgentRuntime:
                     self.executions,
                     project_id,
                     check_media_budget=not is_compose,
+                    confirmed_project_etag=confirmed_project_etag,
+                    confirmed_node_id=confirmed_node_id,
                 )
                 # An already admitted slot must never enter the image
                 # executor's paid transient-retry slot search a second time.
@@ -4179,7 +4215,7 @@ class FileCreatorAgentRuntime:
                     return blocked_item
                 current_plan = requested_work_node(fresh, current_node)
                 if (
-                    current_plan.fingerprint != plan.fingerprint
+                    current_plan.fingerprint != approved_fingerprint
                     or (
                         not is_compose
                         and _execution_provider_model(
@@ -4224,11 +4260,20 @@ class FileCreatorAgentRuntime:
                             f"project:{fresh.etag}:work-graph",
                         ),
                     )
-                result = await self.work_scheduler.await_admitted_execution(
+                from .manual_regeneration_hold import automatic_node
+
+                with automatic_node(
+                    self.services.root,
                     project_id,
                     current_node.node_id,
-                    execution,
-                )
+                ):
+                    result = (
+                        await self.work_scheduler.await_admitted_execution(
+                            project_id,
+                            current_node.node_id,
+                            execution,
+                        )
+                    )
                 task_id = getattr(result, "task_id", None)
                 if task_id is None and isinstance(result, Mapping):
                     task_id = result.get("taskId")
@@ -7469,6 +7514,11 @@ class FileCreatorAgentRuntime:
                     "operation": spec.name,
                     "targetRefs": [target_ref],
                     "parameters": billing_arguments,
+                    **(
+                        {"workGraph": dict(arguments["workGraph"])}
+                        if isinstance(arguments.get("workGraph"), Mapping)
+                        else {}
+                    ),
                     # Keep the literal tool request when it differs, so the
                     # approval record shows both what was asked and what is
                     # billed.
@@ -7878,6 +7928,14 @@ class FileCreatorAgentRuntime:
         waiting for a human.
         """
 
+        from .manual_regeneration_hold import ManualRegenerationHoldStore
+
+        manual_hold = await asyncio.to_thread(
+            ManualRegenerationHoldStore(self.services.root).read,
+            project_id,
+        )
+        if manual_hold.node_ids:
+            return
         auto_approve = get_media_review_mode() == MEDIA_REVIEW_AUTO_APPROVE
         if not auto_approve and await asyncio.to_thread(
             self.services.reviews.all_pending,
