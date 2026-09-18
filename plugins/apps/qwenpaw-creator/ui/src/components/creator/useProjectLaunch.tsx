@@ -534,6 +534,7 @@ export function useProjectLaunch(options?: {
         projectName.trim() || projectNameFromDescription(projectDescription);
       const projectPayload = {
         name: resolvedProjectName,
+        nameSource: projectName.trim() ? ("user" as const) : ("auto" as const),
         description: projectDescription.trim(),
         scenario,
         resolution,

@@ -497,7 +497,16 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
         current.session?.lastEventSeq ?? 0,
       );
       if (response.session.lastEventSeq < currentEventSeq) return {};
-      const patch: Partial<CreatorSessionState> = { session: response.session };
+      const patch: Partial<CreatorSessionState> = {
+        session:
+          current.stopping &&
+          current.session?.status === "INTERRUPT_REQUESTED" &&
+          !["CANCELLED", "INTERRUPT_REQUESTED"].includes(
+            response.session.status,
+          )
+            ? { ...response.session, status: "INTERRUPT_REQUESTED" }
+            : response.session,
+      };
       // The Credits notice lives across projects while this snapshot belongs to
       // one of them, so re-adopting a session that still carries the refusal is
       // what keeps the navigation bar honest after a reload.
@@ -1125,6 +1134,8 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
           (get().projectId ?? get().session?.projectId) === projectId;
         const sessionId = session?.id;
         const previousStatus = session?.status;
+        // A poll started before stop must not restore RUNNING afterwards.
+        sessionRefreshGeneration += 1;
         set((state) => ({
           stopping: true,
           session: state.session
@@ -1132,7 +1143,27 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
             : state.session,
         }));
         try {
-          await interruptCreator(projectId);
+          const response = await interruptCreator(projectId);
+          if (!isCurrentStop()) return;
+          set((state) => {
+            if (
+              state.session?.id !== response.creatorSessionId ||
+              !["CANCELLED", "INTERRUPT_REQUESTED"].includes(response.status)
+            )
+              return { stopping: false };
+            // Also invalidate polls made during cleanup. A newer SSE RUNNING
+            // state belongs to resumed work and is left alone by the guard.
+            sessionRefreshGeneration += 1;
+            if (state.session.status !== "INTERRUPT_REQUESTED")
+              return { stopping: false };
+            return {
+              stopping: false,
+              session: {
+                ...state.session,
+                status: response.status as CreatorSessionView["status"],
+              },
+            };
+          });
         } catch (error) {
           // A stop belongs to the project lifecycle that requested it. A late
           // rejection must not clear a new stop or surface in another project.
@@ -1148,7 +1179,6 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
           }));
           throw error;
         }
-        if (isCurrentStop()) set({ stopping: false });
       },
 
       ingestEvents: (incoming) => {
@@ -1737,13 +1767,24 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
                 typeof event.data.messageId === "string" ||
                 typeof event.data.messageSeq === "number");
             if (persistsConversationMessage) {
+              // Bootstrap already loaded the conversation tail. Historical
+              // lifecycle replay must not undo pagination by pulling from the
+              // first old message again (large projects contain huge tool logs).
+              const historicalMessage =
+                current.isReplaying && event.seq <= replayUntilSeq;
               const message = event.data.message as CreatorMessage | undefined;
-              if (message) {
+              if (message && !historicalMessage) {
                 messages = mergeMessages(messages, [message]);
-                streamingAssistantMessages = withoutDurableStreamingMessages(
-                  streamingAssistantMessages,
-                  [message],
-                );
+              }
+              const durableMessageId =
+                message?.messageId ?? eventString(event.data, "messageId");
+              if (
+                (historicalMessage || message) &&
+                durableMessageId &&
+                streamingAssistantMessages[durableMessageId]
+              ) {
+                streamingAssistantMessages = { ...streamingAssistantMessages };
+                delete streamingAssistantMessages[durableMessageId];
               }
               const clientMessageId = event.data.clientMessageId as
                 | string
@@ -1752,15 +1793,17 @@ export const useCreatorSessionStore = create<CreatorSessionState>(
                 queuedUi = queuedUi.filter(
                   (item) => item.clientMessageId !== clientMessageId,
                 );
-              const rawMessageSeq = event.data.messageSeq ?? event.data.seq;
-              const cursor =
-                typeof rawMessageSeq === "number"
-                  ? Math.max(0, rawMessageSeq - 1)
-                  : messages.at(-1)?.messageSeq ?? 0;
-              messageRefreshAfter =
-                messageRefreshAfter == null
-                  ? cursor
-                  : Math.min(messageRefreshAfter, cursor);
+              if (!historicalMessage) {
+                const rawMessageSeq = event.data.messageSeq ?? event.data.seq;
+                const cursor =
+                  typeof rawMessageSeq === "number"
+                    ? Math.max(0, rawMessageSeq - 1)
+                    : messages.at(-1)?.messageSeq ?? 0;
+                messageRefreshAfter =
+                  messageRefreshAfter == null
+                    ? cursor
+                    : Math.min(messageRefreshAfter, cursor);
+              }
             }
             if (
               event.type === "session.status_changed" ||

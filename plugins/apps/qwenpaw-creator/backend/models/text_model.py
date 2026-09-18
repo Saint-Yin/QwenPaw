@@ -15,31 +15,16 @@ The protocol is read from the persisted ``llm`` section of
 
 from __future__ import annotations
 
-import os
 from urllib.parse import urlsplit
 
 import httpx
 
 from models import config as model_config
 from models.concurrency import model_slot
+from models.output_budget import anthropic_output_limit
 from models.provider_errors import is_gateway_quota_error, retryable_for_status
 from models.sse import decode_chat_response
 from utils.exceptions import ModelError, redact_url, upstream_status_hint
-
-
-# Opt-in detail on a reply that carried no text. Off by default: the numbers
-# below are for reproducing a field failure and they land in a message the
-# operator sees, so nobody has to read provider bookkeeping unasked.
-DIAGNOSTICS_ENV = "CREATOR_MODEL_DIAGNOSTICS"
-
-
-def _diagnostics_enabled() -> bool:
-    return str(os.environ.get(DIAGNOSTICS_ENV, "")).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
 
 
 def _finish_reason_of(payload: dict) -> str:
@@ -57,25 +42,48 @@ def _finish_reason_of(payload: dict) -> str:
     return str(payload.get("stop_reason") or "")
 
 
-def _empty_content_detail(payload: dict) -> str:
-    """Why a 2xx reply held no text, when diagnostics are switched on.
+def _reasoning_only(payload: dict) -> bool:
+    """Whether the reply carried thinking but no answer, without reading it."""
 
-    Without this the failure is undecidable: a reasoning model that spent the
-    whole budget on its thinking trace, a stream the gateway ended without a
-    closing frame, and a refusal all look like the same empty string.
+    choices = payload.get("choices") or []
+    if choices and isinstance(choices[0], dict):
+        reasoning = (choices[0].get("message") or {}).get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning.strip():
+            return True
+    return bool(payload.get("_reasoning_content_dropped"))
+
+
+def _completion_tokens_of(payload: dict) -> str:
+    usage = payload.get("usage") or payload.get("usageMetadata") or {}
+    if isinstance(usage, dict):
+        for key in (
+            "completion_tokens",
+            "output_tokens",
+            "candidatesTokenCount",
+        ):
+            if usage.get(key) is not None:
+                return str(usage[key])
+    return "unknown"
+
+
+def _empty_content_detail(payload: dict) -> str:
+    """Why a 2xx reply held no text, always reported.
+
+    A contentless reply is otherwise undecidable: a reasoning model that spent
+    the whole budget on its thinking trace, a stream the gateway ended without
+    a closing frame, and a refusal all produce the same empty string. The
+    finish reason, token count and reasoning-only hint tell those apart, and
+    none of them is the model's private text.
     """
-    if not _diagnostics_enabled():
-        return ""
-    reason = _finish_reason_of(payload) or "none"
+    reason = _finish_reason_of(payload) or "unknown"
     if payload.get("_finish_reason_missing"):
         reason += "(never_reported)"
-    fields = [
-        f"finish_reason={reason}",
-        f"frames={payload.get('_frame_count', 'n/a')}",
-        f"reasoning_dropped={bool(payload.get('_reasoning_content_dropped'))}",
-        f"usage={payload.get('usage') or payload.get('usageMetadata') or 'none'}",
-    ]
-    return " [" + " ".join(fields) + "]"
+    detail = f"（结束原因：{reason}，输出 token：{_completion_tokens_of(payload)}）"
+    if _reasoning_only(payload):
+        detail += "；模型仅返回了推理内容，没有最终结果"
+    if _finish_reason_of(payload) == "length":
+        detail += "。上游达到输出长度限制，请检查模型或服务的默认输出预算后重试"
+    return detail
 
 
 def _openai_chat_url() -> str:
@@ -143,7 +151,6 @@ async def _call_openai(
     api_key: str,
     model_name: str,
     temperature: float,
-    max_tokens: int,
     timeout: float,
     thinking_budget: int | None = None,
 ) -> str:
@@ -151,7 +158,6 @@ async def _call_openai(
         "model": model_name,
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": max_tokens,
     }
     # Free-tier gateways (e.g. OpenCode Zen ``*-free``) accept requests
     # without an Authorization header; an empty Bearer value would be
@@ -213,7 +219,6 @@ async def _call_anthropic(
     api_key: str,
     model_name: str,
     temperature: float,
-    max_tokens: int,
     timeout: float,
 ) -> str:
     # Anthropic does not support a ``system`` role in ``messages``; it uses
@@ -227,8 +232,12 @@ async def _call_anthropic(
             filtered.append(msg)
     body: dict = {
         "model": model_name,
-        "max_tokens": max_tokens,
         "messages": filtered,
+        "max_tokens": await anthropic_output_limit(
+            model_name,
+            base_url=model_config.get_text_base_url(),
+            api_key=api_key,
+        ),
     }
     if system_text.strip():
         body["system"] = system_text.strip()
@@ -277,7 +286,6 @@ async def _call_gemini(
     api_key: str,
     model_name: str,
     temperature: float,
-    max_tokens: int,
     timeout: float,
 ) -> str:
     # Gemini uses a ``contents`` array with ``parts``; system instructions
@@ -295,7 +303,7 @@ async def _call_gemini(
             contents.append({"role": "model", "parts": [{"text": text}]})
     body: dict = {
         "contents": contents,
-        "generationConfig": {"maxOutputTokens": max_tokens},
+        "generationConfig": {},
     }
     if system_text.strip():
         body["systemInstruction"] = {"parts": [{"text": system_text.strip()}]}
@@ -348,7 +356,6 @@ async def chat_completion(
     *,
     system_prompt: str = "",
     temperature: float = 0.2,
-    max_tokens: int = 6000,
     timeout: float = 180.0,
     thinking_budget: int | None = None,
 ) -> str:
@@ -382,7 +389,6 @@ async def chat_completion(
                 api_key=api_key,
                 model_name=model_name,
                 temperature=temperature,
-                max_tokens=max_tokens,
                 timeout=timeout,
             )
         if model_config.is_gemini_protocol(protocol):
@@ -391,7 +397,6 @@ async def chat_completion(
                 api_key=api_key,
                 model_name=model_name,
                 temperature=temperature,
-                max_tokens=max_tokens,
                 timeout=timeout,
             )
         return await _call_openai(
@@ -399,7 +404,6 @@ async def chat_completion(
             api_key=api_key,
             model_name=model_name,
             temperature=temperature,
-            max_tokens=max_tokens,
             timeout=timeout,
             thinking_budget=thinking_budget,
         )

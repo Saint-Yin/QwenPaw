@@ -43,6 +43,7 @@ from services.runtime_files.models import (
 from utils.exceptions import ModelError
 from utils.logger import setup_logger
 
+from .html_document import extract_html_document
 from .interaction_fingerprint import (
     FINGERPRINT_MARKER as _FINGERPRINT_MARKER,
     interaction_request_fingerprint,
@@ -52,6 +53,8 @@ from .presentation_authoring import (
     PRESENTATION_SYSTEM_PROMPT,
     presentation_fingerprint,
     presentation_prompt,
+    interface_design_skill,
+    presentation_title_policy,
 )
 
 
@@ -208,19 +211,6 @@ def _build_interaction_prompt(
         "请输出这份抉择动效的完整 HTML 文档。",
     ]
     return "\n\n".join(sections)
-
-
-def _strip_code_fences(raw: str) -> str:
-    """剥掉 markdown 代码围栏（```html ... ```），只留 HTML 文档本体。"""
-
-    text = raw.strip()
-    if text.startswith("```"):
-        newline = text.find("\n")
-        text = text[newline + 1 :] if newline >= 0 else ""
-        stripped = text.rstrip()
-        if stripped.endswith("```"):
-            text = stripped[: -len("```")]
-    return text.strip()
 
 
 def _validate_motion_html(
@@ -406,72 +396,85 @@ async def execute_file_interaction_command(
     motion = creation.motion
     execution = ProjectExecutionStore(services.root)
     task_id = _stable_id("task", project_id, idempotency_key)
-    try:
-        existing = execution.get_task(project_id, task_id)
-    except RecordNotFoundError:
-        existing = None
-    if (
-        _motion_is_drafted(motion)
-        and f"{_FINGERPRINT_MARKER}{fingerprint}" in motion.design_notes
-        and (
-            not arguments.get("regenerate")
-            or (existing and existing.status == TaskStatus.SUCCEEDED)
-        )
-    ):
-        logger.info(
-            "interaction draft semantic replay: project=%s element=%s",
-            project_id,
-            element_id,
-        )
-        return FileInteractionExecutionResult(
-            timeline_id=timeline_id,
-            element_id=element_id,
-            input_fingerprint=fingerprint,
-            project_etag=snapshot.etag,
-            project_generation=snapshot.generation,
-            replayed=True,
-        )
-
-    if services.reviews.all_pending(project_id):
-        raise ConflictError(
-            "Approve or reject pending project changes "
-            "before generating interaction motion",
-        )
-    if existing is not None:
-        if existing.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
-            raise ConflictError("Interaction generation already running")
-        raise ModelError(
-            "Interaction task already finished; "
-            "edit the design or explicitly retry with a new key",
-            retryable=False,
-        )
-    execution.create_task(
-        TaskRecord(
-            task_id=task_id,
-            project_id=project_id,
-            kind=TaskKind.INTERACTION_DRAFT,
-            request_fingerprint=fingerprint,
-            idempotency_key=dispatch_key,
-            input_generation=snapshot.generation,
-            input_etag=snapshot.etag,
-            input_refs=[target_ref],
-            metadata={
-                "targetRef": target_ref,
-                "timelineId": timeline_id,
-                "elementId": element_id,
-                "inputFingerprint": input_fingerprint,
-            },
-        ),
-    )
     attempt_id = f"{task_id}-attempt-1"
-    execution.append_task_attempt(
-        project_id,
-        task_id,
-        event_id=f"{attempt_id}-start",
-        attempt_id=attempt_id,
-        status="RUNNING",
-        input={"fingerprint": fingerprint},
-    )
+
+    def admit():
+        with services.projects.lifecycle_lock(project_id):
+            try:
+                existing = execution.get_task(project_id, task_id)
+            except RecordNotFoundError:
+                existing = None
+            if (
+                _motion_is_drafted(motion)
+                and f"{_FINGERPRINT_MARKER}{fingerprint}"
+                in motion.design_notes
+                and (
+                    not arguments.get("regenerate")
+                    or (existing and existing.status == TaskStatus.SUCCEEDED)
+                )
+            ):
+                logger.info(
+                    "interaction draft semantic replay: project=%s element=%s",
+                    project_id,
+                    element_id,
+                )
+                return FileInteractionExecutionResult(
+                    timeline_id=timeline_id,
+                    element_id=element_id,
+                    input_fingerprint=fingerprint,
+                    project_etag=snapshot.etag,
+                    project_generation=snapshot.generation,
+                    replayed=True,
+                )
+
+            if services.reviews.all_pending(project_id):
+                raise ConflictError(
+                    "Approve or reject pending project changes "
+                    "before generating interaction motion",
+                )
+            if existing is not None:
+                if existing.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
+                    raise ConflictError(
+                        "Interaction generation already running",
+                    )
+                reason = (existing.error or {}).get("message")
+                raise ModelError(
+                    (f"此前生成失败：{reason}。" if reason else "此生成任务已结束。")
+                    + "请点击重新生成以发起新的请求。",
+                    retryable=False,
+                )
+            execution.create_task(
+                TaskRecord(
+                    task_id=task_id,
+                    project_id=project_id,
+                    kind=TaskKind.INTERACTION_DRAFT,
+                    request_fingerprint=fingerprint,
+                    idempotency_key=dispatch_key,
+                    input_generation=snapshot.generation,
+                    input_etag=snapshot.etag,
+                    input_refs=[target_ref],
+                    metadata={
+                        "targetRef": target_ref,
+                        "timelineId": timeline_id,
+                        "elementId": element_id,
+                        "inputFingerprint": input_fingerprint,
+                    },
+                ),
+                _lifecycle_lock_held=True,
+            )
+            execution.append_task_attempt(
+                project_id,
+                task_id,
+                event_id=f"{attempt_id}-start",
+                attempt_id=attempt_id,
+                status="RUNNING",
+                input={"fingerprint": fingerprint},
+                _lifecycle_lock_held=True,
+            )
+
+    replay = await asyncio.to_thread(admit)
+    if replay is not None:
+        return replay
     prompt = (
         presentation_prompt(project, creation)
         if is_presentation
@@ -495,15 +498,26 @@ async def execute_file_interaction_command(
                     PRESENTATION_SYSTEM_PROMPT
                     if is_presentation
                     else _INTERACTION_SYSTEM_PROMPT
-                ),
+                )
+                + "\n\n"
+                + interface_design_skill(),
                 temperature=0.5,
-                max_tokens=12000 if is_presentation else 6000,
-                # A presentation contains four complete screens. Keep its
-                # response bounded while allowing more time than one choice.
-                timeout=300.0 if is_presentation else 180.0,
+                # A presentation contains four screens and needs more time
+                # than one choice. The provider controls its output budget.
+                timeout=600.0 if is_presentation else 300.0,
                 thinking_budget=2048,
             )
-            candidate = _strip_code_fences(raw)
+            try:
+                candidate = extract_html_document(raw)
+            except ValueError as exc:
+                problems = [str(exc)]
+                attempt_prompt = (
+                    prompt
+                    + "\n\n上一次输出不合格（"
+                    + "；".join(problems)
+                    + "），请重新输出完整 HTML。"
+                )
+                continue
             problems = (
                 validate_presentation_html(
                     candidate,
@@ -512,6 +526,13 @@ async def execute_file_interaction_command(
                         key: value.model_dump(mode="json")
                         for key, value in creation.screens.items()
                     },
+                    authored_copy=True,
+                    expected_title=(
+                        project.name
+                        if presentation_title_policy(project)["source"]
+                        == "user"
+                        else None
+                    ),
                 )
                 if is_presentation
                 else _validate_motion_html(candidate, creation)
@@ -560,7 +581,8 @@ async def execute_file_interaction_command(
             design_prompt=creation.design_prompt,
             task_id=task_id,
         )
-        execution.append_task_attempt(
+        await asyncio.to_thread(
+            execution.append_task_attempt,
             project_id,
             task_id,
             event_id=f"{attempt_id}-end",
@@ -584,15 +606,23 @@ async def execute_file_interaction_command(
                 else TaskStatus.FAILED
             )
         )
-        current = execution.get_task(project_id, task_id)
+        current = await asyncio.to_thread(
+            execution.get_task,
+            project_id,
+            task_id,
+        )
         if current.status is TaskStatus.RUNNING:
-            execution.append_task_attempt(
+            await asyncio.to_thread(
+                execution.append_task_attempt,
                 project_id,
                 task_id,
                 event_id=f"{attempt_id}-end",
                 attempt_id=attempt_id,
                 status=status.value,
-                error={"message": str(exc), "retryable": False},
+                error={
+                    "message": str(exc),
+                    "retryable": bool(getattr(exc, "retryable", False)),
+                },
             )
         # Preserve the admitted task identity for batch callers that need
         # its durable failure, while retaining the public exception type.

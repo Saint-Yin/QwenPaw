@@ -17,6 +17,8 @@ import re
 from typing import Any, Mapping, Sequence
 
 from .json_pointer import split_pointer
+from .media_selection import video_selection_fingerprint
+from .models import TimelineElement
 from .prompt_sync import is_prompt_sync_pointer
 from .script_artifacts import SCRIPT_SLOT_KIND
 
@@ -555,6 +557,59 @@ def _apply_slot_selection_path(
     _mark_timeline_render_stale(document, timeline_id, impact)
 
 
+def _accept_video_selection(
+    document: dict[str, Any],
+    tokens: tuple[str, ...],
+    impact: EditImpact,
+    *,
+    unchanged: bool,
+) -> None:
+    if (
+        len(tokens) != 4
+        or tokens[:2] != ("assets", "artifact_slots_by_id")
+        or tokens[3] != "selected_version_id"
+    ):
+        return
+    slots = _items(document, "assets", "artifact_slots_by_id")
+    slot = _record(slots.get(tokens[2]))
+    if slot.get("kind") != "element_video":
+        return
+    version_id = slot.get("selected_version_id")
+    version = _items(document, "assets", "artifact_versions_by_id").get(
+        version_id,
+    )
+    if (
+        not isinstance(version, dict)
+        or version_id not in slot.get("version_ids", [])
+        or version_id in impact.invalidated_artifact_version_ids
+        or (unchanged and not version.get("stale"))
+    ):
+        return
+    owner_ref = slot.get("owner_ref", "")
+    found = _find_element(document, owner_ref.removeprefix("element:"))
+    if found is None:
+        return
+    _, raw_element = found
+    element = TimelineElement.model_validate(raw_element)
+    storyboard = _record(
+        slots.get(f"element:{element.element_id}:storyboard"),
+    )
+    metadata = dict(_record(slot.get("metadata")))
+    metadata["selectionAcceptance"] = {
+        "versionId": version_id,
+        "inputFingerprint": video_selection_fingerprint(
+            element,
+            storyboard.get("selected_version_id"),
+        ),
+    }
+    slot["metadata"] = metadata
+    # Accept the chosen bytes without fabricating generation provenance.
+    version["stale"] = False
+    version["stale_reason"] = None
+    # Re-selecting a previously stale selection is also an explicit adoption.
+    _apply_slot_selection_path(document, tokens, impact)
+
+
 def _pointer_value(
     document: Mapping[str, Any] | None,
     tokens: tuple[str, ...],
@@ -703,6 +758,11 @@ def apply_frontend_edit_impacts(
 
     document = copy.deepcopy(dict(candidate))
     impact = EditImpact()
+    if (
+        "/name" in submitted_pointers
+        and "/name_source" not in submitted_pointers
+    ):
+        document["name_source"] = "user"
     if base is not None:
         for slot_id, raw_slot in _items(
             document,
@@ -766,6 +826,15 @@ def apply_frontend_edit_impacts(
         )
         _apply_timeline_setting_path(document, tokens, impact)
         _apply_slot_selection_path(document, tokens, impact)
+    for pointer in dict.fromkeys(submitted_pointers):
+        tokens = split_pointer(pointer)
+        _accept_video_selection(
+            document,
+            tokens,
+            impact,
+            unchanged=base is not None
+            and _pointer_unchanged(base, document, tokens),
+        )
     return document, impact
 
 
@@ -779,7 +848,25 @@ def summarize_committed_edit_impact(
     # Re-running the classifier on a copy is deterministic and also covers
     # the no-selected-artifact case where the commit contains no induced
     # stale path.
-    _, classified = apply_frontend_edit_impacts(project, changed_pointers)
+    document, classified = apply_frontend_edit_impacts(
+        project,
+        changed_pointers,
+    )
+    for pointer in changed_pointers:
+        tokens = split_pointer(pointer)
+        if (
+            len(tokens) >= 5
+            and tokens[:2] == ("assets", "artifact_slots_by_id")
+            and tokens[3:5] == ("metadata", "selectionAcceptance")
+        ):
+            # Re-adopting the current stale video may change only this
+            # stamp: its selection and final's stale flag already match.
+            # The UI still needs to report the downstream compose action.
+            _apply_slot_selection_path(
+                document,
+                (*tokens[:3], "selected_version_id"),
+                classified,
+            )
     impact.affected_element_ids.update(classified.affected_element_ids)
     impact.affected_timeline_ids.update(classified.affected_timeline_ids)
     impact.invalidated_artifact_version_ids.update(

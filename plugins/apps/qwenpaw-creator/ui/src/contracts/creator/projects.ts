@@ -5,6 +5,7 @@ export type CreatorScenario = "short_drama" | "video_edit" | "general";
 export interface ProjectCreateRequest {
   clientRequestId: string;
   name: string;
+  nameSource?: "user" | "auto";
   description?: string;
   scenario: CreatorScenario;
   aspectRatio: string;

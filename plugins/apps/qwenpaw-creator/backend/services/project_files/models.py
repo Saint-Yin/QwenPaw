@@ -1539,6 +1539,7 @@ class Project(StrictModel):
     created_at: UtcDateTime
     updated_at: UtcDateTime
     name: str = Field(min_length=1)
+    name_source: Literal["user", "auto"] | None = None
     description: str = ""
     scenario: Literal["short_drama", "video_edit", "general"] = "general"
     settings: ProjectSettings = Field(default_factory=ProjectSettings)
@@ -2002,6 +2003,10 @@ class Project(StrictModel):
                     problems = validate_interaction_html(
                         creation.motion.html,
                         None,
+                        # Frozen project/transaction snapshots may predate
+                        # output normalization. Keep them readable; generation
+                        # and export enforce the strict document boundary.
+                        allow_legacy_wrapping=True,
                     )
                     if creation.motion.format != "html_css" or problems:
                         raise ValueError(

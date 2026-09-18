@@ -146,10 +146,18 @@ def _execute(services, key: str = "dag-interaction-1"):
     )
 
 
-def test_interaction_command_writes_motion_back(tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_commentary", [False, True])
+def test_interaction_command_writes_motion_back(
+    tmp_path,
+    monkeypatch,
+    with_commentary,
+):
     services = _services(tmp_path)
     # 模型输出裹了 markdown 代码围栏：必须被剥掉后再校验/写回。
-    calls = _mock_chat(monkeypatch, [f"```html\n{GOOD_HTML}\n```"])
+    reply = f"```html\n{GOOD_HTML}\n```"
+    if with_commentary:
+        reply = "这是完整的动效页面。\n" + reply + "\n### 优化建议\n调整按钮样式。"
+    calls = _mock_chat(monkeypatch, [reply])
 
     result = _execute(services)
 
@@ -168,6 +176,7 @@ def test_interaction_command_writes_motion_back(tmp_path, monkeypatch):
     assert 'data-edge-ref="edge:a"' in motion.html
     assert 'data-edge-ref="edge:b"' in motion.html
     assert "```" not in motion.html
+    assert motion.html == GOOD_HTML
     # design_notes = prompt 摘要 + 指纹标记。
     assert "是否当众揭发沈修？" in motion.design_notes
     assert f"input_fingerprint={result.input_fingerprint}" in (
@@ -179,6 +188,34 @@ def test_interaction_command_writes_motion_back(tmp_path, monkeypatch):
     assert "选择B · 保持沉默" in calls[0]["prompt"]
     assert "10 秒" in calls[0]["prompt"]
     assert "data-edge-ref" in calls[0]["system"]
+
+
+def test_legacy_wrapped_interaction_transaction_remains_recoverable(tmp_path):
+    from services.project_files.models import MotionGraphic
+
+    services = _services(tmp_path)
+    base = services.projects.read(PROJECT_ID)
+    candidate = base.project.model_copy(deep=True)
+    legacy = f"这是完整的动效。\n```html\n{GOOD_HTML}\n```\n优化建议。"
+    candidate.timelines.items["timeline:main"].elements_by_id[
+        ELEMENT_ID
+    ].creation.motion = MotionGraphic(html=legacy)
+    services.commits.commit(
+        base=base,
+        candidate=candidate.model_dump(mode="json"),
+        origin="frontend_edit",
+        transaction_id="legacy-wrapped-motion",
+    )
+
+    report = services.recovery.recover_project(PROJECT_ID)
+
+    assert report.ok, report.integrity_errors
+    assert (
+        services.projects.read(PROJECT_ID)
+        .project.timelines.items["timeline:main"]
+        .elements_by_id[ELEMENT_ID]
+        .creation.motion.html
+    ) == legacy
 
 
 def test_same_inputs_replay_without_second_model_call(tmp_path, monkeypatch):
@@ -232,6 +269,35 @@ def test_persistently_bad_output_raises_model_error(tmp_path, monkeypatch):
         ELEMENT_ID
     ]
     assert element.creation.motion is None
+
+
+@pytest.mark.parametrize("retryable", [True, False])
+def test_model_failure_preserves_reason_and_retryability(
+    tmp_path,
+    monkeypatch,
+    retryable,
+):
+    from services.runtime_files.execution_store import ProjectExecutionStore
+
+    services = _services(tmp_path)
+
+    async def fail(prompt, **kwargs):
+        assert "max_tokens" not in kwargs
+        raise ModelError("模型仅返回了推理内容，没有最终结果", retryable=retryable)
+
+    monkeypatch.setattr(
+        interaction_execution.text_model,
+        "chat_completion",
+        fail,
+    )
+    with pytest.raises(ModelError) as failed:
+        _execute(services)
+    task = ProjectExecutionStore(services.root).get_task(
+        PROJECT_ID,
+        failed.value.creator_task_id,
+    )
+    assert task.error == {"message": str(failed.value), "retryable": retryable}
+    assert task.status.value == "FAILED"
 
 
 def test_bad_inputs_are_rejected_fail_closed(tmp_path, monkeypatch):
@@ -861,6 +927,18 @@ def _presentation_html(color="#f4efdf"):
         .strip()
         .replace("#f4efdf", color)
         .replace(
+            'data-bind="project.title"></',
+            'data-bind="project.title">Interaction Exec</',
+        )
+        .replace(
+            'data-bind="project.synopsis"></',
+            'data-bind="project.synopsis">一条意外消息，你会如何选择？</',
+        )
+        .replace(
+            'data-bind="node.title"></h1>',
+            'data-bind="node.title">结局</h1>',
+        )
+        .replace(
             "__NODES__",
             "".join(
                 '<button data-action="jump" '
@@ -869,6 +947,84 @@ def _presentation_html(color="#f4efdf"):
             ),
         )
     )
+
+
+def test_project_interface_discards_model_commentary(tmp_path, monkeypatch):
+    services = _services(tmp_path)
+    html = _presentation_html()
+    calls = _mock_chat(
+        monkeypatch,
+        [f"这是完整的页面。\n```html\n{html}\n```\n### 分支选择与状态回看\n优化建议。"],
+    )
+    asyncio.run(
+        execute_file_interaction_command(
+            services,
+            project_id=PROJECT_ID,
+            target_ref=f"project:{PROJECT_ID}",
+            arguments={},
+            idempotency_key="wrapped-page",
+        ),
+    )
+    saved = services.projects.read(PROJECT_ID).project
+    assert saved.interactive_presentation.motion.html == html
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("project_interface", [False, True])
+@pytest.mark.parametrize("recovers", [False, True])
+def test_incomplete_html_retries_or_persists_failure(
+    tmp_path,
+    monkeypatch,
+    project_interface,
+    recovers,
+):
+    from services.runtime_files.execution_store import ProjectExecutionStore
+
+    services = _services(tmp_path)
+    html = _presentation_html() if project_interface else GOOD_HTML
+    incomplete = html.removesuffix("</html>")
+    calls = _mock_chat(
+        monkeypatch,
+        [incomplete, html if recovers else incomplete],
+    )
+
+    def execute():
+        return asyncio.run(
+            execute_file_interaction_command(
+                services,
+                project_id=PROJECT_ID,
+                target_ref=(
+                    f"project:{PROJECT_ID}"
+                    if project_interface
+                    else f"element:{ELEMENT_ID}"
+                ),
+                arguments={},
+                idempotency_key="incomplete-html",
+            ),
+        )
+
+    if recovers:
+        execute()
+    else:
+        with pytest.raises(ModelError, match="完整的 HTML 文档") as failed:
+            execute()
+        task = ProjectExecutionStore(services.root).get_task(
+            PROJECT_ID,
+            failed.value.creator_task_id,
+        )
+        assert task.status.value == "FAILED"
+        assert "完整的 HTML 文档" in task.error["message"]
+    saved = services.projects.read(PROJECT_ID).project
+    motion = (
+        saved.interactive_presentation.motion
+        if project_interface
+        else saved.timelines.items["timeline:main"]
+        .elements_by_id[ELEMENT_ID]
+        .creation.motion
+    )
+    assert (motion.html if motion else None) == (html if recovers else None)
+    assert len(calls) == 2
+    assert "完整的 HTML 文档" in calls[1]["prompt"]
 
 
 def test_parallel_page_review_does_not_discard_finished_choice(
@@ -1360,3 +1516,202 @@ def test_http_manual_regeneration_uses_new_slot_without_changing_prompt(
         )
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "bad_copy",
+    ["empty", "wrong_title", "numbered_ending"],
+)
+def test_page_copy_contract_retries_and_loads_design_skill(
+    tmp_path,
+    monkeypatch,
+    bad_copy,
+):
+    from services.media_files.presentation_authoring import (
+        interface_design_skill,
+    )
+
+    services = _services(tmp_path)
+    good = _presentation_html()
+    bad = {
+        "empty": good.replace("一条意外消息，你会如何选择？", ""),
+        "wrong_title": good.replace(">Interaction Exec<", ">改掉用户标题<"),
+        "numbered_ending": good.replace(">结局<", ">结局3<"),
+    }[bad_copy]
+    calls = _mock_chat(monkeypatch, [bad, good])
+    asyncio.run(
+        execute_file_interaction_command(
+            services,
+            project_id=PROJECT_ID,
+            target_ref=f"project:{PROJECT_ID}",
+            arguments={},
+            idempotency_key=f"copy-{bad_copy}",
+        ),
+    )
+    assert len(calls) == 2
+    assert interface_design_skill() in calls[0]["system"]
+    assert (
+        services.projects.read(
+            PROJECT_ID,
+        ).project.interactive_presentation.motion.html
+        == good
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        ("制作一个互动故事", None, "auto"),
+        ("制作一个互动故事", "user", "user"),
+        ("用户标题", None, "user"),
+        ("临时项目", "auto", "auto"),
+    ],
+)
+def test_title_policy_keeps_user_names_and_recognizes_legacy_auto_names(
+    name,
+    source,
+    expected,
+):
+    import json
+    from services.media_files.presentation_authoring import (
+        presentation_prompt,
+        presentation_title_policy,
+    )
+
+    project = Project.new(
+        project_id="title-policy",
+        name=name,
+        description="制作一个互动故事",
+    )
+    project.name_source = source
+    assert presentation_title_policy(project)["source"] == expected
+    prompt = json.loads(
+        presentation_prompt(project, project.interactive_presentation),
+    )
+    assert prompt["title_policy"] == {"source": expected, "title": name}
+
+
+def test_replaying_failed_generation_retains_the_provider_error(
+    tmp_path,
+    monkeypatch,
+):
+    services = _services(tmp_path)
+    calls = []
+
+    async def fail(*args, **kwargs):
+        calls.append(kwargs)
+        raise ModelError(
+            "ReadTimeout: provider did not finish",
+            retryable=True,
+        )
+
+    monkeypatch.setattr(
+        interaction_execution.text_model,
+        "chat_completion",
+        fail,
+    )
+    for _ in range(2):
+        with pytest.raises(ModelError, match="ReadTimeout"):
+            _execute(services, key="same-timeout")
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_task_finalization_does_not_block_review_coroutines(
+    tmp_path,
+    monkeypatch,
+    failed,
+):
+    import threading
+    from services.runtime_files.execution_store import ProjectExecutionStore
+
+    services = _services(tmp_path)
+    original = ProjectExecutionStore.append_task_attempt
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+
+        def append(store, *args, **kwargs):
+            if kwargs.get("status") in {"SUCCEEDED", "FAILED"}:
+                # A review holding the project lock must be able to resume
+                # on the event loop before the task writer acquires it.
+                released = threading.Event()
+                loop.call_soon_threadsafe(released.set)
+                assert released.wait(
+                    0.5,
+                ), "task writer blocked the review loop"
+            return original(store, *args, **kwargs)
+
+        async def chat(*args, **kwargs):
+            if failed:
+                raise ModelError("provider timeout", retryable=True)
+            return GOOD_HTML
+
+        monkeypatch.setattr(
+            ProjectExecutionStore,
+            "append_task_attempt",
+            append,
+        )
+        monkeypatch.setattr(
+            interaction_execution.text_model,
+            "chat_completion",
+            chat,
+        )
+        call = execute_file_interaction_command(
+            services,
+            project_id=PROJECT_ID,
+            target_ref=f"element:{ELEMENT_ID}",
+            arguments={},
+            idempotency_key="review-contention",
+        )
+        if failed:
+            with pytest.raises(ModelError, match="provider timeout"):
+                await call
+        else:
+            result = await call
+            assert (
+                ProjectExecutionStore(services.root)
+                .get_task(PROJECT_ID, result.task_id)
+                .status.value
+                == "SUCCEEDED"
+            )
+
+    asyncio.run(scenario())
+
+
+def test_concurrent_identical_generation_admits_only_one_provider_call(
+    tmp_path,
+    monkeypatch,
+):
+    services = _services(tmp_path)
+    calls = []
+
+    async def chat(*args, **kwargs):
+        calls.append(1)
+        await asyncio.sleep(0.05)
+        return GOOD_HTML
+
+    monkeypatch.setattr(
+        interaction_execution.text_model,
+        "chat_completion",
+        chat,
+    )
+
+    async def scenario():
+        return await asyncio.gather(
+            *[
+                execute_file_interaction_command(
+                    services,
+                    project_id=PROJECT_ID,
+                    target_ref=f"element:{ELEMENT_ID}",
+                    arguments={},
+                    idempotency_key="concurrent-identical",
+                )
+                for _ in range(2)
+            ],
+            return_exceptions=True,
+        )
+
+    results = asyncio.run(scenario())
+    assert len(calls) == 1
+    assert any(not isinstance(result, Exception) for result in results)
