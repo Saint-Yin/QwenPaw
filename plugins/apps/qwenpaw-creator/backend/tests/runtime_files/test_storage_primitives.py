@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict
 import pytest
 
 from services.runtime_files import atomic_store as atomic_store_module
+from services.runtime_files.shared_io import open_shared_read
 from services.runtime_files import (
     AtomicJsonRecordStore,
     CorruptRecordError,
@@ -139,24 +140,55 @@ def test_atomic_reader_retries_windows_sharing_violation_but_preserves_denial(
     path = tmp_path / "record.json"
     store = AtomicJsonRecordStore(path, DemoRecord)
     store.create(DemoRecord(name="current", count=1))
-    read_bytes = Path.read_bytes
     calls = []
 
     def read(candidate):
         calls.append(candidate)
         if permanent or len(calls) < 3:
             raise PermissionError(errno.EACCES, "sharing violation", candidate)
-        return read_bytes(candidate)
+        return open_shared_read(candidate)
 
     monkeypatch.setattr(atomic_store_module, "_REPLACE_RETRY_ATTEMPTS", 3)
     monkeypatch.setattr(atomic_store_module, "_REPLACE_RETRY_DELAY_SECONDS", 0)
-    monkeypatch.setattr(Path, "read_bytes", read)
+    monkeypatch.setattr(atomic_store_module, "open_shared_read", read)
     if permanent:
         with pytest.raises(PermissionError):
             store.read()
     else:
         assert store.read().name == "current"
     assert len(calls) == 3
+
+
+def test_open_snapshot_does_not_block_atomic_replacement(
+    tmp_path,
+    monkeypatch,
+):
+    path = tmp_path / "中文 snapshot.json"
+    old = b"old\x1a\r\n\x00snapshot"
+    path.write_bytes(old)
+    # Prove replacement works with a reader held open; retries cannot conceal
+    # a Windows sharing violation. Also exercise binary descriptor semantics.
+    monkeypatch.setattr(atomic_store_module, "_REPLACE_RETRY_ATTEMPTS", 1)
+    with open_shared_read(path) as reader:
+        assert not os.get_inheritable(reader.fileno())
+        atomic_store_module.atomic_replace_bytes(path, b"new snapshot")
+        assert reader.read() == old
+        assert path.read_bytes() == b"new snapshot"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows file-sharing contract")
+def test_external_nonsharing_reader_preserves_failed_write(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "session.json"
+    store = AtomicJsonRecordStore(path)
+    store.write({"revision": 1})
+    monkeypatch.setattr(atomic_store_module, "_REPLACE_RETRY_ATTEMPTS", 1)
+    with path.open("rb"):
+        with pytest.raises(PermissionError):
+            store.write({"revision": 2})
+    assert store.read() == {"revision": 1}
+    assert not list(tmp_path.glob(".session.json.*.tmp"))
 
 
 def test_non_standard_nonfinite_json_is_reported_as_corruption(tmp_path):
