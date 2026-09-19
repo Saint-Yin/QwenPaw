@@ -127,11 +127,11 @@ def atomic_replace_path(
         except PermissionError:
             if _is_windows():
                 try:
-                    replace_open_file(Path(source), Path(target))
-                    return
-                except (PermissionError, FileNotFoundError):
-                    # A non-sharing external reader or a concurrent rename
-                    # can still require the normal bounded retry.
+                    if replace_open_file(Path(source), Path(target)):
+                        return
+                except PermissionError:
+                    # Non-sharing external readers still require the normal
+                    # bounded retry. Other filesystem errors must propagate.
                     pass
             if attempt == _REPLACE_RETRY_ATTEMPTS - 1:
                 raise

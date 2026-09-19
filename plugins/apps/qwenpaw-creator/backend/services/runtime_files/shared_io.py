@@ -27,15 +27,13 @@ def _windows_api():
     api.CreateFileW.restype = wintypes.HANDLE
     api.CloseHandle.argtypes = [wintypes.HANDLE]
     api.CloseHandle.restype = wintypes.BOOL
-    api.ReplaceFileW.argtypes = [
-        wintypes.LPCWSTR,
-        wintypes.LPCWSTR,
-        wintypes.LPCWSTR,
+    api.SetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
         wintypes.DWORD,
-        wintypes.LPVOID,
-        wintypes.LPVOID,
     ]
-    api.ReplaceFileW.restype = wintypes.BOOL
+    api.SetFileInformationByHandle.restype = wintypes.BOOL
     return api
 
 
@@ -84,22 +82,65 @@ def open_shared_read(path: Path) -> BinaryIO:
         raise
 
 
-def replace_open_file(source: Path, target: Path) -> None:
+def replace_open_file(source: Path, target: Path) -> bool:
     """Replace an existing Windows file whose readers share delete access.
 
-    MoveFileEx (os.replace) still rejects an open destination. ReplaceFileW
-    supports the shared handles while preserving the destination's ACL.
-    The caller keeps os.replace for creation and directory publication.
+    MoveFileEx (os.replace) rejects open destinations; ReplaceFileW exposes a
+    missing-name interval to concurrent readers. FileRenameInfoEx with POSIX
+    semantics replaces the name in one operation and retains old read handles.
+    Return False on filesystems/Windows versions lacking this operation so the
+    caller can retry os.replace; never unlink the old snapshot as a fallback.
     """
 
     import ctypes
+    from ctypes import wintypes
 
-    if not _windows_api().ReplaceFileW(
-        str(target),
+    class RenameInfo(ctypes.Structure):
+        _fields_ = [
+            ("Flags", wintypes.DWORD),
+            ("RootDirectory", wintypes.HANDLE),
+            ("FileNameLength", wintypes.DWORD),
+            ("FileName", wintypes.WCHAR * 1),
+        ]
+
+    name = str(target.absolute()).encode("utf-16-le")
+    buffer = ctypes.create_string_buffer(ctypes.sizeof(RenameInfo) + len(name))
+    info = RenameInfo.from_buffer(buffer)
+    info.Flags = 0x01 | 0x02  # REPLACE_IF_EXISTS | POSIX_SEMANTICS
+    info.FileNameLength = len(name)
+    ctypes.memmove(
+        ctypes.addressof(buffer) + RenameInfo.FileName.offset,
+        name,
+        len(name),
+    )
+    api = _windows_api()
+    handle = api.CreateFileW(
         str(source),
+        0x00010000,  # DELETE access, required for rename
+        0x00000001 | 0x00000002 | 0x00000004,
         None,
-        0,
+        3,  # OPEN_EXISTING
+        0x80,  # FILE_ATTRIBUTE_NORMAL
         None,
-        None,
-    ):
+    )
+    if handle == ctypes.c_void_p(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        if api.SetFileInformationByHandle(
+            handle,
+            22,  # FileRenameInfoEx
+            buffer,
+            len(buffer),
+        ):
+            return True
+        error = ctypes.get_last_error()
+        if error in {
+            1,
+            50,
+            87,
+            120,
+        }:  # Unsupported info class/flags/filesystem
+            return False
+        raise ctypes.WinError(error)
+    finally:
+        api.CloseHandle(handle)
