@@ -812,6 +812,41 @@ def _explicit_order_project(video_prompt: str) -> dict:
     return Project.model_validate(project).model_dump(mode="json")
 
 
+@pytest.mark.parametrize("unselected", [False, True])
+def test_default_reference_roles_follow_selected_deduplicated_runtime_slots(
+    monkeypatch,
+    unselected,
+):
+    monkeypatch.setattr(
+        model_config,
+        "get_video_model_name",
+        lambda: "happyhorse-1.1",
+    )
+    monkeypatch.setattr(model_config, "get_video_backend", lambda: "wan")
+    project = _explicit_order_project("")
+    creation = project["timelines"]["items"]["t"]["elements_by_id"]["e"][
+        "creation"
+    ]
+    creation["video_reference_version_ids"] = []
+    creation["character_refs"] = ["char:hero", "char:hero"]
+    if unselected:
+        project["visual"]["entities"]["items"]["char:hero"]["variants"][
+            "items"
+        ]["default"]["selected_artifact_version_id"] = None
+    creation["video_prompt"] = (
+        "[Image 1] is the storyboard. "
+        + ("" if unselected else "[Image 2] is the character. ")
+        + f"[Image {2 if unselected else 3}] is the scene. "
+        + f"[Image {3 if unselected else 4}] is the prop."
+    )
+    validated = Project.model_validate(project)
+    report = check_changed_r2v_prompt_contracts(
+        validated.model_dump(mode="json"),
+        ["/timelines/items/t/elements_by_id/e"],
+    )
+    assert report["passed"], report
+
+
 def test_explicit_reference_order_overrides_canonical_type_roles(
     monkeypatch,
 ) -> None:

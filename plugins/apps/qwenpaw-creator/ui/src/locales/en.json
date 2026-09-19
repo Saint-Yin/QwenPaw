@@ -1,4 +1,15 @@
 {
+  "productionStage": {
+    "scriptOnlyLaunch": "Write the script first; confirm before generating images or video",
+    "scriptOnly": "Script only. Image and video generation is paused.",
+    "mediaEnabled": "Media production is allowed under your selected execution mode.",
+    "confirmScript": "Confirm script and allow production",
+    "pauseMedia": "Return to script",
+    "confirmTitle": "Confirm the currently saved script?",
+    "confirmDescription": "Images and videos may be generated after confirmation. Automatic modes continue production; approval modes still request permission for each generation. Script edits pause media production again.",
+    "allowMedia": "Confirm and allow production",
+    "failed": "Could not update the stage. Refresh and try again."
+  },
   "common": {
     "close": "Close",
     "cancel": "Cancel",
@@ -1127,6 +1138,7 @@
     "discardEdit": "Discard",
     "promptSaved": "Prompt saved. Press Continue to generate with the new content.",
     "promptSaveFailed": "Failed to save the prompt. Please retry.",
+    "promptChanged": "This prompt changed elsewhere. Discard this edit and review the latest content before continuing.",
     "promptEditHint": "You can edit the prompt before confirming; after saving, Continue generates with the new content.",
     "object": "Object",
     "model": "Model",

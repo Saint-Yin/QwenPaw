@@ -6850,6 +6850,19 @@ class FileCreatorAgentRuntime:
                 project_id,
                 authorization_id,
             )
+            from services.project_files.approved_prompt import (
+                approved_specialist_arguments,
+            )
+
+            approved_snapshot = await asyncio.to_thread(
+                self.services.projects.read,
+                project_id,
+            )
+            arguments = approved_specialist_arguments(
+                approved_snapshot,
+                authorization,
+                arguments,
+            )
             active_provider, active_model = _execution_provider_model(
                 spec,
                 (
@@ -7078,6 +7091,19 @@ class FileCreatorAgentRuntime:
             role,
             timeline_count=timeline_count,
         ):
+            from services.project_files.production_stage import (
+                script_fingerprint,
+            )
+
+            if phase == "script":
+                confirmed = await asyncio.to_thread(
+                    self.services.projects.read,
+                    project_id,
+                )
+                if confirmed.project.settings.script_approval_fingerprint == (
+                    script_fingerprint(confirmed.project)
+                ):
+                    continue
             authorization = await self._creation_checkpoint_record(
                 project_id=project_id,
                 round_id=round_id,
@@ -7152,6 +7178,20 @@ class FileCreatorAgentRuntime:
                 is not ExecutionAuthorizationStatus.APPROVED
             ):
                 raise CreationCheckpointBlocked(phase, authorization.status)
+            if phase == "script":
+                latest = await asyncio.to_thread(
+                    self.services.projects.read,
+                    project_id,
+                )
+                if authorization.scope.get(
+                    "scriptFingerprint",
+                ) != script_fingerprint(
+                    latest.project,
+                ):
+                    raise CreationCheckpointBlocked(
+                        phase,
+                        ExecutionAuthorizationStatus.EXPIRED,
+                    )
 
     async def _creation_checkpoint_record(
         self,
@@ -7172,6 +7212,17 @@ class FileCreatorAgentRuntime:
         revised plan or designs instead of being locked out forever.
         """
 
+        revision = None
+        if phase == "script":
+            from services.project_files.production_stage import (
+                script_fingerprint,
+            )
+
+            snapshot = await asyncio.to_thread(
+                self.services.projects.read,
+                project_id,
+            )
+            revision = script_fingerprint(snapshot.project)
         attempt = 0
         while True:
             authorization_id = checkpoint_authorization_id(
@@ -7187,6 +7238,23 @@ class FileCreatorAgentRuntime:
                 )
             except RecordNotFoundError:
                 break
+            if (
+                revision is not None
+                and (record.scope or {}).get("scriptFingerprint") != revision
+            ):
+                if record.status is ExecutionAuthorizationStatus.PENDING:
+                    try:
+                        await asyncio.to_thread(
+                            self.executions.decide_execution_authorization,
+                            project_id,
+                            record.authorization_id,
+                            authorization_token=record.authorization_token,
+                            status=ExecutionAuthorizationStatus.EXPIRED,
+                        )
+                    except ExecutionStoreError:
+                        pass
+                attempt += 1
+                continue
             if record.status not in (
                 ExecutionAuthorizationStatus.REJECTED,
                 ExecutionAuthorizationStatus.EXPIRED,
@@ -7211,6 +7279,7 @@ class FileCreatorAgentRuntime:
                 "operation": checkpoint_operation(phase),
                 "checkpointPhase": phase,
                 "message": checkpoint_summary(phase),
+                **({"scriptFingerprint": revision} if revision else {}),
             },
             # The decision-tray card echoes provider/model back on approve,
             # and the API requires them to match the request exactly.
@@ -7455,6 +7524,18 @@ class FileCreatorAgentRuntime:
                 attempt += 1
                 continue
             existing = record
+            saved = (record.decision or {}).get("savedPrompt")
+            if (
+                record.status is ExecutionAuthorizationStatus.APPROVED
+                and saved
+            ):
+                latest = await asyncio.to_thread(
+                    self.services.projects.read,
+                    project_id,
+                )
+                if latest.etag != saved.get("etag"):
+                    attempt += 1
+                    continue
             break
         if (
             existing is not None

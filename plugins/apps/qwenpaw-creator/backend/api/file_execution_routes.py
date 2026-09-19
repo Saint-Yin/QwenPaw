@@ -104,6 +104,12 @@ class ExecutionAuthorizationApprovalRequest(
         min_length=1,
         strict=True,
     )
+    prompt_pointer: str | None = Field(
+        default=None,
+        alias="promptPointer",
+        min_length=1,
+        strict=True,
+    )
 
 
 _ROLE_LABELS = {
@@ -711,6 +717,9 @@ async def _rebind_workgraph_authorization(
     current: ExecutionAuthorizationRecord,
     project_etag: str,
 ) -> dict[str, str]:
+    # GET/304 carry HTTP entity tags; PATCH returns the raw project digest.
+    # Normalize before both the edit-grace exemption and the snapshot CAS.
+    project_etag = project_etag.strip().removeprefix("W/").strip().strip('"')
     from services.file_agent_runtime.driver import _execution_provider_model
     from services.file_agent_runtime.work_scheduler import WorkGraphScheduler
     from services.file_agent_runtime.workgraph_execution import (
@@ -718,7 +727,7 @@ async def _rebind_workgraph_authorization(
         requested_work_node,
     )
 
-    scope = current.scope
+    scope = current.scope or {}
     workgraph = scope.get("workGraph")
     if not isinstance(workgraph, dict) or any(
         not isinstance(workgraph.get(key), str) or not workgraph[key].strip()
@@ -782,6 +791,8 @@ async def _decide_authorization(
     decision: dict[str, Any] | None,
     services: CreatorFileServices,
 ) -> dict[str, Any]:
+    # One decision validates checkpoint, graph or saved-prompt authority.
+    # pylint: disable=too-many-branches
     store = _store(services)
     try:
         current = await asyncio.to_thread(
@@ -798,6 +809,21 @@ async def _decide_authorization(
             return _authorization_view(current)
         if target_status is ExecutionAuthorizationStatus.APPROVED:
             assert decision is not None
+            if (current.scope or {}).get("checkpointPhase") == "script":
+                from services.project_files.production_stage import (
+                    script_fingerprint,
+                )
+
+                snapshot = await asyncio.to_thread(
+                    services.projects.read,
+                    project_id,
+                )
+                if current.scope.get(
+                    "scriptFingerprint",
+                ) != script_fingerprint(
+                    snapshot.project,
+                ):
+                    raise ConflictError("剧本已更新，请重新请求并确认当前版本。")
             if (
                 decision.get("provider") != current.requested_provider
                 or decision.get("model") != current.requested_model
@@ -807,12 +833,46 @@ async def _decide_authorization(
             if int(decision.get("maxCandidates") or 0) > requested_candidates:
                 raise ConflictError("批准的候选数量不能超过原执行请求")
             if decision.get("projectEtag") is not None:
-                decision["workGraph"] = await _rebind_workgraph_authorization(
-                    services,
-                    store,
-                    current,
-                    decision["projectEtag"],
-                )
+                if (
+                    decision.get("promptPointer") is None
+                    or (current.scope or {}).get("workGraph") is not None
+                ):
+                    decision[
+                        "workGraph"
+                    ] = await _rebind_workgraph_authorization(
+                        services,
+                        store,
+                        current,
+                        decision["projectEtag"],
+                    )
+                else:
+                    from services.project_files.approved_prompt import (
+                        saved_authorization_prompt,
+                    )
+
+                    snapshot = await asyncio.to_thread(
+                        services.projects.read,
+                        project_id,
+                    )
+                    expected = (
+                        decision["projectEtag"]
+                        .strip()
+                        .removeprefix("W/")
+                        .strip()
+                        .strip('"')
+                    )
+                    if snapshot.etag != expected:
+                        raise ConflictError("已保存的项目快照已改变，请重新查看后批准。")
+                    saved = saved_authorization_prompt(
+                        snapshot.project,
+                        current,
+                    )
+                    if saved["pointer"] != decision["promptPointer"]:
+                        raise ConflictError("授权卡的提示词目标与执行目标不一致。")
+                    decision["savedPrompt"] = {
+                        "etag": snapshot.etag,
+                        **saved,
+                    }
         record = await asyncio.to_thread(
             store.decide_execution_authorization,
             project_id,
@@ -848,6 +908,11 @@ async def approve_execution_authorization(
             **(
                 {"projectEtag": request.project_etag}
                 if request.project_etag is not None
+                else {}
+            ),
+            **(
+                {"promptPointer": request.prompt_pointer}
+                if request.prompt_pointer
                 else {}
             ),
         },

@@ -814,7 +814,7 @@ export function WorkbenchSurface({
         // a separate manual click — instead of cascading a paid re-generation.
         if (gated) {
           setSynchronizing(true);
-          await confirmCurrentPrompts(scope);
+          await confirmCurrentPrompts(scope, kind);
           if (!isCurrent()) return;
           await pollOnce(projectId);
           if (!isCurrent()) return;

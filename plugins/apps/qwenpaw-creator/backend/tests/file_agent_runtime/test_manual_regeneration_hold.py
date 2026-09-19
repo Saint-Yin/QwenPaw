@@ -31,6 +31,32 @@ pytestmark = pytest.mark.unit
 PROJECT_ID = "scheduler-project"
 
 
+def test_s2v_preflight_failure_without_video_admission_rolls_back_hold(
+    env,
+    monkeypatch,
+):
+    from services.media_files import r2v_execution
+
+    services, store = env
+    node = replace(_nodes()[1], command="GENERATE_S2V_VIDEO")
+    routes = _route_graph(monkeypatch, (_nodes()[0], node, _nodes()[2]))
+
+    async def reject(*_args, **_kwargs):
+        raise ValidationError("face not detected")
+
+    monkeypatch.setattr(r2v_execution, "preflight_s2v_face_detect", reject)
+    with pytest.raises(ValidationError, match="face not detected"):
+        asyncio.run(
+            routes.dispatch_work_graph_node(
+                PROJECT_ID,
+                node.node_id,
+                services,
+            ),
+        )
+    assert not store.read(PROJECT_ID).node_ids
+    assert not hold.ProjectExecutionStore(services.root).list_tasks(PROJECT_ID)
+
+
 def _nodes():
     return (
         WorkNode(
@@ -552,7 +578,7 @@ def test_image_paid_claim_checks_late_hold(env):
     assert asyncio.run(executor._claim_provider(task))
 
 
-def test_r2v_paid_submit_waits_for_explicit_resume_after_restart(env):
+def test_r2v_unsubmitted_hold_ends_old_request_before_resume(env):
     from services.media_files.r2v_execution import (
         FileR2VExecutionService,
         R2VTaskState,
@@ -573,13 +599,82 @@ def test_r2v_paid_submit_waits_for_explicit_resume_after_restart(env):
     _begin(store)
     assert asyncio.run(executor._submit(task, state)) is False
     assert (
-        executor._read_state_sync(PROJECT_ID, task.task_id).phase == "ADMITTED"
+        executor._read_state_sync(PROJECT_ID, task.task_id).phase == "FAILED"
+    )
+    assert (
+        executor.executions.get_task(PROJECT_ID, task.task_id).status.value
+        == "FAILED"
     )
     store.resume(PROJECT_ID, store.read(PROJECT_ID).revision)
-    claimed = executor._update_state_sync(
-        PROJECT_ID,
-        task.task_id,
-        lambda current: current.model_copy(update={"phase": "SUBMIT_CLAIMED"}),
-        admission=True,
+    assert asyncio.run(executor._submit(task, state)) is False
+    assert (
+        executor._read_state_sync(PROJECT_ID, task.task_id).phase == "FAILED"
     )
-    assert claimed.phase == "SUBMIT_CLAIMED"
+
+
+def test_automatic_context_cannot_inherit_manual_permission(env):
+    services, store = env
+    admission = hold.ManualAdmission(
+        store,
+        _begin(store),
+        PROJECT_ID,
+        "request",
+    )
+    with hold.manual_admission(admission):
+        with hold.automatic_node(services.root, PROJECT_ID, "video:a"):
+            with pytest.raises(hold.ManualHoldConflict):
+                hold.check_automatic(services.root, PROJECT_ID)
+        # The deliberate manual target is still allowed inside its own call.
+        with hold.admission_guard(
+            services.root,
+            PROJECT_ID,
+            node_id="storyboard:a",
+        ):
+            pass
+        with pytest.raises(hold.ManualHoldConflict):
+            with hold.admission_guard(
+                services.root,
+                PROJECT_ID,
+                node_id="video:a",
+            ):
+                pytest.fail(
+                    "a different node must not borrow manual permission",
+                )
+
+
+def test_commit_wake_does_not_borrow_manual_context(env, monkeypatch):
+    services, store = env
+    scheduler = WorkGraphScheduler(services)
+    checked = []
+
+    async def project_loop(project_id):
+        with hold.automatic_node(services.root, project_id, "video:a"):
+            with pytest.raises(hold.ManualHoldConflict):
+                hold.check_automatic(services.root, project_id)
+            checked.append(project_id)
+
+    monkeypatch.setattr(scheduler, "_project_loop", project_loop)
+
+    async def scenario():
+        admission = hold.ManualAdmission(
+            store,
+            _begin(store),
+            PROJECT_ID,
+            "request",
+        )
+        with hold.manual_admission(admission):
+            await asyncio.to_thread(
+                asyncio.get_running_loop().call_soon_threadsafe,
+                scheduler.wake,
+                PROJECT_ID,
+            )
+        await asyncio.sleep(0)
+        await scheduler._loops[PROJECT_ID]
+        store.finish(admission, succeeded=True)
+        assert admission.closed
+        with hold.manual_admission(admission):
+            with pytest.raises(hold.ManualHoldConflict):
+                hold.check_automatic(services.root, PROJECT_ID)
+
+    asyncio.run(scenario())
+    assert checked == [PROJECT_ID]

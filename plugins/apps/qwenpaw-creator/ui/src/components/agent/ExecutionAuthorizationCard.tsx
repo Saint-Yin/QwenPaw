@@ -327,6 +327,10 @@ export default function ExecutionAuthorizationCard({
   const baselineText =
     typeof editBaseline?.value === "string" ? editBaseline.value : "";
   const promptDirty = editing && draft !== baselineText;
+  const promptChanged =
+    editing &&
+    (editBaseline?.present !== promptRead?.present ||
+      editBaseline?.value !== promptRead?.value);
 
   const startEditPrompt = () => {
     setDraft(promptText);
@@ -372,21 +376,28 @@ export default function ExecutionAuthorizationCard({
   };
 
   const continueRun = async () => {
-    if (promptDirty || saving || patching || busy) return;
+    if (promptDirty || promptChanged || saving || patching || busy) return;
     setBusy(true);
     try {
       const payload = authorizationApprovalPayload(authorization);
       const snapshot = useProjectSnapshotStore.getState();
       const workGraph = authorization.scope.workGraph;
       if (
-        workGraph &&
-        typeof workGraph === "object" &&
-        !Array.isArray(workGraph) &&
-        snapshot.projectId === projectId &&
-        snapshot.project === project &&
-        snapshot.etag
+        promptField ||
+        (workGraph &&
+          typeof workGraph === "object" &&
+          !Array.isArray(workGraph))
       ) {
+        if (
+          snapshot.projectId !== projectId ||
+          snapshot.project !== project ||
+          !snapshot.etag
+        ) {
+          message.warning(t("executionAuth.promptChanged"));
+          return;
+        }
         payload.projectEtag = snapshot.etag;
+        if (promptField && !workGraph) payload.promptPointer = promptField;
       }
       await approve(authorization.id, payload);
       message.success(
@@ -527,7 +538,11 @@ export default function ExecutionAuthorizationCard({
             className="w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-1.5 text-[11px] leading-4 text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"
           />
           <p className="text-[10px] leading-3 text-[var(--color-text-tertiary)]">
-            {t("executionAuth.promptEditHint")}
+            {t(
+              promptChanged
+                ? "executionAuth.promptChanged"
+                : "executionAuth.promptEditHint",
+            )}
           </p>
           <div className="flex items-center gap-1.5">
             <button
@@ -552,7 +567,7 @@ export default function ExecutionAuthorizationCard({
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <button
           type="button"
-          disabled={busy || saving || patching || promptDirty}
+          disabled={busy || saving || patching || promptDirty || promptChanged}
           onClick={() => void continueRun()}
           className={`flex-1 ${BUTTON_PRIMARY}`}
         >

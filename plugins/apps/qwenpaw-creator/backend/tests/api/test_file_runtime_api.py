@@ -507,11 +507,110 @@ def test_file_execution_authorization_can_be_polled_and_approved(
     }
 
 
+def test_legacy_specialist_uses_saved_prompt_instead_of_old_tool_argument(
+    tmp_path,
+    run_scenario,
+):
+    from domain.errors import ConflictError
+    from services.project_files.approved_prompt import (
+        approved_specialist_arguments,
+    )
+    from services.project_files.models import TimelineElement
+
+    app, services, snapshot, _ = _app(tmp_path)
+    candidate = snapshot.project.model_dump(mode="json")
+    candidate["timelines"]["items"]["timeline:main"]["elements_by_id"][
+        "e"
+    ] = TimelineElement.model_validate(
+        {
+            "element_id": "e",
+            "span": {"start_tick": 0, "duration_tick": 4000},
+            "location": {},
+            "creation": {
+                "type": "r2v",
+                "narrative": "猫走到窗边。",
+                "storyboard_prompt": "用户保存的提示词B",
+            },
+        },
+    ).model_dump(
+        mode="json",
+    )
+    current = services.commits.commit(
+        base=snapshot,
+        candidate=candidate,
+        origin="frontend_edit",
+    ).snapshot
+    executions = ProjectExecutionStore(services.root)
+    authorization = executions.create_execution_authorization(
+        ExecutionAuthorizationRecord(
+            authorization_id="legacy-prompt",
+            project_id="project-1",
+            round_id="round-1",
+            run_id="run-1",
+            execution_request_id="legacy-request",
+            operation="image_generation",
+            target_scope=["element:e"],
+            authorization_token="token",
+            requested_provider="provider",
+            requested_model="model",
+            requested_candidates=1,
+            summary="Generate the saved storyboard prompt",
+            scope={
+                "operation": "image_generation",
+                "parameters": {"prompt": "旧工具参数A", "ratio": "16:9"},
+            },
+        ),
+    )
+
+    async def scenario(client):
+        result = await client.post(
+            "/projects/project-1/execution-authorizations/legacy-prompt/approve",
+            headers={"Idempotency-Key": "approve-legacy"},
+            json={
+                "authorizationToken": authorization.authorization_token,
+                "provider": "provider",
+                "model": "model",
+                "maxCost": 0,
+                "maxCandidates": 1,
+                "projectEtag": f'"{current.etag}"',
+                "promptPointer": (
+                    "/timelines/items/timeline:main/elements_by_id/e"
+                    "/creation/storyboard_prompt"
+                ),
+            },
+        )
+        assert result.status_code == 200, result.text
+        approved = executions.get_execution_authorization(
+            "project-1",
+            "legacy-prompt",
+        )
+        arguments = {
+            "targetRef": "element:e",
+            "arguments": {"prompt": "旧工具参数A", "ratio": "16:9"},
+        }
+        rebound = approved_specialist_arguments(current, approved, arguments)
+        assert rebound["arguments"] == {"prompt": "用户保存的提示词B", "ratio": "16:9"}
+        assert arguments["arguments"]["prompt"] == "旧工具参数A"
+        changed = current.project.model_dump(mode="json")
+        changed["name"] = "changed"
+        newer = services.commits.commit(
+            base=current,
+            candidate=changed,
+            origin="frontend_edit",
+        ).snapshot
+        with pytest.raises(ConflictError):
+            approved_specialist_arguments(newer, approved, arguments)
+
+    run_scenario(app, scenario)
+
+
 @pytest.mark.parametrize(
     "change",
     [
         "prompt",
         "unchanged",
+        "quoted-etag",
+        "weak-etag",
         "stale-etag",
         "not-ready",
         "review",
@@ -803,6 +902,17 @@ def test_workgraph_saved_snapshot_approval_fails_closed(
             payload["projectEtag"] = ""
         elif change == "non-string-etag":
             payload["projectEtag"] = 123
+        elif change in {"quoted-etag", "weak-etag"}:
+            # Use the public HTTP snapshot representation, including a 304.
+            fetched = await client.get("/projects/project-1/project")
+            conditional = await client.get(
+                "/projects/project-1/project",
+                headers={"If-None-Match": fetched.headers["etag"]},
+            )
+            assert conditional.status_code == 304
+            payload["projectEtag"] = (
+                "W/" if change == "weak-etag" else ""
+            ) + conditional.headers["etag"]
         response = await client.post(
             "/projects/project-1/execution-authorizations/saved-auth/approve",
             headers={"Idempotency-Key": "saved-approval"},
@@ -812,7 +922,7 @@ def test_workgraph_saved_snapshot_approval_fails_closed(
             "project-1",
             "saved-auth",
         )
-        if change in {"prompt", "unchanged"}:
+        if change in {"prompt", "unchanged", "quoted-etag", "weak-etag"}:
             assert response.status_code == 200, response.text
             current_node = current_graph.by_id[node.node_id]
             approved_plan = requested_work_node(fresh, current_node)

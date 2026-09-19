@@ -212,6 +212,7 @@ async def dispatch_work_graph_node(
         # Admission must use the scheduler's exact durable request key.
         # pylint: disable-next=protected-access
         f"dag-{node.node_id}-{scheduler._dispatch_slot(fingerprint)}",
+        node_id=node.node_id,
     )
     with manual_regeneration_hold.manual_admission(admission):
         try:

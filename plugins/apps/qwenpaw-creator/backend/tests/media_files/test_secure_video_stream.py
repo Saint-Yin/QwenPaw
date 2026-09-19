@@ -111,7 +111,9 @@ def _response(
     [
         (_MP4, "video/mp4", "mp4"),
         (_WEBM, "video/webm", "webm"),
+        (_MP4 + b"\x1a\r\n\x00\n", "video/mp4", "mp4"),
     ],
+    ids=["mp4", "webm", "binary-control-bytes"],
 )
 @_run_async
 async def test_local_streaming_detects_video_magic_and_returns_integrity(

@@ -158,6 +158,18 @@ def _json_value(value: Any) -> Any:
         ) from exc
 
 
+def _read_atomic_bytes(path: Path) -> bytes:
+    """Retry a Windows reader racing atomic replacement, without a lock."""
+    for attempt in range(_REPLACE_RETRY_ATTEMPTS):
+        try:
+            return path.read_bytes()
+        except PermissionError:
+            if attempt == _REPLACE_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_RETRY_DELAY_SECONDS)
+    raise AssertionError("Atomic read needs at least one attempt")
+
+
 def canonical_json_bytes(value: Any) -> bytes:
     """Return stable compact JSON used for checksums and request hashes."""
 
@@ -408,7 +420,7 @@ class AtomicJsonRecordStore(Generic[T]):
 
     def _read_snapshot_unlocked(self) -> RecordSnapshot[T]:
         try:
-            raw = self.path.read_bytes()
+            raw = _read_atomic_bytes(self.path)
         except FileNotFoundError as exc:
             raise RecordNotFoundError(self.path) from exc
         try:

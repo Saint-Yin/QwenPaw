@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, nullcontext
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -62,6 +62,7 @@ class ManualAdmission:
     request_id: str
     closed: bool = False
     untracked_admission: bool = False
+    node_id: str | None = None
 
 
 _automatic: ContextVar[tuple[Path, str, str] | None] = ContextVar(
@@ -281,8 +282,6 @@ class ManualRegenerationHoldStore:
                 )
                 if value
             )
-            if durable or succeeded:
-                admission.closed = False
         if durable or succeeded:
             self.admitted(admission.operation)
         elif not admission.untracked_admission:
@@ -291,20 +290,34 @@ class ManualRegenerationHoldStore:
 
 @contextmanager
 def automatic_node(data_root, project_id, node_id):
+    manual_token = _manual.set(None)
     token = _automatic.set((Path(data_root).resolve(), project_id, node_id))
     try:
         yield
     finally:
         _automatic.reset(token)
+        _manual.reset(manual_token)
 
 
 @contextmanager
 def manual_admission(admission: ManualAdmission):
+    automatic_token = _automatic.set(None)
     token = _manual.set(admission)
     try:
         yield
     finally:
         _manual.reset(token)
+        _automatic.reset(automatic_token)
+
+
+def background_context():
+    """Retain provider configuration, never a caller's media permission."""
+    context = copy_context()
+    context.run(_manual.set, None)
+    context.run(_automatic.set, None)
+    context.run(_creating.set, False)
+    context.run(_creating_node.set, None)
+    return context
 
 
 @contextmanager
@@ -325,7 +338,13 @@ def admission_guard(
     ):
         manual = None
     if manual is not None:
-        node_id = None
+        target = manual.node_id or (
+            manual.operation.target if manual.operation else None
+        )
+        if node_id is not None and node_id != target:
+            manual = None
+        else:
+            node_id = None
     if node_id is None and manual is None:
         yield
         return
@@ -387,6 +406,14 @@ class HoldAwareExecutionStore(ProjectExecutionStore):
     def _with_automatic_metadata(self, record):
         automatic = _automatic.get()
         node_id = record.metadata.get("automaticWorkNodeId")
+        manual = _manual.get()
+        if manual and (
+            manual.store.root == self.data_root
+            and manual.project_id == record.project_id
+        ):
+            node_id = manual.node_id or (
+                manual.operation.target if manual.operation else node_id
+            )
         if automatic and automatic[:2] == (self.data_root, record.project_id):
             node_id = automatic[2]
         elif isinstance(record, TaskRecord) and record.run_id and not node_id:
@@ -430,7 +457,26 @@ class HoldAwareExecutionStore(ProjectExecutionStore):
             record.metadata.get("automaticWorkNodeId"),
         )
         try:
-            return super().create_task(record)
+            result = super().create_task(record)
+            manual = _manual.get()
+            if (
+                manual
+                and manual.project_id == record.project_id
+                and (manual.store.root == self.data_root)
+                and any(
+                    value == manual.request_id
+                    or value.startswith(manual.request_id + "-r")
+                    for value in (
+                        record.idempotency_key,
+                        record.caused_by_request_id,
+                    )
+                    if value
+                )
+            ):
+                # Release this target before a clean background supervisor
+                # can claim it; downstream holds remain intact.
+                manual.store.admitted(manual.operation)
+            return result
         finally:
             _creating_node.reset(node_token)
             _creating.reset(token)
@@ -448,4 +494,5 @@ __all__ = [
     "admission_guard",
     "check_automatic",
     "mark_untracked_admission",
+    "background_context",
 ]

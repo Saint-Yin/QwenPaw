@@ -177,7 +177,31 @@ def _expected_reference_roles(
         ),
     )
     if not explicit:
-        return _canonical_type_roles(creation)
+        from pydantic import ValidationError as SchemaValidationError
+        from domain.errors import ValidationError
+        from services.project_files.models import Project, R2VCreation
+        from services.media_files.visual_reference_resolution import (
+            resolve_r2v_visual_reference_version_ids,
+        )
+
+        try:
+            project = Project.model_validate(project_json)
+            live_creation = R2VCreation.model_validate(creation)
+            explicit = list(
+                resolve_r2v_visual_reference_version_ids(
+                    project,
+                    live_creation,
+                    (),
+                ),
+            )
+        except SchemaValidationError:
+            # Partial text-review fixtures have no materialized selections.
+            # Actual Projects always use the same resolver as the executor.
+            return _canonical_type_roles(creation)
+        except ValidationError:
+            # Dependency validation supplies the actionable missing-input
+            # error. Do not invent shifted role slots for unresolved inputs.
+            return ["storyboard"]
 
     assets = project_json.get("assets")
     assets = assets if isinstance(assets, Mapping) else {}

@@ -42,6 +42,50 @@ afterEach(() => {
 });
 
 describe("ExecutionAuthorizationCard inline prompt editing", () => {
+  it("does not approve a refreshed snapshot while an untouched old draft is visible", () => {
+    seed(vi.fn());
+    const approve = vi.fn();
+    useExecutionAuthorizationStore.setState({ approve });
+    const authorization = makePendingAuthorization({
+      targetRef: "element:r2v-window",
+      scope: {
+        operation: "image_generation",
+        workGraph: { nodeId: "storyboard:r2v-window" },
+      },
+    });
+    const view = render(
+      <ExecutionAuthorizationCard
+        authorization={authorization}
+        project={projectDocument}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "编辑提示词" }));
+    const newer = structuredClone(projectDocument);
+    Object.assign(
+      newer.timelines.items["timeline:main"].elements_by_id["r2v-window"]
+        .creation,
+      {
+        storyboard_prompt: "另一个编辑入口保存的内容",
+      },
+    );
+    act(() =>
+      useProjectSnapshotStore.setState({ project: newer, etag: '"etag-4"' }),
+    );
+    view.rerender(
+      <ExecutionAuthorizationCard
+        authorization={authorization}
+        project={newer}
+      />,
+    );
+    expect(screen.getByRole("textbox")).toHaveValue("暖色餐厅窗外的橘猫");
+    const proceed = screen.getByRole("button", { name: "继续" });
+    expect(proceed).toBeDisabled();
+    fireEvent.click(proceed);
+    expect(approve).not.toHaveBeenCalled();
+    expect(screen.getByText(/此提示词已在其他位置更新/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "放弃" }));
+    expect(proceed).toBeEnabled();
+  });
   it("edits and CAS-saves the target prompt before confirming generation", async () => {
     const patchMock = vi.fn(async () => ({
       project: projectDocument,
@@ -276,7 +320,7 @@ describe("ExecutionAuthorizationCard inline prompt editing", () => {
   });
 
   it.each(["non-workgraph", "stale-card"])(
-    "does not rebind a %s confirmation",
+    "binds legacy prompts but does not rebind a stale card: %s",
     async (kind) => {
       seed(vi.fn());
       const approve = vi.fn().mockResolvedValue(undefined);
@@ -303,8 +347,19 @@ describe("ExecutionAuthorizationCard inline prompt editing", () => {
         />,
       );
       fireEvent.click(screen.getByRole("button", { name: "继续" }));
-      await waitFor(() => expect(approve).toHaveBeenCalledTimes(1));
-      expect(approve.mock.calls[0][1]).not.toHaveProperty("projectEtag");
+      if (kind === "non-workgraph") {
+        await waitFor(() => expect(approve).toHaveBeenCalledTimes(1));
+        expect(approve.mock.calls[0][1]).toHaveProperty(
+          "projectEtag",
+          "etag-3",
+        );
+        expect(approve.mock.calls[0][1]).toHaveProperty(
+          "promptPointer",
+          STORYBOARD_POINTER,
+        );
+      } else {
+        expect(approve).not.toHaveBeenCalled();
+      }
     },
   );
 

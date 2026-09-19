@@ -27,6 +27,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import socket
 import stat
 import threading
 import time
@@ -341,6 +342,7 @@ class ExistingR2VProvider:
         return await submit_video_task(
             prompt=prompt,
             reference_image_url_list=list(reference_image_urls),
+            preserve_reference_slots=True,
             ratio=ratio,
             duration=duration_seconds,
             resolution=resolution,
@@ -554,6 +556,10 @@ def _failed_task_conflict(
 
 def _is_transient_materialize_error(error: BaseException) -> bool:
     if isinstance(error, httpx.TransportError):
+        return True
+    if isinstance(error.__cause__, socket.gaierror):
+        # The secure downloader wraps DNS failures as validation errors.
+        # Retry the download, retaining the already-paid provider result.
         return True
     # Large public CDNs can legitimately rotate the selected edge between
     # getaddrinfo and the TLS connection.  The secure downloader still rejects
@@ -1246,6 +1252,26 @@ def _render_reference_markers(prompt: str) -> str:
     )
 
 
+def _submission_input_fingerprint(project: Project, element_id: str) -> str:
+    timeline, element = find_timeline_element(project, element_id)
+    creation = element.creation.model_dump(mode="json")
+    creation.pop("prompt_sync", None)
+    return _fingerprint(
+        {
+            "creation": creation,
+            "span": element.span.model_dump(mode="json"),
+            "ticksPerSecond": timeline.ticks_per_second,
+            "ratio": project.settings.aspect_ratio,
+            "resolution": project.settings.resolution,
+            "references": (
+                video_reference_plan(project, element)
+                if isinstance(element.creation, R2VCreation)
+                else ()
+            ),
+        },
+    )
+
+
 def _resolve_request(
     *,
     snapshot: ProjectSnapshot,
@@ -1254,6 +1280,11 @@ def _resolve_request(
     arguments: Mapping[str, Any],
 ) -> _ResolvedR2V:
     project = snapshot.project
+    from services.project_files.production_stage import (
+        assert_media_production_allowed,
+    )
+
+    assert_media_production_allowed(project)
     element_id = _target_element_id(target_ref)
     timeline, element = find_timeline_element(project, element_id)
     creation = element.creation
@@ -1468,8 +1499,12 @@ def _resolve_s2v_request(
     """
 
     from models.s2v_model import normalize_s2v_resolution
+    from services.project_files.production_stage import (
+        assert_media_production_allowed,
+    )
 
     project = snapshot.project
+    assert_media_production_allowed(project)
     element_id = _target_element_id(target_ref)
     _, element = find_timeline_element(project, element_id)
     creation = element.creation
@@ -1569,7 +1604,9 @@ def _stage_materialized_video(
 ) -> StagedAsset:
     """Stream a verified private scratch file into immutable Asset staging."""
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags = (
+        os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
+    )
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     else:
@@ -1702,7 +1739,13 @@ class FileR2VExecutionService:
         admission: bool = False,
     ) -> R2VTaskState:
         with self.services.projects.lifecycle_lock(project_id, shared=True):
-            self.services.projects.read(project_id)
+            snapshot = self.services.projects.read(project_id)
+            if admission:
+                from services.project_files.production_stage import (
+                    assert_media_production_allowed,
+                )
+
+                assert_media_production_allowed(snapshot.project)
 
             def update(current: R2VTaskState) -> Any:
                 if (
@@ -2201,6 +2244,10 @@ class FileR2VExecutionService:
             "fileId": stable["file_id"],
             "artifactVersionId": stable["artifact_version_id"],
             "transactionId": stable["transaction_id"],
+            "projectInputFingerprint": _submission_input_fingerprint(
+                base.project,
+                resolved.element_id,
+            ),
         }
         if any(resolved.reference_voice_urls):
             # Joins the frozen request only when a voice actually rides
@@ -2432,9 +2479,14 @@ class FileR2VExecutionService:
             return current
         # Read durable state inside the supervisor, off the event loop. A
         # concurrent Project commit must not strand an admitted Task here.
+        from services.file_agent_runtime.manual_regeneration_hold import (
+            background_context,
+        )
+
         worker = asyncio.create_task(
             self._drive(project_id, task_id),
             name=f"file-r2v:{task_id}",
+            context=background_context(),
         )
         self._jobs[task_id] = worker
         self._job_projects[task_id] = project_id
@@ -3129,6 +3181,21 @@ class FileR2VExecutionService:
             )
             if latest.status not in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
                 return current.model_dump(mode="python")
+            snapshot = self.services.projects.read(task.project_id)
+            frozen = current.request.get("projectInputFingerprint")
+            if (
+                frozen is not None
+                and frozen
+                != _submission_input_fingerprint(
+                    snapshot.project,
+                    str(current.request["elementId"]),
+                )
+            ) or (
+                frozen is None
+                and current.request.get("inputEtag")
+                and snapshot.etag != current.request["inputEtag"]
+            ):
+                raise ValidationError("视频输入已改变，请按最新分镜重新确认生成。")
             dumped = current.model_dump(mode="python")
             dumped.update(
                 {
@@ -3155,7 +3222,26 @@ class FileR2VExecutionService:
                 claim,
                 admission=True,
             )
-        except ManualHoldConflict:
+        except ManualHoldConflict as error:
+            # This frozen request has not spent anything. End it so a manual
+            # retry (or an explicit resume) resolves the new storyboard rather
+            # than submitting the old reference after the hold is cleared.
+            await self._fail(
+                task,
+                code="MANUAL_REGENERATION_HOLD",
+                message=str(error),
+                retryable=True,
+                error=error,
+            )
+            return False
+        except ValidationError as error:
+            await self._fail(
+                task,
+                code="R2V_INPUTS_CHANGED",
+                message=str(error),
+                retryable=True,
+                error=error,
+            )
             return False
         if (
             claimed.phase != "SUBMIT_CLAIMED"

@@ -94,6 +94,35 @@ def sync_service(services):
     )
 
 
+def test_confirm_storyboard_does_not_validate_or_confirm_video(services):
+    from domain.errors import ValidationError as DomainValidationError
+
+    service = PromptSyncService(services)
+    asyncio.run(service.confirm_current(PID, TID, EID))
+    edit(services, "narrative", "女子拿起钥匙，说：“你好！”")
+    before = services.projects.read(PID).project
+    assert service.status(PID, TID, EID, stage="storyboard")["status"] == (
+        "needs_update"
+    )
+    asyncio.run(service.confirm_current(PID, TID, EID, stage="storyboard"))
+    assert service.status(PID, TID, EID, stage="storyboard")["status"] == (
+        "current"
+    )
+    assert service.status(PID, TID, EID, stage="video")["status"] == (
+        "needs_update"
+    )
+    after = services.projects.read(PID).project
+    old = before.timelines.items[TID].elements_by_id[EID].creation
+    new = after.timelines.items[TID].elements_by_id[EID].creation
+    assert (old.narrative, old.storyboard_prompt, old.video_prompt) == (
+        new.narrative,
+        new.storyboard_prompt,
+        new.video_prompt,
+    )
+    with pytest.raises(DomainValidationError, match="VIDEO_DIALOGUE_MISSING"):
+        asyncio.run(service.confirm_current(PID, TID, EID, stage="video"))
+
+
 @pytest.mark.parametrize(
     "source, field, output",
     [

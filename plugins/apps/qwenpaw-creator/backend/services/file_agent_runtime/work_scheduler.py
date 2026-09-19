@@ -431,6 +431,7 @@ class WorkGraphScheduler:
         if task is None or task.done():
             self._loops[project_id] = asyncio.create_task(
                 self._project_loop(project_id),
+                context=manual_regeneration_hold.background_context(),
             )
 
     async def shutdown(self) -> None:
@@ -1834,7 +1835,7 @@ async def _default_s2v_dispatch(
 
     del command
     await asyncio.to_thread(
-        manual_regeneration_hold.mark_untracked_admission,
+        manual_regeneration_hold.check_automatic,
         services.root,
         project_id,
     )

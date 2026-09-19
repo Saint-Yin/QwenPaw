@@ -130,6 +130,35 @@ def test_atomic_bytes_tolerate_windows_like_missing_fchmod_and_dir_fsync(
     assert (tmp_path / "created.json").read_bytes() == b'{"created":true}\n'
 
 
+@pytest.mark.parametrize("permanent", [False, True])
+def test_atomic_reader_retries_windows_sharing_violation_but_preserves_denial(
+    tmp_path,
+    monkeypatch,
+    permanent,
+):
+    path = tmp_path / "record.json"
+    store = AtomicJsonRecordStore(path, DemoRecord)
+    store.create(DemoRecord(name="current", count=1))
+    read_bytes = Path.read_bytes
+    calls = []
+
+    def read(candidate):
+        calls.append(candidate)
+        if permanent or len(calls) < 3:
+            raise PermissionError(errno.EACCES, "sharing violation", candidate)
+        return read_bytes(candidate)
+
+    monkeypatch.setattr(atomic_store_module, "_REPLACE_RETRY_ATTEMPTS", 3)
+    monkeypatch.setattr(atomic_store_module, "_REPLACE_RETRY_DELAY_SECONDS", 0)
+    monkeypatch.setattr(Path, "read_bytes", read)
+    if permanent:
+        with pytest.raises(PermissionError):
+            store.read()
+    else:
+        assert store.read().name == "current"
+    assert len(calls) == 3
+
+
 def test_non_standard_nonfinite_json_is_reported_as_corruption(tmp_path):
     path = tmp_path / "record.json"
     path.write_text('{"name":"bad","count":NaN}\n', encoding="utf-8")
