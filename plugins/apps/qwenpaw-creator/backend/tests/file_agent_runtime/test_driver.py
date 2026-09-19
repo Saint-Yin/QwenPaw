@@ -540,6 +540,7 @@ def test_browser_operation_scratch_is_removed_after_execution_failure(
 
 def test_live_operation_scratch_cleanup_rejects_escape_and_symlink(
     tmp_path,
+    directory_link,
 ) -> None:
     run_root = tmp_path / "runtime"
     scratch_root = run_root / "live_operation"
@@ -553,9 +554,9 @@ def test_live_operation_scratch_cleanup_rejects_escape_and_symlink(
     assert marker.read_text(encoding="utf-8") == "keep"
 
     redirect = scratch_root / "agent-run-link"
-    redirect.symlink_to(outside, target_is_directory=True)
+    directory_link(outside, redirect)
     _remove_live_operation_scratch(run_root, redirect.name)
-    assert redirect.is_symlink()
+    assert redirect.resolve() == outside.resolve()
     assert marker.read_text(encoding="utf-8") == "keep"
 
     ordinary = scratch_root / "agent-run-safe"

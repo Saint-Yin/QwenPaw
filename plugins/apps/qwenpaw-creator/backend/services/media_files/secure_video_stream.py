@@ -38,6 +38,7 @@ import httpx
 
 from domain.errors import StorageIntegrityError, ValidationError
 from services.runtime_files.atomic_store import fsync_directory
+from services.runtime_files.path_safety import is_link_stat
 
 logger = logging.getLogger("qwenpaw.creator.media_files.secure_video_stream")
 
@@ -199,7 +200,7 @@ def _require_real_directory(path: Path, *, label: str) -> None:
         details = path.lstat()
     except OSError as error:
         raise ValidationError(f"{label} 不存在、不是目录或包含符号链接") from error
-    if stat.S_ISLNK(details.st_mode) or not stat.S_ISDIR(details.st_mode):
+    if is_link_stat(details) or not stat.S_ISDIR(details.st_mode):
         raise ValidationError(f"{label} 不存在、不是目录或包含符号链接")
 
 
@@ -214,7 +215,7 @@ def _require_regular_private_file(
         raise ValidationError(
             f"{label} 不存在、不是 regular file 或包含符号链接",
         ) from error
-    if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(details.st_mode):
+    if is_link_stat(details) or not stat.S_ISREG(details.st_mode):
         raise ValidationError(f"{label} 不存在、不是 regular file 或包含符号链接")
     if details.st_nlink != 1:
         raise ValidationError(f"{label} 不允许使用硬链接")
@@ -327,7 +328,7 @@ class _TaskScratch:
             raise ValidationError(
                 "Project root 缺少 regular project.json",
             ) from error
-        if stat.S_ISLNK(project_details.st_mode) or not stat.S_ISREG(
+        if is_link_stat(project_details) or not stat.S_ISREG(
             project_details.st_mode,
         ):
             raise ValidationError("Project root 缺少 regular project.json")
