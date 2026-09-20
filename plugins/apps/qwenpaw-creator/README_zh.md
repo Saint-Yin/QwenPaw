@@ -169,6 +169,8 @@ Agent 生成的媒体和修改的文本会进入决策托盘；你手动编辑�
 
 ## 附录：安装与运行环境
 
+可复用用户模板：[猫咪新品发布会 · 一张照片](templates/cat-launch/README.md)，包含15秒单图生视频制作要求、六组字幕配置及安装说明。
+
 请打开 QwenPaw 控制台的 **Apps（应用中心）**，找到 **QwenPaw Creator** 并点击安装；安装完成后，直接从 Apps 打开 Creator。
 
 Creator 会使用若干本地工具，但不会改动系统安装：`ffmpeg` 负责媒体处理与合成（可用 `CREATOR_FFMPEG_PATH` 指定，否则回退系统 `ffmpeg` 或 `imageio-ffmpeg`）；`jq` 支撑 Agent 对项目文件的结构化编辑（`CREATOR_JQ_PATH` 或 `PATH`）。依赖缺失时 Creator 以降级模式启动，可通过 `GET /api/qwenpaw-creator/health` 查看缺失项。
