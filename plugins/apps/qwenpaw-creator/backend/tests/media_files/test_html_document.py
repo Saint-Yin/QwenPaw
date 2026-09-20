@@ -40,6 +40,7 @@ def test_extract_preserves_document_and_excludes_only_surrounding_text(reply):
         "<html><html><body>Ambiguous</body></html></html>",
         "</html><html>",
         "<p>A fragment is not a complete generated document.</p>",
+        "<![invalid declaration]>" + DOCUMENT,
     ],
 )
 def test_incomplete_or_ambiguous_reply_is_not_silently_repaired(reply):

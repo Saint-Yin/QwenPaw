@@ -1,0 +1,176 @@
+[
+  {
+    "element_id": "ov:s1",
+    "location": {
+      "coordinate_space": "normalized_canvas",
+      "x": 0.5,
+      "y": 0.115,
+      "width": 0.9,
+      "height": 0.15,
+      "anchor_x": 0.5,
+      "anchor_y": 0.5,
+      "rotation_degrees": 0.0,
+      "opacity": 1.0
+    },
+    "creation": {
+      "type": "overlay",
+      "text": "你好，小主角",
+      "vibe": "warm",
+      "prompt": "编辑感片头标题（竖幅9:16）：单行『你好，小主角』，黑色无衬线中号字，居中于画面顶部空白区；淡入后快速柔和淡出（仅0.7秒短停留）；四周留6%安全边距，不遮挡下方猫的脸与眼睛；如顶部背景偏亮影响可读性，可加白色半透明底衬；无可爱气泡、无贴纸、无装饰粒子、不贴满屏。",
+      "reference_version_ids": [],
+      "motion": {
+        "format": "html_css",
+        "html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}body{display:flex;align-items:center;justify-content:center;font-family:\"Microsoft YaHei\",\"SimHei\",sans-serif}@keyframes enter{from{opacity:.2;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.title{animation:enter .25s ease-out both;text-align:center;color:#202020;text-shadow:0 1px 8px #ffffff,0 0 16px #ffffff}.label{font-family:Arial,sans-serif;font-size:2.8vw;font-weight:500;letter-spacing:.24em;margin-bottom:3vh}.copy{font-size:5.7vw;font-weight:600;letter-spacing:.035em;line-height:1.5;white-space:nowrap}</style></head><body><div class=\"title\"><div class=\"label\">MEOW ONE</div><div class=\"copy\">你好，小主角</div></div></body></html>",
+        "fps": 24,
+        "loop": false,
+        "design_notes": "统一发布会排版：透明底、深灰无衬线字、英文眉题；无需生成式动效设计",
+        "motif": "custom"
+      }
+    }
+  },
+  {
+    "element_id": "ov:s2",
+    "location": {
+      "coordinate_space": "normalized_canvas",
+      "x": 0.5,
+      "y": 0.87,
+      "width": 0.9,
+      "height": 0.15,
+      "anchor_x": 0.5,
+      "anchor_y": 0.5,
+      "rotation_degrees": 0.0,
+      "opacity": 1.0
+    },
+    "creation": {
+      "type": "overlay",
+      "text": "每一根，都很讲究",
+      "vibe": "calm",
+      "prompt": "精准副标题：单行『每一根，都很讲究』，黑色或深灰无衬线小字，居中于画面顶部空白区；淡入停留后淡出；四周留6%安全边距，不遮挡猫脸；需要时用白色半透明底衬保证可读；无气泡、无贴纸、不贴满屏。",
+      "reference_version_ids": [],
+      "motion": {
+        "format": "html_css",
+        "html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}body{display:flex;align-items:center;justify-content:center;font-family:\"Microsoft YaHei\",\"SimHei\",sans-serif}@keyframes enter{from{opacity:.2;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.title{animation:enter .25s ease-out both;text-align:center;color:#202020;text-shadow:0 1px 8px #ffffff,0 0 16px #ffffff}.label{font-family:Arial,sans-serif;font-size:2.8vw;font-weight:500;letter-spacing:.24em;margin-bottom:3vh}.copy{font-size:5.7vw;font-weight:600;letter-spacing:.035em;line-height:1.5;white-space:nowrap}</style></head><body><div class=\"title\"><div class=\"label\">SOFT BY NATURE</div><div class=\"copy\">每一根，都很讲究</div></div></body></html>",
+        "fps": 24,
+        "loop": false,
+        "design_notes": "统一发布会排版：透明底、深灰无衬线字、英文眉题；无需生成式动效设计",
+        "motif": "custom"
+      }
+    }
+  },
+  {
+    "element_id": "ov:s3",
+    "location": {
+      "coordinate_space": "normalized_canvas",
+      "x": 0.5,
+      "y": 0.87,
+      "width": 0.9,
+      "height": 0.15,
+      "anchor_x": 0.5,
+      "anchor_y": 0.5,
+      "rotation_degrees": 0.0,
+      "opacity": 1.0
+    },
+    "creation": {
+      "type": "overlay",
+      "text": "目光，自带高光",
+      "vibe": "calm",
+      "prompt": "精准副标题：单行『目光，自带高光』，黑色或深灰无衬线小字，居中于画面底部（眼睛微距镜头专用位置，绝不遮挡瞳孔与眼部主体）；淡入停留后淡出；需要时用白色半透明底衬；无气泡、无贴纸、不贴满屏。",
+      "reference_version_ids": [],
+      "motion": {
+        "format": "html_css",
+        "html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}body{display:flex;align-items:center;justify-content:center;font-family:\"Microsoft YaHei\",\"SimHei\",sans-serif}@keyframes enter{from{opacity:.2;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.title{animation:enter .25s ease-out both;text-align:center;color:#202020;text-shadow:0 1px 8px #ffffff,0 0 16px #ffffff}.label{font-family:Arial,sans-serif;font-size:2.8vw;font-weight:500;letter-spacing:.24em;margin-bottom:3vh}.copy{font-size:5.7vw;font-weight:600;letter-spacing:.035em;line-height:1.5;white-space:nowrap}</style></head><body><div class=\"title\"><div class=\"label\">A CLOSER LOOK</div><div class=\"copy\">目光，自带高光</div></div></body></html>",
+        "fps": 24,
+        "loop": false,
+        "design_notes": "统一发布会排版：透明底、深灰无衬线字、英文眉题；无需生成式动效设计",
+        "motif": "custom"
+      }
+    }
+  },
+  {
+    "element_id": "ov:s4",
+    "location": {
+      "coordinate_space": "normalized_canvas",
+      "x": 0.5,
+      "y": 0.115,
+      "width": 0.9,
+      "height": 0.15,
+      "anchor_x": 0.5,
+      "anchor_y": 0.5,
+      "rotation_degrees": 0.0,
+      "opacity": 1.0
+    },
+    "creation": {
+      "type": "overlay",
+      "text": "轻轻一碰，心动回应",
+      "vibe": "warm",
+      "prompt": "精准副标题（竖幅9:16）：单行『轻轻一碰，心动回应』，黑色或深灰无衬线小字，居中于画面顶部空白区，避开中下部伸出的猫爪与猫脸；淡入停留后淡出；需要时用白色半透明底衬；无气泡、无贴纸、不贴满屏。",
+      "reference_version_ids": [],
+      "motion": {
+        "format": "html_css",
+        "html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}body{display:flex;align-items:center;justify-content:center;font-family:\"Microsoft YaHei\",\"SimHei\",sans-serif}@keyframes enter{from{opacity:.2;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.title{animation:enter .25s ease-out both;text-align:center;color:#202020;text-shadow:0 1px 8px #ffffff,0 0 16px #ffffff}.label{font-family:Arial,sans-serif;font-size:2.8vw;font-weight:500;letter-spacing:.24em;margin-bottom:3vh}.copy{font-size:5.7vw;font-weight:600;letter-spacing:.035em;line-height:1.5;white-space:nowrap}</style></head><body><div class=\"title\"><div class=\"label\">MADE TO CONNECT</div><div class=\"copy\">轻轻一碰，心动回应</div></div></body></html>",
+        "fps": 24,
+        "loop": false,
+        "design_notes": "统一发布会排版：透明底、深灰无衬线字、英文眉题；无需生成式动效设计",
+        "motif": "custom"
+      }
+    }
+  },
+  {
+    "element_id": "ov:s5",
+    "location": {
+      "coordinate_space": "normalized_canvas",
+      "x": 0.5,
+      "y": 0.115,
+      "width": 0.9,
+      "height": 0.15,
+      "anchor_x": 0.5,
+      "anchor_y": 0.5,
+      "rotation_degrees": 0.0,
+      "opacity": 1.0
+    },
+    "creation": {
+      "type": "overlay",
+      "text": "五种造型，同一种可爱",
+      "vibe": "playful",
+      "prompt": "精准副标题：单行『五种造型，同一种可爱』，黑色或深灰无衬线小字，居中于画面顶部空白区，避开五猫阵列主体（左侧猫略贴边属素材原状，字幕不得遮挡）；淡入停留后淡出；需要时用白色半透明底衬；无气泡、无贴纸、不贴满屏。",
+      "reference_version_ids": [],
+      "motion": {
+        "format": "html_css",
+        "html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}body{display:flex;align-items:center;justify-content:center;font-family:\"Microsoft YaHei\",\"SimHei\",sans-serif}@keyframes enter{from{opacity:.2;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.title{animation:enter .25s ease-out both;text-align:center;color:#202020;text-shadow:0 1px 8px #ffffff,0 0 16px #ffffff}.label{font-family:Arial,sans-serif;font-size:2.8vw;font-weight:500;letter-spacing:.24em;margin-bottom:3vh}.copy{font-size:5.7vw;font-weight:600;letter-spacing:.035em;line-height:1.5;white-space:nowrap}</style></head><body><div class=\"title\"><div class=\"label\">FIVE LITTLE MOODS</div><div class=\"copy\">五种造型，同一种可爱</div></div></body></html>",
+        "fps": 24,
+        "loop": false,
+        "design_notes": "统一发布会排版：透明底、深灰无衬线字、英文眉题；无需生成式动效设计",
+        "motif": "custom"
+      }
+    }
+  },
+  {
+    "element_id": "ov:s6",
+    "location": {
+      "coordinate_space": "normalized_canvas",
+      "x": 0.5,
+      "y": 0.115,
+      "width": 0.9,
+      "height": 0.15,
+      "anchor_x": 0.5,
+      "anchor_y": 0.5,
+      "rotation_degrees": 0.0,
+      "opacity": 1.0
+    },
+    "creation": {
+      "type": "overlay",
+      "text": "Meow One\n今天，也被你治愈",
+      "vibe": "warm",
+      "prompt": "编辑感片尾标题（竖幅9:16）：主标题『Meow One』黑色无衬线中号字，下方『今天，也被你治愈』深灰色小字；两行居中于画面顶部空白区，淡入后稳定停留至成片结束，不遮挡下方猫脸；需要时用白色半透明底衬；无背景色块、无logo、无价格或购买按钮、无气泡贴纸、不贴满屏。",
+      "reference_version_ids": [],
+      "motion": {
+        "format": "html_css",
+        "html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}body{display:flex;align-items:center;justify-content:center;font-family:\"Microsoft YaHei\",\"SimHei\",sans-serif}@keyframes enter{from{opacity:.2;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.title{animation:enter .25s ease-out both;text-align:center;color:#202020;text-shadow:0 1px 8px #ffffff,0 0 16px #ffffff}.label{font-family:Arial,sans-serif;font-size:2.8vw;font-weight:500;letter-spacing:.24em;margin-bottom:3vh}.copy{font-size:5.7vw;font-weight:600;letter-spacing:.035em;line-height:1.5;white-space:nowrap}</style></head><body><div class=\"title\"><div class=\"label\">Meow One</div><div class=\"copy\">今天，也被你治愈</div></div></body></html>",
+        "fps": 24,
+        "loop": false,
+        "design_notes": "统一发布会排版：透明底、深灰无衬线字、英文眉题；无需生成式动效设计",
+        "motif": "custom"
+      }
+    }
+  }
+]

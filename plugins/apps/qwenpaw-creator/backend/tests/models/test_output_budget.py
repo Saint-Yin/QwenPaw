@@ -25,11 +25,7 @@ pytestmark = pytest.mark.unit
     ],
 )
 def test_model_requests_use_provider_output_budget(
-    monkeypatch,
-    kind,
-    protocol,
-    model,
-    expected_limit,
+    monkeypatch, kind, protocol, model, expected_limit
 ):
     for key, value in {
         "api_key": "test-key",
@@ -38,9 +34,7 @@ def test_model_requests_use_provider_output_budget(
         "protocol": protocol,
     }.items():
         monkeypatch.setattr(
-            config,
-            f"get_{kind}_{key}",
-            lambda value=value: value,
+            config, f"get_{kind}_{key}", lambda value=value: value
         )
     captured = []
 
@@ -60,8 +54,7 @@ def test_model_requests_use_provider_output_budget(
         httpx,
         "AsyncClient",
         lambda **kwargs: client_type(
-            transport=httpx.MockTransport(handle),
-            **kwargs,
+            transport=httpx.MockTransport(handle), **kwargs
         ),
     )
     client = text_model if kind == "text" else vlm_model
@@ -78,8 +71,7 @@ def test_model_requests_use_provider_output_budget(
 
 @pytest.mark.parametrize("kind", ["llm", "vlm"])
 @pytest.mark.parametrize(
-    "protocol",
-    ["OpenAI", "Google Gemini", "Anthropic Claude"],
+    "protocol", ["OpenAI", "Google Gemini", "Anthropic Claude"]
 )
 def test_connection_probe_follows_same_output_budget(kind, protocol):
     _, _, body = asyncio.run(
@@ -90,8 +82,8 @@ def test_connection_probe_follows_same_output_budget(kind, protocol):
                 model_name="MiniMax-M2.7",
                 base_url="https://gateway.example",
                 api_key="test-key",
-            ),
-        ),
+            )
+        )
     )
     if protocol == "Anthropic Claude":
         assert body["max_tokens"] == 204800
@@ -116,8 +108,7 @@ def test_claude_dated_alias_reads_sdk_capability():
 
 @pytest.mark.parametrize("limit", [150000, None, -1, True])
 def test_unknown_anthropic_model_uses_models_api_or_reports_missing_capability(
-    monkeypatch,
-    limit,
+    monkeypatch, limit
 ):
     captured = []
 
@@ -130,8 +121,7 @@ def test_unknown_anthropic_model_uses_models_api_or_reports_missing_capability(
         httpx,
         "AsyncClient",
         lambda **kwargs: client_type(
-            transport=httpx.MockTransport(handle),
-            **kwargs,
+            transport=httpx.MockTransport(handle), **kwargs
         ),
     )
     call = output_budget.anthropic_output_limit(
@@ -162,9 +152,7 @@ def test_empty_reasoning_response_preserves_diagnostics_without_reasoning_text(
         "protocol": "OpenAI",
     }.items():
         monkeypatch.setattr(
-            config,
-            f"get_text_{key}",
-            lambda value=value: value,
+            config, f"get_text_{key}", lambda value=value: value
         )
     client_type = httpx.AsyncClient
     monkeypatch.setattr(
@@ -182,11 +170,11 @@ def test_empty_reasoning_response_preserves_diagnostics_without_reasoning_text(
                                     "content": "",
                                     "reasoning_content": "private reasoning",
                                 },
-                            },
+                            }
                         ],
                         "usage": {"completion_tokens": 12000},
                     },
-                ),
+                )
             ),
             **kwargs,
         ),

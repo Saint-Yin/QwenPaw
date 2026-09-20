@@ -398,6 +398,7 @@ async def execute_file_interaction_command(
     task_id = _stable_id("task", project_id, idempotency_key)
     attempt_id = f"{task_id}-attempt-1"
 
+    # pylint: disable-next=inconsistent-return-statements
     def admit():
         with services.projects.lifecycle_lock(project_id):
             try:

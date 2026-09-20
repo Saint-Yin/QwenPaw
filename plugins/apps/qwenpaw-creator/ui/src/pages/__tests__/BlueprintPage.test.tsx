@@ -187,8 +187,8 @@ describe("BlueprintPage narrative shapes", () => {
     seedProject(project);
     const { container } = renderPage();
 
-    expect(screen.getByText("剧情节点待起草")).toBeInTheDocument();
-    expect(screen.getByText("让故事从这里开始")).toBeInTheDocument();
+    expect(container.querySelector('[data-blueprint-shape="branching"] [data-graph-toolbar]')).toBeInTheDocument();
+    expect(screen.getByText("分支连接尚未建立")).toBeInTheDocument();
     expect(
       container.querySelector('[data-workspace-empty="interactive"]'),
     ).toBeInTheDocument();
@@ -248,7 +248,7 @@ describe("BlueprintPage narrative shapes", () => {
         '[data-blueprint-node="timeline:main"]',
       ) as HTMLElement,
     );
-    expect(screen.getAllByText("公开保留")[0]).toBeInTheDocument();
+    expect(container.querySelector('[data-graph-edge-label="edge:a"]')).toHaveTextContent("公开保留");
     expect(screen.getAllByText("结局")).toHaveLength(1);
     expect(
       container.querySelector('[data-blueprint-shape="linear"]'),

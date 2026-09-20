@@ -130,8 +130,7 @@ def test_adopting_historical_video_allows_compose_with_its_exact_version(
 
 
 @pytest.mark.parametrize(
-    "change",
-    ["prompt", "duration", "storyboard", "stale"],
+    "change", ["prompt", "duration", "storyboard", "stale"]
 )
 def test_adopted_video_becomes_stale_again_after_new_input_change(change):
     adopted, _ = _adopt_historical_video(_historical_video_project())

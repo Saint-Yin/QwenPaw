@@ -366,9 +366,8 @@ def test_anthropic_agent_uses_model_limit_instead_of_sdk_default(monkeypatch):
     with pytest.raises(AgentModelError, match="request captured"):
         asyncio.run(
             client.complete(
-                messages=[{"role": "user", "content": "ping"}],
-                tools=[],
-            ),
+                messages=[{"role": "user", "content": "ping"}], tools=[]
+            )
         )
     assert captured["max_tokens"] == 204800
 

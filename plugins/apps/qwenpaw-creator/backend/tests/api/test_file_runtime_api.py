@@ -258,8 +258,7 @@ def test_interrupt_response_does_not_wait_for_terminal_task_cleanup(
 
 
 @pytest.mark.parametrize(
-    "task_status",
-    [TaskStatus.RUNNING, TaskStatus.CANCELLED],
+    "task_status", [TaskStatus.RUNNING, TaskStatus.CANCELLED]
 )
 def test_stop_cleanup_settles_media_run_after_worker_is_gone(
     tmp_path,

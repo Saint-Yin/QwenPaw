@@ -151,7 +151,7 @@ class _PresentationParser(_InteractionParser):
             )
 
 
-def validate_presentation_html(
+def validate_presentation_html(  # pylint: disable=too-many-branches
     html: str,
     node_ids=None,
     screens=None,
