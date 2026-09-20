@@ -67,18 +67,8 @@ export default function PlatformAutoConfigPane({
       <div>
         <div
           style={{
-            fontSize: 15,
-            fontWeight: 700,
-            color: "var(--color-text-primary)",
-          }}
-        >
-          {t("modelConfig.panePlatform")}
-        </div>
-        <div
-          style={{
             fontSize: 12,
             color: "var(--color-text-tertiary)",
-            marginTop: 3,
             lineHeight: 1.6,
           }}
         >
