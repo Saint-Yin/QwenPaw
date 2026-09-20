@@ -58,6 +58,9 @@ from services.project_files.assets import (
     AssetAlreadyExists,
     AssetFileStore,
 )
+from services.project_files.production_stage import (
+    assert_media_production_allowed,
+)
 from services.project_files.models import (
     ArtifactSlot,
     ArtifactVersion,
@@ -121,6 +124,7 @@ from services.runtime_files.execution_store import (
     ProjectExecutionStore,
 )
 from services.runtime_files.models import ChangeOrigin, ReviewPolicy
+from services.runtime_files.path_safety import is_link_stat
 from services.runtime_files.safe_remote_download import (
     SafeRemoteDownloadError,
     validate_public_remote_url,
@@ -975,6 +979,7 @@ def _resolve_request(
     max_reference_images: int | None = None,
 ) -> _ResolvedRequest:
     project = snapshot.project
+    assert_media_production_allowed(project)
     if command is CreatorCommandType.GENERATE_STORYBOARD_IMAGE:
         if any(
             key in arguments
@@ -1442,7 +1447,7 @@ async def _read_controlled_local(
                     raise ValidationError(
                         "provider 本地输出不存在、越界或包含 symlink",
                     ) from exc
-                if stat.S_ISLNK(details.st_mode) or not stat.S_ISDIR(
+                if is_link_stat(details) or not stat.S_ISDIR(
                     details.st_mode,
                 ):
                     raise ValidationError(
@@ -1455,7 +1460,7 @@ async def _read_controlled_local(
                 raise ValidationError(
                     "provider 本地输出不存在、越界或包含 symlink",
                 ) from exc
-            if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(
+            if is_link_stat(details) or not stat.S_ISREG(
                 details.st_mode,
             ):
                 raise ValidationError("provider 本地输出必须是普通文件")
@@ -1829,7 +1834,11 @@ class FileImageExecutionService:
             raise ValueError("max_output_bytes must be positive")
         self.services = services
         self.provider = provider or ExistingImageProvider()
-        self.executions = ProjectExecutionStore(services.root)
+        from services.file_agent_runtime.manual_regeneration_hold import (
+            HoldAwareExecutionStore,
+        )
+
+        self.executions = HoldAwareExecutionStore(services.root)
         self.max_output_bytes = max_output_bytes
         self.resume_poll_interval_seconds = resume_poll_interval_seconds
         self.resume_poll_budget_seconds = resume_poll_budget_seconds
@@ -2042,6 +2051,10 @@ class FileImageExecutionService:
                 replayed=True,
             )
 
+        from services.file_agent_runtime.manual_regeneration_hold import (
+            ManualHoldConflict,
+        )
+
         task = await self._start(
             run=run,
             task=task,
@@ -2051,14 +2064,18 @@ class FileImageExecutionService:
         try:
             if not await self._claim_provider(task):
                 raise ConflictError("图片 Task 已由另一个执行者领取")
-        except ValidationError as exc:
+        except (ValidationError, ManualHoldConflict) as exc:
             # An anchor can start repainting after admission. No provider
             # claim exists yet: close this attempt and allow a free retry
             # once its dependencies settle instead of leaving it RUNNING.
             await self._fail_if_running(
                 project_id,
                 ids,
-                "VISUAL_ANCHOR_NOT_READY",
+                (
+                    "MANUAL_REGENERATION_HOLD"
+                    if isinstance(exc, ManualHoldConflict)
+                    else "VISUAL_ANCHOR_NOT_READY"
+                ),
                 message=str(exc),
                 error=exc,
                 retryable=True,
@@ -2606,11 +2623,24 @@ class FileImageExecutionService:
         }
 
         def claim_sync():
-            with self.services.projects.lifecycle_lock(
-                task.project_id,
-                shared=True,
+            from services.file_agent_runtime.manual_regeneration_hold import (
+                admission_guard,
+            )
+
+            with (
+                self.services.projects.lifecycle_lock(
+                    task.project_id,
+                    shared=True,
+                ),
+                admission_guard(
+                    self.services.root,
+                    task.project_id,
+                    node_id=task.metadata.get("automaticWorkNodeId"),
+                    _lifecycle_lock_held=True,
+                ),
             ):
                 latest = self.services.projects.read(task.project_id)
+                assert_media_production_allowed(latest.project)
                 self._assert_visual_anchors_ready(
                     latest.project,
                     str(task.metadata.get("commandType") or ""),
