@@ -41,6 +41,10 @@ from services.media_files.keyframe_cache import (
     materialize_keyframe,
     verified_indexed_path,
 )
+from services.media_files.informal_launch_template import (
+    render_informal_launch_caption,
+    uses_informal_launch_captions,
+)
 from services.media_files.live_operation import (
     facts_within,
     project_location_to_canvas,
@@ -1720,6 +1724,9 @@ async def design_motion_overlays(
     executions = ProjectExecutionStore(services.root)
     ffmpeg_path = resolve_ffmpeg() or "ffmpeg"
     canvas_size = _design_canvas_size(project)
+    fixed_launch_captions = uses_informal_launch_captions(timeline)
+    if fixed_launch_captions:
+        budget = 0
     # Beat-sync (WT-B5): decoration entrances snap to the BGM grid when a
     # music Element with local bytes exists; degradation is declared inside.
     beat_sync = await asyncio.to_thread(
@@ -2386,6 +2393,28 @@ async def design_motion_overlays(
         }
         if requested is not None and overlay.element_id not in requested:
             return {**entry, "status": "not_requested"}
+        if fixed_launch_captions:
+            if requested is None and creation.motion is not None:
+                existing_motion = creation.motion
+                if (
+                    existing_motion.format == "html_css"
+                    and existing_motion.template_version == 4
+                    and (existing_motion.html or existing_motion.html_file_id)
+                ):
+                    return {**entry, "status": "already_styled"}
+            motion, location = render_informal_launch_caption(
+                overlay,
+                ticks_per_second=timeline.ticks_per_second,
+                canvas_size=canvas_size,
+                card_index=card_index,
+                card_count=len(text_overlays),
+            )
+            styled[overlay.element_id] = (motion, location)
+            return {
+                **entry,
+                "status": "styled",
+                "concept": motion.design_notes,
+            }
         # An explicit elementIds request forces a redesign even over a
         # trusted document — that is how review feedback replaces a card.
         if requested is None and _is_trusted_caption_motion(creation.motion):
@@ -2638,7 +2667,7 @@ async def design_motion_overlays(
                     for card_index, overlay in enumerate(text_overlays)
                 ),
             )
-            if caption_style == "varied"
+            if fixed_launch_captions or caption_style == "varied"
             else [uniform_text_style(overlay) for overlay in text_overlays]
         ),
     )

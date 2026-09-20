@@ -1,176 +1,150 @@
-[
-  {
-    "element_id": "ov:s1",
-    "location": {
-      "coordinate_space": "normalized_canvas",
-      "x": 0.5,
-      "y": 0.115,
-      "width": 0.9,
-      "height": 0.15,
-      "anchor_x": 0.5,
-      "anchor_y": 0.5,
-      "rotation_degrees": 0.0,
-      "opacity": 1.0
-    },
-    "creation": {
-      "type": "overlay",
-      "text": "你好，小主角",
-      "vibe": "warm",
-      "prompt": "编辑感片头标题（竖幅9:16）：单行『你好，小主角』，黑色无衬线中号字，居中于画面顶部空白区；淡入后快速柔和淡出（仅0.7秒短停留）；四周留6%安全边距，不遮挡下方猫的脸与眼睛；如顶部背景偏亮影响可读性，可加白色半透明底衬；无可爱气泡、无贴纸、无装饰粒子、不贴满屏。",
-      "reference_version_ids": [],
-      "motion": {
-        "format": "html_css",
-        "html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}body{display:flex;align-items:center;justify-content:center;font-family:\"Microsoft YaHei\",\"SimHei\",sans-serif}@keyframes enter{from{opacity:.2;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.title{animation:enter .25s ease-out both;text-align:center;color:#202020;text-shadow:0 1px 8px #ffffff,0 0 16px #ffffff}.label{font-family:Arial,sans-serif;font-size:2.8vw;font-weight:500;letter-spacing:.24em;margin-bottom:3vh}.copy{font-size:5.7vw;font-weight:600;letter-spacing:.035em;line-height:1.5;white-space:nowrap}</style></head><body><div class=\"title\"><div class=\"label\">MEOW ONE</div><div class=\"copy\">你好，小主角</div></div></body></html>",
-        "fps": 24,
-        "loop": false,
-        "design_notes": "统一发布会排版：透明底、深灰无衬线字、英文眉题；无需生成式动效设计",
-        "motif": "custom"
-      }
-    }
+{
+  "version": 4,
+  "purpose": "本模板专属的全屏视频内叠字样式。生成视频始终铺满画布，透明字幕动效直接叠在原画面留白中；不缩小视频、不添加外部文字栏。内容来自本次照片与实际镜头，不固定台词、动作、配色或顺序。无需修改 Agent prompt、skill 或通用渲染器。",
+  "copy": {
+    "source": "先读照片提取至少三项具体可见特征，结合本镜实际画面形成 audience_brief。只把其中已确定的观众信息转成 screen_copy；每条中文有准确对应英文，主题、造型颜色与款式、可选副句均成对出现。不得保留示例文字、占位符或固定口号。",
+    "canonical": "每个 Overlay 的 creation.text 必须按其 HTML 中的 DOM 顺序逐组写“中文\\n英文”，使用真实换行；一组内不要夹入别的组，不把英文拆成逐字 span。只写实际显示的文字，不把文案藏进注释、脚本或透明元素来通过校验。 此处只序列化 screen_copy；不要夹带 production_notes、动作步骤、机位或校对备注。",
+    "coverage": "完整片约30秒规划10–11个镜头，主信息按可读时长分成8–10组字幕，纯动作过桥允许短暂不加字，不用一秒镜头塞双语。至少覆盖亮相、两项照片细节、感知/触碰、姿态展示、3–5款造型及片尾。每个主标题4–10个汉字，英文一般2–6词；造型总标题与每款中英标签均完整。只有补充了新的观众信息才使用同一 region 中的第二个双语 group，由文档流向下排列；纯动作步骤不算补充信息，不强制每镜都有副句。",
+    "translation": "英文逐组表达中文原意，保留主次关系，使用自然简洁的短语。检查冠词、单复数、搭配，不能增加中文没有的能力、性格、角色或动作，不漏译真实颜色和款式信息。先审中文，再翻译；普通主标题英文尽量2–6词，短镜头若超预算应缩短中文信息再重译。读起来生硬就重写，不用固定英文填空。",
+    "editing": "screen_copy 的主标题采用可见特征名称、状态/观感短语或真实款式名称。姿态/动作镜头提炼它表现出的舒展、轻盈、专注等观感，成立与否必须由画面支撑；不要叙述身体部位依次如何运动。每组先对应一条 audience_brief，避免看着动作步骤逐句改写。副句只有带来一项新的观众信息才加，没有就省略；少于3秒的细节镜头只放一个短主标题与对应英文。具体词句每片重新写，不使用固定口号，不编造品种、性格、能力或真实产品指标。",
+    "phrases": "主标题与副句每条中文均控制在4–10字。毛色、部位、衣款等词组必须完整，超过一行时在词组之间主动插入 <br>，不把“加白”“虎斑”“针织衣领”等拆到两行；英文按词均衡换行，避免长句最后一行仅剩一个短词。先写本片照片已确认的中英术语对照，再逐组核对：例如银虎斑加白的译文不能漏掉 white，白爪不能只译成 paws；仅使用原照确认的词，不因示例而给其他猫虚构特征。",
+    "separation": "在 Timeline.description 的每镜计划中分列 production_notes（生成专用指令）、audience_brief（本镜要让观众记住的可见特征或观感）、screen_copy（独立写作并校对的双语文案）。三栏只组织说明文本，不新增模型字段。先把制作步骤抽象成 audience_brief，再创作文案；不能将动作链缩写、翻译或添加修辞后转存 screen_copy。Overlay.creation.text 与 HTML 只能取最终 screen_copy。",
+    "review": "初稿完成后单独审读 screen_copy，并与 production_notes / audience_brief 对照。第一遍只检查语义：删去或重写部位运动报幕、动作先后步骤、拍摄参数和制作要求；用比喻改写步骤仍不能通过。第二遍核对画面事实：未完成的翻转、触碰等不能出现在文案及其修辞中。第三遍对照中英文：不能增加中文没有的能力、性格、角色含义，不漏译颜色、款式和主体特征。任一不合格就先改稿，再更新完整双语组。草稿 Overlay 写齐后检查实际 creation.text 一次，全部通过再启用；不要只声称初稿已合格。合法的造型数量、颜色和款式名不因含数字或部位词而被禁用。"
   },
-  {
-    "element_id": "ov:s2",
-    "location": {
-      "coordinate_space": "normalized_canvas",
-      "x": 0.5,
-      "y": 0.87,
-      "width": 0.9,
-      "height": 0.15,
-      "anchor_x": 0.5,
-      "anchor_y": 0.5,
-      "rotation_degrees": 0.0,
-      "opacity": 1.0
-    },
-    "creation": {
-      "type": "overlay",
-      "text": "每一根，都很讲究",
-      "vibe": "calm",
-      "prompt": "精准副标题：单行『每一根，都很讲究』，黑色或深灰无衬线小字，居中于画面顶部空白区；淡入停留后淡出；四周留6%安全边距，不遮挡猫脸；需要时用白色半透明底衬保证可读；无气泡、无贴纸、不贴满屏。",
-      "reference_version_ids": [],
-      "motion": {
-        "format": "html_css",
-        "html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}body{display:flex;align-items:center;justify-content:center;font-family:\"Microsoft YaHei\",\"SimHei\",sans-serif}@keyframes enter{from{opacity:.2;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.title{animation:enter .25s ease-out both;text-align:center;color:#202020;text-shadow:0 1px 8px #ffffff,0 0 16px #ffffff}.label{font-family:Arial,sans-serif;font-size:2.8vw;font-weight:500;letter-spacing:.24em;margin-bottom:3vh}.copy{font-size:5.7vw;font-weight:600;letter-spacing:.035em;line-height:1.5;white-space:nowrap}</style></head><body><div class=\"title\"><div class=\"label\">SOFT BY NATURE</div><div class=\"copy\">每一根，都很讲究</div></div></body></html>",
-        "fps": 24,
-        "loop": false,
-        "design_notes": "统一发布会排版：透明底、深灰无衬线字、英文眉题；无需生成式动效设计",
-        "motif": "custom"
-      }
-    }
+  "composition": {
+    "subject": "在全屏分镜内部规划文字留白。以实际画面核对整个字幕时段的运动范围，脸、眼鼻、耳朵、爪部、正在展示的毛色细节和每款服装都是重点保护区；白毛不能当作空背景。记录已观察的空区、关键部位与时间区间，没有实片证据不得声称完成主体检测或跟踪。",
+    "collision": "视频全程保持全屏，文字直接覆盖原视频内部。先检查本镜全时段的实际画面，再在 overlay_layouts 的候选区中选择安全空区，并按需调整区域位置与宽度；候选坐标本身不是安全证据。主体穿过时移动整组到另一个已确认空区或分段换位，也可调整文字出现时段；仍放不下先精简文案、分时呈现副句或修正生成构图。禁止缩小、平移原片腾出外栏，禁止以卡片、分屏、画中画或大面积不透明底衬遮住原片作为兜底。没有观察能力时保留全屏并记录位置待验收，不编造位置证据。",
+    "safe": "文字与画布边缘至少6%，与脸、耳、爪、服装等关键可见区域至少2%间隔，并给入场平移预留空间。每组稳定阅读至少1.5秒，造型段至少5秒。中文主标题最多2行、英文最多3行；长文案先精简并按完整词组分行，不能挤压行高、把字缩小到下限以下或裁切文字。字形之间也必须保留行距，不因原画面变满而叠字。",
+    "timing": "字幕时段跟随实片切点，不跨镜；短镜只显示一组短标题和对应英文。主副信息可错开出现，但须留足稳定阅读时间。视频一直全屏播放，不出现为了放字而缩小或移位的跳变；纯动作过桥可不加字。",
+    "looks": "造型标签直接叠在全屏阵列视频内部的上方或下方留白中，不能另开视频外的列表区。全部造型出现且机位稳定后显示；根据实片确认顺序和各猫位置，Grid 区域宽度与位置可按阵列调整。无法逐款对齐时用片内顶部紧凑列表并明确它是款式列表，不假装跟随标签。横版3–5栏，中文最多6字、英文2–3词；竖版分批或2+3排布，保持原视频铺满画面。",
+    "contrast": "根据文字下方的真实视频选择深字或浅字，英文也随背景调整。可使用轻微局部字影提高对比；默认透明背景，不能使用整幅蒙版、卡片底板、大面积渐变或底衬把视频变成小框。强调渐变两端均要可读。",
+    "flow": "同一文字区的双语组在一个 region 内沿正常文档流上下排列，group 不单独绝对定位。主标题换行后自动推开英文和下一组。不同 region 互不相交；全部 region 是透明的视频内文字区域，不能改变视频矩形。禁止逐字定位、负行距、重叠副本、固定高度裁字、ellipsis 或 line-clamp。"
   },
-  {
-    "element_id": "ov:s3",
-    "location": {
-      "coordinate_space": "normalized_canvas",
-      "x": 0.5,
-      "y": 0.87,
-      "width": 0.9,
-      "height": 0.15,
-      "anchor_x": 0.5,
-      "anchor_y": 0.5,
-      "rotation_degrees": 0.0,
-      "opacity": 1.0
+  "recipes": [
+    {
+      "name": "hero",
+      "class": "accent",
+      "motion": "slide",
+      "use": "片头一个 region 堆叠主标题和对应英文，中文48–56px、英文24–26px；必要副句作为 small group 接在后面，不能定位到主标题的行间。"
     },
-    "creation": {
-      "type": "overlay",
-      "text": "目光，自带高光",
-      "vibe": "calm",
-      "prompt": "精准副标题：单行『目光，自带高光』，黑色或深灰无衬线小字，居中于画面底部（眼睛微距镜头专用位置，绝不遮挡瞳孔与眼部主体）；淡入停留后淡出；需要时用白色半透明底衬；无气泡、无贴纸、不贴满屏。",
-      "reference_version_ids": [],
-      "motion": {
-        "format": "html_css",
-        "html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}body{display:flex;align-items:center;justify-content:center;font-family:\"Microsoft YaHei\",\"SimHei\",sans-serif}@keyframes enter{from{opacity:.2;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.title{animation:enter .25s ease-out both;text-align:center;color:#202020;text-shadow:0 1px 8px #ffffff,0 0 16px #ffffff}.label{font-family:Arial,sans-serif;font-size:2.8vw;font-weight:500;letter-spacing:.24em;margin-bottom:3vh}.copy{font-size:5.7vw;font-weight:600;letter-spacing:.035em;line-height:1.5;white-space:nowrap}</style></head><body><div class=\"title\"><div class=\"label\">A CLOSER LOOK</div><div class=\"copy\">目光，自带高光</div></div></body></html>",
-        "fps": 24,
-        "loop": false,
-        "design_notes": "统一发布会排版：透明底、深灰无衬线字、英文眉题；无需生成式动效设计",
-        "motif": "custom"
-      }
+    {
+      "name": "detail",
+      "class": "",
+      "motion": "focus",
+      "use": "照片细节的双语短标题，中文38–44px、英文22–24px，整体淡入；可加本片强调色细线。"
+    },
+    {
+      "name": "paired_callout",
+      "class": "",
+      "motion": "reveal",
+      "use": "可见特征或观感卖点使用同一区域的上下层级，主组36–40/22–23px；有新的观众信息时才加 small 补充组28–32/20–22px。两组都来自 screen_copy，不显示身体运动步骤或摄影指令；整组一起入场，中文和英文不相向穿越。"
+    },
+    {
+      "name": "look_labels",
+      "class": "label center",
+      "motion": "fade",
+      "use": "总标题在上方 region top，3–5项标签位于下方 region row，Grid 自动等宽。总标题28/17px，标签22–23/17px，延迟到稳定阅读期，间隔约0.08秒淡入。"
+    },
+    {
+      "name": "closing",
+      "class": "accent",
+      "motion": "lift",
+      "use": "主题与对应英文，再接 small 双语副句；两组在同一 region 正常流排版，组间28px以上，不设第二组绝对 top。"
     }
+  ],
+  "render_contract": {
+    "format": "html_css",
+    "fps": 30,
+    "loop": false,
+    "motif": "custom",
+    "authoring": "使用版本化固定 CSS：creation.motion={format:\"html_css\",template_version:4,fps:30,loop:false,motif:\"custom\",html:填充后的完整文档}。组装 region_template（包含一到两个 group_template，造型列表可3–5个）到 document_template.GROUPS；没有 matte 或背景卡片。替换全部占位符并 HTML 转义，不改 CSS。每镜一个透明 Overlay，不保留重复旧文字层；禁止 html_js、空 motion、默认气泡或伪造 html_file_id。",
+    "viewport": "16:9：每个镜头一个透明全画布 Overlay，location={x:0.5,y:0.5,width:1,height:1,anchor_x:0.5,anchor_y:0.5}；WIDTH/HEIGHT=最终画布像素。全部可见组的位置在文档内设定，避免把文档再缩进小字幕框导致双重缩放。不是让文字铺满画布。",
+    "portrait": "9:16生成视频同样铺满项目画布，不缩成中部小框。文字使用全宽透明顶部/底部 Overlay 带，height<=0.40（盒子宽高比>=1.25），只限定文字排版而不改变视频。盒子实际像素填 WIDTH/HEIGHT，位置按实片头部、耳朵、身体和爪的运动范围选择；中文32–40px、英文20–23px。造型标签可分批或2+3排布，不能直接缩小横版。",
+    "duration": "DURATION=本 Overlay 实际秒数。动画只作用于整个双语 group 的透明度和不超过12px的平移，0.55秒内结束并 forwards 停留；两种语言始终共享同一运动容器。细线可独立伸展，但文字不得 scale、模糊、clip-path 擦除、逐字交叉或拉伸。首组 DELAY=0，第一帧部分可见（opacity=.28）；延迟前 opacity:0，后续标签不提前半透明出现；CSS 由现有渲染器 seek，无脚本、网络或计时器。",
+    "design_pass": "使用本官方模板的固定字幕入口：Overlay.creation.prompt 可填写 template=informal_launch 的 JSON 槽位，creation.text 保存完整双语。整批启用后调用 design_motion_overlays（maxDecorations=0），本模板直接填充固定 CSS，并保留正确版本4文档，不进入通用 VLM 字幕设计或气泡回退。也可直接按下方文档模板填写完整 motion。",
+    "verification": "检查实际 MP4 与 Creator 预览，视频四边始终由原片覆盖，没有边框、外栏、画中画或灰色底衬。逐镜核对字形边界、片内留白、关键部位和整个时段的运动范围；微距保留眼鼻、胡须与展示部位，阵列标签不压住脸、服装和爪。入场0/0.12/0.28/0.55/0.9秒、稳定期与结束前检查中英、主副句及相邻标签两两相交和裁切。出现渲染回退、文案不一致或缺字时先修模板填充再合成，不把任务成功当作验收。",
+    "reframe": "全屏是本模板的硬约束。原 R2V 直接使用项目画布，或复用其精确源区间创建 Edit；Edit.location 必须 x=0.5,y=0.5,width=1,height=1,anchor_x=0.5,anchor_y=0.5。保持原画幅和音轨，禁止为了文字缩放成小框、向一侧挪视频、加 matte_template 或 box-shadow 背景遮挡原片。多个 Edit 与原 R2V 只能有一套启用，避免重复画面和声音。只有用户另行明确要求分屏或画中画才改变全屏约束。",
+    "template_version": 4,
+    "compatibility": "保留 html/body 内联 padding:0!important、transform:none!important。正文使用 h2.zh 与 div.en；类名限定 region/group/zh/en/rule/label/accent/small/row/top/center，不能带 title/text/caption 子串，避免通用安全样式覆写字号。中文与英文显式 display:block、position:static、margin:0 和独立行高，不依赖外部样式或默认标题样式。保留原有渲染检查，不绕过 warnings。",
+    "assembly": "先把全部透明字幕写成 enabled=false 的完整草稿；如需按镜剪辑，同时建立全屏 Edit 草稿，精确覆盖原片区间。文案、样式、主体避让与时序齐全后一次启用全部后期元素。使用 Edit 时停用原 R2V；只叠字幕时保留原 R2V。最终仅一条视频底层持续铺满画布，字幕叠在视频内部，不得混入旧的小框或底衬。完成整批启用再请求最终合成。",
+    "completion": "完成上述整批启用后，再按现有入口请求 compose。核对选中的成片确实由这批完整后期输入生成，所有镜头与全部双语信息都已进入实片。若请求只复用更早的产物，或实片仍缺任一字幕，不能宣布交付完成；保留原片并明确记录合成未跟随，不重新生成收费视频、不伪造 stale/产物记录。",
+    "layout_budget": "候选左右区宽24%，上角短标题区宽32%，均位于全屏视频内部且可按实片调整。主标题48–56px、普通38–44px、副句28–32px、英文20–26px；左右区带副句时主组英文最多2行、副组中英各2行，组间28px。顶部短区只放一组短文案，中文38–40px/英文20–22px，不加装饰细线。造型总标题28/17px，标签22–23/17px。所有内容总高度小于区域高度，超预算精简或分时呈现，不缩小视频或裁字。"
   },
-  {
-    "element_id": "ov:s4",
-    "location": {
-      "coordinate_space": "normalized_canvas",
-      "x": 0.5,
-      "y": 0.115,
-      "width": 0.9,
-      "height": 0.15,
-      "anchor_x": 0.5,
-      "anchor_y": 0.5,
-      "rotation_degrees": 0.0,
-      "opacity": 1.0
-    },
-    "creation": {
-      "type": "overlay",
-      "text": "轻轻一碰，心动回应",
-      "vibe": "warm",
-      "prompt": "精准副标题（竖幅9:16）：单行『轻轻一碰，心动回应』，黑色或深灰无衬线小字，居中于画面顶部空白区，避开中下部伸出的猫爪与猫脸；淡入停留后淡出；需要时用白色半透明底衬；无气泡、无贴纸、不贴满屏。",
-      "reference_version_ids": [],
-      "motion": {
-        "format": "html_css",
-        "html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}body{display:flex;align-items:center;justify-content:center;font-family:\"Microsoft YaHei\",\"SimHei\",sans-serif}@keyframes enter{from{opacity:.2;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.title{animation:enter .25s ease-out both;text-align:center;color:#202020;text-shadow:0 1px 8px #ffffff,0 0 16px #ffffff}.label{font-family:Arial,sans-serif;font-size:2.8vw;font-weight:500;letter-spacing:.24em;margin-bottom:3vh}.copy{font-size:5.7vw;font-weight:600;letter-spacing:.035em;line-height:1.5;white-space:nowrap}</style></head><body><div class=\"title\"><div class=\"label\">MADE TO CONNECT</div><div class=\"copy\">轻轻一碰，心动回应</div></div></body></html>",
-        "fps": 24,
-        "loop": false,
-        "design_notes": "统一发布会排版：透明底、深灰无衬线字、英文眉题；无需生成式动效设计",
-        "motif": "custom"
-      }
-    }
+  "document_template": "<!doctype html><html lang=\"zh-CN\" style=\"padding:0!important;box-sizing:border-box!important\"><head><meta charset=\"utf-8\"><style>\n*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}body{font-family:\"PingFang SC\",\"Noto Sans CJK SC\",\"Microsoft YaHei\",sans-serif;color:var(--ink,#20242c)}\n:root{--unit:min(calc(100vw / {{WIDTH}}),calc(100vh / {{HEIGHT}}))}\n.region{position:absolute;left:var(--x);top:var(--y);width:var(--w);height:var(--h);display:flex;flex-direction:column;justify-content:center;gap:calc(28*var(--unit));isolation:isolate}.region.top{justify-content:flex-start}.region.row{display:grid;grid-template-columns:repeat(var(--count,4),minmax(0,1fr));column-gap:calc(12*var(--unit));align-items:start;align-content:start}\n.group{position:relative;flex:none;min-width:0;width:100%;text-align:var(--align,left);opacity:0;animation:fade .55s cubic-bezier(.22,.7,.28,1) var(--delay,0s) forwards}.zh,.en{position:static;display:block;width:100%;max-width:100%;height:auto;min-width:0;margin:0;padding:0;white-space:normal;word-break:normal;overflow-wrap:normal;text-shadow:var(--shadow,none);-webkit-text-stroke:0}.zh{font-size:calc(var(--zh,42)*var(--unit));font-weight:650;line-height:1.25;letter-spacing:.01em;text-wrap:balance;line-break:strict}.en{text-wrap:balance;font-family:Arial,\"Noto Sans\",sans-serif;font-size:calc(var(--en,23)*var(--unit));font-weight:400;line-height:1.4;letter-spacing:0;margin-top:calc(10*var(--unit));color:var(--muted,#454c58);hyphens:none}.region.top .en{margin-top:calc(6*var(--unit))}.small .zh{font-weight:550}.accent .zh{color:#6142bd;background:linear-gradient(105deg,var(--color,#6142bd) 8%,var(--color-end,#277f83) 90%);background-clip:text;-webkit-background-clip:text;-webkit-text-fill-color:transparent}.rule{width:calc(52*var(--unit));height:calc(2*var(--unit));margin-bottom:calc(16*var(--unit));background:var(--color,#6142bd);transform-origin:left;animation:line .55s var(--delay,0s) both}.label .zh{font-weight:600}.label .en{margin-top:calc(6*var(--unit))}.center{text-align:center}.center .rule{margin-left:auto;margin-right:auto}.region.row .group{animation-name:fade}\n.group[data-motion=slide]{animation-name:slide}.group[data-motion=lift]{animation-name:lift}.group[data-motion=focus],.group[data-motion=reveal],.group[data-motion=fade]{animation-name:fade}\n@keyframes fade{from{opacity:.28}to{opacity:1}}@keyframes slide{from{opacity:.28;transform:translateX(calc(-12*var(--unit)))}to{opacity:1;transform:translateX(0)}}@keyframes lift{from{opacity:.28;transform:translateY(calc(8*var(--unit)))}to{opacity:1;transform:translateY(0)}}@keyframes line{from{transform:scaleX(.1)}to{transform:scaleX(1)}}\n</style></head><body data-motion-template-version=\"4\" data-duration=\"{{DURATION}}\" style=\"transform:none!important;transform-origin:center!important\">{{GROUPS}}</body></html>",
+  "group_template": "<section class=\"group {{CLASS}}\" data-motion=\"{{MOTION}}\" style=\"--delay:{{DELAY}}s;--zh:{{ZH_SIZE}};--en:{{EN_SIZE}};--align:{{ALIGN}};--ink:{{INK}};--muted:{{MUTED}};--shadow:{{SHADOW}};color:var(--ink);--color:{{COLOR}};--color-end:{{COLOR_END}}\">{{RULE}}<h2 class=\"zh\">{{ZH}}</h2><div class=\"en\" lang=\"en\">{{EN}}</div></section>",
+  "slots": {
+    "CLASS": "accent / small / label center / 空；不组合冲突样式",
+    "MOTION": "slide / lift / focus / reveal / fade；整组入场，focus 只淡入，reveal 搭配细线而不裁文字，标签与顶部总标题只用 fade",
+    "DELAY": "本组真正开始显示的秒数，常规首组0、后续0.1–0.25；造型标签可延迟到已验证的稳定时段。延迟前保持不可见，动画完成后至少稳定1.5秒。",
+    "ZH_SIZE_EN_SIZE": "基于 WIDTH/HEIGHT 的像素字号，与视口一起等比缩放",
+    "ALIGN": "left / center / right",
+    "COLOR": "本片强调起色；根据照片与实际搭配选择，保证与背景对比",
+    "RULE": "可选 <div class=\"rule\"></div> 或空",
+    "ZH_EN": "仅填入本次 screen_copy 中已通过观众文案审稿的中文及其英文译文；严禁 production_notes 的姿态执行步骤、机位、角度、时长和制作备注。本次动态中文与准确英文翻译。逐段 HTML 转义；中文标题按完整词组断行时仅在已转义片段之间插入 <br>，creation.text 对应使用真实换行；不留孤立的单字尾行。英文保持按词换行，不插逐字标签。 每个 group 的中文和英文只出现一次，不为动画复制文字；一条双语不得拆成两个绝对定位 group。 副句也最多10个汉字，换行必须落在词组之间；毛色组合与衣款不得跨行拆词，英文不能漏译其中的颜色或白色部位。",
+    "COLOR_END": "本片强调尾色；可与 COLOR 相同得到纯色，避免每片都套同一渐变",
+    "LAYOUT": "region 空类表示上下堆叠并垂直居中；top 表示顶部对齐；row 表示造型列表等宽网格。每个文字区只放一个 region，内含全部组。",
+    "COUNT": "仅 row 使用，为实际3–5款数量；普通 region 填1",
+    "LEFT_TOP_WIDTH_HEIGHT": "region 的片内文字区域百分比，可参考 overlay_layouts 再按实片微调；这些数字不决定视频尺寸。group 没有独立坐标。标题换行后依靠文档流展开，超高度先精简或分时。",
+    "INK_MUTED_SHADOW": "根据文字下方实片选主字色、英文字色和轻微局部字影。浅背景默认 INK=#20242c、MUTED=#454c58、SHADOW=none；深背景可用浅字及小范围暗影。无背景板，不填大范围发光/阴影来遮住画面。"
   },
-  {
-    "element_id": "ov:s5",
-    "location": {
-      "coordinate_space": "normalized_canvas",
+  "region_template": "<div class=\"region {{LAYOUT}}\" style=\"--x:{{LEFT}}%;--y:{{TOP}}%;--w:{{WIDTH}}%;--h:{{HEIGHT}}%;--count:{{COUNT}}\">{{ITEMS}}</div>",
+  "overlay_layouts": {
+    "contract": "以下为透明片内文字区域的构图起点，不是自动主体检测结果。视频始终 full_frame；核对实际画面后选择文字位置、时段与尺寸，不能通过挪动或缩小视频来满足文字区。",
+    "full_frame": {
       "x": 0.5,
-      "y": 0.115,
-      "width": 0.9,
-      "height": 0.15,
+      "y": 0.5,
+      "width": 1,
+      "height": 1,
       "anchor_x": 0.5,
-      "anchor_y": 0.5,
-      "rotation_degrees": 0.0,
-      "opacity": 1.0
+      "anchor_y": 0.5
     },
-    "creation": {
-      "type": "overlay",
-      "text": "五种造型，同一种可爱",
-      "vibe": "playful",
-      "prompt": "精准副标题：单行『五种造型，同一种可爱』，黑色或深灰无衬线小字，居中于画面顶部空白区，避开五猫阵列主体（左侧猫略贴边属素材原状，字幕不得遮挡）；淡入停留后淡出；需要时用白色半透明底衬；无气泡、无贴纸、不贴满屏。",
-      "reference_version_ids": [],
-      "motion": {
-        "format": "html_css",
-        "html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}body{display:flex;align-items:center;justify-content:center;font-family:\"Microsoft YaHei\",\"SimHei\",sans-serif}@keyframes enter{from{opacity:.2;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.title{animation:enter .25s ease-out both;text-align:center;color:#202020;text-shadow:0 1px 8px #ffffff,0 0 16px #ffffff}.label{font-family:Arial,sans-serif;font-size:2.8vw;font-weight:500;letter-spacing:.24em;margin-bottom:3vh}.copy{font-size:5.7vw;font-weight:600;letter-spacing:.035em;line-height:1.5;white-space:nowrap}</style></head><body><div class=\"title\"><div class=\"label\">FIVE LITTLE MOODS</div><div class=\"copy\">五种造型，同一种可爱</div></div></body></html>",
-        "fps": 24,
-        "loop": false,
-        "design_notes": "统一发布会排版：透明底、深灰无衬线字、英文眉题；无需生成式动效设计",
-        "motif": "custom"
+    "text_left": {
+      "text_region_percent": {
+        "LEFT": 8,
+        "TOP": 24,
+        "WIDTH": 24,
+        "HEIGHT": 52
       }
-    }
-  },
-  {
-    "element_id": "ov:s6",
-    "location": {
-      "coordinate_space": "normalized_canvas",
-      "x": 0.5,
-      "y": 0.115,
-      "width": 0.9,
-      "height": 0.15,
-      "anchor_x": 0.5,
-      "anchor_y": 0.5,
-      "rotation_degrees": 0.0,
-      "opacity": 1.0
     },
-    "creation": {
-      "type": "overlay",
-      "text": "Meow One\n今天，也被你治愈",
-      "vibe": "warm",
-      "prompt": "编辑感片尾标题（竖幅9:16）：主标题『Meow One』黑色无衬线中号字，下方『今天，也被你治愈』深灰色小字；两行居中于画面顶部空白区，淡入后稳定停留至成片结束，不遮挡下方猫脸；需要时用白色半透明底衬；无背景色块、无logo、无价格或购买按钮、无气泡贴纸、不贴满屏。",
-      "reference_version_ids": [],
-      "motion": {
-        "format": "html_css",
-        "html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}body{display:flex;align-items:center;justify-content:center;font-family:\"Microsoft YaHei\",\"SimHei\",sans-serif}@keyframes enter{from{opacity:.2;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.title{animation:enter .25s ease-out both;text-align:center;color:#202020;text-shadow:0 1px 8px #ffffff,0 0 16px #ffffff}.label{font-family:Arial,sans-serif;font-size:2.8vw;font-weight:500;letter-spacing:.24em;margin-bottom:3vh}.copy{font-size:5.7vw;font-weight:600;letter-spacing:.035em;line-height:1.5;white-space:nowrap}</style></head><body><div class=\"title\"><div class=\"label\">Meow One</div><div class=\"copy\">今天，也被你治愈</div></div></body></html>",
-        "fps": 24,
-        "loop": false,
-        "design_notes": "统一发布会排版：透明底、深灰无衬线字、英文眉题；无需生成式动效设计",
-        "motif": "custom"
+    "text_right": {
+      "text_region_percent": {
+        "LEFT": 70,
+        "TOP": 24,
+        "WIDTH": 24,
+        "HEIGHT": 52
       }
-    }
+    },
+    "top_left": {
+      "text_region_percent": {
+        "LEFT": 8,
+        "TOP": 7,
+        "WIDTH": 32,
+        "HEIGHT": 19
+      }
+    },
+    "top_right": {
+      "text_region_percent": {
+        "LEFT": 62,
+        "TOP": 7,
+        "WIDTH": 32,
+        "HEIGHT": 19
+      }
+    },
+    "collection": {
+      "header_region_percent": {
+        "LEFT": 6,
+        "TOP": 6.5,
+        "WIDTH": 88,
+        "HEIGHT": 11
+      },
+      "labels_region_percent": {
+        "LEFT": 9,
+        "TOP": 83,
+        "WIDTH": 80,
+        "HEIGHT": 10.5
+      },
+      "note": "总标题和标签均直接位于原视频内部。顶部28/17px，底部 row 的3–5组22–23/17px，各组 fade。必须核对头顶、爪部与服装的真实位置；根据阵列宽度调整标签区域，不改变视频。"
+    },
+    "portrait": "只重排透明文字带，生成视频保持全屏；按实际头部与身体运动避让，信息较多时分批显示。"
   }
-]
+}
