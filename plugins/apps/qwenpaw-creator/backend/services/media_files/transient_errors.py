@@ -12,7 +12,6 @@ from collections.abc import Mapping
 from typing import Any
 
 from models.provider_errors import (
-    classify_gateway_error,
     is_retryable_status,
     status_code_in_text,
 )
@@ -78,19 +77,16 @@ MAX_TRANSIENT_RETRY_SLOTS = 3
 def is_transient_error_message(message: str) -> bool:
     """Whether a failure is worth another attempt.
 
-    Three signals, most trusted first: a gateway error code, then an HTTP
-    status the message names, then a short list of causes no retry can fix.
-    Anything left over counts as transient.
+    Two signals, most trusted first: an HTTP status the message names, then a
+    short list of causes no retry can fix. Anything left over counts as
+    transient.
     """
 
-    # A provider gateway envelope outranks everything below: the AgentScope
-    # proxy stamps ``retryable: true`` on deterministic failures (measured: a
-    # missing required field and an unresolvable reference host both return
-    # ASP.UPSTREAM.ERROR in 0.1s), so a status or wording guess would burn
-    # every retry slot on a request that can never succeed.
-    classified = classify_gateway_error(message)
-    if classified:
-        return classified == "transient"
+    # A gateway error code used to outrank everything below - the AgentScope
+    # proxy stamped ``retryable: true`` on deterministic failures, so trusting
+    # the status alone would burn paid retries on a request that could never
+    # succeed. The proxy is fixing that stamping on its side, so the status is
+    # now the authority and the envelope no longer vetoes a retry here.
     status = status_code_in_text(message)
     if status:
         # A message that names its own status needs no substring guess. The
@@ -108,7 +104,7 @@ def is_transient_error_message(message: str) -> bool:
 def is_unclassified_failure(message: str) -> bool:
     """Whether a failure carries no signal at all about its cause.
 
-    True only when there is no gateway code, no HTTP status in the wording, and
+    True only when there is no HTTP status in the wording and
     no match in either marker table - which means the caller has learned
     nothing, as opposed to having learned that the fault is permanent. The
     scheduler retries exactly these, so that an unrecognised wording costs a
@@ -117,7 +113,7 @@ def is_unclassified_failure(message: str) -> bool:
     """
 
     text = str(message or "")
-    if classify_gateway_error(text) or status_code_in_text(text):
+    if status_code_in_text(text):
         return False
     folded = text.casefold()
     return not any(
@@ -130,14 +126,11 @@ def is_transient_task_error(error: Mapping[str, Any] | None) -> bool:
     if not isinstance(error, Mapping):
         return False
     message = str(error.get("message") or "")
-    # The persisted flag is whatever the raising layer believed, and a
-    # gateway envelope outranks it: the AgentScope proxy stamps
-    # ``retryable: true`` on deterministic failures, so honouring the flag
-    # first would re-open a retry slot for a request that can never
-    # succeed - and an image or video render is billed even when it fails.
-    classified = classify_gateway_error(message)
-    if classified:
-        return classified == "transient"
+    # The persisted flag is whatever the raising layer believed. A gateway
+    # envelope used to outrank it - the proxy stamped ``retryable: true`` on
+    # deterministic failures, so honouring the flag first would re-open a retry
+    # slot for a request that can never succeed - but the proxy is fixing that
+    # stamping on its side, so the flag is taken at face value again.
     if error.get("retryable") is True:
         return True
     return is_transient_error_message(message)

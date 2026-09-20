@@ -163,20 +163,28 @@ def is_gateway_quota_error(text: str) -> bool:
 
 
 def is_gateway_transient(text: str) -> bool:
-    """True only for codes that are transient by their own nature."""
+    """True only for codes that are transient by their own nature.
+
+    Diagnostic use only - no retry path reads this any more. The gateway used
+    to override the HTTP status with its ``code`` so a deterministic client
+    fault dressed as a 5xx would not burn paid retries; the proxy is fixing
+    that stamping on its side, so retry decisions now key on the status alone
+    and this helper survives only for callers that want the classification.
+    """
     return classify_gateway_error(text) == CLASS_TRANSIENT
 
 
 def retryable_for_status(status_code: int, body: str = "") -> bool:
     """Retry decision for one HTTP failure.
 
-    A code with known semantics overrides the status - the proxy stamps
-    ``retryable: true`` on deterministic failures - while an unlisted code or
-    no envelope at all defers to the status, which the proxy passes through.
+    The status alone decides. An earlier revision let a gateway ``code``
+    override the status - it stamped deterministic client faults as a 5xx to
+    avoid paying for their retries - but the proxy is fixing that on its side,
+    so we no longer second-guess the status here. ``body`` stays in the
+    signature because callers still pass the raw response and the quota path
+    (``is_gateway_quota_error``) reads codes from it separately.
     """
-    code = gateway_error_code(body)
-    if code:
-        return classify_gateway_error(body) == CLASS_TRANSIENT
+    _ = body
     return is_retryable_status(status_code)
 
 

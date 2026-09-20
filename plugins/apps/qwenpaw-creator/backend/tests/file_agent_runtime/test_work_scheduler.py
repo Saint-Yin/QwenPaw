@@ -1231,50 +1231,6 @@ def test_credits_refusal_holds_the_project_and_reports_once(
     assert scheduler._deterministic_failure_nodes == {}
 
 
-def test_a_deterministic_gateway_fault_fails_once_without_the_breaker(
-    tmp_path,
-    monkeypatch,
-):
-    """A 502 that lies about being retryable must not burn the retry budget.
-
-    The provider's own ``retryable: true`` and the scheduler's ``status 5``
-    marker both say transient; the error code says otherwise.
-    """
-    services = _services(tmp_path, monkeypatch, ready_variants=1)
-    _enable_yolo(monkeypatch)
-    bus = _RecordingBus()
-    records: list = []
-    dispatch = _RecordingDispatch(
-        fail=True,
-        error=UPSTREAM_ERROR,
-        records=records,
-    )
-    scheduler = WorkGraphScheduler(
-        services,
-        image_dispatch=dispatch,
-        notifications=bus,
-    )
-    monkeypatch.setattr(
-        scheduler.executions,
-        "list_tasks",
-        lambda _project_id: list(records),
-    )
-
-    async def scenario():
-        for _ in range(3):
-            await scheduler.tick(PROJECT_ID)
-            await _drain()
-        await scheduler.shutdown()
-
-    asyncio.run(scenario())
-
-    assert len(dispatch.calls) == 1
-    # Fails once, but the rest of the project keeps working: a broken
-    # reference is this node's problem, not the account's.
-    assert not scheduler._quota_breaker_open(PROJECT_ID)
-    assert scheduler._deterministic_failure_nodes == {}
-
-
 def test_credits_breaker_is_tripped_once_and_cleared_by_cancel(
     tmp_path,
     monkeypatch,
