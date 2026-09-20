@@ -175,7 +175,14 @@ async def _call_openai(
     host = urlsplit(url).hostname or ""
     if (
         thinking_budget is not None
-        and host.endswith(".aliyuncs.com")
+        and (
+            host.endswith(".aliyuncs.com")
+            # The AgentScope platform proxy fronts the same Qwen models and
+            # honours ``thinking_budget``. Without this the field is silently
+            # dropped there, so a thinking model rambles on until the platform
+            # ends the stream at ~300s and we get reasoning-only, empty output.
+            or model_config.is_agentscope_endpoint(url)
+        )
         and model_name.lower().startswith(("qwen3.", "qwen3-"))
     ):
         body["thinking_budget"] = thinking_budget
