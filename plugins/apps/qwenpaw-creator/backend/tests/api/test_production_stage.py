@@ -137,12 +137,33 @@ def test_confirmation_is_exact_and_script_edits_pause_again(env, run_scenario):
             origin="frontend_edit",
         ).snapshot
         assert saved.project.settings.production_stage == "media"
+        # Shot planning after confirmation is media-stage work: rewriting a
+        # shot's narrative/intent or breaking down a new shot keeps production
+        # enabled instead of bouncing the project back to the script stage.
         candidate = saved.project.model_dump(mode="json")
-        candidate["timelines"]["items"][TID]["elements_by_id"]["e"][
-            "creation"
-        ]["narrative"] = "小猫关上窗，回到壁炉旁。"
-        edited = services.commits.commit(
+        elements = candidate["timelines"]["items"][TID]["elements_by_id"]
+        elements["e"]["creation"]["narrative"] = "小猫关上窗，回到壁炉旁。"
+        elements["e"]["creation"]["intent"] = "低角度仰拍，强调窗外雪光"
+        elements["e2"] = {
+            "element_id": "e2",
+            "span": {"start_tick": 4000, "duration_tick": 4000},
+            "location": {},
+            "creation": {"type": "r2v", "narrative": "壁炉旁的猫打了个哈欠。"},
+        }
+        planned = services.commits.commit(
             base=saved,
+            candidate=candidate,
+            origin="agentdock_idle_goal",
+        ).snapshot
+        assert planned.project.settings.production_stage == "media"
+        assert (
+            planned.project.settings.script_approval_fingerprint
+            == saved.project.settings.script_approval_fingerprint
+        )
+        candidate = planned.project.model_dump(mode="json")
+        candidate["timelines"]["items"][TID]["description"] = "小猫决定出门看雪。"
+        edited = services.commits.commit(
+            base=planned,
             candidate=candidate,
             origin="frontend_edit",
         ).snapshot
@@ -150,7 +171,7 @@ def test_confirmation_is_exact_and_script_edits_pause_again(env, run_scenario):
         assert edited.project.settings.script_approval_fingerprint is None
         stale = await client.post(
             f"/projects/{PID}/production-stage",
-            json={"stage": "media", "projectEtag": f'"{saved.etag}"'},
+            json={"stage": "media", "projectEtag": f'"{planned.etag}"'},
         )
         assert stale.status_code == 409
         assert (

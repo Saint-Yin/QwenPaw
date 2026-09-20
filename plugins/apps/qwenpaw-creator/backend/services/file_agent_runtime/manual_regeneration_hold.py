@@ -22,11 +22,20 @@ from services.runtime_files.execution_models import (
 from services.runtime_files.execution_store import ProjectExecutionStore
 from services.runtime_files.locking import CrossProcessFileLock
 from services.runtime_files.models import StrictRuntimeModel
-from services.runtime_files.path_safety import require_safe_runtime_segment
+from services.runtime_files.path_safety import (
+    is_link_path,
+    is_link_stat,
+    require_safe_runtime_segment,
+)
 
 
 class ManualHoldConflict(ConflictError):
     pass
+
+
+# project.json is published by atomic replacement, so (mtime, size, inode)
+# changes on every write and a hit means the parsed identity is still valid.
+_IDENTITY_CACHE: dict[Path, tuple[tuple[int, int, int], str]] = {}
 
 
 class ManualHoldState(StrictRuntimeModel):
@@ -105,19 +114,30 @@ class ManualRegenerationHoldStore:
         root_stat = root.lstat()
         project_path = root / "project.json"
         project_stat = project_path.lstat()
-        if not stat.S_ISDIR(root_stat.st_mode) or not stat.S_ISREG(
-            project_stat.st_mode,
+        if (
+            is_link_stat(root_stat)
+            or not stat.S_ISDIR(root_stat.st_mode)
+            or not stat.S_ISREG(project_stat.st_mode)
         ):
             raise ManualHoldConflict("Unsafe Project path")
-        runtime = root / "runtime"
-        if runtime.is_symlink():
+        if is_link_path(root / "runtime"):
             raise ManualHoldConflict("Unsafe Runtime path")
+        key = (
+            project_stat.st_mtime_ns,
+            project_stat.st_size,
+            project_stat.st_ino,
+        )
+        cached = _IDENTITY_CACHE.get(project_path)
+        if cached is not None and cached[0] == key:
+            return cached[1]
         document = json.loads(project_path.read_bytes())
         if document["project_id"] != project_id:
             raise ManualHoldConflict("Project identity mismatch")
-        return (
-            f"{root_stat.st_dev}:{root_stat.st_ino}:{document['created_at']}"
-        )
+        # Durable fields only: an exported/imported or relocated Project keeps
+        # its holds, while a deleted and recreated one has a new created_at.
+        identity = f"{project_id}:{document['created_at']}"
+        _IDENTITY_CACHE[project_path] = (key, identity)
+        return identity
 
     def _record(self, project_id):
         return AtomicJsonRecordStore(

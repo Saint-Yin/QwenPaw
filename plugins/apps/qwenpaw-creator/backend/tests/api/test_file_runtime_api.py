@@ -591,6 +591,8 @@ def test_legacy_specialist_uses_saved_prompt_instead_of_old_tool_argument(
         rebound = approved_specialist_arguments(current, approved, arguments)
         assert rebound["arguments"] == {"prompt": "用户保存的提示词B", "ratio": "16:9"}
         assert arguments["arguments"]["prompt"] == "旧工具参数A"
+        # An unrelated write moves the ETag but not the approved prompt: the
+        # approval stays usable instead of re-asking the user.
         changed = current.project.model_dump(mode="json")
         changed["name"] = "changed"
         newer = services.commits.commit(
@@ -598,8 +600,21 @@ def test_legacy_specialist_uses_saved_prompt_instead_of_old_tool_argument(
             candidate=changed,
             origin="frontend_edit",
         ).snapshot
+        assert newer.etag != current.etag
+        assert approved_specialist_arguments(newer, approved, arguments)[
+            "arguments"
+        ] == {"prompt": "用户保存的提示词B", "ratio": "16:9"}
+        edited = newer.project.model_dump(mode="json")
+        edited["timelines"]["items"]["timeline:main"]["elements_by_id"]["e"][
+            "creation"
+        ]["storyboard_prompt"] = "用户又改了的提示词C"
+        rewritten = services.commits.commit(
+            base=newer,
+            candidate=edited,
+            origin="frontend_edit",
+        ).snapshot
         with pytest.raises(ConflictError):
-            approved_specialist_arguments(newer, approved, arguments)
+            approved_specialist_arguments(rewritten, approved, arguments)
 
     run_scenario(app, scenario)
 

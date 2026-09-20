@@ -46,14 +46,30 @@ def saved_authorization_prompt(project, authorization):
     return {"pointer": pointer, "prompt": prompt}
 
 
+def saved_prompt_is_current(snapshot, authorization) -> bool:
+    """The approval still describes the stored prompt.
+
+    The saved ETag is only a fast path: unrelated writes (task results,
+    auto-saved drafts elsewhere) must not void an approval whose prompt text
+    is byte-identical, while any change to the prompt itself does.
+    """
+    saved = (authorization.decision or {}).get("savedPrompt")
+    if not saved:
+        return True
+    if snapshot.etag == saved.get("etag"):
+        return True
+    try:
+        current = saved_authorization_prompt(snapshot.project, authorization)
+    except ConflictError:
+        return False
+    return current == {key: saved.get(key) for key in ("pointer", "prompt")}
+
+
 def approved_specialist_arguments(snapshot, authorization, arguments):
     saved = (authorization.decision or {}).get("savedPrompt")
     if not saved:
         return arguments
-    if snapshot.etag != saved.get("etag") or saved_authorization_prompt(
-        snapshot.project,
-        authorization,
-    ) != {key: saved.get(key) for key in ("pointer", "prompt")}:
+    if not saved_prompt_is_current(snapshot, authorization):
         raise ConflictError("批准后的提示词已改变，请按最新内容重新请求授权。")
     return {
         **arguments,

@@ -7529,11 +7529,15 @@ class FileCreatorAgentRuntime:
                 record.status is ExecutionAuthorizationStatus.APPROVED
                 and saved
             ):
+                from services.project_files.approved_prompt import (
+                    saved_prompt_is_current,
+                )
+
                 latest = await asyncio.to_thread(
                     self.services.projects.read,
                     project_id,
                 )
-                if latest.etag != saved.get("etag"):
+                if not saved_prompt_is_current(latest, record):
                     attempt += 1
                     continue
             break

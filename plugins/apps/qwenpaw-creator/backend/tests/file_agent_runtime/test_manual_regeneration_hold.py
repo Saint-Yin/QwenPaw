@@ -240,6 +240,22 @@ def test_old_operation_cannot_touch_recreated_project(env):
     assert store.is_held(PROJECT_ID, "video:a")
 
 
+def test_relocated_project_keeps_hold_readable_and_resumable(
+    env,
+    tmp_path_factory,
+):
+    services, store = env
+    store.admitted(_begin(store))
+    expected = store.read(PROJECT_ID).node_ids
+    assert expected
+    relocated = tmp_path_factory.mktemp("relocated-root")
+    shutil.copytree(services.root / PROJECT_ID, relocated / PROJECT_ID)
+    moved = hold.ManualRegenerationHoldStore(relocated)
+    assert moved.read(PROJECT_ID).node_ids == expected
+    moved.resume(PROJECT_ID, moved.read(PROJECT_ID).revision)
+    assert not moved.read(PROJECT_ID).node_ids
+
+
 def test_corrupt_store_fails_closed(env):
     _, store = env
     _begin(store)

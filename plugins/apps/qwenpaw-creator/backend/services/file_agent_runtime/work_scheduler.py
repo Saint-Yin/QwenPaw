@@ -744,14 +744,13 @@ class WorkGraphScheduler:
         # dispatching inside it would hand a possibly half-finished prompt
         # to a paid provider. Recheck once the earliest window expires.
         held_recheck: float | None = None
+        manually_held = (
+            await asyncio.to_thread(self.manual_holds.read, project_id)
+        ).node_ids
         for node in self._dispatch_candidates(project_id, graph, tasks):
             if capacity <= 0:
                 break
-            if await asyncio.to_thread(
-                self.manual_holds.is_held,
-                project_id,
-                node.node_id,
-            ):
+            if node.node_id in manually_held:
                 logger.info(
                     "work-graph node %s held pending manual regeneration",
                     node.node_id,
@@ -884,6 +883,9 @@ class WorkGraphScheduler:
                 and graph.by_id[key[1]].prompt_sync_required
             )
         }
+        manually_held = (
+            await asyncio.to_thread(self.manual_holds.read, project_id)
+        ).node_ids
         for node in graph.nodes:
             if (
                 # pylint: disable-next=too-many-boolean-expressions
@@ -892,6 +894,7 @@ class WorkGraphScheduler:
                 or not node.timeline_id
                 or not node.target_ref
                 or node.node_id in self._inflight.get(project_id, set())
+                or node.node_id in manually_held
                 or any(
                     dep not in graph.by_id
                     or graph.by_id[dep].status is not WorkNodeStatus.DONE
@@ -902,12 +905,6 @@ class WorkGraphScheduler:
                     and other.status is WorkNodeStatus.RUNNING
                     for other in graph.nodes
                 )
-            ):
-                continue
-            if await asyncio.to_thread(
-                self.manual_holds.is_held,
-                project_id,
-                node.node_id,
             ):
                 continue
             if not await asyncio.to_thread(self.enabled):

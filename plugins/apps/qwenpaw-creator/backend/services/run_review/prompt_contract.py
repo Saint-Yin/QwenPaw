@@ -9,7 +9,7 @@ coverage and provider-specific storyboard reference syntax.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 import re
 from typing import Any
 
@@ -157,6 +157,7 @@ def _expected_reference_roles(
     element: Mapping[str, Any],
     creation: Mapping[str, Any],
     element_id: str,
+    load_project: Callable[[], Any],
 ) -> list[str | None]:
     """Resolve the role actually bound to each runtime ``[Image N]`` slot.
 
@@ -179,13 +180,17 @@ def _expected_reference_roles(
     if not explicit:
         from pydantic import ValidationError as SchemaValidationError
         from domain.errors import ValidationError
-        from services.project_files.models import Project, R2VCreation
+        from services.project_files.models import R2VCreation
         from services.media_files.visual_reference_resolution import (
             resolve_r2v_visual_reference_version_ids,
         )
 
+        project = load_project()
+        if project is None:
+            # Partial text-review fixtures have no materialized selections.
+            # Actual Projects always use the same resolver as the executor.
+            return _canonical_type_roles(creation)
         try:
-            project = Project.model_validate(project_json)
             live_creation = R2VCreation.model_validate(creation)
             explicit = list(
                 resolve_r2v_visual_reference_version_ids(
@@ -195,8 +200,6 @@ def _expected_reference_roles(
                 ),
             )
         except SchemaValidationError:
-            # Partial text-review fixtures have no materialized selections.
-            # Actual Projects always use the same resolver as the executor.
             return _canonical_type_roles(creation)
         except ValidationError:
             # Dependency validation supplies the actionable missing-input
@@ -329,6 +332,19 @@ def check_changed_r2v_prompt_contracts(
     )
 
     findings: list[dict[str, str]] = []
+    validated_project: list[Any] = []
+
+    def load_project() -> Any:
+        if not validated_project:
+            from pydantic import ValidationError as SchemaValidationError
+            from services.project_files.models import Project
+
+            try:
+                validated_project.append(Project.model_validate(project_json))
+            except SchemaValidationError:
+                validated_project.append(None)
+        return validated_project[0]
+
     checked_elements: list[str] = []
     reviewed_pointers: list[str] = []
     for timeline_id, timeline in timeline_items.items():
@@ -483,6 +499,7 @@ def check_changed_r2v_prompt_contracts(
                     element,
                     creation,
                     str(element_id),
+                    load_project,
                 )
                 for literal, expected, actual in _reference_role_mismatches(
                     video_prompt,
