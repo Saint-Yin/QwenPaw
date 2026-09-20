@@ -823,7 +823,7 @@ class ProjectReviewService:
                 continue
             transactions_root = review_root / "decision-transactions"
             if not transactions_root.exists() and not is_link_path(
-                transactions_root
+                transactions_root,
             ):
                 continue
             if (
@@ -1170,7 +1170,7 @@ class ProjectReviewService:
             runtime_root / "reviews" / review_id / "decision-transactions"
         )
         if not transactions_root.exists() and not is_link_path(
-            transactions_root
+            transactions_root,
         ):
             return
         if is_link_path(transactions_root) or not transactions_root.is_dir():

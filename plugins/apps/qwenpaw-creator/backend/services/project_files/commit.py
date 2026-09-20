@@ -511,7 +511,7 @@ class ProjectCommitBoundary:
                     os.rename(staged_transaction, transaction_root)
                 except OSError as exc:
                     if transaction_root.exists() or is_link_path(
-                        transaction_root
+                        transaction_root,
                     ):
                         raise ProjectCommitError(
                             f"Project transaction already exists: {transaction_id}",
