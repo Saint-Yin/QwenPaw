@@ -44,6 +44,7 @@ from .dependencies import (
     CreatorErrorRoute,
     project_file_services,
     resolve_idempotency_key,
+    semantic_etag,
 )
 
 
@@ -719,7 +720,7 @@ async def _rebind_workgraph_authorization(
 ) -> dict[str, str]:
     # GET/304 carry HTTP entity tags; PATCH returns the raw project digest.
     # Normalize before both the edit-grace exemption and the snapshot CAS.
-    project_etag = project_etag.strip().removeprefix("W/").strip().strip('"')
+    project_etag = semantic_etag(project_etag)
     from services.file_agent_runtime.driver import _execution_provider_model
     from services.file_agent_runtime.work_scheduler import WorkGraphScheduler
     from services.file_agent_runtime.workgraph_execution import (
@@ -854,13 +855,7 @@ async def _decide_authorization(
                         services.projects.read,
                         project_id,
                     )
-                    expected = (
-                        decision["projectEtag"]
-                        .strip()
-                        .removeprefix("W/")
-                        .strip()
-                        .strip('"')
-                    )
+                    expected = semantic_etag(decision["projectEtag"])
                     if snapshot.etag != expected:
                         raise ConflictError("已保存的项目快照已改变，请重新查看后批准。")
                     saved = saved_authorization_prompt(

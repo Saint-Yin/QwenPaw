@@ -208,11 +208,9 @@ export default function WorkGraphPanel({ projectId }: { projectId: string }) {
   useEffect(() => {
     void refresh(projectId);
   }, [projectId, refresh]);
-  if (!graph || (!graph.nodes.length && !graph.manualHold?.nodeIds.length))
-    return null;
+  if (!graph || !graph.nodes.length) return null;
   return (
     <div data-testid="work-graph-panel">
-      <WorkGraphManualHoldNotice projectId={projectId} />
       <ul className="space-y-1">
         {graph.nodes.map((node) => (
           <NodeRow key={node.id} node={node} projectId={projectId} />

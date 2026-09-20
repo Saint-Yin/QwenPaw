@@ -11,8 +11,15 @@ export default function ProductionStageControl({
 }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
-  const snapshot = useProjectSnapshotStore((state) => state);
-  const project = snapshot.projectId === projectId ? snapshot.project : null;
+  const project = useProjectSnapshotStore((state) =>
+    state.projectId === projectId ? state.project : null,
+  );
+  const etag = useProjectSnapshotStore((state) =>
+    state.projectId === projectId ? state.etag : null,
+  );
+  const patching = useProjectSnapshotStore(
+    (state) => state.projectId === projectId && state.patching,
+  );
   if (!project) return null;
   const scriptOnly = project.settings.production_stage === "script";
 
@@ -38,18 +45,18 @@ export default function ProductionStageControl({
     }
   };
   const changeStage = () => {
-    if (!snapshot.etag) return;
-    const etag = snapshot.etag;
+    if (!etag) return;
+    const current = etag;
     if (scriptOnly) {
       Modal.confirm({
         title: t("productionStage.confirmTitle"),
         content: t("productionStage.confirmDescription"),
         okText: t("productionStage.allowMedia"),
         cancelText: t("common.cancel"),
-        onOk: () => update("media", etag),
+        onOk: () => update("media", current),
       });
     } else {
-      void update("script", etag).catch(() => undefined);
+      void update("script", current).catch(() => undefined);
     }
   };
   return (
@@ -63,7 +70,7 @@ export default function ProductionStageControl({
       </span>
       <button
         type="button"
-        disabled={busy || snapshot.patching || !snapshot.etag}
+        disabled={busy || patching || !etag}
         className="btn-secondary"
         onClick={changeStage}
       >

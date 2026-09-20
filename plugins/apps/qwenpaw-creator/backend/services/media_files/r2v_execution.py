@@ -127,6 +127,7 @@ from services.runtime_files.execution_store import (
     ExecutionStateConflict,
 )
 from services.runtime_files.models import ChangeOrigin, ReviewPolicy
+from services.runtime_files.path_safety import is_link_stat
 from services.runtime_files.reconciliation import reconcile_terminal_task_runs
 
 # pylint: disable=no-name-in-module
@@ -1611,7 +1612,7 @@ def _stage_materialized_video(
         flags |= os.O_NOFOLLOW
     else:
         value = materialized.path.lstat()
-        if stat.S_ISLNK(value.st_mode):
+        if is_link_stat(value):
             raise ValidationError("R2V Asset staging refuses symlink output")
     descriptor = os.open(materialized.path, flags)
     try:

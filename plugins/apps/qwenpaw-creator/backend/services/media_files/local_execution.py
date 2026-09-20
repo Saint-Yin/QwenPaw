@@ -132,6 +132,7 @@ from services.runtime_files.execution_store import (
     ProjectExecutionStore,
 )
 from services.runtime_files.models import ChangeOrigin, ReviewPolicy
+from services.runtime_files.path_safety import is_link_stat, is_link_path
 from services.runtime_files.media_probe import MediaProbeError, probe_media
 from services.runtime_files.runtime_dependencies import resolve_ffmpeg
 
@@ -2472,7 +2473,7 @@ def _require_real_directory(path: Path) -> None:
         raise StorageIntegrityError(
             f"Runtime task-work 父目录不存在: {path}",
         ) from exc
-    if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISDIR(path_stat.st_mode):
+    if is_link_stat(path_stat) or not stat.S_ISDIR(path_stat.st_mode):
         raise StorageIntegrityError(f"Runtime task-work 路径不安全: {path}")
 
 
@@ -4371,7 +4372,7 @@ class FileLocalMediaExecutionService:
             output_stat = spec.output_path.lstat()
         except FileNotFoundError as exc:
             raise ValidationError("本地媒体 runner 未生成 output.mp4") from exc
-        if spec.output_path.is_symlink() or not stat.S_ISREG(
+        if is_link_path(spec.output_path) or not stat.S_ISREG(
             output_stat.st_mode,
         ):
             raise StorageIntegrityError("本地媒体输出不是普通文件")

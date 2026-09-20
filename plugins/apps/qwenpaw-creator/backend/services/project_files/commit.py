@@ -37,7 +37,11 @@ from services.runtime_files.atomic_store import (
 from services.runtime_files.field_blocks import FieldBlockStore
 from services.runtime_files.locking import CrossProcessFileLock
 from services.runtime_files.manual_edit_store import ManualEditBufferStore
-from services.runtime_files.path_safety import hashed_runtime_segment
+from services.runtime_files.path_safety import (
+    hashed_runtime_segment,
+    is_link_path,
+    is_link_stat,
+)
 from services.runtime_files.models import (
     ChangeOrigin,
     ChangeRoundRecord,
@@ -435,7 +439,7 @@ class ProjectCommitBoundary:
             self.store.read(project_id)
             runtime_root = self.store.project_root(project_id) / "runtime"
             transaction_root = runtime_root / "transactions" / transaction_id
-            if transaction_root.exists() or transaction_root.is_symlink():
+            if transaction_root.exists() or is_link_path(transaction_root):
                 self._archive_matching_aborted_transaction(
                     transaction_root=transaction_root,
                     runtime_root=runtime_root,
@@ -479,7 +483,7 @@ class ProjectCommitBoundary:
             transactions_root.mkdir(parents=True, exist_ok=True)
             staging_root = runtime_root / "temp" / "transactions"
             staging_root.mkdir(mode=0o700, exist_ok=True)
-            if staging_root.is_symlink() or not staging_root.is_dir():
+            if is_link_path(staging_root) or not staging_root.is_dir():
                 raise ProjectCommitError(
                     "Project transaction staging path must be a real directory",
                 )
@@ -506,9 +510,8 @@ class ProjectCommitBoundary:
                 try:
                     os.rename(staged_transaction, transaction_root)
                 except OSError as exc:
-                    if (
-                        transaction_root.exists()
-                        or transaction_root.is_symlink()
+                    if transaction_root.exists() or is_link_path(
+                        transaction_root
                     ):
                         raise ProjectCommitError(
                             f"Project transaction already exists: {transaction_id}",
@@ -794,7 +797,7 @@ class ProjectCommitBoundary:
                 earliest_created = review.created_at
                 if reviews_root.is_dir():
                     for child in reviews_root.iterdir():
-                        if child.is_symlink() or not child.is_dir():
+                        if is_link_path(child) or not child.is_dir():
                             continue
                         pending_review = AtomicJsonRecordStore(
                             child / "review.json",
@@ -962,7 +965,7 @@ class ProjectCommitBoundary:
         advance_accepted_baseline: bool,
     ) -> None:
         entry_stat = transaction_root.lstat()
-        if stat.S_ISLNK(entry_stat.st_mode) or not stat.S_ISDIR(
+        if is_link_stat(entry_stat) or not stat.S_ISDIR(
             entry_stat.st_mode,
         ):
             raise ProjectCommitError(
@@ -1407,7 +1410,7 @@ class ProjectCommitBoundary:
             reviews_root.iterdir(),
             key=lambda item: item.name,
         ):
-            if review_root.is_symlink() or not review_root.is_dir():
+            if is_link_path(review_root) or not review_root.is_dir():
                 continue
             review_store = AtomicJsonRecordStore(
                 review_root / "review.json",

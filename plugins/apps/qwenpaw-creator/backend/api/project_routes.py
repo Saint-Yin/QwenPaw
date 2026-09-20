@@ -82,6 +82,7 @@ from .dependencies import (
     CreatorErrorRoute,
     project_file_services,
     resolve_idempotency_key,
+    semantic_etag,
 )
 
 logger = setup_logger("project_routes")
@@ -529,9 +530,7 @@ async def set_production_stage(
     request: ProductionStageRequest,
     services: CreatorFileServices = Depends(project_file_services),
 ):
-    expected = (
-        request.project_etag.strip().removeprefix("W/").strip().strip('"')
-    )
+    expected = semantic_etag(request.project_etag)
     snapshot = await asyncio.to_thread(services.projects.read, project_id)
     if snapshot.etag != expected:
         raise ConflictError("剧本已更新，请查看最新内容后重新确认。")

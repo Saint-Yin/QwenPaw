@@ -124,6 +124,7 @@ from services.runtime_files.execution_store import (
     ProjectExecutionStore,
 )
 from services.runtime_files.models import ChangeOrigin, ReviewPolicy
+from services.runtime_files.path_safety import is_link_stat
 from services.runtime_files.safe_remote_download import (
     SafeRemoteDownloadError,
     validate_public_remote_url,
@@ -1446,7 +1447,7 @@ async def _read_controlled_local(
                     raise ValidationError(
                         "provider 本地输出不存在、越界或包含 symlink",
                     ) from exc
-                if stat.S_ISLNK(details.st_mode) or not stat.S_ISDIR(
+                if is_link_stat(details) or not stat.S_ISDIR(
                     details.st_mode,
                 ):
                     raise ValidationError(
@@ -1459,7 +1460,7 @@ async def _read_controlled_local(
                 raise ValidationError(
                     "provider 本地输出不存在、越界或包含 symlink",
                 ) from exc
-            if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(
+            if is_link_stat(details) or not stat.S_ISREG(
                 details.st_mode,
             ):
                 raise ValidationError("provider 本地输出必须是普通文件")

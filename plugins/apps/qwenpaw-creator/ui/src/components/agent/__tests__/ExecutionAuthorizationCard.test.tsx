@@ -7,7 +7,9 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { message } from "antd";
 import ExecutionAuthorizationCard from "@/components/agent/ExecutionAuthorizationCard";
+import { CreatorHttpError } from "@/api/creator/client";
 import { useExecutionAuthorizationStore } from "@/store/executionAuthorizationStore";
 import {
   useProjectSnapshotStore,
@@ -37,6 +39,7 @@ function seed(patch: PatchFn) {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   useExecutionAuthorizationStore.getState().reset();
   useProjectSnapshotStore.getState().reset();
 });
@@ -387,5 +390,51 @@ describe("ExecutionAuthorizationCard inline prompt editing", () => {
     expect(screen.getByRole("textbox")).toBeDisabled();
     expect(screen.getByRole("button", { name: "放弃" })).toBeDisabled();
     await act(async () => finish());
+  });
+
+  it("shows the snapshot conflict and refreshes instead of a generic failure", async () => {
+    seed(vi.fn());
+    const pollOnce = vi.fn().mockResolvedValue(undefined);
+    useProjectSnapshotStore.setState({
+      pollOnce: pollOnce as unknown as ProjectSnapshotState["pollOnce"],
+    });
+    const warning = vi
+      .spyOn(message, "warning")
+      .mockImplementation(() => undefined as never);
+    const error = vi
+      .spyOn(message, "error")
+      .mockImplementation(() => undefined as never);
+    const approve = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new CreatorHttpError(409, {
+          message: "已保存的项目快照已改变，请重新保存后批准",
+        }),
+      )
+      .mockRejectedValueOnce(new Error("network"));
+    useExecutionAuthorizationStore.setState({ approve });
+    render(
+      <ExecutionAuthorizationCard
+        authorization={makePendingAuthorization({
+          targetRef: "element:r2v-window",
+          scope: {
+            operation: "image_generation",
+            workGraph: { nodeId: "storyboard:r2v-window" },
+          },
+        })}
+        project={projectDocument}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    await waitFor(() =>
+      expect(warning).toHaveBeenCalledWith(
+        "已保存的项目快照已改变，请重新保存后批准",
+      ),
+    );
+    expect(pollOnce).toHaveBeenCalledWith("p1");
+    expect(error).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    await waitFor(() => expect(error).toHaveBeenCalledWith("执行失败，请重试"));
+    expect(warning).toHaveBeenCalledTimes(1);
   });
 });

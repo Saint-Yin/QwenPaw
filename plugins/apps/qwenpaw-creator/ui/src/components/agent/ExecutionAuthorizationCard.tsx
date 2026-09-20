@@ -21,6 +21,7 @@ import {
   type ProjectPointerRead,
 } from "@/lib/projectJsonPointer";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
+import { CreatorHttpError } from "@/api/creator/client";
 import i18n from "@/i18n";
 
 const BUTTON_BASE =
@@ -407,8 +408,15 @@ export default function ExecutionAuthorizationCard({
             : "executionAuth.confirmed",
         ),
       );
-    } catch {
-      message.error(t("agent.executionFailed"));
+    } catch (error) {
+      if (error instanceof CreatorHttpError && error.status === 409) {
+        message.warning(error.userMessage);
+        if (projectId) {
+          void useProjectSnapshotStore.getState().pollOnce(projectId);
+        }
+      } else {
+        message.error(t("agent.executionFailed"));
+      }
     } finally {
       setBusy(false);
     }

@@ -70,4 +70,26 @@ describe("readProjectPointer", () => {
       value: "value",
     });
   });
+
+  it("only resolves own properties, never the prototype chain", () => {
+    for (const pointer of ["/list/__proto__", "/timelines/constructor"]) {
+      expect(readProjectPointer(root, pointer)).toEqual({
+        present: false,
+        value: undefined,
+      });
+    }
+  });
+
+  it("requires canonical decimal array indices", () => {
+    for (const pointer of ["/list/01/id", "/list/ 1/id", "/list//id"]) {
+      expect(readProjectPointer(root, pointer)).toEqual({
+        present: false,
+        value: undefined,
+      });
+    }
+    expect(readProjectPointer(root, "/list/0/id")).toEqual({
+      present: true,
+      value: "a",
+    });
+  });
 });

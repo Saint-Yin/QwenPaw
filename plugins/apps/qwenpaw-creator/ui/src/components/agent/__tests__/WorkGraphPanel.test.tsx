@@ -10,7 +10,9 @@ import {
 } from "@testing-library/react";
 import { ConfigProvider, message } from "antd";
 
-import WorkGraphPanel from "@/components/agent/WorkGraphPanel";
+import WorkGraphPanel, {
+  WorkGraphManualHoldNotice,
+} from "@/components/agent/WorkGraphPanel";
 import AgentProgressOverview from "@/components/agent/AgentProgressOverview";
 import type { WorkGraphView } from "@/contracts/creator/workGraph";
 import { useWorkGraphStore } from "@/store/workGraphStore";
@@ -147,6 +149,7 @@ function graphFetch(status = 200) {
 async function renderHeldPanel() {
   const view = render(
     <ConfigProvider theme={{ token: { motion: false } }}>
+      <WorkGraphManualHoldNotice projectId="p1" />
       <WorkGraphPanel projectId="p1" />
     </ConfigProvider>,
   );
@@ -358,7 +361,12 @@ describe("manual work-graph holds", () => {
   it("localizes the pause and cost-aware resume action in English", async () => {
     graphFetch();
     await i18n.changeLanguage("en");
-    render(<WorkGraphPanel projectId="p1" />);
+    render(
+      <>
+        <WorkGraphManualHoldNotice projectId="p1" />
+        <WorkGraphPanel projectId="p1" />
+      </>,
+    );
     expect(await screen.findByText("Manually paused")).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", { name: "Resume automatic production" }),

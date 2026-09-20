@@ -36,13 +36,13 @@ export function readProjectPointer(
   let current: unknown = root;
   for (const token of tokens) {
     if (Array.isArray(current)) {
+      if (!/^(0|[1-9][0-9]*)$/.test(token)) return absent;
       const index = Number(token);
-      if (!Number.isInteger(index) || index < 0 || index >= current.length)
-        return absent;
+      if (index >= current.length) return absent;
       current = current[index];
     } else if (current !== null && typeof current === "object") {
       const record = current as Record<string, unknown>;
-      if (!(token in record)) return absent;
+      if (!Object.prototype.hasOwnProperty.call(record, token)) return absent;
       current = record[token];
     } else {
       return absent;
