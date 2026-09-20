@@ -71,19 +71,11 @@ CREDITS_REPR_ENVELOPE = (
 )
 
 
-def test_deterministic_upstream_error_is_not_transient() -> None:
-    """A 0.1s rejection must not spend a retry slot on a billed render."""
-    assert gateway_error_code(UPSTREAM_ENVELOPE) == "ASP.UPSTREAM.ERROR"
-    assert classify_gateway_error(UPSTREAM_ENVELOPE) == CLASS_UNKNOWN
-    # "status 502" is in the shared marker table and "status 5" is in the
-    # scheduler's own; both would have called this transient.
-    assert is_transient_error_message(UPSTREAM_ENVELOPE) is False
-    assert _is_transient_dispatch_error(Exception(UPSTREAM_ENVELOPE)) is False
-
-
-def test_oversized_body_is_not_transient() -> None:
+def test_oversized_body_is_classified_unknown() -> None:
+    # The classifier still reads the envelope as unknown; only it no longer
+    # vetoes a retry, so a 500 is retried on its status.
     assert classify_gateway_error(SIZE_ENVELOPE) == CLASS_UNKNOWN
-    assert retryable_for_status(500, SIZE_ENVELOPE) is False
+    assert retryable_for_status(500, SIZE_ENVELOPE) is True
 
 
 def test_credits_refusal_is_its_own_class() -> None:
@@ -127,8 +119,10 @@ def test_a_repr_serialised_envelope_still_classifies() -> None:
 def test_classification_keys_on_the_code(code: str, expected: str) -> None:
     body = f'{{"code": "{code}", "retryable": true}}'
     assert classify_gateway_error(body) == expected
-    # The provider's own flag never decides: it says retryable for all six.
-    assert retryable_for_status(502, body) == (expected == CLASS_TRANSIENT)
+    # Classification keeps reading the code, but it no longer decides retries:
+    # a 502 is retried on its status whatever the code says. The provider's own
+    # flag is likewise ignored here.
+    assert retryable_for_status(502, body) is True
 
 
 def test_providers_without_an_envelope_keep_the_status_rule() -> None:
@@ -140,16 +134,18 @@ def test_providers_without_an_envelope_keep_the_status_rule() -> None:
     assert is_transient_error_message("status 503: upstream busy") is True
 
 
-def test_persisted_retryable_flag_does_not_outrank_the_envelope() -> None:
-    """The stored flag is what the raising layer believed, not the truth."""
+def test_a_persisted_retryable_flag_is_now_taken_at_face_value() -> None:
+    """The envelope used to veto the stored flag; it no longer does.
+
+    The proxy is fixing its ``retryable`` stamping on its side, so a persisted
+    ``True`` now means what it says even when the message carries an envelope.
+    """
     assert (
         is_transient_task_error(
             {"message": UPSTREAM_ENVELOPE, "retryable": True},
         )
-        is False
+        is True
     )
-    # Without an envelope the flag still speaks, so existing providers keep
-    # the behaviour their executors were written against.
     assert (
         is_transient_task_error(
             {"message": "socket hang up", "retryable": True},
@@ -201,6 +197,8 @@ CONCURRENCY_ENVELOPE = (
 
 
 def test_an_unlisted_code_defers_to_the_passed_through_status() -> None:
+    # An unrecognised code never overrode the status either way; the status is
+    # now the sole authority for every code.
     assert classify_gateway_error(CONCURRENCY_ENVELOPE) == CLASS_TRANSIENT
     assert is_transient_error_message(CONCURRENCY_ENVELOPE) is True
     assert retryable_for_status(429, CONCURRENCY_ENVELOPE) is True
@@ -217,11 +215,11 @@ def test_a_4xx_status_still_walls_an_unlisted_code() -> None:
     )
 
 
-def test_a_measured_wrapper_keeps_walling_even_at_502() -> None:
-    # Both the status and the provider's flag say retry; measured behaviour
-    # says the request can never succeed, so the code still wins.
+def test_a_measured_wrapper_no_longer_walls_at_502() -> None:
+    # The old guardrail let this code veto the 502; with the proxy fixing its
+    # stamping, the status wins and the node is retried instead of walled.
     assert classify_gateway_error(UPSTREAM_ENVELOPE) == CLASS_UNKNOWN
-    assert is_transient_error_message(UPSTREAM_ENVELOPE) is False
+    assert is_transient_error_message(UPSTREAM_ENVELOPE) is True
 
 
 def test_a_severed_stream_is_transient_without_any_envelope() -> None:

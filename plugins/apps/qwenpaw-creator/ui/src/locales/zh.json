@@ -183,6 +183,11 @@
     "creditsExhausted": "Credits 不足",
     "creditsExhaustedHint": "模型 Credits 已用尽，所有项目的模型调用都会被服务端拒绝。请在平台「模型调用」页用贡献值兑换，再回到出错的那个项目继续。",
     "creditsDismiss": "暂时隐藏 Credits 提醒",
+    "creditsRemaining": "剩余可用",
+    "creditsConsumed": "已消耗",
+    "creditsRingTitle": "Credits 用量",
+    "creditsRingAria": "Credits 剩余额度",
+    "creditsRingUnavailable": "暂不可用：未连上平台额度接口",
     "blueprint": "视频脚本"
   },
   "modelConfig": {

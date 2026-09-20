@@ -183,6 +183,11 @@
     "creditsExhausted": "Out of Credits",
     "creditsExhaustedHint": "The model Credits balance is empty, so the provider refuses model calls in every project. Redeem Credits with contribution points on the platform's Model Calls page, then return to the project that failed and continue.",
     "creditsDismiss": "Hide the Credits notice for now",
+    "creditsRemaining": "Available",
+    "creditsConsumed": "Consumed",
+    "creditsRingTitle": "Credits usage",
+    "creditsRingAria": "Remaining Credits",
+    "creditsRingUnavailable": "Unavailable: cannot reach the platform credits endpoint",
     "blueprint": "Video script"
   },
   "modelConfig": {

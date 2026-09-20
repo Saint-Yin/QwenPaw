@@ -33,6 +33,7 @@ import { useRecreateStore } from "@/store/recreateStore";
 import { useRouter, useSearchParams } from "@/routing/navigation";
 import ModelBadges from "@/components/creator/ModelBadges";
 import ModelCreditsNotice from "@/components/creator/ModelCreditsNotice";
+import CreditsRing from "@/components/creator/CreditsRing";
 import ModelConfigModal from "@/components/creator/ModelConfigModal";
 import { SCENARIO_OPTIONS } from "@/components/creator/useProjectLaunch";
 import { creatorStatusLabel } from "@/lib/creatorPresentation";
@@ -532,6 +533,7 @@ export default function HomePage() {
               </button>
             </Tooltip>
             <LanguageToggle className="icon-button shrink-0 text-[11px] font-semibold" />
+            <CreditsRing />
             <ModelCreditsNotice />
             <ModelBadges />
           </div>

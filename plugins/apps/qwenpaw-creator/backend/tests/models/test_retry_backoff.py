@@ -129,12 +129,11 @@ def test_unenveloped_server_errors_are_retryable() -> None:
     assert _is_retryable_response(_Response(502, ""))
 
 
-def test_gateway_code_overrides_a_retryable_looking_status() -> None:
-    # Every retry of an image render is billed, so a code that names the
-    # fault wins over the status the proxy stamped it with.
-    assert not _is_retryable_response(
-        _Response(502, GATEWAY_DETERMINISTIC_502),
-    )
+def test_a_gateway_code_no_longer_overrides_the_status() -> None:
+    # The proxy is fixing its stamping on its side, so a deterministic-looking
+    # code no longer vetoes the status: a 502 retries. A 4xx still does not -
+    # that is the status rule, not the code.
+    assert _is_retryable_response(_Response(502, GATEWAY_DETERMINISTIC_502))
     assert not _is_retryable_response(_Response(403, GATEWAY_CREDITS_403))
 
 
