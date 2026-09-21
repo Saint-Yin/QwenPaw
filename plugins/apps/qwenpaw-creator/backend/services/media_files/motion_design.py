@@ -41,8 +41,16 @@ from services.media_files.keyframe_cache import (
     verified_indexed_path,
 )
 from services.media_files.informal_launch_template import (
+    informal_launch_copy_matches,
+    informal_launch_caption_skill,
+    informal_launch_frame_windows,
+    normalize_informal_launch_html,
     render_informal_launch_caption,
+    requests_informal_launch_preset,
     uses_informal_launch_captions,
+)
+from services.media_files.informal_launch_timing import (
+    align_launch_caption_spans,
 )
 from services.media_files.live_operation import (
     facts_within,
@@ -590,6 +598,7 @@ def _validated_design(
     default_loop: bool = True,
     canvas_size: tuple[int, int] | None = None,
     force_design: bool = False,
+    full_canvas_overlay: bool = False,
 ) -> tuple[MotionGraphic, ElementLocation, str] | str:
     """Return ``(motion, location, concept)`` or a skip reason string.
 
@@ -680,7 +689,11 @@ def _validated_design(
     if not isinstance(html, str) or len(html.strip()) < 32:
         raise ValidationError("design html 缺失或过短")
     if not uses_template and not uses_blueprint:
-        html = _repair_common_html_slips(html)
+        html = (
+            normalize_informal_launch_html(html)
+            if full_canvas_overlay
+            else _repair_common_html_slips(html)
+        )
     html = html.strip()
     if len(html) > 200_000:
         raise ValidationError("design html 超过 200000 字符上限")
@@ -762,6 +775,14 @@ def _validated_design(
             "装饰动效不允许通过 CSS content 生成可见文字或符号；请用 CSS 几何图形表达",
         )
     if required_text is not None:
+        if full_canvas_overlay and not informal_launch_copy_matches(
+            html,
+            required_text,
+        ):
+            raise ValidationError(
+                "非正式发布会字幕只允许给定完整文案，不得漏字、重复或添加 OK 等额外字样；"
+                "花字装饰使用无文字的图形，不能用隐藏文本凑齐文案",
+            )
         wanted = re.sub(r"\s+", "", required_text)
         # Expressive lettering commonly replaces punctuation with layout
         # (a line break instead of a comma, an accent shape instead of
@@ -832,7 +853,11 @@ def _validated_design(
         intensity=intensity,
     )
     location = _validated_location(raw.get("location"))
-    if required_text is not None and canvas_size is not None:
+    if (
+        required_text is not None
+        and canvas_size is not None
+        and not full_canvas_overlay
+    ):
         _validate_caption_location(location, required_text, canvas_size)
     return motion, location, concept
 
@@ -1064,6 +1089,7 @@ async def _design_document(
     forced_theme: str | None = None,
     forced_fields: Mapping[str, Any] | None = None,
     force_design: bool = False,
+    full_canvas_overlay: bool = False,
 ) -> tuple[MotionGraphic, ElementLocation, str] | str:
     """Design one document with bounded retries; returns design or skip reason."""
 
@@ -1097,6 +1123,7 @@ async def _design_document(
                 default_loop=default_loop,
                 canvas_size=canvas_size,
                 force_design=force_design,
+                full_canvas_overlay=full_canvas_overlay,
             )
         except ValidationError as exc:
             last_error = str(exc)
@@ -1138,9 +1165,15 @@ async def _design_document(
             hint = ""
             if last_error and "t=0" in last_error:
                 hint = (
-                    "具体修法：把所有 tl.from/fromTo 的起始透明度改为 "
-                    "autoAlpha:0.25（不要 opacity:0），或在时间线最前面 "
-                    "tl.set(根容器,{autoAlpha:0.3},0)。"
+                    "具体修法：根容器始终保持 opacity:1，至少一组文字从 "
+                    "autoAlpha:0.25 入场并显式动画到1；不要把根容器永久设成0.3，"
+                    "否则子元素达到1后整段依旧灰淡。稳定阅读期中文和英文均应清晰。"
+                    if full_canvas_overlay
+                    else (
+                        "具体修法：把所有 tl.from/fromTo 的起始透明度改为 "
+                        "autoAlpha:0.25（不要 opacity:0），或在时间线最前面 "
+                        "tl.set(根容器,{autoAlpha:0.3},0)。"
+                    )
                 )
             elif last_error and "__hf" in last_error:
                 hint = (
@@ -1181,7 +1214,9 @@ async def _design_document(
                 "请修正后重新只输出一个 JSON 对象。"
             )
             continue
-        if required_text is not None and probe.text_occlusion > 0.18:
+        if required_text is not None and probe.text_occlusion > (
+            0.10 if full_canvas_overlay else 0.18
+        ):
             culprits = "、".join(probe.text_occlusion_culprits[:4])
             last_error = (
                 "字幕文字被卡片内的图标或装饰遮挡"
@@ -1654,8 +1689,8 @@ async def design_motion_overlays(
     executions = ProjectExecutionStore(services.root)
     ffmpeg_path = resolve_ffmpeg() or "ffmpeg"
     canvas_size = _design_canvas_size(project)
-    fixed_launch_captions = uses_informal_launch_captions(timeline)
-    if fixed_launch_captions:
+    launch_captions = uses_informal_launch_captions(timeline)
+    if launch_captions:
         budget = 0
     # Beat-sync (WT-B5): decoration entrances snap to the BGM grid when a
     # music Element with local bytes exists; degradation is declared inside.
@@ -1685,6 +1720,26 @@ async def design_motion_overlays(
         ),
         key=lambda element: (element.span.start_tick, element.element_id),
     )[:_MAX_SEGMENTS]
+    aligned_caption_spans = {}
+    caption_frame_windows: dict[str, list[tuple[str, float, float]]] = {}
+    caption_timing: dict[str, Any] = {}
+    if launch_captions:
+        aligned_caption_spans, caption_timing = await asyncio.to_thread(
+            align_launch_caption_spans,
+            project,
+            timeline,
+            text_overlays,
+            project_root,
+            ffmpeg_path,
+        )
+        text_overlays = [
+            item.model_copy(
+                update={"span": aligned_caption_spans[item.element_id]},
+            )
+            if item.element_id in aligned_caption_spans
+            else item
+            for item in text_overlays
+        ]
     motion_clips = sorted(
         (
             element
@@ -2156,22 +2211,157 @@ async def design_motion_overlays(
         }
         if requested is not None and overlay.element_id not in requested:
             return {**entry, "status": "not_requested"}
-        if fixed_launch_captions:
-            if requested is None and creation.motion is not None:
-                existing_motion = creation.motion
-                if (
-                    existing_motion.format == "html_css"
-                    and existing_motion.template_version == 4
-                    and (existing_motion.html or existing_motion.html_file_id)
-                ):
+        if launch_captions:
+            existing = creation.motion
+            if existing is not None:
+                # The template owns its visual direction, not an enum of
+                # five layouts. Validate the authored design without
+                # replacing its typography, location or choreography.
+                html = existing.html
+                if html is None:
+                    indexed = project.assets.files_by_id[existing.html_file_id]
+                    with AssetFileStore(project_root).open_verified(
+                        indexed,
+                    ) as stream:
+                        html = stream.read().decode("utf-8")
+                normalized = normalize_informal_launch_html(html)
+                location = overlay.location or ElementLocation(
+                    x=0.5,
+                    y=0.5,
+                    width=1,
+                    height=1,
+                )
+                if not informal_launch_copy_matches(normalized, creation.text):
+                    raise ValidationError(
+                        f"非正式发布会字幕 {overlay.element_id} 文案与动效不一致；"
+                        "请修正自定义文档，不会替换为预设",
+                    )
+                probe = await asyncio.to_thread(
+                    probe_motion_document,
+                    normalized,
+                    doc_format=existing.format,
+                    box_width=max(160, round(canvas_size[0] * location.width)),
+                    box_height=max(
+                        90,
+                        round(canvas_size[1] * location.height),
+                    ),
+                    ffmpeg_path=ffmpeg_path,
+                    loop=existing.loop,
+                )
+                if not probe.ok or probe.text_occlusion > 0.10:
+                    raise ValidationError(
+                        f"非正式发布会字幕 {overlay.element_id} 校验失败："
+                        f"{probe.error or '文字被遮挡'}；保留设计，请修正后重试",
+                    )
+                if normalized == html:
                     return {**entry, "status": "already_styled"}
-            motion, location = render_informal_launch_caption(
-                overlay,
-                ticks_per_second=timeline.ticks_per_second,
-                canvas_size=canvas_size,
-                card_index=card_index,
-                card_count=len(text_overlays),
-            )
+                motion = existing.model_copy(
+                    update={"html": normalized, "html_file_id": None},
+                )
+                styled[overlay.element_id] = (motion, location)
+                return {**entry, "status": "styled", "concept": "保留设计并修复转义"}
+            if requests_informal_launch_preset(creation):
+                motion, location = render_informal_launch_caption(
+                    overlay,
+                    ticks_per_second=timeline.ticks_per_second,
+                    canvas_size=canvas_size,
+                    card_index=card_index,
+                    card_count=len(text_overlays),
+                )
+            else:
+                frames = []
+                windows = informal_launch_frame_windows(
+                    project,
+                    timeline,
+                    overlay,
+                )
+                caption_frame_windows[overlay.element_id] = windows
+                for version_id, start, end in windows:
+                    artifact = project.assets.artifact_versions_by_id.get(
+                        version_id,
+                    )
+                    if artifact is not None:
+                        if artifact.stale:
+                            raise ValidationError("非正式发布会字幕不能基于已过期的视频设计")
+                        source = verified_indexed_path(
+                            project_root,
+                            project.assets.files_by_id[artifact.file_id],
+                        )
+                    else:
+                        source = _source_local_path(
+                            project=project,
+                            project_root=project_root,
+                            version_id=version_id,
+                            executions=executions,
+                        )
+                    if source is None:
+                        raise ValidationError("非正式发布会字幕缺少实片字节，无法设计主体避让")
+                    for fraction in (0.12, 0.38, 0.62, 0.88):
+                        frame = await asyncio.to_thread(
+                            materialize_keyframe,
+                            project_root,
+                            source_path=source,
+                            source_identity=version_id,
+                            timestamp_seconds=start + (end - start) * fraction,
+                            width=_KEYFRAME_WIDTH,
+                            ffmpeg_path=ffmpeg_path,
+                        )
+                        frames.append(frame.path)
+                context = {
+                    "canvas": canvas_size,
+                    "durationSeconds": overlay.span.duration_tick
+                    / timeline.ticks_per_second,
+                    "actualTimeRangeSeconds": [
+                        overlay.span.start_tick / timeline.ticks_per_second,
+                        overlay.span.end_tick / timeline.ticks_per_second,
+                    ],
+                    "timingEvidence": caption_timing,
+                    "screenCopy": creation.text,
+                    "designIntent": creation.prompt,
+                    "filmDirection": brief,
+                    "creativeDirection": project.strategy.creative_direction,
+                    "visualStyle": project.visual.style,
+                    "story": timeline.description,
+                    "captions": [
+                        {
+                            "id": item.element_id,
+                            "start": item.span.start_tick
+                            / timeline.ticks_per_second,
+                            "duration": item.span.duration_tick
+                            / timeline.ticks_per_second,
+                            "text": item.creation.text,
+                            "intent": item.creation.prompt,
+                        }
+                        for item in text_overlays
+                    ],
+                }
+                async with semaphore:
+                    design = await _design_document(
+                        system_prompt=informal_launch_caption_skill(),
+                        task_text=json.dumps(context, ensure_ascii=False),
+                        frame_paths=frames,
+                        canvas_size=canvas_size,
+                        required_text=creation.text,
+                        default_loop=False,
+                        full_canvas_overlay=True,
+                        max_edge_contact=0.01,
+                        max_attempts=_TEXT_CARD_DESIGN_ATTEMPTS,
+                        ffmpeg_path=ffmpeg_path,
+                        forced_fields={
+                            "blueprint": "",
+                            "motif": "custom",
+                            "loop": False,
+                            "location": {
+                                "x": 0.5,
+                                "y": 0.5,
+                                "width": 1,
+                                "height": 1,
+                            },
+                        },
+                    )
+                if isinstance(design, str):
+                    raise ValidationError("非正式发布会字幕设计未完成：" + design)
+                motion, location, _concept = design
             styled[overlay.element_id] = (motion, location)
             return {
                 **entry,
@@ -2348,7 +2538,7 @@ async def design_motion_overlays(
                     for card_index, overlay in enumerate(text_overlays)
                 ),
             )
-            if fixed_launch_captions or caption_style == "varied"
+            if launch_captions or caption_style == "varied"
             else [uniform_text_style(overlay) for overlay in text_overlays]
         ),
     )
@@ -2394,10 +2584,49 @@ async def design_motion_overlays(
             "segments": segment_results,
             "generation": snapshot.generation,
             "etag": snapshot.etag,
+            **({"captionTiming": caption_timing} if launch_captions else {}),
         }
 
     def commit_sync() -> ProjectSnapshot:
         current = services.projects.read(project_id)
+        if launch_captions:
+            current_timeline = _target_timeline(current.project, target_ref)
+            if (
+                not uses_informal_launch_captions(current_timeline)
+                or current_timeline.ticks_per_second
+                != timeline.ticks_per_second
+                or _design_canvas_size(current.project) != canvas_size
+            ):
+                raise ValidationError("字幕设计期间模板或画布已变化，请基于最新设置重新设计")
+            # Model calls can outlive an editor change. Only merge designs
+            # whose caption and observed footage still match their inputs;
+            # unrelated edits (for example a project rename) remain valid.
+            for overlay in text_overlays:
+                overlay_id = overlay.element_id
+                if overlay_id not in styled:
+                    continue
+                original = timeline.elements_by_id[overlay_id]
+                latest = current_timeline.elements_by_id.get(overlay_id)
+                if latest is None or any(
+                    getattr(latest, field) != getattr(original, field)
+                    for field in ("creation", "span", "location", "enabled")
+                ):
+                    raise ValidationError("字幕设计期间字幕已被修改，保留最新修改并重新设计")
+                if overlay_id in caption_frame_windows:
+                    try:
+                        windows = informal_launch_frame_windows(
+                            current.project,
+                            current_timeline,
+                            latest.model_copy(update={"span": overlay.span}),
+                        )
+                    except ValidationError as exc:
+                        raise ValidationError(
+                            "字幕设计期间底层视频已变化，请基于新版本重新设计",
+                        ) from exc
+                    if windows != caption_frame_windows[overlay_id]:
+                        raise ValidationError(
+                            "字幕设计期间底层视频已变化，请基于新版本重新设计",
+                        )
         # Motion documents are externalized to content-addressed Project
         # files before the commit references them; project.json keeps only
         # creative facts plus the html_file_id reference.
@@ -2421,6 +2650,16 @@ async def design_motion_overlays(
             else target_ref
         )
         elements = timelines[timeline_key]["elements_by_id"]
+        if aligned_caption_spans:
+            source_slot = current.project.assets.artifact_slots_by_id.get(
+                caption_timing["sourceSlotId"],
+            )
+            if (
+                source_slot is None
+                or source_slot.selected_version_id
+                != caption_timing["sourceVersionId"]
+            ):
+                raise ValidationError("字幕设计期间实片版本已变化，请基于新版本重新设计")
         for item in designed:
             if item.element_id in elements:
                 continue
@@ -2439,6 +2678,10 @@ async def design_motion_overlays(
                 mode="json",
             )
             raw["location"] = location.model_dump(mode="json")
+            if overlay_id in aligned_caption_spans:
+                raw["span"] = aligned_caption_spans[overlay_id].model_dump(
+                    mode="json",
+                )
         for clip_id, motion in clip_styled.items():
             raw = elements.get(clip_id)
             if not isinstance(raw, dict):
@@ -2488,6 +2731,7 @@ async def design_motion_overlays(
         "segments": segment_results,
         "generation": committed.generation,
         "etag": committed.etag,
+        **({"captionTiming": caption_timing} if launch_captions else {}),
     }
 
 

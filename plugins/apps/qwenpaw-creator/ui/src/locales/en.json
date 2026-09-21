@@ -1,14 +1,10 @@
 {
   "productionStage": {
-    "scriptOnlyLaunch": "Write the script first; confirm before generating images or video",
-    "scriptOnly": "Script only. Image and video generation is paused.",
-    "mediaEnabled": "Media production is allowed under your selected execution mode.",
-    "confirmScript": "Confirm script and allow production",
-    "pauseMedia": "Return to script",
+    "confirmScript": "Confirm script and continue",
     "confirmTitle": "Confirm the currently saved script?",
-    "confirmDescription": "Images and videos may be generated after confirmation. Automatic modes continue production; approval modes still request permission for each generation. Script edits pause media production again.",
-    "allowMedia": "Confirm and allow production",
-    "failed": "Could not update the stage. Refresh and try again."
+    "confirmDescription": "Continue generating images and video after confirmation. If you edit the script, you will need to confirm it again.",
+    "allowMedia": "Confirm and continue",
+    "failed": "Could not confirm the script. Refresh and try again."
   },
   "common": {
     "close": "Close",
@@ -242,9 +238,9 @@
     "permissionModeTitle": "Execution Mode: ",
     "permissionModeSaveFailed": "Failed to save permission mode",
     "permissionMode0Label": "Full Confirm",
-    "permissionMode0Desc": "Confirm at each creation checkpoint, authorize high-cost model execution each time.",
+    "permissionMode0Desc": "Review the script before generating images or video; confirm each remaining creation checkpoint and high-cost execution.",
     "permissionMode1Label": "High-cost Only",
-    "permissionMode1Desc": "Skip creation checkpoints, only confirm before high-cost model execution.",
+    "permissionMode1Desc": "Review the script before generating images or video; skip other creation checkpoints and confirm high-cost execution.",
     "permissionMode2Label": "Auto Generate",
     "permissionMode2Desc": "No more prompts for generation; outputs still need review, auto-continue video after storyboard approval.",
     "permissionMode3Label": "YOLO",

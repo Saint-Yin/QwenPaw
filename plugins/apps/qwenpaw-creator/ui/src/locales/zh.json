@@ -1,14 +1,10 @@
 {
   "productionStage": {
-    "scriptOnlyLaunch": "先写剧本，确认后再生成图片／视频",
-    "scriptOnly": "当前仅创作剧本，图片和视频生成已暂停。",
-    "mediaEnabled": "已允许媒体制作，执行仍遵循所选运行模式。",
-    "confirmScript": "确认剧本并允许制作",
-    "pauseMedia": "返回剧本阶段",
+    "confirmScript": "确认剧本并继续",
     "confirmTitle": "确认当前已保存的剧本？",
-    "confirmDescription": "确认后可以生成图片和视频。自动模式会继续制作；需要逐项确认的模式仍会请求生成授权。之后修改剧本会再次暂停媒体制作。",
-    "allowMedia": "确认并允许制作",
-    "failed": "阶段更新失败，请刷新后重试。"
+    "confirmDescription": "确认后继续生成图片和视频；如修改剧本，需要重新确认。",
+    "allowMedia": "确认并继续",
+    "failed": "确认失败，请刷新后重试。"
   },
   "common": {
     "close": "关闭",
@@ -242,9 +238,9 @@
     "permissionModeTitle": "执行确认模式：",
     "permissionModeSaveFailed": "授权模式保存失败",
     "permissionMode0Label": "全程确认",
-    "permissionMode0Desc": "创作检查点逐站确认，高花费模型执行逐次授权。",
+    "permissionMode0Desc": "先写剧本并确认，再生成图片和视频；其余创作检查点及高花费执行仍逐次确认。",
     "permissionMode1Label": "仅高花费确认",
-    "permissionMode1Desc": "跳过创作检查点，仅在高花费模型执行前确认。",
+    "permissionMode1Desc": "先写剧本并确认，再生成图片和视频；跳过其他创作检查点，高花费执行仍需确认。",
     "permissionMode2Label": "自动生成",
     "permissionMode2Desc": "生成不再逐次询问；产物仍需人工审阅，分镜过审后自动继续视频。",
     "permissionMode3Label": "YOLO",

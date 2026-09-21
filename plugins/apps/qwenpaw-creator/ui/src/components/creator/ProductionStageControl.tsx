@@ -20,17 +20,16 @@ export default function ProductionStageControl({
   const patching = useProjectSnapshotStore(
     (state) => state.projectId === projectId && state.patching,
   );
-  if (!project) return null;
-  const scriptOnly = project.settings.production_stage === "script";
+  if (!project || project.settings.production_stage !== "script") return null;
 
-  const update = async (stage: "script" | "media", etag: string) => {
+  const confirmScript = async (etag: string) => {
     setBusy(true);
     try {
       await creatorRequest(
         `/projects/${encodeURIComponent(projectId)}/production-stage`,
         {
           method: "POST",
-          body: jsonBody({ stage, projectEtag: etag }),
+          body: jsonBody({ stage: "media", projectEtag: etag }),
         },
       );
       await useProjectSnapshotStore.getState().pollOnce(projectId);
@@ -44,42 +43,25 @@ export default function ProductionStageControl({
       setBusy(false);
     }
   };
-  const changeStage = () => {
+  const requestConfirmation = () => {
     if (!etag) return;
     const current = etag;
-    if (scriptOnly) {
-      Modal.confirm({
-        title: t("productionStage.confirmTitle"),
-        content: t("productionStage.confirmDescription"),
-        okText: t("productionStage.allowMedia"),
-        cancelText: t("common.cancel"),
-        onOk: () => update("media", current),
-      });
-    } else {
-      void update("script", current).catch(() => undefined);
-    }
+    Modal.confirm({
+      title: t("productionStage.confirmTitle"),
+      content: t("productionStage.confirmDescription"),
+      okText: t("productionStage.allowMedia"),
+      cancelText: t("common.cancel"),
+      onOk: () => confirmScript(current),
+    });
   };
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] px-4 py-2 text-xs">
-      <span>
-        {t(
-          scriptOnly
-            ? "productionStage.scriptOnly"
-            : "productionStage.mediaEnabled",
-        )}
-      </span>
-      <button
-        type="button"
-        disabled={busy || patching || !etag}
-        className="btn-secondary"
-        onClick={changeStage}
-      >
-        {t(
-          scriptOnly
-            ? "productionStage.confirmScript"
-            : "productionStage.pauseMedia",
-        )}
-      </button>
-    </div>
+    <button
+      type="button"
+      disabled={busy || patching || !etag}
+      className="btn-secondary"
+      onClick={requestConfirmation}
+    >
+      {t("productionStage.confirmScript")}
+    </button>
   );
 }

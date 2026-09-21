@@ -271,16 +271,6 @@ export function ProjectComposer({ open, onClose }: ProjectComposerProps) {
             </div>
           )}
 
-          {scenario === "short_drama" && (
-            <label className="flex items-center gap-2 px-3 py-2 text-xs text-[var(--color-text-secondary)]">
-              <input
-                type="checkbox"
-                checked={launch.scriptOnly}
-                onChange={(event) => launch.setScriptOnly(event.target.checked)}
-              />
-              {t("productionStage.scriptOnlyLaunch")}
-            </label>
-          )}
           {hasMissingModels && (
             <button
               type="button"

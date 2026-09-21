@@ -207,10 +207,10 @@ export default function BlueprintPage() {
           </button>
           {/* 下载/导出 + 导出互动包 (design 84:30317) live on the blueprint
               header, not the plan page. */}
+          <ProductionStageControl projectId={id} />
           <ProjectExportActions project={project} />
         </span>
       </header>
-      <ProductionStageControl projectId={id} />
 
       {/* First screen: single projects read as the script document itself
           (design 84:37778); multi-episode / branching keep the structure. */}

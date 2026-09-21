@@ -39,7 +39,7 @@ it("confirms the displayed script snapshot even when polling updates behind the 
     },
   ]);
   render(<ProductionStageControl projectId="p1" />);
-  fireEvent.click(screen.getByRole("button", { name: "确认剧本并允许制作" }));
+  fireEvent.click(screen.getByRole("button", { name: "确认剧本并继续" }));
   expect(calls).toHaveLength(0);
   act(() => useProjectSnapshotStore.setState({ etag: '"newer"' }));
   await act(async () => {
