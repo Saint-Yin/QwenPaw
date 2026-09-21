@@ -271,11 +271,14 @@ def test_no_generated_interface_means_no_export():
 
 
 @pytest.mark.parametrize(
-    "prefix,suffix", [("前言\n```html\n", ""), ("", "\n```\n### 优化建议")]
+    "prefix,suffix",
+    [("前言\n```html\n", ""), ("", "\n```\n### 优化建议")],
 )
 @pytest.mark.parametrize("project_interface", [False, True])
 def test_export_rejects_model_prose_outside_document(
-    prefix, suffix, project_interface
+    prefix,
+    suffix,
+    project_interface,
 ):
     project, payloads = _branching_project()
     motion = (

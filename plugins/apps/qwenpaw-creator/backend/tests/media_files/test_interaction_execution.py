@@ -148,7 +148,9 @@ def _execute(services, key: str = "dag-interaction-1"):
 
 @pytest.mark.parametrize("with_commentary", [False, True])
 def test_interaction_command_writes_motion_back(
-    tmp_path, monkeypatch, with_commentary
+    tmp_path,
+    monkeypatch,
+    with_commentary,
 ):
     services = _services(tmp_path)
     # 模型输出裹了 markdown 代码围栏：必须被剥掉后再校验/写回。
@@ -271,23 +273,28 @@ def test_persistently_bad_output_raises_model_error(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("retryable", [True, False])
 def test_model_failure_preserves_reason_and_retryability(
-    tmp_path, monkeypatch, retryable
+    tmp_path,
+    monkeypatch,
+    retryable,
 ):
     from services.runtime_files.execution_store import ProjectExecutionStore
 
     services = _services(tmp_path)
 
-    async def fail(prompt, **kwargs):
+    async def fail(_prompt, **kwargs):
         assert "max_tokens" not in kwargs
         raise ModelError("模型仅返回了推理内容，没有最终结果", retryable=retryable)
 
     monkeypatch.setattr(
-        interaction_execution.text_model, "chat_completion", fail
+        interaction_execution.text_model,
+        "chat_completion",
+        fail,
     )
     with pytest.raises(ModelError) as failed:
         _execute(services)
     task = ProjectExecutionStore(services.root).get_task(
-        PROJECT_ID, failed.value.creator_task_id
+        PROJECT_ID,
+        failed.value.creator_task_id,
     )
     assert task.error == {"message": str(failed.value), "retryable": retryable}
     assert task.status.value == "FAILED"
@@ -928,7 +935,8 @@ def _presentation_html(color="#f4efdf"):
             'data-bind="project.synopsis">一条意外消息，你会如何选择？</',
         )
         .replace(
-            'data-bind="node.title"></h1>', 'data-bind="node.title">结局</h1>'
+            'data-bind="node.title"></h1>',
+            'data-bind="node.title">结局</h1>',
         )
         .replace(
             "__NODES__",
@@ -965,7 +973,10 @@ def test_project_interface_discards_model_commentary(tmp_path, monkeypatch):
 @pytest.mark.parametrize("project_interface", [False, True])
 @pytest.mark.parametrize("recovers", [False, True])
 def test_incomplete_html_retries_or_persists_failure(
-    tmp_path, monkeypatch, project_interface, recovers
+    tmp_path,
+    monkeypatch,
+    project_interface,
+    recovers,
 ):
     from services.runtime_files.execution_store import ProjectExecutionStore
 
@@ -973,7 +984,8 @@ def test_incomplete_html_retries_or_persists_failure(
     html = _presentation_html() if project_interface else GOOD_HTML
     incomplete = html.removesuffix("</html>")
     calls = _mock_chat(
-        monkeypatch, [incomplete, html if recovers else incomplete]
+        monkeypatch,
+        [incomplete, html if recovers else incomplete],
     )
 
     def execute():
@@ -997,7 +1009,8 @@ def test_incomplete_html_retries_or_persists_failure(
         with pytest.raises(ModelError, match="完整的 HTML 文档") as failed:
             execute()
         task = ProjectExecutionStore(services.root).get_task(
-            PROJECT_ID, failed.value.creator_task_id
+            PROJECT_ID,
+            failed.value.creator_task_id,
         )
         assert task.status.value == "FAILED"
         assert "完整的 HTML 文档" in task.error["message"]
@@ -1506,10 +1519,13 @@ def test_http_manual_regeneration_uses_new_slot_without_changing_prompt(
 
 
 @pytest.mark.parametrize(
-    "bad_copy", ["empty", "wrong_title", "numbered_ending"]
+    "bad_copy",
+    ["empty", "wrong_title", "numbered_ending"],
 )
 def test_page_copy_contract_retries_and_loads_design_skill(
-    tmp_path, monkeypatch, bad_copy
+    tmp_path,
+    monkeypatch,
+    bad_copy,
 ):
     from services.media_files.presentation_authoring import (
         interface_design_skill,
@@ -1530,13 +1546,13 @@ def test_page_copy_contract_retries_and_loads_design_skill(
             target_ref=f"project:{PROJECT_ID}",
             arguments={},
             idempotency_key=f"copy-{bad_copy}",
-        )
+        ),
     )
     assert len(calls) == 2
     assert interface_design_skill() in calls[0]["system"]
     assert (
         services.projects.read(
-            PROJECT_ID
+            PROJECT_ID,
         ).project.interactive_presentation.motion.html
         == good
     )
@@ -1552,7 +1568,9 @@ def test_page_copy_contract_retries_and_loads_design_skill(
     ],
 )
 def test_title_policy_keeps_user_names_and_recognizes_legacy_auto_names(
-    name, source, expected
+    name,
+    source,
+    expected,
 ):
     import json
     from services.media_files.presentation_authoring import (
@@ -1561,30 +1579,36 @@ def test_title_policy_keeps_user_names_and_recognizes_legacy_auto_names(
     )
 
     project = Project.new(
-        project_id="title-policy", name=name, description="制作一个互动故事"
+        project_id="title-policy",
+        name=name,
+        description="制作一个互动故事",
     )
     project.name_source = source
     assert presentation_title_policy(project)["source"] == expected
     prompt = json.loads(
-        presentation_prompt(project, project.interactive_presentation)
+        presentation_prompt(project, project.interactive_presentation),
     )
     assert prompt["title_policy"] == {"source": expected, "title": name}
 
 
 def test_replaying_failed_generation_retains_the_provider_error(
-    tmp_path, monkeypatch
+    tmp_path,
+    monkeypatch,
 ):
     services = _services(tmp_path)
     calls = []
 
-    async def fail(*args, **kwargs):
+    async def fail(*_args, **kwargs):
         calls.append(kwargs)
         raise ModelError(
-            "ReadTimeout: provider did not finish", retryable=True
+            "ReadTimeout: provider did not finish",
+            retryable=True,
         )
 
     monkeypatch.setattr(
-        interaction_execution.text_model, "chat_completion", fail
+        interaction_execution.text_model,
+        "chat_completion",
+        fail,
     )
     for _ in range(2):
         with pytest.raises(ModelError, match="ReadTimeout"):
@@ -1594,7 +1618,9 @@ def test_replaying_failed_generation_retains_the_provider_error(
 
 @pytest.mark.parametrize("failed", [False, True])
 def test_task_finalization_does_not_block_review_coroutines(
-    tmp_path, monkeypatch, failed
+    tmp_path,
+    monkeypatch,
+    failed,
 ):
     import threading
     from services.runtime_files.execution_store import ProjectExecutionStore
@@ -1612,20 +1638,24 @@ def test_task_finalization_does_not_block_review_coroutines(
                 released = threading.Event()
                 loop.call_soon_threadsafe(released.set)
                 assert released.wait(
-                    0.5
+                    0.5,
                 ), "task writer blocked the review loop"
             return original(store, *args, **kwargs)
 
-        async def chat(*args, **kwargs):
+        async def chat(*_args, **_kwargs):
             if failed:
                 raise ModelError("provider timeout", retryable=True)
             return GOOD_HTML
 
         monkeypatch.setattr(
-            ProjectExecutionStore, "append_task_attempt", append
+            ProjectExecutionStore,
+            "append_task_attempt",
+            append,
         )
         monkeypatch.setattr(
-            interaction_execution.text_model, "chat_completion", chat
+            interaction_execution.text_model,
+            "chat_completion",
+            chat,
         )
         call = execute_file_interaction_command(
             services,
@@ -1650,18 +1680,21 @@ def test_task_finalization_does_not_block_review_coroutines(
 
 
 def test_concurrent_identical_generation_admits_only_one_provider_call(
-    tmp_path, monkeypatch
+    tmp_path,
+    monkeypatch,
 ):
     services = _services(tmp_path)
     calls = []
 
-    async def chat(*args, **kwargs):
+    async def chat(*_args, **_kwargs):
         calls.append(1)
         await asyncio.sleep(0.05)
         return GOOD_HTML
 
     monkeypatch.setattr(
-        interaction_execution.text_model, "chat_completion", chat
+        interaction_execution.text_model,
+        "chat_completion",
+        chat,
     )
 
     async def scenario():

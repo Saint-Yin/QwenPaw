@@ -2,11 +2,11 @@
 # pylint: disable=unused-argument,use-implicit-booleaness-not-comparison
 from __future__ import annotations
 
-import pytest
-
 import asyncio
 import os
 from pathlib import Path
+
+import pytest
 
 from services.project_files.json_pointer import hash_json_value
 from services.project_files.models import Project
@@ -427,10 +427,15 @@ def test_snapshot_polling_during_edits_never_returns_busy(app, run_scenario):
 
 @pytest.mark.parametrize("source", ["user", "auto"])
 def test_project_create_persists_title_provenance(
-    app, api_runtime_root, run_scenario, source
+    app,
+    api_runtime_root,
+    run_scenario,
+    source,
 ):
     payload = _create_payload(
-        "title-source-" + source, "项目标题", nameSource=source
+        "title-source-" + source,
+        "项目标题",
+        nameSource=source,
     )
 
     async def scenario(client):
