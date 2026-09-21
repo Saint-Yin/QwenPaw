@@ -16,7 +16,9 @@ from services.media_files import informal_launch_timing
 from services.media_files.informal_launch_template import (
     compile_informal_launch_captions,
     informal_launch_caption_skill,
+    informal_launch_copy_matches,
     informal_launch_frame_windows,
+    informal_launch_screen_copy,
     informal_launch_uses_uploaded_bgm,
     normalize_informal_launch_html,
     render_informal_launch_caption,
@@ -661,6 +663,7 @@ async def test_lettering_uses_template_skill_and_selected_r2v_frames(
     project = launch_with_selected_video()
     timeline = project.timelines.items["timeline:main"]
     timeline.elements_by_id["caption"].creation.prompt = prompt
+    timeline.elements_by_id["caption"].creation.text = "正式登场 / Takes the Stage"
     services = CreatorFileServices.create(tmp_path)
     services.projects.create(project)
     frames = []
@@ -700,6 +703,9 @@ async def test_lettering_uses_template_skill_and_selected_r2v_frames(
     assert arguments["system_prompt"] == informal_launch_caption_skill()
     assert arguments["full_canvas_overlay"] is True
     assert json.loads(arguments["task_text"])["designIntent"] == prompt
+    assert json.loads(arguments["task_text"])["screenCopy"] == (
+        "正式登场\nTakes the Stage"
+    )
     current = services.projects.read(project.project_id).project
     motion = (
         current.timelines.items["timeline:main"]
@@ -919,19 +925,86 @@ def test_template_rejects_unrequested_stamp_copy():
         )
 
 
+@pytest.mark.parametrize(
+    ("text", "visible", "accepted"),
+    [
+        (
+            "布丁 正式登场 / Pudding Has Arrived",
+            "布丁正式登场<br>Pudding Has Arrived",
+            True,
+        ),
+        (
+            "布丁 正式登场 / Pudding Has Arrived",
+            "布丁正式登场 / Pudding Has Arrived",
+            True,
+        ),
+        (
+            "碎花 / 日常 / Floral Bib\n领结 / 晚宴 / Bow Tie",
+            "碎花<br>日常 / Floral Bib<br>领结<br>晚宴<br>Bow Tie",
+            True,
+        ),
+        ("24/7 / AC/DC", "24/7<br>AC/DC", True),
+        ("24/7 / AC/DC", "247<br>ACDC", False),
+        ("原装大眼睛 / Factory Eyes", "原装大眼睛<br>Factory", False),
+        ("原装大眼睛 / Factory Eyes", "原装大眼睛<br>Factory Eyes<div>OK</div>", False),
+        (
+            "原装大眼睛 / Factory Eyes",
+            "原装大眼睛<br>Factory Eyes<div>原装大眼睛</div>",
+            False,
+        ),
+        ("原装大眼睛 / Factory Eyes", "Factory Eyes<br>原装大眼睛", False),
+        ("功能，正常 / Working as Intended", "功能正常<br>Working as Intended", False),
+        ("主题 / Launch", "主题 / / Launch", False),
+    ],
+)
+def test_launch_copy_allows_only_authored_group_separators(
+    text,
+    visible,
+    accepted,
+):
+    document = f"<!doctype html><html><body>{visible}</body></html>"
+    assert informal_launch_copy_matches(document, text) is accepted
+
+
+def test_launch_separator_normalization_preserves_literal_slashes():
+    assert informal_launch_screen_copy("全天 24/7 / AC/DC\n原装 / Original") == (
+        "全天 24/7\nAC/DC\n原装\nOriginal"
+    )
+
+
+def test_launch_multilingual_layout_passes_generation_copy_gate():
+    motion, _, _ = motion_design._validated_design(
+        {
+            "html": CUSTOM_LETTERING,
+            "concept": "中英文分行花字",
+            "location": {"x": 0.5, "y": 0.5, "width": 1, "height": 1},
+        },
+        required_text="正式登场 / Takes the Stage",
+        canvas_size=(1920, 1080),
+        full_canvas_overlay=True,
+    )
+    assert motion.html == CUSTOM_LETTERING
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("externalized", [False, True])
+@pytest.mark.parametrize("separator", ["\n", " / "])
 async def test_custom_lettering_survives_design_and_compose(
     tmp_path,
     monkeypatch,
     externalized,
+    separator,
 ):
     services = CreatorFileServices.create(tmp_path)
     project = apply_video_template_to_project(
         Project.new(project_id="custom-launch", name="自定义花字"),
         get_video_template("informal_launch"),
     )
-    overlay = caption(mode="custom", recipe="not-a-preset")
+    overlay = caption(
+        text=f"正式登场{separator}Takes the Stage",
+        mode="custom",
+        recipe="not-a-preset",
+    )
     overlay.location = ElementLocation(x=0.5, y=0.5, width=1, height=1)
     motion = MotionGraphic(html=CUSTOM_LETTERING, loop=False, fps=30)
     project_root = services.projects.project_root(project.project_id)
@@ -983,6 +1056,10 @@ async def test_custom_lettering_survives_design_and_compose(
         frozen,
     )
     assert materialized["motion"]["html"] == CUSTOM_LETTERING
+    assert informal_launch_copy_matches(
+        materialized["motion"]["html"],
+        materialized["text"],
+    )
     assert materialized["location"] == overlay.location.model_dump(mode="json")
     model.assert_not_called()
 
