@@ -188,7 +188,7 @@ const LLM_PROTOCOL_FALLBACK_BASE_URLS: Record<string, string> = {
   "Aliyun Coding Plan": "https://coding.dashscope.aliyuncs.com/v1",
   // The proxy's API root: /compatible-mode/v1 is not deployed on platform-pre
   // (it answers the frontend shell), while /v1 serves chat and the model list.
-  "AgentScope Platform": "https://platform-pre.agentscope.io/v1",
+  "AgentScope Platform": "https://platform.agentscope.io/v1",
   DeepSeek: "https://api.deepseek.com",
   "OpenAI 协议": "https://api.openai.com/v1",
   "Anthropic Claude": "https://api.anthropic.com",
@@ -201,6 +201,13 @@ const LLM_PROTOCOL_FALLBACK_BASE_URLS: Record<string, string> = {
   "Volcano Engine（火山引擎）": "https://ark.cn-beijing.volces.com/api/v3",
   "小米 MiMo": "https://token-plan-cn.xiaomimimo.com/v1",
   OpenCode: "https://opencode.ai/zen/v1",
+};
+
+// Model list the LLM/VLM section offers for a fallback protocol when the host
+// registry has no record for it. AgentScope Platform's proxy serves the Qwen3.8
+// family; flash leads so it becomes the seeded default.
+const LLM_PROTOCOL_FALLBACK_MODELS: Record<string, string[]> = {
+  "AgentScope Platform": ["qwen3.8-flash", "qwen3.8-max"],
 };
 
 // Presets seed a default endpoint when the user picks a protocol/model;
@@ -242,7 +249,12 @@ export function llmPresetFor(
       };
     }
     const fallback = LLM_PROTOCOL_FALLBACK_BASE_URLS[protocol];
-    return fallback ? { base_url: fallback, models: [] } : null;
+    return fallback
+      ? {
+          base_url: fallback,
+          models: LLM_PROTOCOL_FALLBACK_MODELS[protocol] ?? [],
+        }
+      : null;
   }
   const hostIds = [
     ...provider.models.map((model) => model.id),
@@ -333,7 +345,7 @@ const ASR_PRESETS: Record<string, ProtocolPreset> = {
   // The proxy does not deploy the fun-asr transcription route at all
   // (measured: 404), so only the qwen-audio alias is offered.
   "AgentScope Platform": {
-    base_url: "https://platform-pre.agentscope.io/v1",
+    base_url: "https://platform.agentscope.io/v1",
     models: ["qwen-audio-3.0-asr-flash"],
   },
 };
@@ -373,7 +385,7 @@ const TTS_PRESETS: Record<string, ProtocolPreset> = {
   // have a route here (cosyvoice is websocket-only and is refused at
   // synthesis time with an actionable message rather than a silent failure).
   "AgentScope Platform": {
-    base_url: "https://platform-pre.agentscope.io/v1",
+    base_url: "https://platform.agentscope.io/v1",
     models: [],
   },
 };
@@ -465,7 +477,7 @@ const IMAGE_PRESETS: Record<string, ProtocolPreset> = {
   // (GET /v1/models). The base carries the proxy's API root, which is also
   // where its own /media/uploads reference transport lives.
   "AgentScope Platform": {
-    base_url: "https://platform-pre.agentscope.io/v1",
+    base_url: "https://platform.agentscope.io/v1",
     models: ["qwen-image-3.0"],
   },
 };
@@ -566,7 +578,7 @@ const VIDEO_PRESETS: Record<string, ProtocolPreset> = {
   // is listed (it derives -t2v/-i2v/-r2v at submission); 1.0 is allowlisted
   // only as the exact video-edit id, so an exact name is offered instead.
   "AgentScope Platform": {
-    base_url: "https://platform-pre.agentscope.io/v1",
+    base_url: "https://platform.agentscope.io/v1",
     models: ["wan3.0-video", "happyhorse-1.1", "happyhorse-1.0-video-edit"],
   },
 };
@@ -2095,7 +2107,17 @@ export default function ModelConfigModal({ open, onClose }: Props) {
   ): { value: string; label: string }[] => {
     if (type === "llm" || type === "vlm") {
       const providerId = mergedProviderMap[protocol];
-      if (!providerId) return [];
+      if (!providerId) {
+        // A protocol the host registry does not publish (e.g. AgentScope
+        // Platform) still offers its static preset model list, so the field
+        // becomes a dropdown like every provider-backed section instead of a
+        // bare text box.
+        const preset = llmPresetFor(protocol, undefined, hostProviders);
+        return (preset?.models ?? []).map((model) => ({
+          value: model,
+          label: model,
+        }));
+      }
       const provider = hostProviders.find((p) => p.id === providerId);
       const options = provider
         ? [

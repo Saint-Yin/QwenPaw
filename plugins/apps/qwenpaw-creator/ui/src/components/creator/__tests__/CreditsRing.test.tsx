@@ -147,6 +147,34 @@ describe("creditsStore.load", () => {
     expect(state.consumed).toBe(50);
     expect(state.byModel).toHaveLength(1);
   });
+
+  it("gates a repeat load() once ready but reload() re-reads the balance", async () => {
+    // reload() is the shared primitive behind tab-focus and node-completion
+    // refreshes; it must bypass the mount gate that load() enforces.
+    const { calls } = installMockFetch([
+      {
+        match: CREDENTIALS,
+        response: {
+          ok: true,
+          status: 200,
+          json: {
+            data: {
+              api_key: "k",
+              chat_completions_url: "u",
+              display_available_credits: 100,
+            },
+          },
+        },
+      },
+    ]);
+    await useCreditsStore.getState().load();
+    expect(useCreditsStore.getState().available).toBe(100);
+    const afterFirst = calls.length;
+    await useCreditsStore.getState().load();
+    expect(calls.length).toBe(afterFirst);
+    await useCreditsStore.getState().reload();
+    expect(calls.length).toBeGreaterThan(afterFirst);
+  });
 });
 
 describe("CreditsRing rendering", () => {
