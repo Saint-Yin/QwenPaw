@@ -251,10 +251,20 @@ export default function ModelBadges() {
             type="button"
             data-platform-quick-config
             className="icon-button shrink-0"
+            style={{
+              width: "auto",
+              padding: "0 10px",
+              gap: 6,
+              fontSize: 12,
+              fontWeight: 600,
+            }}
             aria-label={t("modelConfig.panePlatform")}
             onClick={() => setPlatformOpen(true)}
           >
             <CloudServerOutlined style={{ fontSize: 13 }} />
+            <span className="whitespace-nowrap">
+              {t("modelConfig.panePlatform")}
+            </span>
           </button>
         </Tooltip>
       </div>
