@@ -181,8 +181,17 @@ def normalize_informal_launch_html(document: str) -> str:
     )
 
 
+def informal_launch_screen_copy(text: str) -> str:
+    """Express authored, whitespace-delimited bilingual separators as lines.
+
+    A slash inside a word or value (24/7, AC/DC) is literal copy. Only the
+    standalone `` / `` notation used between caption groups is layout.
+    """
+    return re.sub(r"\s+/\s+", "\n", text)
+
+
 def informal_launch_copy_matches(document: str, text: str) -> bool:
-    """Check actual body copy, including per-character expressive lettering."""
+    """Check every body character, allowing authored layout separators."""
     body = re.sub(
         r"<(head|style|script)\b[^>]*>.*?</\1\s*>|<!--.*?-->",
         "",
@@ -190,7 +199,12 @@ def informal_launch_copy_matches(document: str, text: str) -> bool:
         flags=re.IGNORECASE | re.DOTALL,
     )
     visible = unescape(re.sub(r"<[^>]+>", "", body))
-    return re.sub(r"\s+", "", text) == re.sub(r"\s+", "", visible)
+    # Existing documents may show the separator; new designs use separate
+    # lines. Permit either only where the author wrote a standalone slash,
+    # never by stripping all punctuation or accepting a substring match.
+    parts = re.split(r"\s+/\s+", text)
+    pattern = "/?".join(re.escape(re.sub(r"\s+", "", part)) for part in parts)
+    return re.fullmatch(pattern, re.sub(r"\s+", "", visible)) is not None
 
 
 def compile_informal_launch_captions(

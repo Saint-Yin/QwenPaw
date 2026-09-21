@@ -42,6 +42,7 @@ from services.media_files.keyframe_cache import (
 )
 from services.media_files.informal_launch_template import (
     informal_launch_copy_matches,
+    informal_launch_screen_copy,
     informal_launch_caption_skill,
     informal_launch_frame_windows,
     normalize_informal_launch_html,
@@ -773,8 +774,8 @@ def _validated_design(
         raise ValidationError(
             "装饰动效不允许通过 CSS content 生成可见文字或符号；请用 CSS 几何图形表达",
         )
-    if required_text is not None:
-        if full_canvas_overlay and not informal_launch_copy_matches(
+    if required_text is not None and full_canvas_overlay:
+        if not informal_launch_copy_matches(
             html,
             required_text,
         ):
@@ -782,6 +783,7 @@ def _validated_design(
                 "非正式发布会字幕只允许给定完整文案，不得漏字、重复或添加 OK 等额外字样；"
                 "花字装饰使用无文字的图形，不能用隐藏文本凑齐文案",
             )
+    elif required_text is not None:
         wanted = re.sub(r"\s+", "", required_text)
         # Expressive lettering commonly replaces punctuation with layout
         # (a line break instead of a comma, an accent shape instead of
@@ -2311,7 +2313,7 @@ async def design_motion_overlays(
                         overlay.span.end_tick / timeline.ticks_per_second,
                     ],
                     "timingEvidence": caption_timing,
-                    "screenCopy": creation.text,
+                    "screenCopy": informal_launch_screen_copy(creation.text),
                     "designIntent": creation.prompt,
                     "filmDirection": brief,
                     "creativeDirection": project.strategy.creative_direction,
@@ -2324,7 +2326,9 @@ async def design_motion_overlays(
                             / timeline.ticks_per_second,
                             "duration": item.span.duration_tick
                             / timeline.ticks_per_second,
-                            "text": item.creation.text,
+                            "text": informal_launch_screen_copy(
+                                item.creation.text,
+                            ),
                             "intent": item.creation.prompt,
                         }
                         for item in text_overlays

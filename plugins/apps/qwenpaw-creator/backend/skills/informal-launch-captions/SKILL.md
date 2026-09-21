@@ -14,6 +14,8 @@ description: >-
 
 主 Agent 或剪辑导演使用本技能时，在现有 Overlay 的 `creation.text` 写完整中文与对应英文，`creation.prompt` 描述本镜的字体材质、重点词、入场和稳定期效果；使用已有 `design_motion_overlays` 结合实片生成文档。该工具也会自动读取本技能，无须增加委派或把产物重新上传。已有且符合需求的自定义设计继续保留；只有用户希望改样式或文案时才按现有编辑流程修订对应字幕。
 
+中英文及不同标签组优先用换行分隔。历史文案中两侧带空白的 ` / ` 是组间排版分隔符，工具会在 `screenCopy` 中转为换行，不要求在画面上额外绘制斜杠。词语或数值内部的斜杠（例如 `24/7`、`AC/DC`）仍是正文，必须保留。
+
 在字幕设计工具中，输入包含 `screenCopy`、`designIntent`、`actualTimeRangeSeconds`、`durationSeconds`、本片上下文和按时间排序的真实视频帧。此时直接设计当前一组字幕，并按文末契约返回 JSON，不输出计划或调用其他工具。
 
 **每次只设计当前字幕。** `screenCopy` 是本次唯一上屏文案来源；`captions`、`story` 和其他镜头的文案仅供理解全片风格，绝不能一起画进当前文档。保留 `screenCopy` 的全部字词、标点和英文原始大小写，只调整换行与视觉层级；需要全大写外观时用 CSS `text-transform`，不要改写 DOM 里的英文。核对一次 HTML 的全部可见文字，忽略排版空白后应与本次 `screenCopy` 完全相同。
