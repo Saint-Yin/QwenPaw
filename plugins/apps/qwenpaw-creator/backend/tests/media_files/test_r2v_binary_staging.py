@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Video staging must not apply Windows text-mode byte translations."""
 
 import hashlib
@@ -16,15 +17,22 @@ def test_video_staging_preserves_binary_bytes(tmp_path, changed):
     source = tmp_path / "generated.mp4"
     source.write_bytes(content + (b"changed" if changed else b""))
     video = MaterializedVideo(
-        path=source, sha256=hashlib.sha256(content).hexdigest(),
-        size_bytes=len(content), media_type="video/mp4",
-        container="mp4", source_kind="local",
+        path=source,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size_bytes=len(content),
+        media_type="video/mp4",
+        container="mp4",
+        source_kind="local",
     )
     store = AssetFileStore(tmp_path)
     if changed:
         with pytest.raises(StorageIntegrityError, match="scratch changed"):
             _stage_materialized_video(store, video, staging_id="binary-test")
     else:
-        staged = _stage_materialized_video(store, video, staging_id="binary-test")
+        staged = _stage_materialized_video(
+            store,
+            video,
+            staging_id="binary-test",
+        )
         assert staged.sha256 == video.sha256
         assert staged.size_bytes == len(content)

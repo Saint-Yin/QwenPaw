@@ -99,7 +99,7 @@ def production_summary(evidence: dict[str, Any], receipt: str = "") -> str:
         f"{counts.get('ready', 0)} 项待派发，"
         f"{counts.get('failed', 0) + counts.get('stale', 0)} 项需要修正或更新，"
         f"{counts.get('gated', 0)} 项等待前置内容，"
-        f"{counts.get('waiting_review', 0)} 项等待审阅。"
+        f"{counts.get('waiting_review', 0)} 项等待审阅。",
     )
     if evidence["unplannedTimelines"]:
         lines.append(
@@ -110,6 +110,6 @@ def production_summary(evidence: dict[str, Any], receipt: str = "") -> str:
         lines.append(
             "互动包所需产物已齐备，可以发起导出。"
             if bundle["status"] == "done"
-            else "互动包尚未就绪，暂时不能作为完整作品交付。"
+            else "互动包尚未就绪，暂时不能作为完整作品交付。",
         )
     return "\n".join(lines)

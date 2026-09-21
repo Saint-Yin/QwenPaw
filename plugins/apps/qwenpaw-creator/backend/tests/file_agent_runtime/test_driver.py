@@ -3109,10 +3109,11 @@ def test_yolo_resume_carries_quiet_digest_and_respects_fuse(
             [
                 item
                 for item in services.sessions.list_messages(
-                    PROJECT_ID, SESSION_ID
+                    PROJECT_ID,
+                    SESSION_ID,
                 )
                 if item.source == "creator_execution_notice"
-            ]
+            ],
         )
         == 1
     )
@@ -3124,10 +3125,13 @@ def test_yolo_resume_carries_quiet_digest_and_respects_fuse(
 
 
 @pytest.mark.parametrize(
-    "reason", ["no_committed_progress", "media_budget_exhausted"]
+    "reason",
+    ["no_committed_progress", "media_budget_exhausted"],
 )
 def test_yolo_pause_reasons_are_durable_not_new_model_requests(
-    tmp_path, monkeypatch, reason
+    tmp_path,
+    monkeypatch,
+    reason,
 ):
     services, snapshot = _create_project(tmp_path, initial_goal="完成短剧")
     driver = _driver(services, lambda *_args: AgentModelTurn())
@@ -3139,17 +3143,22 @@ def test_yolo_pause_reasons_are_durable_not_new_model_requests(
         error="请修改输入文本",
     )
     monkeypatch.setattr(
-        driver_module, "get_media_review_mode", lambda: "auto_approve"
+        driver_module,
+        "get_media_review_mode",
+        lambda: "auto_approve",
     )
     monkeypatch.setattr(
         driver_module,
         "derive_work_graph",
         lambda *_a, **_kw: WorkGraph(
-            nodes=(node,), generation=snapshot.generation
+            nodes=(node,),
+            generation=snapshot.generation,
         ),
     )
     monkeypatch.setattr(
-        driver.work_scheduler, "wake", lambda _project_id: None
+        driver.work_scheduler,
+        "wake",
+        lambda _project_id: None,
     )
     if reason == "no_committed_progress":
         services.sessions.append_message(
@@ -3167,7 +3176,9 @@ def test_yolo_pause_reasons_are_durable_not_new_model_requests(
             raise driver_module.MediaCallBudgetExhausted("used budget")
 
         monkeypatch.setattr(
-            driver_module, "ensure_media_call_budget", exhausted
+            driver_module,
+            "ensure_media_call_budget",
+            exhausted,
         )
     before = services.sessions.list_messages(PROJECT_ID, SESSION_ID)
     asyncio.run(
@@ -3176,7 +3187,7 @@ def test_yolo_pause_reasons_are_durable_not_new_model_requests(
             session_id=SESSION_ID,
             conversation_id=CONVERSATION_ID,
             run_id="paused-run",
-        )
+        ),
     )
     after = services.sessions.list_messages(PROJECT_ID, SESSION_ID)
     assert [m.message_id for m in before if m.role == "user"] == [
@@ -3192,7 +3203,9 @@ def test_yolo_pause_reasons_are_durable_not_new_model_requests(
     [WorkNodeStatus.READY, WorkNodeStatus.RUNNING, WorkNodeStatus.STALE],
 )
 def test_yolo_does_not_resume_while_scheduler_owns_remaining_work(
-    tmp_path, monkeypatch, status
+    tmp_path,
+    monkeypatch,
+    status,
 ):
     services, snapshot = _create_project(tmp_path, initial_goal="完成短剧")
     driver = _driver(services, lambda *_args: AgentModelTurn())
@@ -3208,13 +3221,16 @@ def test_yolo_does_not_resume_while_scheduler_owns_remaining_work(
         else None,
     )
     monkeypatch.setattr(
-        driver_module, "get_media_review_mode", lambda: "auto_approve"
+        driver_module,
+        "get_media_review_mode",
+        lambda: "auto_approve",
     )
     monkeypatch.setattr(
         driver_module,
         "derive_work_graph",
         lambda *_a, **_kw: WorkGraph(
-            nodes=(node,), generation=snapshot.generation
+            nodes=(node,),
+            generation=snapshot.generation,
         ),
     )
     monkeypatch.setattr(driver.work_scheduler, "enabled", lambda: True)
@@ -3227,7 +3243,7 @@ def test_yolo_does_not_resume_while_scheduler_owns_remaining_work(
             session_id=SESSION_ID,
             conversation_id=CONVERSATION_ID,
             run_id="machine-owned-run",
-        )
+        ),
     )
     assert woke == [PROJECT_ID]
     assert services.sessions.list_messages(PROJECT_ID, SESSION_ID) == before

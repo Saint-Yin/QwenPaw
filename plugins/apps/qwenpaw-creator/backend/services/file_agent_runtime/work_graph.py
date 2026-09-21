@@ -582,6 +582,7 @@ def _dispatch_inputs_changed(
     return identity not in {ledger, dispatch_slot(ledger), legacy_slot}
 
 
+# pylint: disable-next=too-many-return-statements
 def _artifact_is_stale(
     project: Project,
     version_id: str | None,

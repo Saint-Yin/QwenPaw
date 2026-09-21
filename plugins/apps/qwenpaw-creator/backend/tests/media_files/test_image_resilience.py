@@ -1066,7 +1066,8 @@ def test_safety_rejection_blocks_unchanged_inputs_and_accepts_repairs(
 
 
 def test_unchanged_text_only_refusal_is_also_locally_blocked(
-    tmp_path, monkeypatch
+    tmp_path,
+    monkeypatch,
 ):
     services = _safety_services(tmp_path, monkeypatch)
     provider = _CountingProvider(fail_with=_SAFETY_MESSAGE)

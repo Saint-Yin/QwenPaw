@@ -183,7 +183,7 @@ def test_failed_receipt_reaches_agent_and_cannot_be_narrated_as_submitted(
                             "kinds": ["visual"],
                         },
                     ),
-                )
+                ),
             )
         result = json.loads(messages[-1]["content"])
         assert result["status"] == "PARTIAL"
@@ -219,7 +219,8 @@ def test_failed_receipt_reaches_agent_and_cannot_be_narrated_as_submitted(
     deltas = [
         event.payload.get("delta", "")
         for event in services.sessions.list_events(
-            "probe-project", "probe-session"
+            "probe-project",
+            "probe-session",
         )
         if event.event_type == "agent.message_delta"
         and event.payload.get("streamKind") == "text"

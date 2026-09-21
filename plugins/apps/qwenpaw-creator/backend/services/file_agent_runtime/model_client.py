@@ -914,7 +914,9 @@ class AgentScopeAgentChatClient:
                     ):
                         configured.parameters.max_tokens = (
                             await anthropic_output_limit(
-                                model_name, base_url=base_url, api_key=api_key
+                                model_name,
+                                base_url=base_url,
+                                api_key=api_key,
                             )
                         )
                 response = await configured(

@@ -175,7 +175,7 @@ def test_video_selection_patch_accepts_history_and_only_invalidates_compose(
         (root / "assets").mkdir(exist_ok=True)
         for version_id in ("old", "new", "final"):
             (root / f"assets/{version_id}.mp4").write_bytes(
-                version_id.encode()
+                version_id.encode(),
             )
 
     services = CreatorFileServices.create(tmp_path.resolve())

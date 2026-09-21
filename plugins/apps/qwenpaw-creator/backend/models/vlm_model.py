@@ -811,7 +811,9 @@ async def _call_anthropic_vlm(
         "model": model_name,
         "messages": [{"role": "user", "content": anthropic_content}],
         "max_tokens": await anthropic_output_limit(
-            model_name, base_url=base_url, api_key=api_key
+            model_name,
+            base_url=base_url,
+            api_key=api_key,
         ),
     }
     if system_prompt.strip():

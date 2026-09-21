@@ -195,7 +195,7 @@ def _build_script_prompt(
     if timeline.description.strip():
         sections.append(
             "本节点已保存的剧本正文（保留其剧情、人物行动与分支约束，"
-            "根据当前创作依据和修改意见修订，不要忽略已写好的内容）：\n" + timeline.description
+            "根据当前创作依据和修改意见修订，不要忽略已写好的内容）：\n" + timeline.description,
         )
     if intelligence_digest:
         sections.append(intelligence_digest)

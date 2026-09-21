@@ -44,13 +44,20 @@ def _playwright_browser_ready() -> bool:
         if sys.platform == "darwin":
             root = os.path.expanduser("~/Library/Caches/ms-playwright")
         elif sys.platform.startswith("win"):
-            root = os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright")
+            root = os.path.join(
+                os.environ.get("LOCALAPPDATA", ""),
+                "ms-playwright",
+            )
         else:
             root = os.path.expanduser("~/.cache/ms-playwright")
     for name in ("chrome-headless-shell", "chrome", "Chromium", "chromium"):
-        if glob.glob(os.path.join(root, "chromium*", "**", name), recursive=True):
+        if glob.glob(
+            os.path.join(root, "chromium*", "**", name),
+            recursive=True,
+        ):
             return True
     return False
+
 
 _CLIP_HTML = (
     "<!DOCTYPE html><html><head><style>"

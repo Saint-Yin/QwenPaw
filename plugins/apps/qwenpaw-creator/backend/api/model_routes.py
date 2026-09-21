@@ -1676,12 +1676,14 @@ async def _prepare_probe_payload(
 ) -> tuple[str, dict[str, str], dict[str, Any]]:
     url, headers, payload = _probe_payload(body)
     if body.type in {"llm", "vlm"} and model_config.is_anthropic_protocol(
-        body.protocol
+        body.protocol,
     ):
         from models.output_budget import anthropic_output_limit
 
         payload["max_tokens"] = await anthropic_output_limit(
-            body.model_name, base_url=body.base_url, api_key=body.api_key
+            body.model_name,
+            base_url=body.base_url,
+            api_key=body.api_key,
         )
     return url, headers, payload
 
