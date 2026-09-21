@@ -58,7 +58,8 @@ class ProjectCreateRequest(StrictModel):
     client_request_id: str = Field(alias="clientRequestId")
     name: str = Field(min_length=1)
     name_source: Literal["user", "auto"] | None = Field(
-        None, alias="nameSource"
+        None,
+        alias="nameSource",
     )
     description: str = ""
     scenario: Literal["short_drama", "video_edit", "general"] = "general"

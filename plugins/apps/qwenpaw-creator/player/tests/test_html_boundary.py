@@ -25,20 +25,17 @@ def test_rejects_commentary_around_html(presentation, prefix, suffix):
     else:
         html = '<html><body><button data-edge-ref="a">A</button></body></html>'
         validate = lambda value: validate_interaction_html(value, ["a"])
-    assert validate(html) == []
+    assert not validate(html)
     assert "text outside the HTML document is forbidden" in validate(
-        prefix + html + suffix
+        prefix + html + suffix,
     )
-    assert (
-        validate(html.replace("</body>", "<p>正文中的优化建议和 ``` 保留。</p></body>"))
-        == []
+    assert not validate(
+        html.replace("</body>", "<p>正文中的优化建议和 ``` 保留。</p></body>"),
     )
 
 
 def test_legacy_choice_fragment_remains_valid():
-    assert (
-        validate_interaction_html(
-            '<button data-edge-ref="a">选择这条分支</button>', ["a"]
-        )
-        == []
+    assert not validate_interaction_html(
+        '<button data-edge-ref="a">选择这条分支</button>',
+        ["a"],
     )
