@@ -38,6 +38,10 @@ from domain.errors import (
     ValidationError,
     BadRequestError,
 )
+from models.config import (
+    EXECUTION_AUTHORIZATION_REQUIRED,
+    get_execution_authorization_mode,
+)
 from schemas.projects import (
     ExecutionPreauthorizationPolicy,
     ProjectCreateRequest,
@@ -156,9 +160,18 @@ def _settings(request: ProjectCreateRequest) -> ProjectSettings:
         if request.execution_preauthorization is not None
         else None
     )
+    # The launch form follows the persisted permission ladder. Both full
+    # confirmation and cost-only confirmation review the script before any
+    # image/video spending; automatic and YOLO launches can keep going.
+    # Explicit API stages remain available for intentional script-only work.
+    script_first = (
+        request.scenario == "short_drama"
+        and get_execution_authorization_mode()
+        == EXECUTION_AUTHORIZATION_REQUIRED
+    )
     return ProjectSettings(
         production_stage=request.production_stage
-        or ("script" if request.scenario == "short_drama" else "media"),
+        or ("script" if script_first else "media"),
         aspect_ratio=request.aspect_ratio,
         resolution=request.resolution,
         content_type=request.content_type,

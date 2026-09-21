@@ -46,6 +46,108 @@ def env(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "checkpoints,authorization,review,expected_stage",
+    [
+        ("required", "required", "required", "script"),
+        ("skip", "required", "required", "script"),
+        ("skip", "allow_all", "required", "media"),
+        ("skip", "allow_all", "auto_approve", "media"),
+    ],
+    ids=["full-confirmation", "cost-confirmation", "automatic", "yolo"],
+)
+def test_launch_stage_follows_saved_permission_mode(
+    env,
+    monkeypatch,
+    run_scenario,
+    checkpoints,
+    authorization,
+    review,
+    expected_stage,
+):
+    from models import config
+
+    app, services = env
+    settings = {
+        "creation_checkpoints": {"mode": checkpoints},
+        "execution_authorization": {"mode": authorization},
+        "media_review": {"mode": review},
+    }
+    monkeypatch.setattr(config, "_get_user_config", lambda: settings)
+
+    async def scenario(client):
+        payload = {
+            "clientRequestId": "mode-derived-launch",
+            "name": "小猫看雪",
+            "scenario": "short_drama",
+        }
+        response = await client.post("/projects", json=payload)
+        assert response.status_code == 201, response.text
+        project_id = response.json()["projectId"]
+        assert (
+            services.projects.read(
+                project_id,
+            ).project.settings.production_stage
+            == expected_stage
+        )
+        # Later launches read the latest saved mode. Existing projects
+        # retain their stage, including any intentional pause by the user.
+        settings["execution_authorization"]["mode"] = (
+            "allow_all" if authorization == "required" else "required"
+        )
+        changed = await client.post(
+            "/projects",
+            json={
+                **payload,
+                "clientRequestId": "changed-mode-launch",
+                "name": "小猫看雪-切换模式后",
+            },
+        )
+        assert changed.status_code == 201, changed.text
+        changed_project = services.projects.read(
+            changed.json()["projectId"],
+        ).project
+        assert changed_project.settings.production_stage == (
+            "media" if expected_stage == "script" else "script"
+        )
+        assert (
+            services.projects.read(
+                project_id,
+            ).project.settings.production_stage
+            == expected_stage
+        )
+
+    run_scenario(app, scenario)
+
+
+@pytest.mark.parametrize("scenario_name", ["video_edit", "general"])
+def test_confirmation_modes_do_not_add_script_stage_to_other_scenarios(
+    env,
+    monkeypatch,
+    run_scenario,
+    scenario_name,
+):
+    from models import config
+
+    app, services = env
+    monkeypatch.setattr(config, "_get_user_config", lambda: {})
+
+    async def scenario(client):
+        response = await client.post(
+            "/projects",
+            json={
+                "clientRequestId": "non-script-launch",
+                "name": "剪辑素材",
+                "scenario": scenario_name,
+            },
+        )
+        assert response.status_code == 201, response.text
+        project = services.projects.read(response.json()["projectId"]).project
+        assert project.settings.production_stage == "media"
+
+    run_scenario(app, scenario)
+
+
+@pytest.mark.parametrize(
     "checkpoints,authorization,review",
     [
         ("required", "required", "required"),
