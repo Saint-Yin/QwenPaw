@@ -1598,6 +1598,34 @@ def test_interaction_node_gates_on_script_then_becomes_dispatchable() -> None:
     assert node in graph.ready_media_nodes()
 
 
+def test_cover_node_becomes_dispatchable_when_script_is_final() -> None:
+    """Regression: cover must be dispatchable or it strands at 待开始.
+
+    The whole-piece cover shares interaction:project's deps, so once the
+    script is selected it turns READY; it only leaves 待开始 if its kind is
+    in DISPATCHABLE_KINDS and the scheduler actually picks it up.
+    """
+
+    project = _project()
+    _make_branching(project)
+    # cover 依赖全部 timeline 的 script 节点，三条都定稿后才转 READY。
+    for timeline_id in ("timeline:main", "timeline:ep4a", "timeline:ep4b"):
+        _select_slot(
+            project,
+            slot_id=f"script:{timeline_id}",
+            kind="timeline_script",
+            owner_ref=f"timeline:{timeline_id}",
+            version_id=f"art:script-{timeline_id.rsplit(':', 1)[-1]}",
+        )
+
+    graph = derive_work_graph(project)
+    node = graph.by_id["cover:project"]
+    assert node.kind == "cover"
+    assert node.command == "GENERATE_COVER"
+    assert node.status is WorkNodeStatus.READY
+    assert node in graph.ready_media_nodes()
+
+
 def test_interaction_node_done_when_motion_is_drafted() -> None:
     project = _project()
     _make_branching(project)
