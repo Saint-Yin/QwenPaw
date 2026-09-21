@@ -103,7 +103,13 @@ describe("creditsStore.load", () => {
         response: {
           ok: true,
           status: 200,
-          json: { data: { api_key: "k", chat_completions_url: "u", display_available_credits: 60 } },
+          json: {
+            data: {
+              api_key: "k",
+              chat_completions_url: "u",
+              display_available_credits: 60,
+            },
+          },
         },
       },
       { match: USAGE, response: { ok: false, status: 500, json: {} } },
@@ -123,7 +129,13 @@ describe("creditsStore.load", () => {
         response: {
           ok: true,
           status: 200,
-          json: { data: { api_key: "k", chat_completions_url: "u", display_available_credits: 150 } },
+          json: {
+            data: {
+              api_key: "k",
+              chat_completions_url: "u",
+              display_available_credits: 150,
+            },
+          },
         },
       },
       {

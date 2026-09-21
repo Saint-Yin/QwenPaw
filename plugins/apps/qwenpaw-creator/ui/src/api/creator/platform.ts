@@ -127,11 +127,8 @@ export interface CreditsUsage {
 }
 
 function asNumber(value: unknown): number {
-  const parsed =
-    typeof value === "string" ? Number(value) : (value as unknown);
-  return typeof parsed === "number" && Number.isFinite(parsed)
-    ? parsed
-    : 0;
+  const parsed = typeof value === "string" ? Number(value) : (value as unknown);
+  return typeof parsed === "number" && Number.isFinite(parsed) ? parsed : 0;
 }
 
 /**
@@ -175,8 +172,7 @@ export async function fetchCreditsUsage(
       model_type:
         typeof row.model_type === "string" ? row.model_type : undefined,
       settled_credits: asNumber(row.settled_credits),
-      call_count:
-        row.call_count == null ? undefined : asNumber(row.call_count),
+      call_count: row.call_count == null ? undefined : asNumber(row.call_count),
     }));
   return {
     total_settled_credits: asNumber(record.total_settled_credits),

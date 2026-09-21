@@ -61,9 +61,7 @@ describe("interactive bundle upload", () => {
   });
 
   it("refuses an empty bundle before touching the network", async () => {
-    const { calls } = installMockFetch([
-      { match: UPLOAD_ROUTE, response: {} },
-    ]);
+    const { calls } = installMockFetch([{ match: UPLOAD_ROUTE, response: {} }]);
     await expect(
       uploadInteractiveBundle({ bundle: new Blob(), projectId: "p" }),
     ).rejects.toThrow("为空");
