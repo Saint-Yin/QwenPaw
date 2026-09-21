@@ -50,6 +50,13 @@ from domain.errors import (
     ValidationError,
 )
 from models.config import is_self_review_enabled
+from services.media_files.informal_launch_template import (
+    informal_launch_uses_uploaded_bgm,
+    compile_informal_launch_captions,
+    informal_launch_copy_matches,
+    normalize_informal_launch_html,
+    reject_informal_launch_fallback,
+)
 from services.media_files.overlay import (
     PET_OS_VIBES,
     render_interview_summary_overlay,
@@ -273,6 +280,7 @@ class LocalMediaExecutionSpec:
     # BGM ducks itself inside these windows.
     speech_windows: tuple[tuple[float, float], ...] = ()
     color_grade: str = ""
+    replace_native_audio: bool = False
 
 
 def _input_render_element_ids(item: LocalMediaInput) -> frozenset[str]:
@@ -787,7 +795,9 @@ class FfmpegLocalMediaRunner:
             label = f"[mix{index}]"
             filters.append(",".join(chain) + label)
             (music_labels if role == "bgm" else labels).append(label)
-        has_native_audio = self._probe_has_audio(premix)
+        has_native_audio = (
+            not spec.replace_native_audio and self._probe_has_audio(premix)
+        )
         if music_labels and has_native_audio:
             # Read the already composed sound, so edits, retiming and
             # transitions have the same clock as the final picture. This is
@@ -1480,14 +1490,20 @@ class FfmpegLocalMediaRunner:
             motion = overlay.get("motion")
             render_location = overlay.get("location")
             using_safe_motion = False
+            copy_matches = (
+                informal_launch_copy_matches
+                if overlay.get("caption_template") == "informal_launch"
+                else _motion_document_matches_text
+            )
             if (
                 isinstance(motion, Mapping)
                 and str(motion.get("html") or "").strip()
-                and not _motion_document_matches_text(
+                and not copy_matches(
                     str(motion["html"]),
                     str(overlay.get("text") or ""),
                 )
             ):
+                reject_informal_launch_fallback(overlay, "动效文档与当前文案不一致")
                 motion = None
                 styled_error = (
                     f"{overlay['kind']} 动效文档与当前文案不一致，" "已用回退样式渲染最新文案"
@@ -1496,10 +1512,14 @@ class FfmpegLocalMediaRunner:
                 isinstance(motion, Mapping)
                 and str(motion.get("html") or "").strip()
             ):
-                safety_error = caption_layout_error(
-                    render_location,
-                    str(overlay.get("text") or ""),
-                    video_size,
+                safety_error = (
+                    None
+                    if overlay.get("caption_template") == "informal_launch"
+                    else caption_layout_error(
+                        render_location,
+                        str(overlay.get("text") or ""),
+                        video_size,
+                    )
                 )
                 if safety_error is None:
                     location = render_location
@@ -1530,6 +1550,7 @@ class FfmpegLocalMediaRunner:
                     elif probe.text_occlusion > 0.10:
                         safety_error = "字幕文字被卡片内的图标或装饰遮挡"
                 if safety_error is not None:
+                    reject_informal_launch_fallback(overlay, safety_error)
                     render_location = {
                         **DEFAULT_CAPTION_LOCATION,
                         "opacity": 1.0,
@@ -1562,7 +1583,13 @@ class FfmpegLocalMediaRunner:
                     appear_at=overlay["appear_at"],
                     duration=overlay["duration"],
                     location=render_location,
-                    viewport_inset=0.05,
+                    # Template documents passed the actual render probe.
+                    # Legacy safety CSS must not override custom lettering.
+                    viewport_inset=(
+                        0.0
+                        if overlay.get("caption_template") == "informal_launch"
+                        else 0.05
+                    ),
                     doc_format=str(motion.get("format") or "html_css"),
                     # Caption cards may bleed background blocks off their
                     # box on purpose; readability is guarded by the
@@ -1574,6 +1601,10 @@ class FfmpegLocalMediaRunner:
                         (prep.layer, styled_error, overlay, render_location),
                     )
                     continue
+                reject_informal_launch_fallback(
+                    overlay,
+                    prep.error or "动效层生成失败",
+                )
                 if not using_safe_motion:
                     generated_error = prep.error or "未知错误"
                     render_location = {
@@ -1641,6 +1672,11 @@ class FfmpegLocalMediaRunner:
         render_location: Mapping[str, Any] | None,
     ) -> None:
         """Burn one fixed-style caption; failure aborts the composition."""
+
+        reject_informal_launch_fallback(
+            overlay,
+            styled_error or "模板动效文档缺失",
+        )
 
         rendered = segment.with_name(f"{segment.stem}-overlay.mp4")
         if overlay["kind"] == "pet_os":
@@ -1908,6 +1944,8 @@ class FfmpegLocalMediaRunner:
         vibe = str(raw.get("vibe") or "chill").strip().casefold()
         return {
             "kind": kind,
+            "element_id": str(raw.get("element_id") or ""),
+            "caption_template": raw.get("caption_template"),
             "text": text,
             "vibe": vibe if vibe in PET_OS_VIBES else "chill",
             "appear_at": appear_at,
@@ -2377,6 +2415,7 @@ class _ResolvedExecution:
     audio_tracks: tuple[_FrozenAudioTrack, ...] = ()
     speech_windows: tuple[tuple[float, float], ...] = ()
     color_grade: str = ""
+    replace_native_audio: bool = False
 
 
 def _stable_id(prefix: str, project_id: str, key: str) -> str:
@@ -2657,6 +2696,13 @@ def _edit_overlays(
         ),
         key=lambda candidate: (candidate.z_index, candidate.element_id),
     )
+    compiled = compile_informal_launch_captions(
+        timeline,
+        _canvas_size(
+            project.settings.aspect_ratio,
+            project.settings.resolution,
+        ),
+    )
     result: list[Mapping[str, Any]] = []
     for overlay in overlays:
         intersection_start = max(
@@ -2665,8 +2711,17 @@ def _edit_overlays(
         )
         intersection_end = min(element.span.end_tick, overlay.span.end_tick)
         motion = overlay.creation.motion
+        location = overlay.location
+        template_fields: dict[str, str] = {}
+        if overlay.element_id in compiled:
+            motion, location = compiled[overlay.element_id]
+            template_fields["caption_template"] = "informal_launch"
+            # Invalidate only this template's old forced-preset renders.
+            # Generic subtitle projects retain their existing cache keys.
+            template_fields["caption_renderer"] = "authored-v1"
         result.append(
             {
+                **template_fields,
                 # Fixed fallback styling tag: overlay roles derive from
                 # data (non-empty text = caption).  vibe="summary" is the
                 # migrated interview_summary presentation and keeps the
@@ -2683,8 +2738,8 @@ def _edit_overlays(
                 "text": overlay.creation.text,
                 "vibe": overlay.creation.vibe,
                 "location": (
-                    overlay.location.model_dump(mode="json")
-                    if overlay.location is not None
+                    location.model_dump(mode="json")
+                    if location is not None
                     else None
                 ),
                 "motion": (
@@ -3239,6 +3294,10 @@ def _timeline_execution(
         audio_tracks=tuple(audio_tracks),
         speech_windows=speech_windows,
         color_grade=timeline.color_grade,
+        replace_native_audio=informal_launch_uses_uploaded_bgm(
+            project,
+            timeline,
+        ),
     )
 
 
@@ -3362,6 +3421,11 @@ def _resolved_fingerprint(resolved: _ResolvedExecution) -> str:
             # v11: ordinary and safety-fallback captions use borderless
             # typography, including the last-resort PNG renderer.
             "rendererVersion": 11,
+            **(
+                {"informalLaunchAudio": "uploaded-bgm-only-v1"}
+                if resolved.replace_native_audio
+                else {}
+            ),
             "targetRef": resolved.target_ref,
             "inputs": [
                 {
@@ -3550,11 +3614,17 @@ def _materialized_overlay(
     if overlay is None:
         return None
     motion = overlay.get("motion")
-    if not isinstance(motion, Mapping) or motion.get("html"):
+    if not isinstance(motion, Mapping):
         return overlay
+    resolved = _materialized_motion(project, file_store, motion)
+    if overlay.get("caption_template") == "informal_launch":
+        resolved = {
+            **resolved,
+            "html": normalize_informal_launch_html(str(resolved["html"])),
+        }
     return {
         **overlay,
-        "motion": _materialized_motion(project, file_store, motion),
+        "motion": resolved,
     }
 
 
@@ -4284,6 +4354,7 @@ class FileLocalMediaExecutionService:
             audio_tracks=tuple(local_audio_tracks),
             speech_windows=resolved.speech_windows,
             color_grade=resolved.color_grade,
+            replace_native_audio=resolved.replace_native_audio,
         )
         AtomicJsonRecordStore(work_dir / "spec.json").write(
             {
@@ -4292,6 +4363,7 @@ class FileLocalMediaExecutionService:
                 "targetRef": resolved.target_ref,
                 "inputGeneration": base.generation,
                 "inputEtag": base.etag,
+                "replaceNativeAudio": resolved.replace_native_audio,
                 "inputs": [
                     {
                         "versionId": item.version_id,

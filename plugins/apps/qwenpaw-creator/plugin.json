@@ -28,6 +28,7 @@
   },
   "pack_requires": [
     "backend/skills/edu-math-tutorial/SKILL.md",
+    "backend/skills/informal-launch-captions/SKILL.md",
     "backend/skills/professional-media-prompts/SKILL.md",
     "backend/skills/visual-asset-design/SKILL.md"
   ],
