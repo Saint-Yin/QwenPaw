@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
@@ -37,8 +38,11 @@ from services.runtime_files.models import ChangeOrigin, ReviewPolicy
 from .cover_generation import (
     cover_input_fingerprint,
     cover_is_current,
+    cover_reference_version_ids,
     render_cover_bytes,
 )
+
+logger = logging.getLogger(__name__)
 
 _FINGERPRINT_MARKER = "input_fingerprint="
 
@@ -151,7 +155,13 @@ async def execute_file_cover_command(
 
     await asyncio.to_thread(admit)
     try:
-        content = await render_cover_bytes(project)
+        references = await asyncio.to_thread(
+            _resolve_cover_references,
+            services,
+            project_id=project_id,
+            project=project,
+        )
+        content = await render_cover_bytes(project, references=references)
         result = await asyncio.to_thread(
             _publish_cover_image,
             services,
@@ -198,6 +208,43 @@ async def execute_file_cover_command(
             )
         exc.creator_task_id = task_id
         raise
+
+
+def _resolve_cover_references(
+    services: CreatorFileServices,
+    *,
+    project_id: str,
+    project: Any,
+) -> list[tuple[str, str]]:
+    """Turn the first scene + protagonist images into model reference URLs.
+
+    Best-effort: an unready or unreadable reference asset falls back to an
+    empty list so the cover degrades to text-to-image instead of failing the
+    task - the poster is a nicety, not a hard dependency.
+    """
+
+    refs = cover_reference_version_ids(project)
+    if not refs:
+        return []
+    # Imported lazily: image_execution pulls the whole media stack, which the
+    # read-only cover paths must not load.
+    # pylint: disable-next=import-outside-toplevel
+    from services.media_files.image_execution import (
+        _resolve_version_references,
+    )
+
+    try:
+        urls, _, _ = _resolve_version_references(
+            project=project,
+            project_root=services.projects.project_root(project_id),
+            version_ids=[version_id for _, version_id in refs],
+        )
+    except Exception:  # noqa: BLE001 - any resolution miss -> text-only
+        logger.warning("封面参考图解析失败，回退文生图", exc_info=True)
+        return []
+    if len(urls) != len(refs):
+        return []
+    return [(label, url) for (label, _), url in zip(refs, urls)]
 
 
 def _publish_cover_image(

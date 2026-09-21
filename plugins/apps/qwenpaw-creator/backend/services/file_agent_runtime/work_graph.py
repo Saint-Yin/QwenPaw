@@ -76,6 +76,11 @@ DISPATCHABLE_KINDS = frozenset(
         "video",
         "compose",
         "interaction",
+        # The whole-piece cover is a project-level READY node with a
+        # GENERATE_COVER command; without this kind the scheduler's
+        # ready_media_nodes() filter skips it and it strands at 待开始
+        # forever even after every other lane finishes.
+        "cover",
     },
 )
 

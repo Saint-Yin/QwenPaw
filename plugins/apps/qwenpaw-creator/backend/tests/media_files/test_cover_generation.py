@@ -13,6 +13,7 @@ from services.media_files.cover_generation import (
     build_cover_prompt,
     cover_input_fingerprint,
     cover_is_current,
+    cover_reference_version_ids,
     poster_frame_from_video,
     render_cover_bytes,
 )
@@ -51,6 +52,47 @@ def test_prompt_names_the_project_and_landscape_intent() -> None:
     prompt = build_cover_prompt(_project())
     assert "深夜末班地铁" in prompt
     assert "16:9" in prompt or "横" in prompt
+
+
+def test_reference_labels_shape_the_poster_prompt() -> None:
+    prompt = build_cover_prompt(
+        _project(),
+        reference_labels=["关键场景", "主角"],
+    )
+    assert "图一是关键场景" in prompt and "图二是主角" in prompt
+    # 无参考图时不出现图一/图二措辞（纯文生图）。
+    assert "图一" not in build_cover_prompt(_project())
+
+
+def test_reference_version_ids_pick_first_scene_and_character() -> None:
+    def entity(entity_id, kind, version_id):
+        return SimpleNamespace(
+            entity_id=entity_id,
+            kind=kind,
+            canonical_variant_id=None,
+            selected_artifact_version_id=version_id,
+            variants=SimpleNamespace(items={}, order=[]),
+        )
+
+    project = _project(
+        visual=SimpleNamespace(
+            style="写实冷调",
+            visual_bible="金属与荧光灯",
+            entities=SimpleNamespace(
+                items={
+                    "char:1": entity("char:1", "character", "art:c1"),
+                    "char:2": entity("char:2", "character", "art:c2"),
+                    "scene:1": entity("scene:1", "scene", "art:s1"),
+                },
+                order=["char:1", "scene:1", "char:2"],
+            ),
+        ),
+    )
+    # 场景在前（图一），主角按声明顺序取第一个（图二）。
+    assert cover_reference_version_ids(project) == [
+        ("关键场景", "art:s1"),
+        ("主角", "art:c1"),
+    ]
 
 
 def test_cover_is_current_requires_matching_fingerprint() -> None:

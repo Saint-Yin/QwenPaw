@@ -47,7 +47,7 @@ def _run(services, key="dag-cover-1"):
 def _stub_render(monkeypatch, payload=POSTER):
     calls: list[int] = []
 
-    async def fake_render(project):
+    async def fake_render(project, **kwargs):
         calls.append(1)
         return payload
 
@@ -115,7 +115,7 @@ def test_regenerate_forces_fresh_render(tmp_path, monkeypatch):
 def test_render_failure_is_recorded_and_not_persisted(tmp_path, monkeypatch):
     services = _services(tmp_path)
 
-    async def boom(project):
+    async def boom(project, **kwargs):
         raise RuntimeError("provider down")
 
     monkeypatch.setattr(cover_execution, "render_cover_bytes", boom)
