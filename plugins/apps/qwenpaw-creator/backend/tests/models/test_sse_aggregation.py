@@ -345,6 +345,6 @@ def test_sentinel_detection_tolerates_spacing_and_crlf() -> None:
     assert sse_stream_terminated("data:[DONE]\r\n") is True
     assert sse_stream_terminated("data:   [DONE]  \n") is True
     assert sse_stream_terminated('{"choices": []}\n') is False
-    assert sse_stream_terminated("data: {\"x\": 1}\n\n") is False
+    assert sse_stream_terminated('data: {"x": 1}\n\n') is False
     assert sse_stream_terminated("") is False
     assert sse_stream_terminated(None) is False

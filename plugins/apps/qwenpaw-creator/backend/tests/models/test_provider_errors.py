@@ -241,7 +241,7 @@ GATEWAY_TIMEOUT_504 = (
     "Text model 请求失败 [protocol=OpenAI-compatible model=qwen3.8-flash "
     "endpoint=https://platform-pre.agentscope.io/v1/chat/completions] "
     "HTTP 504: 上游响应: <html>\n<head><title>504 Gateway Time-out</title>"
-    "</head>\n<body bgcolor=\"white\">\n<center><h1>504 Gateway Time-out"
+    '</head>\n<body bgcolor="white">\n<center><h1>504 Gateway Time-out'
     "</h1></center>\n<hr><center>nginx</center>\n</body>\n</html>"
 )
 
@@ -280,7 +280,7 @@ def test_a_named_status_does_not_rescue_a_client_error() -> None:
 # What nginx actually writes for a read timeout, verbatim in its wording.
 NGINX_504_PAGE = (
     "<html>\r\n<head><title>504 Gateway Time-out</title></head>\r\n"
-    "<body bgcolor=\"white\">\r\n<center><h1>504 Gateway Time-out</h1>"
+    '<body bgcolor="white">\r\n<center><h1>504 Gateway Time-out</h1>'
     "</center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
 )
 

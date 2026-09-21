@@ -90,8 +90,8 @@ def test_the_stage_walks_back_past_a_generic_newest_error(
 ) -> None:
     # The newest failure is a bare api/CONFLICT that names no step; the image
     # error one line earlier does. The stage reads back the real signal while
-    # the pointer still cites the newest record, which is what actually happened
-    # last.
+    # the pointer still cites the newest record, which is what actually
+    # happened last.
     monkeypatch.setattr(
         feedback_routes,
         "read_trace_records",

@@ -24,7 +24,7 @@ from models.retry_timing import (
 
 NGINX_503 = (
     "<html>\r\n<head><title>503 Service Temporarily Unavailable</title>"
-    "</head>\r\n<body bgcolor=\"white\">\r\n<center><h1>503 Service "
+    '</head>\r\n<body bgcolor="white">\r\n<center><h1>503 Service '
     "Temporarily Unavailable</h1></center>\r\n<hr><center>nginx</center> "
     "</body>\r\n</html>"
 )
@@ -147,8 +147,12 @@ def test_client_errors_and_successes_are_never_retried() -> None:
 
 
 def test_rate_limit_signal_recognises_both_wordings() -> None:
-    assert is_rate_limit_text("Image generation failed: rate limited after all retries")
-    assert is_rate_limit_text("Image generation failed with status 429: slow down")
+    assert is_rate_limit_text(
+        "Image generation failed: rate limited after all retries",
+    )
+    assert is_rate_limit_text(
+        "Image generation failed with status 429: slow down",
+    )
     assert is_rate_limit_text("Video submit hit a rate limit")
     assert not is_rate_limit_text(NGINX_503)
     assert not is_rate_limit_text(GATEWAY_CREDITS_403)

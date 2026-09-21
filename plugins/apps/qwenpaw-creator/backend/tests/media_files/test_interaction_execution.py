@@ -510,8 +510,7 @@ def test_failed_task_parks_scheduler_without_more_model_calls(
         interaction_tasks = [
             task
             for task in scheduler.executions.list_tasks(PROJECT_ID)
-            if getattr(task.kind, "value", task.kind)
-            == "interaction_draft"
+            if getattr(task.kind, "value", task.kind) == "interaction_draft"
         ]
         assert len(interaction_tasks) == 2
 

@@ -263,7 +263,7 @@ def test_bundle_zip_contains_player_manifest_and_segments() -> None:
 def test_bundle_ships_stored_cover_and_skips_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import services.media_files.cover_generation as cover_generation
+    from services.media_files import cover_generation
 
     project, payloads = _branching_project()
     _draft_presentation(project)
@@ -299,7 +299,7 @@ def test_bundle_ships_stored_cover_and_skips_fallback(
 def test_bundle_falls_back_to_entry_frame_without_generated_cover(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import services.media_files.cover_generation as cover_generation
+    from services.media_files import cover_generation
 
     project, payloads = _branching_project()
     _draft_presentation(project)
@@ -331,7 +331,7 @@ def test_bundle_falls_back_to_entry_frame_without_generated_cover(
 def test_bundle_omits_cover_when_no_poster_and_no_frame(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import services.media_files.cover_generation as cover_generation
+    from services.media_files import cover_generation
 
     project, payloads = _branching_project()
     _draft_presentation(project)

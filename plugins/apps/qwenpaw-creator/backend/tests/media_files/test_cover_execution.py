@@ -47,7 +47,7 @@ def _run(services, key="dag-cover-1"):
 def _stub_render(monkeypatch, payload=POSTER):
     calls: list[int] = []
 
-    async def fake_render(project, **kwargs):
+    async def fake_render(_project, **_kwargs):
         calls.append(1)
         return payload
 

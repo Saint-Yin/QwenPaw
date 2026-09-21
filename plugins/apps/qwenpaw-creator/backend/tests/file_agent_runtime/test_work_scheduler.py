@@ -1303,7 +1303,9 @@ def test_rate_limit_breaker_holds_the_fan_out_and_expires(
     assert not scheduler._rate_limit_breaker_open(PROJECT_ID)
     assert scheduler._trip_rate_limit_breaker(
         PROJECT_ID,
-        Exception("Image generation failed with status 429: too many requests"),
+        Exception(
+            "Image generation failed with status 429: too many requests",
+        ),
     )
 
     # Credits is the better diagnosis when a refusal looks like both: its
