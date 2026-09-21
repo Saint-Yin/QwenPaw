@@ -957,7 +957,7 @@ class WorkGraphScheduler:
         return graph
 
     # Keep all admission and publication gates around one proposal.
-    # pylint: disable-next=too-many-branches
+    # pylint: disable-next=too-many-branches,too-many-return-statements
     async def _prepare_changed_prompts(
         self,
         project_id: str,
