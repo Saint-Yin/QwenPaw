@@ -2224,17 +2224,13 @@ def test_specialist_cancel_emits_terminal_event(
     monkeypatch,
     cancel_phase,
 ) -> None:
-    """A specialist run cancelled mid-flight must emit a terminal
-    ``subagent.failed`` event, both from RUNNING_MODEL and from
-    WAITING_RUNTIME (a long-running tool mid-invoke).
-
-    Regression note for the WAITING_RUNTIME case: the run reaches the
-    cancel-except only after the invoke-finally bridges WAITING_RUNTIME back
-    to RUNNING_MODEL, so the on-disk transition succeeds — but the terminal
-    event was still missing.  Locks in that the event fires on this path too.
-    """
+    """Cancellation must emit a terminal event from either specialist phase."""
     if cancel_phase == "waiting_runtime":
         _authorization_gate_modes(monkeypatch, authorization="allow_all")
+        monkeypatch.setattr(
+            "services.specialist_tools.is_tts_configured",
+            lambda: True,
+        )
 
     async def scenario():
         services, _snapshot = _create_project(
@@ -2243,6 +2239,7 @@ def test_specialist_cancel_emits_terminal_event(
         )
         blocked = asyncio.Event()
         cancel_entered = asyncio.Event()
+        delegated = False
 
         async def _block_until_cancelled() -> None:
             blocked.set()
@@ -2253,8 +2250,12 @@ def test_specialist_cancel_emits_terminal_event(
                 raise
 
         async def callback(messages, tools):
+            nonlocal delegated
             names = {item["function"]["name"] for item in tools}
             if "delegate_to_agent" in names:
+                if delegated:
+                    await asyncio.Event().wait()
+                delegated = True
                 return _delegate_call(
                     "delegate-editing",
                     role="ai_editing_director",
@@ -2262,14 +2263,12 @@ def test_specialist_cancel_emits_terminal_event(
                     task="角色声音设计",
                 )
             if cancel_phase == "waiting_runtime":
-                # Specialist turn: park the run in a long-running tool.
                 return _media_call(
                     "gen-1",
                     name="tts_generation",
                     target_ref="asset:hero",
                     arguments={"text": "测试取消中的长任务。"},
                 )
-            # Specialist turn: block forever until the parent is interrupted.
             await _block_until_cancelled()
 
         async def blocking_invoke(**_kwargs):
@@ -2278,15 +2277,37 @@ def test_specialist_cancel_emits_terminal_event(
         driver = _driver(services, callback)
         if cancel_phase == "waiting_runtime":
             driver.specialist_tools.invoke = blocking_invoke  # type: ignore[method-assign]
-        await driver.start()
-        driver.notify(PROJECT_ID)
-        await asyncio.wait_for(blocked.wait(), timeout=2.0)
-        interrupted = await driver.interrupt(PROJECT_ID, reason="test-stop")
-        await driver.wait_until_idle(PROJECT_ID)
-        specialist_runs = driver.executions.list_specialist_runs(PROJECT_ID)
-        events = services.sessions.list_events(PROJECT_ID, SESSION_ID)
-        await driver.stop()
-        return interrupted, specialist_runs, events, cancel_entered
+        try:
+            await driver.start()
+            driver.notify(PROJECT_ID)
+            # Readiness includes durable I/O, not just model/tool latency.
+            await asyncio.wait_for(blocked.wait(), timeout=30.0)
+            runs = driver.executions.list_specialist_runs(PROJECT_ID)
+            assert len(runs) == 1
+            assert runs[0].status.value == cancel_phase.upper()
+            specialist_task = driver._specialist_tasks[PROJECT_ID][
+                runs[0].run_id
+            ].task
+            assert specialist_task is not None
+            interrupted = await driver.interrupt(
+                PROJECT_ID,
+                reason="test-stop",
+            )
+            # Mainline idleness does not join detached specialists.
+            done, _pending = await asyncio.wait(
+                {specialist_task},
+                timeout=30.0,
+            )
+            assert specialist_task in done
+            assert specialist_task.cancelled()
+            await driver.wait_until_idle(PROJECT_ID, timeout_seconds=30.0)
+            specialist_runs = driver.executions.list_specialist_runs(
+                PROJECT_ID,
+            )
+            events = services.sessions.list_events(PROJECT_ID, SESSION_ID)
+            return interrupted, specialist_runs, events, cancel_entered
+        finally:
+            await driver.stop()
 
     interrupted, specialist_runs, events, cancel_entered = asyncio.run(
         scenario(),
