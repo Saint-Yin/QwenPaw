@@ -64,6 +64,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m playwright install chromium
 
+      - name: Install Linux caption renderer
+        if: runner.os == 'Linux'
+        run: |
+          python -m playwright install --with-deps chromium
+          sudo apt-get install --yes fonts-noto-cjk
+
       - name: Run Creator backend tests
         working-directory: plugins/apps/qwenpaw-creator/backend
         run: |

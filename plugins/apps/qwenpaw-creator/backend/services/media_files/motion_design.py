@@ -1720,10 +1720,8 @@ async def design_motion_overlays(
         ),
         key=lambda element: (element.span.start_tick, element.element_id),
     )[:_MAX_SEGMENTS]
-    authored_caption_spans = {
-        item.element_id: item.span for item in text_overlays
-    }
     aligned_caption_spans = {}
+    caption_frame_windows: dict[str, list[tuple[str, float, float]]] = {}
     caption_timing: dict[str, Any] = {}
     if launch_captions:
         aligned_caption_spans, caption_timing = await asyncio.to_thread(
@@ -2272,11 +2270,13 @@ async def design_motion_overlays(
                 )
             else:
                 frames = []
-                for version_id, start, end in informal_launch_frame_windows(
+                windows = informal_launch_frame_windows(
                     project,
                     timeline,
                     overlay,
-                ):
+                )
+                caption_frame_windows[overlay.element_id] = windows
+                for version_id, start, end in windows:
                     artifact = project.assets.artifact_versions_by_id.get(
                         version_id,
                     )
@@ -2589,6 +2589,44 @@ async def design_motion_overlays(
 
     def commit_sync() -> ProjectSnapshot:
         current = services.projects.read(project_id)
+        if launch_captions:
+            current_timeline = _target_timeline(current.project, target_ref)
+            if (
+                not uses_informal_launch_captions(current_timeline)
+                or current_timeline.ticks_per_second
+                != timeline.ticks_per_second
+                or _design_canvas_size(current.project) != canvas_size
+            ):
+                raise ValidationError("字幕设计期间模板或画布已变化，请基于最新设置重新设计")
+            # Model calls can outlive an editor change. Only merge designs
+            # whose caption and observed footage still match their inputs;
+            # unrelated edits (for example a project rename) remain valid.
+            for overlay in text_overlays:
+                overlay_id = overlay.element_id
+                if overlay_id not in styled:
+                    continue
+                original = timeline.elements_by_id[overlay_id]
+                latest = current_timeline.elements_by_id.get(overlay_id)
+                if latest is None or any(
+                    getattr(latest, field) != getattr(original, field)
+                    for field in ("creation", "span", "location", "enabled")
+                ):
+                    raise ValidationError("字幕设计期间字幕已被修改，保留最新修改并重新设计")
+                if overlay_id in caption_frame_windows:
+                    try:
+                        windows = informal_launch_frame_windows(
+                            current.project,
+                            current_timeline,
+                            latest.model_copy(update={"span": overlay.span}),
+                        )
+                    except ValidationError as exc:
+                        raise ValidationError(
+                            "字幕设计期间底层视频已变化，请基于新版本重新设计",
+                        ) from exc
+                    if windows != caption_frame_windows[overlay_id]:
+                        raise ValidationError(
+                            "字幕设计期间底层视频已变化，请基于新版本重新设计",
+                        )
         # Motion documents are externalized to content-addressed Project
         # files before the commit references them; project.json keeps only
         # creative facts plus the html_file_id reference.
@@ -2622,14 +2660,6 @@ async def design_motion_overlays(
                 != caption_timing["sourceVersionId"]
             ):
                 raise ValidationError("字幕设计期间实片版本已变化，请基于新版本重新设计")
-            for overlay_id in aligned_caption_spans:
-                raw = elements.get(overlay_id)
-                if not isinstance(raw, dict) or raw.get(
-                    "span",
-                ) != authored_caption_spans[overlay_id].model_dump(
-                    mode="json",
-                ):
-                    raise ValidationError("字幕设计期间时序已被修改，保留最新修改并重新设计")
         for item in designed:
             if item.element_id in elements:
                 continue

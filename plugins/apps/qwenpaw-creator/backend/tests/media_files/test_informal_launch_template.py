@@ -738,6 +738,96 @@ def test_caption_frames_follow_trimmed_edit_timing_and_selected_version():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change",
+    ["text", "prompt", "motion", "location", "span", "source", "trim", "name"],
+)
+async def test_pending_caption_design_preserves_newer_edits(
+    tmp_path,
+    monkeypatch,
+    change,
+):
+    project = launch_with_selected_video()
+    services = CreatorFileServices.create(tmp_path)
+    services.projects.create(project)
+    monkeypatch.setattr(
+        motion_design,
+        "materialize_keyframe",
+        lambda *_args, **_kwargs: SimpleNamespace(path=tmp_path / "frame.jpg"),
+    )
+    monkeypatch.setattr(
+        motion_design,
+        "verified_indexed_path",
+        lambda *_: tmp_path / "video.mp4",
+    )
+    newer = None
+
+    async def finish_after_edit(**_kwargs):
+        nonlocal newer
+        snapshot = services.projects.read(project.project_id)
+        candidate = snapshot.project.model_dump(mode="json")
+        elements = candidate["timelines"]["items"]["timeline:main"][
+            "elements_by_id"
+        ]
+        overlay = elements["caption"]
+        if change in {"text", "prompt"}:
+            overlay["creation"][change] = "后续人工修改"
+        elif change == "motion":
+            overlay["creation"]["motion"] = MotionGraphic(
+                html=CUSTOM_LETTERING.replace("#663399", "#00aabb"),
+            ).model_dump(mode="json")
+        elif change == "location":
+            overlay["location"]["x"] = 0.6
+        elif change == "span":
+            overlay["span"]["duration_tick"] = 2500
+        elif change == "source":
+            candidate["assets"]["artifact_slots_by_id"]["video-slot"][
+                "selected_version_id"
+            ] = "older-video"
+        elif change == "trim":
+            elements["video"]["render_source"]["source_in_tick"] = 1000
+        else:
+            candidate["name"] = "只修改项目名称"
+        newer = services.commits.commit(
+            base=snapshot,
+            candidate=candidate,
+            origin=ChangeOrigin.RUNTIME_TASK,
+            review_policy=ReviewPolicy.AUTO_FIX,
+            caused_by_request_id="newer-edit",
+        ).snapshot
+        return (
+            MotionGraphic(html=CUSTOM_LETTERING, loop=False),
+            ElementLocation(x=0.5, y=0.5, width=1, height=1),
+            "旧输入的花字设计",
+        )
+
+    monkeypatch.setattr(
+        motion_design,
+        "_design_document",
+        finish_after_edit,
+    )
+    operation = motion_design.design_motion_overlays(
+        services,
+        project_id=project.project_id,
+        target_ref="timeline:main",
+        arguments={},
+        idempotency_key="pending-design",
+    )
+    if change == "name":
+        result = await operation
+        assert result["designedCount"] == 1
+        assert services.projects.read(project.project_id).project.name == (
+            "只修改项目名称"
+        )
+    else:
+        with pytest.raises(ValidationError, match="字幕设计期间"):
+            await operation
+        current = services.projects.read(project.project_id)
+        assert current.generation == newer.generation
+        assert current.project == newer.project
+
+
+@pytest.mark.asyncio
 async def test_missing_footage_does_not_fill_a_preset(
     tmp_path,
 ):
