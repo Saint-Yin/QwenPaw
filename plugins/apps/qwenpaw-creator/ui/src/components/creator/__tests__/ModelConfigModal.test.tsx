@@ -499,7 +499,7 @@ describe("ModelConfigModal model presets", () => {
       expect(
         preset.base_url,
         `${type} preset must use the proxy API root`,
-      ).toBe("https://platform-pre.agentscope.io/v1");
+      ).toBe("https://platform.agentscope.io/v1");
     }
     // Sections measured to work on the proxy; a new one silently dropping
     // its preset would leave the dropdown pointing at Bailian.
@@ -512,8 +512,8 @@ describe("ModelConfigModal model presets", () => {
     // the field holding the URL of whatever provider had been selected
     // before, which sent an sk-as key off to Bailian.
     expect(llmPresetFor("AgentScope Platform", undefined, [])).toEqual({
-      base_url: "https://platform-pre.agentscope.io/v1",
-      models: [],
+      base_url: "https://platform.agentscope.io/v1",
+      models: ["qwen3.8-flash", "qwen3.8-max"],
     });
 
     // A provider the host does publish still wins over the static table,

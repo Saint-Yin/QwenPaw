@@ -70,7 +70,9 @@ function RingDetails({
           {consumed === null ? "—" : formatCredits(consumed)}
         </span>
       </div>
-      {byModel.length > 0 && <div className="my-1 h-px bg-[var(--color-border)]" />}
+      {byModel.length > 0 && (
+        <div className="my-1 h-px bg-[var(--color-border)]" />
+      )}
       {byModel.map((row) => (
         <div
           key={row.model_id}
@@ -95,18 +97,28 @@ function CreditsRingInner() {
   const consumed = useCreditsStore((state) => state.consumed);
   const byModel = useCreditsStore((state) => state.byModel);
   const load = useCreditsStore((state) => state.load);
+  const reload = useCreditsStore((state) => state.reload);
 
   // Load in an effect, never during render: a synchronous store write here
   // would schedule a re-render while React is still rendering this component.
+  // Re-read whenever the tab regains focus — Credits usually move while the
+  // person is in another window, and returning is when they want the number
+  // without a manual reload.
   useEffect(() => {
     void load();
-  }, [load]);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void reload();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [load, reload]);
 
   // Balance unknown (both endpoints failed, or still loading): a neutral grey
   // ring, not a misleading full/empty one. Still hoverable so nothing looks
   // dead, but it carries no numbers.
   const fraction = ringFraction(available, consumed);
-  const color = fraction === null ? "var(--color-border-strong)" : tierColor(fraction);
+  const color =
+    fraction === null ? "var(--color-border-strong)" : tierColor(fraction);
   const dash = fraction === null ? 0 : CIRCUMFERENCE * fraction;
 
   const detail = (

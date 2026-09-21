@@ -38,6 +38,8 @@ export interface CreditsState {
   /** True when the balance itself is unknown, so the ring cannot be drawn. */
   balanceKnown: boolean;
   load: () => Promise<void>;
+  /** Force a re-read even after a successful load (tab focus / task done). */
+  reload: () => Promise<void>;
 }
 
 function toNumber(value: unknown): number | null {
@@ -74,8 +76,7 @@ export const useCreditsStore = create<CreditsState>((set, get) => ({
         credential.status === "fulfilled"
           ? toNumber(credential.value.display_available_credits)
           : null;
-      const usageValue =
-        usage.status === "fulfilled" ? usage.value : null;
+      const usageValue = usage.status === "fulfilled" ? usage.value : null;
       const balanceKnown = available !== null || usageValue !== null;
       set({
         status: balanceKnown ? "ready" : "error",
@@ -89,6 +90,15 @@ export const useCreditsStore = create<CreditsState>((set, get) => ({
       inflight = null;
     });
     return inflight;
+  },
+
+  reload: async () => {
+    // load()'s ready-gate only exists to stop duplicate first-fetches; once the
+    // balance has actually moved we must be able to re-read it. Reuse an
+    // in-flight call rather than firing a parallel request.
+    if (get().status === "loading") return inflight ?? undefined;
+    set({ status: "idle" });
+    return get().load();
   },
 }));
 
