@@ -164,7 +164,10 @@ export default function ModelBadges() {
           aria-label={t("modelBadges.modelConfig")}
           className="flex cursor-pointer items-center rounded-full bg-[rgba(43,27,0,0.04)] px-3 py-1 transition-colors hover:bg-[rgba(43,27,0,0.07)]"
         >
-          <span className="hidden items-center gap-3 xl:flex">
+          {/* Readiness is always shown in the compact summary form; the
+            per-model glyph strip stays in the DOM (its labels are still the
+            accessibility surface) but never expands, at any viewport width. */}
+          <span className="hidden items-center gap-3">
             {BADGE_META.map((meta) => {
               const state = status(meta.type);
               const ready = state === "on";
@@ -215,11 +218,11 @@ export default function ModelBadges() {
               );
             })}
           </span>
-          {/* Narrow viewports collapse the eight glyphs into one readiness
-            summary pill; the per-model statuses stay reachable via title. */}
+          {/* One readiness summary pill at every resolution; the per-model
+            statuses stay reachable via the aggregated title. */}
           <span
             data-model-badges-compact
-            className="flex h-5 items-center gap-2 whitespace-nowrap text-xs font-semibold text-[var(--color-text-secondary)] xl:hidden"
+            className="flex h-5 items-center gap-2 whitespace-nowrap text-xs font-semibold text-[var(--color-text-secondary)]"
             title={compactTitle}
           >
             <span
