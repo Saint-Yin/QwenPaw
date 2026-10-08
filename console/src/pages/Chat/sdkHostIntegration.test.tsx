@@ -12,6 +12,7 @@ import { useSyncExternalStore, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { renderWithProviders } from "@/test/common_setup";
 import ChatPage from "./index";
+import { LongTextPasteInput } from "./LongTextPaste";
 import { chatExtensions } from "@/plugins/registry/chatExtensions";
 
 // ---------------------------------------------------------------------------
@@ -133,6 +134,13 @@ vi.mock(
   }),
 );
 
+vi.mock("../../features/session-settings/sessionModel", () => ({
+  loadSessionModel: (...args: unknown[]) => mockGetActiveModels(...args),
+  readPendingModel: () => null,
+  migratePendingModel: vi.fn(),
+  withPendingModel: (body: unknown) => body,
+}));
+
 vi.mock("@/api/modules/provider", () => ({
   providerApi: {
     listProviders: mockListProviders,
@@ -204,6 +212,8 @@ vi.mock("./sessionApi", () => ({
     getBackendSessionId: vi.fn(() => "backend-session-1"),
     setLastUserMessage: vi.fn(),
     discardLastUserMessage: vi.fn(),
+    setVisibleSession: vi.fn(),
+    getSession: vi.fn(async (id: string) => ({ id, messages: [] })),
     lastActiveChatId: "last-chat-1",
     patchLastUserMessage: vi.fn(),
     getSessionIdentity: vi.fn(() => ({
@@ -241,7 +251,7 @@ vi.mock("./OptionsPanel/defaultConfig", () => ({
       },
     },
     welcome: {},
-    sender: {},
+    sender: { longTextUpload: false },
   })),
 }));
 
@@ -800,7 +810,7 @@ describe("ChatPage coverage", () => {
       initialEntries: ["/chat/test-session"],
     });
     await screen.findByTestId("chat-ui");
-    expect(screen.getByTestId("model-selector")).toBeInTheDocument();
+    expect(screen.queryByTestId("model-selector")).not.toBeInTheDocument();
     expect(screen.getByTestId("action-group")).toBeInTheDocument();
     expect(screen.getByTestId("header-title")).toBeInTheDocument();
   });
@@ -1598,6 +1608,12 @@ describe("ChatPage coverage", () => {
 
   // ── handleBeforeSubmit: SDK query override ─────────────────────────────
   it("returns the prepared query after the SDK captures input data", async () => {
+    const { holdOwnershipLock } = await import("@/stores/messageQueueStore");
+    let acquireOwnership: (() => void) | undefined;
+    vi.mocked(holdOwnershipLock).mockImplementationOnce((_key, onAcquired) => {
+      acquireOwnership = onAcquired;
+      return Promise.resolve();
+    });
     mockBeginLoopModeSubmission.mockImplementation(
       (text: string) => `/goal ${text}`,
     );
@@ -1605,7 +1621,6 @@ describe("ChatPage coverage", () => {
       initialEntries: ["/chat/test-session"],
     });
     await screen.findByTestId("chat-ui");
-    const { holdOwnershipLock } = await import("@/stores/messageQueueStore");
     await waitFor(() =>
       expect(holdOwnershipLock).toHaveBeenCalledWith(
         "test-session",
@@ -1613,6 +1628,10 @@ describe("ChatPage coverage", () => {
         expect.any(AbortSignal),
       ),
     );
+
+    // Rendering the SDK does not imply that this tab owns the send lock.
+    await waitFor(() => expect(acquireOwnership).toBeTypeOf("function"));
+    await act(async () => acquireOwnership!());
 
     const beforeSubmit = capturedOptions?.sender?.beforeSubmit;
     expect(typeof beforeSubmit).toBe("function");
@@ -1645,9 +1664,16 @@ describe("ChatPage coverage", () => {
     expect(submitted.query).toBe("/goal do the task");
     expect(submitted.fileList).toEqual(inputData.fileList);
     expect(submitted.mentions).toEqual(inputData.mentions);
+    expect(mockQueueEnqueue).not.toHaveBeenCalled();
   });
 
   it("leaves the query unchanged for a non-QwenPaw backend", async () => {
+    const { holdOwnershipLock } = await import("@/stores/messageQueueStore");
+    let acquireOwnership: (() => void) | undefined;
+    vi.mocked(holdOwnershipLock).mockImplementationOnce((_key, onAcquired) => {
+      acquireOwnership = onAcquired;
+      return Promise.resolve();
+    });
     mockRequiresQwenPawModel.mockReturnValue(false);
     mockBeginLoopModeSubmission.mockImplementation(
       (text: string) => `/goal ${text}`,
@@ -1656,6 +1682,8 @@ describe("ChatPage coverage", () => {
       initialEntries: ["/chat/test-session"],
     });
     await screen.findByTestId("chat-ui");
+    await waitFor(() => expect(acquireOwnership).toBeTypeOf("function"));
+    await act(async () => acquireOwnership!());
 
     const beforeSubmit = capturedOptions?.sender?.beforeSubmit;
     const result = await beforeSubmit({ query: "do the task" });
@@ -2023,21 +2051,15 @@ describe("ChatPage coverage", () => {
     }
   });
 
-  // ── sender longTextUpload customRequest ────────────────────────────────
-  it("sender longTextUpload customRequest is available", async () => {
+  it("uses the host paste adapter without SDK draft conversion or truncation", async () => {
     renderWithProviders(<ChatPage />, {
       initialEntries: ["/chat/test-session"],
     });
     await screen.findByTestId("chat-ui");
 
-    const longTextUpload = capturedOptions?.sender?.longTextUpload;
-    if (longTextUpload) {
-      expect(typeof longTextUpload.customRequest).toBe("function");
-      expect(typeof longTextUpload.prompt).toBe("function");
-      // Exercise the prompt function
-      const promptText = longTextUpload.prompt();
-      expect(typeof promptText).toBe("string");
-    }
+    expect(capturedOptions?.sender?.longTextUpload).toBe(false);
+    expect(capturedOptions?.sender?.maxLength).toBeUndefined();
+    expect(capturedOptions?.sender?.components?.input).toBe(LongTextPasteInput);
   });
 
   // ── sender placeholder ─────────────────────────────────────────────────
@@ -2262,7 +2284,7 @@ describe("ChatPage coverage", () => {
   });
 
   // ── model-switched event with maxInputLength ───────────────────────────
-  it("model-switched event with maxInputLength patches context", async () => {
+  it("model-switched refreshes capabilities for the session model", async () => {
     renderWithProviders(<ChatPage />, {
       initialEntries: ["/chat/test-session"],
     });
@@ -2277,7 +2299,7 @@ describe("ChatPage coverage", () => {
       );
     });
 
-    // Should trigger both fetchMultimodalCaps and patchContextMaxInputLength
+    // Capability refresh uses the session model, without rewriting history.
     await waitFor(() => {
       expect(mockGetActiveModels).toHaveBeenCalled();
     });
