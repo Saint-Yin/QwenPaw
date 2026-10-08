@@ -23,6 +23,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from domain.errors import ConflictError, StorageIntegrityError, ValidationError
 from models import config as model_config
+from models.minimax_errors import minimax_probe_base_resp_error
 from schemas.models import (
     AsrConfig,
     EmbeddingConfig,
@@ -1702,6 +1703,41 @@ def _openai_model_probe(
     )
 
 
+def _minimax_image_probe(
+    body: ModelConnectionTestRequest,
+    headers: dict[str, str],
+) -> tuple[str, dict[str, str], dict[str, Any]]:
+    """Zero-cost MiniMax image probe.
+
+    MiniMax has no model-retrieve ``GET /models/{id}``; the OpenAI-style
+    fall-through would hit a non-existent path and surface an nginx HTML 404.
+    The task-query endpoint is free, reachable with the same Bearer key on the
+    same host, and answers with a MiniMax JSON envelope instead of raw HTML.
+    """
+    base = body.base_url.rstrip("/")
+    return (
+        f"{base}/v1/query/video_generation",
+        headers,
+        {
+            "_get_probe": True,
+            "task_id": "creator-connection-probe",
+        },
+    )
+
+
+def _minimax_base_resp_error(response: httpx.Response) -> str | None:
+    """Message when a MiniMax 2xx probe body carries a non-zero ``base_resp``.
+
+    The code table and formatting live in :mod:`models.minimax_errors` so the
+    probe and the real image/video generation paths share one definition.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    return minimax_probe_base_resp_error(body)
+
+
 def _gateway_models_probe(
     body: ModelConnectionTestRequest,
     headers: dict[str, str],
@@ -1935,6 +1971,8 @@ def _probe_payload(
             return _token_plan_models_probe(body, headers)
         if "dashscope" in body.protocol.casefold() or "百炼" in body.protocol:
             return _dashscope_policy_probe(body, headers)
+        if "minimax" in body.protocol.casefold() or "海螺" in body.protocol:
+            return _minimax_image_probe(body, headers)
         return _openai_model_probe(body, headers)
     if body.type == "video":
         from models.video_capabilities import video_model_capability
@@ -2085,6 +2123,19 @@ async def test_model_connection(
                     json=payload,
                 )
         elapsed = round((time.monotonic() - start) * 1000)
+        if response.is_success and "minimax" in selected.protocol.casefold():
+            # MiniMax hides auth/balance failures inside an HTTP 200; without
+            # this the connection test green-lights a key the provider rejects.
+            base_resp_error = _minimax_base_resp_error(response)
+            if base_resp_error is not None:
+                return ConnectionTestResponse(
+                    ok=False,
+                    ms=elapsed,
+                    error=(
+                        f"{base_resp_error} "
+                        f"[探测端点: {redact_url(url)}，协议: {selected.protocol}]"
+                    ),
+                )
         if response.is_success:
             return ConnectionTestResponse(
                 ok=True,
@@ -2110,7 +2161,17 @@ async def test_model_connection(
             else:
                 provider_error = str(provider_body)
         except ValueError:
-            provider_error = response.text[:300]
+            # A gateway/nginx error page is HTML, not a provider message; echo
+            # ing it leaks markup into the UI and hides the real cause. Fall
+            # back to the status line only when the body is not JSON.
+            raw = response.text.strip()
+            if raw[:1] == "<" or "<html" in raw[:200].casefold():
+                provider_error = (
+                    f"服务返回了非 JSON 错误页（{response.reason_phrase}），"
+                    "通常是 Base URL 或路径不受该 provider 支持"
+                )
+            else:
+                provider_error = raw[:300]
         hint = upstream_status_hint(response.status_code)
         return ConnectionTestResponse(
             ok=False,
