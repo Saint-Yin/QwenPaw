@@ -115,7 +115,7 @@ router = APIRouter(
     tags=["projects"],
     route_class=_RemovedProjectPutRoute,
 )
-archive_router = APIRouter(
+storage_router = APIRouter(
     prefix="/projects",
     tags=["projects"],
     route_class=CreatorErrorRoute,
@@ -295,7 +295,7 @@ def _existing_copy_receipt(
     return {"projectId": target_project_id}
 
 
-@router.get("")
+@storage_router.get("")
 async def list_projects(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -805,7 +805,7 @@ async def copy_project(
 # pylint: enable=too-many-statements
 
 
-@archive_router.get("/{project_id}/export")
+@storage_router.get("/{project_id}/export")
 async def export_project(
     project_id: str,
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
@@ -992,7 +992,7 @@ async def _run_import(upload) -> str:
         )
 
 
-@archive_router.post("/import")
+@storage_router.post("/import")
 async def import_project(
     request: Request,
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
