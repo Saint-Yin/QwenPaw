@@ -24,6 +24,7 @@ from models.image.gemini_provider import GeminiImageModel
 from models.image.ark_provider import ArkImageModel
 from models.image.bfl_provider import BFLImageModel
 from models.image.ideogram_provider import IdeogramImageModel
+from models.image.minimax_provider import MiniMaxImageModel
 from models import config as model_config
 from utils.logger import setup_logger
 
@@ -37,6 +38,7 @@ __all__ = [
     "ArkImageModel",
     "BFLImageModel",
     "IdeogramImageModel",
+    "MiniMaxImageModel",
     "get_image_backend",
     "get_image_model",
     "generate_image",
@@ -51,6 +53,7 @@ _PROVIDERS: dict[str, type[BaseImageModel]] = {
     "ARK": ArkImageModel,
     "BFL": BFLImageModel,
     "IDEOGRAM": IdeogramImageModel,
+    "MINIMAX": MiniMaxImageModel,
 }
 
 
@@ -83,6 +86,8 @@ def _detect_backend_from_names(model_name: str, base_url: str) -> str | None:
         return "BFL"
     if model_name.startswith("ideogram") or "ideogram.ai" in base_url:
         return "IDEOGRAM"
+    if model_name.startswith("image-01") or "minimax" in base_url:
+        return "MINIMAX"
     if (
         model_name.startswith("qwen-image")
         or "multimodal-generation" in base_url
@@ -177,6 +182,8 @@ def _backend_for_protocol(protocol: str) -> str | None:
         return "BFL"
     if "ideogram" in protocol:
         return "IDEOGRAM"
+    if "minimax" in protocol or "海螺" in protocol:
+        return "MINIMAX"
     if "openai" in protocol:
         return "OPENAI"
     return None
