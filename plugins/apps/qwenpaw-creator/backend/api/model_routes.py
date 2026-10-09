@@ -764,27 +764,22 @@ def _ensure_grounding_model_configured(
 
 
 def _image_backend_for_protocol(protocol: str) -> str:
-    """Map the persisted image protocol label onto a provider switch."""
+    """Map the persisted image protocol label onto a provider switch.
 
-    lowered = protocol.casefold()
-    if (
-        "dashscope" in lowered
-        or "百炼" in protocol
-        or "token plan" in lowered
-        or "tokenplan" in lowered
-    ):
-        return "DASHSCOPE"
-    if "gemini" in lowered:
-        return "GEMINI"
-    if "volcano" in lowered or "火山" in protocol or "ark" in lowered:
-        return "ARK"
-    if "flux" in lowered or "black forest" in lowered or "bfl" in lowered:
-        return "BFL"
-    if "ideogram" in lowered:
-        return "IDEOGRAM"
-    if "openai" in lowered:
-        return "OPENAI"
-    return ""
+    Delegates to :func:`models.image.image_backend_for_protocol`, the
+    same single source the persisted fallback uses, mirroring how
+    ``_video_backend_for_protocol`` defers to ``models.config``. The
+    inline copy kept here is what let MiniMax ship mapped in the
+    connection probe and in the lowest-priority fallback while this --
+    the writer behind the highest-priority input -- still returned
+    nothing, so an ``IMAGE_MODEL`` env var sent a MiniMax key and model
+    to OpenAI's ``/v1/images/generations`` and generation failed even
+    though the connection test had passed.
+    """
+
+    from models.image import image_backend_for_protocol
+
+    return image_backend_for_protocol(protocol) or ""
 
 
 def _video_backend_for_protocol(protocol: str) -> str:

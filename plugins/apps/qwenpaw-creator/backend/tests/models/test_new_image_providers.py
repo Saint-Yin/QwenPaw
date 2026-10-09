@@ -20,8 +20,8 @@ from models.image import (
     GeminiImageModel,
     IdeogramImageModel,
     MiniMaxImageModel,
-    _backend_for_protocol,
     _detect_backend_from_names,
+    image_backend_for_protocol,
 )
 from models.image import ark_provider, bfl_provider, gemini_provider
 from models.image import ideogram_provider
@@ -81,14 +81,15 @@ def _model(cls, name, base_url):
 
 
 def test_backend_detection() -> None:
-    assert _backend_for_protocol("google gemini") == "GEMINI"
-    assert _backend_for_protocol("volcano engine（火山引擎）") == "ARK"
-    assert _backend_for_protocol("black forest labs（flux）") == "BFL"
-    assert _backend_for_protocol("ideogram") == "IDEOGRAM"
-    # The persisted protocol reaches this matcher pre-casefolded (see
-    # get_image_backend); the label is "MiniMax（国内站）".
-    assert _backend_for_protocol("minimax（国内站）") == "MINIMAX"
-    assert _backend_for_protocol("minimax（国际站）") == "MINIMAX"
+    assert image_backend_for_protocol("google gemini") == "GEMINI"
+    assert image_backend_for_protocol("volcano engine（火山引擎）") == "ARK"
+    assert image_backend_for_protocol("black forest labs（flux）") == "BFL"
+    assert image_backend_for_protocol("ideogram") == "IDEOGRAM"
+    # Labels reach the matcher exactly as the UI stores them; it casefolds
+    # internally, so the request-scoped writer and the persisted-config
+    # fallback can both pass one through untouched.
+    assert image_backend_for_protocol("MiniMax（国内站）") == "MINIMAX"
+    assert image_backend_for_protocol("MiniMax（国际站）") == "MINIMAX"
     assert _detect_backend_from_names("image-01", "") == "MINIMAX"
     assert _detect_backend_from_names("", "https://api.minimax.io") == "MINIMAX"
     assert _detect_backend_from_names("", "https://api.minimax.cn") == "MINIMAX"
