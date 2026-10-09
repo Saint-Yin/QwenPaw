@@ -17,9 +17,12 @@ Request shape (verified against the official OpenAPI):
 - ``aspect_ratio`` is an 8-value enum; ``21:9`` only applies to ``image-01``.
   An explicit ``width``/``height`` pair is overridden by ``aspect_ratio`` when
   both are sent, so Creator only ever sends ``aspect_ratio``.
-- ``subject_reference`` carries at most one character image; the official docs
-  demonstrate a network URL, so a local reference is inlined as Base64 the same
-  way the BFL provider handles its frames.
+- ``subject_reference`` carries at most one character image. The endpoint takes
+  either a public URL or a Base64 **data URL**
+  (``data:image/jpeg;base64,...``), so a local reference is inlined through
+  ``reference_media_data_url`` the way the Ark provider does. BFL's bare-base64
+  form does not apply here: MiniMax reads neither a URL nor a media type out of
+  it, so the value is rejected before any image is generated.
 
 A successful body still answers HTTP 200, so ``base_resp.status_code`` (0 means
 success) is the authoritative status and is checked before the image is read.
@@ -33,6 +36,7 @@ import httpx
 from models import config as model_config
 from models.media_transport import (
     read_reference_media,
+    reference_media_data_url,
     validate_reference_image_bytes,
 )
 from models.minimax_errors import minimax_base_resp_error
@@ -51,6 +55,12 @@ logger = setup_logger("model.image.minimax")
 
 DEFAULT_BASE_URL = "https://api.minimax.io"
 DEFAULT_MODEL_NAME = "image-01"
+
+# The documented ceiling for one reference image. The shared data-URL builder
+# only guards Seedance's larger limit, so the provider states its own; base64
+# also inflates the body by a third, which makes the ceiling worth enforcing
+# locally instead of taking a bare parameter error from the endpoint.
+MINIMAX_REFERENCE_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 
 # Creator aspect ratio -> the documented enum. Creator only emits ratios that
 # MiniMax already lists, so this is a pass-through map kept explicit to reject a
@@ -162,10 +172,21 @@ class MiniMaxImageModel(BaseImageModel):
             )
 
     async def _resolve_reference(self, url: str) -> str:
-        """Return a ``subject_reference.image_file`` value MiniMax can read."""
+        """Return a ``subject_reference.image_file`` value MiniMax can read.
+
+        That field accepts a public URL or a Base64 data URL, not bare base64:
+        with no ``data:<mime>;base64,`` prefix the endpoint can treat the value
+        as neither, and the request dies on a parameter error before generating.
+        """
         if url.startswith(("http://", "https://")):
             return url
-        content, _filename = await read_reference_media(url)
+        content, filename = await read_reference_media(url)
+        if len(content) >= MINIMAX_REFERENCE_IMAGE_MAX_BYTES:
+            raise ModelError(
+                "MiniMax reference images must be under 10MB; downscale the "
+                "media or provide a public HTTPS URL",
+                model_name=self.model_name,
+            )
         try:
             validate_reference_image_bytes(content)
         except ValueError as exc:
@@ -174,7 +195,7 @@ class MiniMaxImageModel(BaseImageModel):
                 f"{url[:120]} ({exc})",
                 model_name=self.model_name,
             ) from exc
-        return base64.b64encode(content).decode("ascii")
+        return reference_media_data_url(content, filename)
 
     async def _request(
         self,
