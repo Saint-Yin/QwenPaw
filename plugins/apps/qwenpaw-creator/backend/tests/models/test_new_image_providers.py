@@ -292,9 +292,37 @@ def test_minimax_request_shape(monkeypatch) -> None:
     assert body["aspect_ratio"] == "16:9"
     assert body["response_format"] == "url"
     assert body["n"] == 1
-    # The local reference is inlined as bare base64 under one character subject.
+    # A local reference has to reach the endpoint as a data URL: MiniMax
+    # reads neither a URL nor a media type out of bare base64 and answers a
+    # parameter error before generating anything.
+    encoded = base64.b64encode(_PNG).decode()
     assert body["subject_reference"] == [
-        {"type": "character", "image_file": base64.b64encode(_PNG).decode()},
+        {
+            "type": "character",
+            "image_file": f"data:image/png;base64,{encoded}",
+        },
+    ]
+
+
+def test_minimax_keeps_a_public_reference_as_url(monkeypatch) -> None:
+    # The documented form is a network URL; inlining a file MiniMax can fetch
+    # itself would only inflate the request body.
+    _stub_reference_reading(monkeypatch, minimax_provider)
+    captured: dict = {}
+    model = _model(MiniMaxImageModel, "image-01", "https://api.minimax.io")
+    asyncio.run(
+        model._request(
+            _CapturingClient(captured),
+            "a cat",
+            "1:1",
+            ["https://cdn.example.com/ref.jpg"],
+        ),
+    )
+    assert captured["json"]["subject_reference"] == [
+        {
+            "type": "character",
+            "image_file": "https://cdn.example.com/ref.jpg",
+        },
     ]
 
 
