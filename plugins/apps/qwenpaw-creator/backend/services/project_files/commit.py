@@ -69,7 +69,7 @@ from .json_pointer import (
     value_at,
 )
 from .locator_map import derive_ui_locator
-from .models import Project
+from .models import CURRENT_PROJECT_SCHEMA_VERSION, Project
 from .serialization import project_etag
 from .review_bookkeeping import is_human_review_change
 from .store import ProjectSnapshot, ProjectStore
@@ -105,6 +105,20 @@ class CommitJournalState(StrEnum):
     ABORTED = "ABORTED"
 
 
+# Document representation a journal's ``touched_pointers`` and snapshots were
+# diffed against.  Recovery recomputes both and MUST replay the same
+# representation the committing boundary used, or a legitimate transaction is
+# misread as tampered.  ``SOURCE`` (the default, so journals persisted before
+# this field existed keep recovering) diffs the raw ``base.json`` /
+# ``candidate.json`` / ``latest.json`` verbatim.  ``MIGRATED`` diffs the
+# migrated ``model_dump`` on both sides so system normalization (defaulted
+# fields, timestamp canonicalisation, load-time repairs such as muting an older
+# overlapping narration) never surfaces as a phantom user edit.  New commits
+# stamp ``MIGRATED``.
+DIFF_SEMANTICS_SOURCE = 1
+DIFF_SEMANTICS_MIGRATED = 2
+
+
 class ProjectCommitJournal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -121,6 +135,11 @@ class ProjectCommitJournal(BaseModel):
     final_etag: str | None = None
     temp_path: str
     touched_pointers: list[str]
+    # Representation ``touched_pointers`` was diffed against; see
+    # DIFF_SEMANTICS_*.  Defaults to the legacy source semantics so a journal
+    # written before this field existed still recovers against the exact
+    # documents it recorded.
+    diff_semantics: int = DIFF_SEMANTICS_SOURCE
     created_at: datetime
     updated_at: datetime
     error: str | None = None
@@ -225,6 +244,42 @@ def _now() -> datetime:
 
 def _json(project: Project) -> dict[str, Any]:
     return project.model_dump(mode="json")
+
+
+def _snapshot_document(snapshot: ProjectSnapshot) -> dict[str, Any]:
+    """The persisted recovery ETag anchor for one snapshot.
+
+    ``ProjectStore.read`` hashes the persisted *source* document
+    (:func:`project_document_etag`). Recovery re-hashes the two persisted
+    transaction snapshots against those source ETags: ``base.json`` must
+    equal ``journal.base_etag`` and ``latest.json`` must equal
+    ``journal.publish_base_etag`` (``latest.etag``), so those two files stay
+    the source document verbatim.
+
+    The source is deliberately *not* the diff base. User-edit diffs,
+    protected-pointer checks and the three-way merge run on the migrated
+    ``model_dump`` (``_json``), the same representation the candidate is
+    built from: diffing the raw source against the candidate would report
+    every model-defaulted field, timestamp canonicalisation and generation
+    fill as a user edit and reject legitimate saves of older documents.
+    Recovery recomputes ``touched_pointers`` the same way -- it normalizes
+    ``base.json`` before diffing it against ``candidate.json``.
+
+    Only a source already at ``CURRENT_PROJECT_SCHEMA_VERSION`` is used
+    verbatim; a legacy source below it is not guaranteed to re-hash to its
+    stored ETag once migrated, so those keep the migrated ``model_dump``.
+    Snapshots built in memory (``source_document is None``) also keep the
+    ``model_dump`` -- their model already is the authority ``project_etag``
+    hashed.
+    """
+
+    source = snapshot.source_document
+    if (
+        source is not None
+        and source.get("schema_version") == CURRENT_PROJECT_SCHEMA_VERSION
+    ):
+        return copy.deepcopy(dict(source))
+    return _json(snapshot.project)
 
 
 def _candidate_hash(candidate: Mapping[str, Any]) -> str:
@@ -373,6 +428,11 @@ class ProjectCommitBoundary:
         round_id = _runtime_path_segment(round_id or transaction_id)
         origin_value = ChangeOrigin(origin)
         policy_value = ReviewPolicy(review_policy)
+        base_doc = _snapshot_document(base)
+        # Diffs, protection checks and the three-way merge run on the
+        # migrated model_dump so system normalization never surfaces as a
+        # user edit; base_doc is only the recovery ETag anchor persisted
+        # as base.json below.
         base_data = _json(base.project)
         candidate_data = copy.deepcopy(dict(candidate))
         candidate_etag = _candidate_hash(candidate_data)
@@ -469,6 +529,7 @@ class ProjectCommitBoundary:
                 candidate_etag=candidate_etag,
                 temp_path=f"runtime/temp/project.json.{transaction_id}.tmp",
                 touched_pointers=[item.pointer for item in requested],
+                diff_semantics=DIFF_SEMANTICS_MIGRATED,
                 created_at=timestamp,
                 updated_at=timestamp,
             )
@@ -497,7 +558,7 @@ class ProjectCommitBoundary:
                     ChangeRoundRecord,
                 ).write(round_record)
                 AtomicJsonRecordStore(staged_transaction / "base.json").write(
-                    base_data,
+                    base_doc,
                 )
                 AtomicJsonRecordStore(
                     staged_transaction / "candidate.json",
@@ -603,6 +664,7 @@ class ProjectCommitBoundary:
                     from domain.errors import ConflictError
 
                     raise ConflictError("项目在保存同步结果时已更新，请按最新内容重新生成")
+                latest_doc = _snapshot_document(latest)
                 latest_data = _json(latest.project)
                 if prompt_sync_context_validator is not None:
                     prompt_sync_context_validator(latest_data)
@@ -676,7 +738,7 @@ class ProjectCommitBoundary:
                     AtomicJsonRecordStore(
                         transaction_root / "latest.json",
                     ).write(
-                        latest_data,
+                        latest_doc,
                     )
                     AtomicJsonRecordStore(
                         transaction_root / "final.json",
@@ -1153,7 +1215,11 @@ class ProjectCommitBoundary:
         journal: ProjectCommitJournal,
         advance_accepted_baseline: bool,
     ) -> RuntimeChangeSet:
-        latest_data = _json(latest.project)
+        # Same authoritative source as the publish ETags below: recovery
+        # re-hashes latest.json/final.json against publish_base_etag/final_etag
+        # (both ``latest.etag``, a source hash), so the snapshots must be that
+        # source too -- see _snapshot_document.
+        latest_data = _snapshot_document(latest)
         # Persist the exact response snapshot even when this transaction did
         # not advance Project generation.  An HTTP idempotency retry may occur
         # after unrelated later commits, so consulting the then-current
