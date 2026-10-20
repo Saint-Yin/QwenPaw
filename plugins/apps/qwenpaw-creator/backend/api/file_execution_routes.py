@@ -722,6 +722,7 @@ async def _rebind_workgraph_authorization(
     # Normalize before both the edit-grace exemption and the snapshot CAS.
     project_etag = semantic_etag(project_etag)
     from services.file_agent_runtime.driver import _execution_provider_model
+    from services.file_agent_runtime.work_graph import MEDIA_NODE_KINDS
     from services.file_agent_runtime.work_scheduler import WorkGraphScheduler
     from services.file_agent_runtime.workgraph_execution import (
         ready_request_context,
@@ -757,7 +758,7 @@ async def _rebind_workgraph_authorization(
     node = graph.by_id.get(workgraph["nodeId"])
     if (
         node is None
-        or node.kind not in {"visual", "lineup", "storyboard", "video"}
+        or node.kind not in MEDIA_NODE_KINDS
         or current.target_scope != [node.target_ref]
         or node.node_id in blocked
     ):

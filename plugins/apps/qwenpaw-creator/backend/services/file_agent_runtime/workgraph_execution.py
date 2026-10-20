@@ -17,6 +17,7 @@ from domain.enums import CreatorCommandType, SpecialistRole
 from domain.errors import ReviewPendingError
 from models.config import get_image_model_name, get_video_model_name
 from services.file_agent_runtime.work_graph import (
+    MEDIA_NODE_KINDS,
     WorkNode,
     WorkNodeStatus,
     derive_work_graph,
@@ -31,9 +32,6 @@ from services.project_files.models import ArtifactVersion
 from services.specialist_tools import SpecialistToolSpec
 
 REQUEST_WORKGRAPH_EXECUTION = "request_workgraph_execution"
-MEDIA_NODE_KINDS = frozenset(
-    {"visual", "lineup", "storyboard", "video", "compose", "interaction"},
-)
 
 
 def request_workgraph_tool_manifest() -> dict[str, Any]:

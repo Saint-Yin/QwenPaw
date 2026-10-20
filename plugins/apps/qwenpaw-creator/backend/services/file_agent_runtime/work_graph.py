@@ -84,6 +84,18 @@ DISPATCHABLE_KINDS = frozenset(
     },
 )
 
+# Human-authorizable media kinds: the exact set ``request_workgraph_execution``
+# accepts, the approve/rebind whitelist admits, the script-stage production
+# gate holds back, and the media-review fence guards. Kept as one source so a
+# new media node kind updates every gate at once -- the per-list literals used
+# to drift (approve/rebind omitted compose+interaction, so approving an
+# interaction node failed forever with "授权的 WorkGraph 目标已改变或尚未就绪").
+# It is ``DISPATCHABLE_KINDS`` minus the auto-only ``script``/``cover`` lanes,
+# which are never human-authorized.
+MEDIA_NODE_KINDS = frozenset(
+    {"visual", "lineup", "storyboard", "video", "compose", "interaction"},
+)
+
 
 @dataclass(frozen=True, slots=True)
 class WorkNode:
@@ -731,8 +743,7 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
     def add(node: WorkNode) -> None:
         if (
             project.settings.production_stage == "script"
-            and node.kind
-            in {"visual", "lineup", "storyboard", "video", "compose"}
+            and node.kind in MEDIA_NODE_KINDS
             and node.status is not WorkNodeStatus.RUNNING
         ):
             from services.project_files.production_stage import (
