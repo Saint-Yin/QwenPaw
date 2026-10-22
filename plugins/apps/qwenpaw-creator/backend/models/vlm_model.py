@@ -618,6 +618,8 @@ async def chat_completion(
                 "rejects_media",
                 True,
             )
+        if model_config.is_temperature_unsupported_error(exc.response.text):
+            model_config.learn_temperature_unsupported(model_name)
         elapsed = time.perf_counter() - start_ts
         logger.error(
             "VLM request failed: %s %s elapsed=%.2fs",
@@ -647,6 +649,8 @@ async def chat_completion(
                 "rejects_media",
                 True,
             )
+        if model_config.is_temperature_unsupported_error(str(exc)):
+            model_config.learn_temperature_unsupported(model_name)
         elapsed = time.perf_counter() - start_ts
         request_url = _vlm_url(base_url, protocol, model_name)
         logger.error(
@@ -736,6 +740,8 @@ async def _call_openai_vlm(
         "temperature": temperature,
         "enable_thinking": False,
     }
+    if model_config.chat_temperature(model_name, temperature) is None:
+        body.pop("temperature", None)
     headers: dict = {
         "Content-Type": "application/json",
         **(
