@@ -58,7 +58,8 @@ def script_version_id(project_id: str, timeline_id: str, checksum: str) -> str:
 
     digest = uuid5(
         NAMESPACE_URL,
-        f"qwenpaw-creator:timeline-script:{project_id}:{timeline_id}:{checksum}",
+        "qwenpaw-creator:timeline-script:"
+        f"{project_id}:{timeline_id}:{checksum}",
     ).hex
     return f"artifact-script-{digest}"
 

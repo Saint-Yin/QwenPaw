@@ -765,9 +765,18 @@ def _asset(
     return store, indexed, project / published.relative_uri
 
 
+@pytest.mark.parametrize("disable_pinned_release", [False, True])
 def test_an_input_links_the_asset_instead_of_doubling_it(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    disable_pinned_release: bool,
 ) -> None:
+    if disable_pinned_release:
+        monkeypatch.setattr(
+            task_scratch,
+            "pinned_release_supported",
+            lambda: False,
+        )
     store, indexed, final = _asset(tmp_path, b"artifact-payload" * 8)
     scratch = _scratch(tmp_path, media=("output.mp4",))
     destination = scratch / "inputs" / "000000-artifact.mp4"
@@ -778,9 +787,18 @@ def test_an_input_links_the_asset_instead_of_doubling_it(
     assert destination.stat().st_ino == final.stat().st_ino
     assert final.stat().st_nlink == 2
 
-    release_scratch_media(scratch, reason="terminal")
+    result = release_scratch_media(scratch, reason="terminal")
 
-    assert not destination.exists()
+    if task_scratch.pinned_release_supported():
+        assert result.removed_files == 2
+        assert not destination.exists()
+        assert not (scratch / "output.mp4").exists()
+        assert final.stat().st_nlink == 1
+    else:
+        assert result == _empty()
+        assert destination.read_bytes() == b"artifact-payload" * 8
+        assert (scratch / "output.mp4").read_bytes() == b"x" * 64
+        assert final.stat().st_nlink == 2
     assert final.read_bytes() == b"artifact-payload" * 8
 
 

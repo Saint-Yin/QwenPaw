@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import json as json_module
 
 import pytest
 
@@ -214,7 +214,9 @@ def test_unsupported_temperature_learns_and_retries_without_it(
     cache.clear(key)
 
     bodies: list[dict] = []
-    ok_payload = json.dumps({"choices": [{"message": {"content": "pong"}}]})
+    ok_payload = json_module.dumps(
+        {"choices": [{"message": {"content": "pong"}}]},
+    )
 
     class FakeResponse:
         headers = {"content-type": "application/json"}
@@ -224,7 +226,7 @@ def test_unsupported_temperature_learns_and_retries_without_it(
             self.text = text
 
         def json(self) -> dict:
-            return json.loads(self.text)
+            return json_module.loads(self.text)
 
     class FakeAsyncClient:
         def __init__(self, *, timeout):
@@ -237,6 +239,8 @@ def test_unsupported_temperature_learns_and_retries_without_it(
             return False
 
         async def post(self, url, *, headers, json):
+            assert url == "https://gateway.example.com/v1/chat/completions"
+            assert headers["Authorization"] == "Bearer test-key"
             bodies.append(dict(json))
             if len(bodies) == 1:
                 return FakeResponse(
