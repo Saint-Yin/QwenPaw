@@ -159,6 +159,47 @@ def test_media_review_blocking_considers_target_ref(
     )
 
 
+def test_media_node_kinds_are_the_single_source_for_media_gates() -> None:
+    """Approve/rebind, script gate and review fence must share one kind set.
+
+    Regression: the approve/rebind whitelist hardcoded only visual/lineup/
+    storyboard/video, so authorizing an interaction or compose node failed
+    forever with "授权的 WorkGraph 目标已改变或尚未就绪".
+    """
+
+    from services.file_agent_runtime import workgraph_execution
+    from services.file_agent_runtime.work_graph import MEDIA_NODE_KINDS
+
+    assert {"interaction", "compose"} <= MEDIA_NODE_KINDS
+    # request-side accepted kinds and the review fence read the same object.
+    assert workgraph_execution.MEDIA_NODE_KINDS is MEDIA_NODE_KINDS
+    assert work_scheduler._MEDIA_REVIEW_DEPENDENT_KINDS is MEDIA_NODE_KINDS
+
+
+def test_media_review_fences_interaction_of_reviewed_element() -> None:
+    """interaction was missing from the review fence; a pending review of its
+    own element must now hold an interaction regeneration, while an unrelated
+    review leaves it free (non-heavy: blocked only on its own owner)."""
+
+    node = WorkNode(
+        node_id="interaction:e1",
+        kind="interaction",
+        label="choice",
+        status=WorkNodeStatus.READY,
+        target_ref="element:e1",
+    )
+    assert _blocked_by_active_media_review(
+        node,
+        frozenset({"element:e1:storyboard"}),
+        frozenset({"element:e1"}),
+    )
+    assert not _blocked_by_active_media_review(
+        node,
+        frozenset({"element:e2:storyboard"}),
+        frozenset({"element:e2"}),
+    )
+
+
 @pytest.mark.parametrize(
     ("kind", "blocked"),
     [

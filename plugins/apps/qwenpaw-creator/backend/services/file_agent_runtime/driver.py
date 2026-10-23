@@ -10398,6 +10398,10 @@ _AUTHORIZATION_OPERATION_LABELS = {
     "s2v_generation": "生成数字人视频",
     "tts_generation": "生成语音",
     "create_character_voice": "复刻角色音色",
+    # compose currently dispatches without an approval card
+    # (requires_execution_authorization=False); label kept so a future
+    # authorization shows Chinese copy instead of "执行 compose_final_video".
+    "compose_final_video": "本地成片合成",
 }
 
 

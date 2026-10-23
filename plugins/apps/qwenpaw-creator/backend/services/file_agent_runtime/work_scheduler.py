@@ -51,6 +51,7 @@ from services.media_files.transient_errors import (
 from services.file_agent_runtime import manual_regeneration_hold
 from services.file_agent_runtime.notifications import RuntimeEventKind
 from services.file_agent_runtime.work_graph import (
+    MEDIA_NODE_KINDS,
     dispatch_key_predates_digest_ledger,
     dispatch_ledger_fingerprint,
     dispatch_slot,
@@ -202,11 +203,13 @@ _COVER_COMMANDS = {CreatorCommandType.GENERATE_COVER.value}
 # asynchronous reviewer to settle. Otherwise a short image review can replace
 # a storyboard while a paid two-minute video is already running; that finished
 # video is quarantined as stale and the provider gets billed a second time.
-# Visual/lineup nodes are blocked only when targeting a slot under review,
-# preventing double-generation that would invalidate the pending review.
-_MEDIA_REVIEW_DEPENDENT_KINDS = frozenset(
-    {"visual", "lineup", "storyboard", "video", "compose"},
-)
+# Every human-authorizable media kind is fenced by an active media review so a
+# regeneration cannot silently invalidate the pending review. visual/lineup/
+# interaction (non-heavy) are blocked only when their own owner is under
+# review; storyboard/video/compose (heavy) are always blocked while any slot is
+# active. Sourced from MEDIA_NODE_KINDS so a new media kind is fenced without
+# editing this list too.
+_MEDIA_REVIEW_DEPENDENT_KINDS = MEDIA_NODE_KINDS
 # Heavy/billed nodes that need stable inputs: storyboard, video, and compose.
 # Reviews fence their consumers and transitive dependencies; unrelated work
 # may proceed. Project-wide or unknown review scopes remain conservative.
