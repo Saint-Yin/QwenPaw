@@ -6,19 +6,24 @@ unless its journal positively says it settled, and history the Project arrived
 with is never this build's to reclaim.
 """
 
+# pylint: disable=protected-access
+
 from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
+import time
 
 import pytest
 
 from services.media_files.task_scratch import remember_scratch_baseline
+from services.project_files import transaction_gc
 from services.project_files.transaction_gc import (
     collect_project_transactions,
     collect_terminal_transactions,
+    request_project_sweep,
     transaction_gc_enabled,
 )
 from services.project_files.transaction_index import (
@@ -251,3 +256,143 @@ def test_sweep_covers_every_project_and_never_raises(tmp_path):
     assert not (first / "p1-old").exists()
     assert (first / "p1-new").is_dir()
     assert (second / "p2-old").is_dir()
+
+
+def _wait_for_idle(timeout: float = 5.0) -> None:
+    """The sweep runs on its own thread; tests need its outcome, not timing."""
+
+    deadline = time.monotonic() + timeout
+    while transaction_gc._sweeps_in_flight:
+        if time.monotonic() > deadline:
+            pytest.fail("background transaction sweep never settled")
+        time.sleep(0.01)
+
+
+def test_a_growing_project_sweeps_itself_without_waiting_for_a_restart(
+    tmp_path,
+) -> None:
+    project_root = _managed(tmp_path)
+    oldest = _transaction(project_root, "txn-old", "ABORTED", age_days=1)
+    middle = _transaction(project_root, "txn-mid", "ABORTED", age_days=2)
+    newest = _transaction(project_root, "txn-new", "ABORTED", age_days=3)
+
+    started = request_project_sweep(
+        project_root,
+        directory_count=3,
+        threshold=2,
+        retention=2,
+    )
+    _wait_for_idle()
+
+    assert started is True
+    assert not oldest.exists()
+    assert middle.is_dir() and newest.is_dir()
+
+
+def test_a_project_below_the_threshold_is_not_swept(tmp_path) -> None:
+    project_root = _managed(tmp_path)
+    kept = _transaction(project_root, "txn-old", "ABORTED", age_days=1)
+
+    started = request_project_sweep(
+        project_root,
+        directory_count=1,
+        threshold=2,
+        retention=0,
+    )
+
+    assert started is False
+    assert kept.is_dir()
+
+
+def test_history_this_build_will_not_touch_is_not_rescanned_every_commit(
+    tmp_path,
+) -> None:
+    project_root = _managed(tmp_path)
+    # Older than the reclaim baseline: the sweep legitimately refuses it.
+    ancient = (
+        project_root / "runtime" / "transactions" / "arrived-with-project"
+    )
+    ancient.mkdir(parents=True)
+    (ancient / "journal.json").write_text(
+        json.dumps({"state": "ABORTED"}),
+        encoding="utf-8",
+    )
+    moment = (BASELINE - timedelta(days=5)).timestamp()
+    os.utime(ancient, (moment, moment))
+
+    first = request_project_sweep(
+        project_root,
+        directory_count=3,
+        threshold=2,
+        retention=1,
+    )
+    _wait_for_idle()
+    again = request_project_sweep(
+        project_root,
+        directory_count=4,
+        threshold=2,
+        retention=1,
+    )
+    further = request_project_sweep(
+        project_root,
+        directory_count=6,
+        threshold=2,
+        retention=1,
+    )
+    _wait_for_idle()
+
+    assert first is True
+    # One commit past the mark is not worth another full scan of the same tree.
+    assert again is False
+    assert further is True
+    assert ancient.is_dir()
+
+
+def test_a_disabled_gc_starts_no_sweep(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CREATOR_TRANSACTION_GC_ENABLED", "0")
+    project_root = _managed(tmp_path)
+    kept = _transaction(project_root, "txn-old", "ABORTED", age_days=1)
+
+    assert (
+        request_project_sweep(project_root, directory_count=9, threshold=2)
+        is False
+    )
+    assert kept.is_dir()
+
+
+def test_a_failing_sweep_never_reaches_the_committer(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    project_root = _managed(tmp_path)
+    _transaction(project_root, "txn-old", "ABORTED", age_days=1)
+    attempts: list[int] = []
+
+    def explode(*_args, **_kwargs):
+        attempts.append(1)
+        raise RuntimeError("store is unreadable")
+
+    monkeypatch.setattr(
+        transaction_gc,
+        "collect_project_transactions",
+        explode,
+    )
+
+    assert (
+        request_project_sweep(project_root, directory_count=3, threshold=2)
+        is True
+    )
+    _wait_for_idle()
+    # The failure is swallowed on the worker thread and still released its
+    # slot: a commit near the same count is not retried, one a threshold later
+    # is.
+    assert (
+        request_project_sweep(project_root, directory_count=4, threshold=2)
+        is False
+    )
+    assert (
+        request_project_sweep(project_root, directory_count=6, threshold=2)
+        is True
+    )
+    _wait_for_idle()
+    assert len(attempts) == 2

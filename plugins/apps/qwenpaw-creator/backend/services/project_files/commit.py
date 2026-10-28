@@ -73,6 +73,7 @@ from .models import CURRENT_PROJECT_SCHEMA_VERSION, Project
 from .serialization import project_etag
 from .review_bookkeeping import is_human_review_change
 from .store import ProjectSnapshot, ProjectStore
+from .transaction_gc import request_project_sweep
 from .transaction_index import (
     plan_transaction_scan,
     record_transaction_scan,
@@ -1228,6 +1229,14 @@ class ProjectCommitBoundary:
                     f"{journal.transaction_id}",
                 )
         record_transaction_scan(transactions_root, plan, observed_states)
+        # A container that is never restarted never ran the startup sweep,
+        # so commit history asks for its own collection once it outgrows the
+        # threshold. This runs before the current transaction exists, which is
+        # what keeps the sweep off the committing thread's critical path.
+        request_project_sweep(
+            runtime_root.parent,
+            directory_count=plan.directory_count,
+        )
 
     def _finalize_no_change(
         self,

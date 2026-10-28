@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Collect terminal Project transactions at startup.
+"""Collect terminal Project transactions, at startup and as history grows.
 
 Every commit leaves a transaction directory holding four full copies of the
 Project (base, candidate, latest, final) plus its journal, changeset and round.
@@ -8,7 +8,9 @@ history that no reader can use: recovery only needs transactions that never
 finished, and the change record itself lives durably in the change rounds and
 the Project generation.  Observed on one project: 238 directories, 3.1 GB.
 
-The sweep runs at startup only, next to the orphaned-scratch sweep, and is
+The sweep runs at startup, next to the orphaned-scratch sweep, and -- because a
+container that is never restarted never ran it -- again once one Project's
+commit history outgrows :data:`TERMINAL_TRANSACTION_SWEEP_THRESHOLD`.  It is
 deliberately conservative:
 
 * A transaction is removed only when its own ``journal.json`` says it reached
@@ -33,6 +35,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import threading
 from typing import Any
 
 from services.media_files.task_scratch import read_scratch_baseline
@@ -45,6 +48,11 @@ logger = logging.getLogger("qwenpaw.creator.project_files.transaction_gc")
 
 # Terminal transactions kept after a sweep, newest first by directory mtime.
 TERMINAL_TRANSACTION_RETENTION = 50
+
+# Transaction directories one Project may accumulate before its next commit
+# asks for a sweep of its own.  Above the retention on purpose: the startup
+# sweep alone only ever ran on a build that was restarted.
+TERMINAL_TRANSACTION_SWEEP_THRESHOLD = 100
 
 TRANSACTIONS_DIR_NAME = "transactions"
 JOURNAL_FILE_NAME = "journal.json"
@@ -199,10 +207,83 @@ def collect_terminal_transactions(
     )
 
 
+_sweep_guard = threading.Lock()
+_sweeps_in_flight: set[str] = set()
+_sweep_counts: dict[str, int] = {}
+
+
+def request_project_sweep(
+    project_root: Path,
+    *,
+    directory_count: int,
+    threshold: int = TERMINAL_TRANSACTION_SWEEP_THRESHOLD,
+    retention: int = TERMINAL_TRANSACTION_RETENTION,
+) -> bool:
+    """Sweep one Project in the background once its history outgrows itself.
+
+    ``directory_count`` comes from the listing the commit path already keeps,
+    so a normal commit pays nothing here. It counts every transaction directory
+    rather than only settled ones: a sweep may still find nothing to remove,
+    but it never misses one that is due.
+
+    Housekeeping must not block or fail a commit: the sweep runs on a daemon
+    thread, swallows everything it raises, and one Project never runs two at a
+    time. A sweep that removed nothing is not retried until the count has grown
+    by another threshold's worth, so pre-existing history this build will not
+    touch does not cost a scan per commit.
+    """
+
+    if not transaction_gc_enabled():
+        return False
+    key = str(project_root)
+    with _sweep_guard:
+        if directory_count <= threshold:
+            return False
+        if key in _sweeps_in_flight:
+            return False
+        if directory_count < _sweep_counts.get(key, 0) + threshold:
+            return False
+        _sweeps_in_flight.add(key)
+        _sweep_counts[key] = directory_count
+
+    def sweep() -> None:
+        try:
+            removed, removed_bytes = collect_project_transactions(
+                Path(project_root),
+                retention=retention,
+            )
+            if removed:
+                logger.info(
+                    "terminal transactions released during runtime: "
+                    "project_root=%s transactions=%s bytes=%s",
+                    project_root,
+                    removed,
+                    removed_bytes,
+                )
+        except Exception:  # noqa: BLE001 - a sweep never reaches the committer
+            logger.warning(
+                "transaction sweep failed: project_root=%s",
+                project_root,
+                exc_info=True,
+            )
+        finally:
+            with _sweep_guard:
+                _sweeps_in_flight.discard(key)
+
+    threading.Thread(
+        target=sweep,
+        name=f"creator-transaction-sweep:{Path(project_root).name}",
+        daemon=True,
+    ).start()
+    return True
+
+
 __all__ = [
     "TERMINAL_TRANSACTION_RETENTION",
+    "TERMINAL_TRANSACTION_SWEEP_THRESHOLD",
     "TransactionGCSummary",
     "collect_project_transactions",
     "collect_terminal_transactions",
+    "request_project_sweep",
     "transaction_gc_enabled",
 ]
