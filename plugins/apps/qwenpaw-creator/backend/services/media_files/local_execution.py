@@ -50,6 +50,7 @@ from domain.errors import (
     ValidationError,
 )
 from models.config import is_self_review_enabled
+from services.media_files import media_gate
 from services.media_files.informal_launch_template import (
     informal_launch_uses_uploaded_bgm,
     compile_informal_launch_captions,
@@ -2208,7 +2209,7 @@ class FfmpegLocalMediaRunner:
         """
 
         try:
-            process = subprocess.run(
+            process = media_gate.run(
                 [
                     self.executable,
                     "-hide_banner",
@@ -2325,42 +2326,45 @@ class FfmpegLocalMediaRunner:
         """Run ffmpeg to completion and return its stderr text."""
 
         try:
-            process = subprocess.Popen(
-                [self.executable, *arguments],
-                cwd=cwd,
-                # ffmpeg reads stdin by default; inheriting the service
-                # process tty triggers SIGTTIN and suspends the process group
-                # when running in the background, so detach explicitly.
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+            with media_gate.slot("ffmpeg"):
+                process = subprocess.Popen(
+                    [self.executable, *arguments],
+                    cwd=cwd,
+                    # ffmpeg reads stdin by default; inheriting the service
+                    # process tty triggers SIGTTIN and suspends the process
+                    # group when running in the background, so detach.
+                    **media_gate.popen_options(
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    ),
+                )
+                try:
+                    stdout, stderr = process.communicate(
+                        timeout=self.timeout_seconds,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    # The gate owns the signal ladder: the child is a group
+                    # leader, so a stuck filter graph goes down with it.
+                    media_gate.kill_group(
+                        process,
+                        self.termination_grace_seconds,
+                    )
+                    try:
+                        process.communicate(
+                            timeout=self.termination_grace_seconds,
+                        )
+                    except subprocess.TimeoutExpired:
+                        # The group has already received the strongest
+                        # portable signal.  Never turn cleanup into another
+                        # unbounded wait.
+                        pass
+                    raise ConflictError(
+                        f"ffmpeg 执行超时（{self.timeout_seconds:g} 秒）",
+                    ) from exc
         except FileNotFoundError as exc:
             raise ValidationError("本机未安装 ffmpeg") from exc
-        try:
-            stdout, stderr = process.communicate(timeout=self.timeout_seconds)
-        except subprocess.TimeoutExpired as exc:
-            try:
-                process.terminate()
-            except OSError:
-                pass
-            try:
-                process.communicate(timeout=self.termination_grace_seconds)
-            except subprocess.TimeoutExpired:
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-                try:
-                    process.communicate(timeout=self.termination_grace_seconds)
-                except subprocess.TimeoutExpired:
-                    # The child has already received the strongest portable
-                    # signal.  Never turn cleanup into another unbounded wait.
-                    pass
-            raise ConflictError(
-                f"ffmpeg 执行超时（{self.timeout_seconds:g} 秒）",
-            ) from exc
         if process.returncode != 0:
             detail = (stderr or stdout or "ffmpeg failed")[-4000:]
             raise ConflictError(f"ffmpeg 执行失败: {detail}")

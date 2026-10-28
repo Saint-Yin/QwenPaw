@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from services.project_files.models import Project, Timeline
+from services.media_files import media_gate
 from services.observability import mem_probe
 
 _DRAFT_HEIGHT = 480
@@ -322,7 +323,7 @@ def render_rough_cut(
 
 def _run_ffmpeg(command: list[str]) -> None:
     try:
-        completed = subprocess.run(
+        completed = media_gate.run(
             command,
             capture_output=True,
             timeout=_FFMPEG_TIMEOUT_SECONDS,

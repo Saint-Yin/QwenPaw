@@ -47,6 +47,7 @@ from services.media_files.motion_engine import (
     resolve_vendor_files,
 )
 from services.media_files.overlay import OverlayRenderResult
+from services.media_files import media_gate
 from services.observability import mem_probe
 from utils.logger import setup_logger
 
@@ -872,7 +873,7 @@ def _frame_alpha_stats(
     frame, all ``-1.0`` when the alpha plane cannot be inspected."""
 
     try:
-        result = subprocess.run(
+        result = media_gate.run(
             [
                 ffmpeg_path,
                 "-v",
@@ -981,7 +982,7 @@ def _frame_rgba_bytes(
     """Raw RGBA plane of one PNG frame, ``None`` when inspection fails."""
 
     try:
-        result = subprocess.run(
+        result = media_gate.run(
             [
                 ffmpeg_path,
                 "-v",
@@ -1167,7 +1168,7 @@ def _verify_captured_frames(
         if frame_ring and frame_window is not None:
             frame_path = frames_dir / f"{index:05d}.png"
             try:
-                result = subprocess.run(
+                result = media_gate.run(
                     [
                         ffmpeg_path,
                         "-v",
@@ -2068,7 +2069,7 @@ def composite_motion_layers(
         os.fspath(output_path),
     ]
     try:
-        result = subprocess.run(
+        result = media_gate.run(
             command,
             stdin=subprocess.DEVNULL,
             capture_output=True,
