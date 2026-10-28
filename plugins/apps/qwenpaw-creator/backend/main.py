@@ -57,6 +57,9 @@ from services.project_files.facade import (  # noqa: E402
     clear_creator_file_service_registry,
     creator_file_services,
 )
+from services.project_files.transaction_gc import (  # noqa: E402
+    collect_terminal_transactions,
+)
 from services.runtime_files.runtime_dependencies import (  # noqa: E402
     CreatorBinaryDependencyError,
     ensure_creator_runtime_dependencies,
@@ -179,6 +182,33 @@ async def _sweep_orphaned_scratch(services: CreatorFileServices) -> None:
         )
 
 
+async def _collect_settled_transactions(services: CreatorFileServices) -> None:
+    """Drop commit history no reader can use, without gating startup.
+
+    Runs after the scratch sweep, which stamps the reclaim baseline this sweep
+    measures against. Recovery has already reconciled every journal by now, so
+    anything still non-terminal is a transaction the next commit must see.
+    """
+
+    try:
+        sweep = await asyncio.to_thread(
+            collect_terminal_transactions,
+            services,
+        )
+    except Exception:  # noqa: BLE001 - cleanup must never gate startup
+        logger.warning("terminal transaction sweep failed", exc_info=True)
+        return
+    if sweep.removed_transactions:
+        logger.info(
+            "terminal transactions released: projects=%s swept=%s "
+            "transactions=%s bytes=%s",
+            sweep.projects,
+            sweep.swept_projects,
+            sweep.removed_transactions,
+            sweep.removed_bytes,
+        )
+
+
 @app.hook("startup", priority=90)
 async def _startup() -> None:
     global _file_services
@@ -254,6 +284,7 @@ async def _startup() -> None:
     _file_services = services
     logger.info("QwenPaw Creator file runtime ready at %s", data_root)
     await _sweep_orphaned_scratch(services)
+    await _collect_settled_transactions(services)
     # Loud, not silent: explicitly set review env vars take full control
     # and the settings-center toggles are ignored — a field incident had
     # review running with the UI switched off because a stale env stayed

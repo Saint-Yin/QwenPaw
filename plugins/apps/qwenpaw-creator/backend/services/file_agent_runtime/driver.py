@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import mimetypes
+import os
 from pathlib import Path, PurePosixPath
 import secrets
 import shutil
@@ -7968,15 +7969,18 @@ class FileCreatorAgentRuntime:
         result: Mapping[str, Any],
         failed: bool = False,
     ) -> None:
-        raw_result = json.dumps(
-            result,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
         result_kind = _runtime_action_result_kind(
             tool_name,
             result,
             failed=failed,
+        )
+        stored_result: Mapping[str, Any] = result
+        if result_kind == _PROJECT_SNAPSHOT_RESULT_KIND:
+            stored_result = _durable_project_echo(result)
+        raw_result = json.dumps(
+            stored_result,
+            ensure_ascii=False,
+            separators=(",", ":"),
         )
         appended = await self._persist_session_append(
             f"{project_id}: tool result",
@@ -9660,6 +9664,43 @@ def _message_text(
 # changes to reconstruct current state. Durable Runtime history keeps every
 # original byte.
 _SNAPSHOT_SOURCE = "runtime_action_result"
+
+_TOOL_ECHO_DISABLED_VALUES = frozenset({"0", "false", "no", "off"})
+
+
+def tool_echo_receipt_enabled() -> bool:
+    """Whether a durable Project echo stores the bounded view, not the bytes.
+
+    Every ``read_project`` / ``jq_project`` / ``patch_project`` result used to
+    be appended verbatim, so the conversation kept every intermediate state of
+    the Project forever (observed: 96% of a 284 MB ``messages.jsonl``, and the
+    page reader paid it on every open).  Nothing the model can still be shown
+    depends on that surplus: the wire context and the rebuilt history already
+    collapse these records with :func:`project_snapshot_view` and receipts.
+
+    This changes what is *persisted*, so it needs an emergency switch: set
+    ``CREATOR_TOOL_ECHO_RECEIPT=0`` to go back to byte-for-byte retention.
+    """
+
+    raw = os.environ.get("CREATOR_TOOL_ECHO_RECEIPT", "")
+    return raw.strip().casefold() not in _TOOL_ECHO_DISABLED_VALUES
+
+
+def _durable_project_echo(
+    result: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """The Project snapshot exactly as durable conversation history keeps it.
+
+    The projection is the one the ephemeral wire context already builds for the
+    newest snapshot: frozen history timelines get indexed instead of copied, and
+    the payload stays bounded.  Identifiers the metadata column carries
+    (generation, etag, changedPointers) survive untouched, and a later snapshot
+    still collapses this record to a receipt when the model context is rebuilt.
+    """
+
+    if not tool_echo_receipt_enabled():
+        return result
+    return project_snapshot_view(result)
 
 
 @dataclass(frozen=True)
