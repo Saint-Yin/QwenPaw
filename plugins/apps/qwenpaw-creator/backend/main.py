@@ -51,7 +51,7 @@ from services.media_files.motion_engine import ensure_vendor_libs  # noqa: E402
 from services.media_files.task_scratch import (
     release_orphaned_scratch,
 )  # noqa: E402
-from services.observability import trace_event  # noqa: E402
+from services.observability import mem_probe, trace_event  # noqa: E402
 from services.project_files.facade import (  # noqa: E402
     CreatorFileServices,
     clear_creator_file_service_registry,
@@ -210,12 +210,13 @@ async def _collect_settled_transactions(services: CreatorFileServices) -> None:
 
 
 @app.hook("startup", priority=90)
-async def _startup() -> None:
+async def _startup() -> None:  # pylint: disable=too-many-statements
     global _file_services
     try:
         configure_creator_runtime_environment()
         data_root = require_creator_data_root()
         log_path = configure_creator_file_logging(data_root)
+        mem_probe.start_probe(data_root)
         trace_event(
             "creator.runtime.starting",
             component="pawapp",
@@ -234,6 +235,7 @@ async def _startup() -> None:
             services,
         )
         reset_remote_ingest_admission()
+        mem_probe.stage("runtime.prepared")
     except (CreatorDataRootError, CreatorBinaryDependencyError) as exc:
         trace_event(
             "creator.runtime.startup_failed",
@@ -370,7 +372,10 @@ async def _shutdown() -> None:
         try:
             await drain_timeline_render_jobs()
         finally:
-            await _shutdown_file_runtime()
+            try:
+                await _shutdown_file_runtime()
+            finally:
+                mem_probe.stop_probe()
 
 
 async def _shutdown_file_runtime() -> None:

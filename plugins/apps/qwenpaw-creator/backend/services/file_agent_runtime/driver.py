@@ -142,7 +142,12 @@ from services.external_skills import (
     render_external_skills_context,
     view_skill as view_external_skill,
 )
-from services.observability import report_error, trace_event, traced_async
+from services.observability import (
+    mem_probe,
+    report_error,
+    trace_event,
+    traced_async,
+)
 from services.source_analysis import SourceAgentToolContext
 from services.specialist_tools import (
     CHARACTER_VOICE_TOOL_NAME,
@@ -4984,6 +4989,11 @@ class FileCreatorAgentRuntime:
             for take in outcome.takes:
                 try:
                     video = take.video_path.read_bytes()
+                    mem_probe.stage(
+                        "live_operation.take_bytes",
+                        take_id=take.take_id,
+                        bytes=len(video),
+                    )
                 except OSError as exc:
                     issues.append(f"take_unreadable:{take.take_id}")
                     logger.warning(

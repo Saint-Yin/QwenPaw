@@ -92,7 +92,7 @@ from services.media_files.transitions import (
     build_transition_filter_chain,
     normalize_transition_kind,
 )
-from services.observability import report_error
+from services.observability import mem_probe, report_error
 from services.project_files.assets import (
     AssetAlreadyExists,
     AssetFileError,
@@ -394,7 +394,14 @@ class FfmpegLocalMediaRunner:
 
     async def render(self, spec: LocalMediaExecutionSpec) -> Mapping[str, Any]:
         self._validate_supported_directives(spec)
-        overlay_warnings = await asyncio.to_thread(self._render_sync, spec)
+        token = mem_probe.watch("local_render.thread")
+        try:
+            overlay_warnings = await asyncio.to_thread(self._render_sync, spec)
+        except asyncio.CancelledError:
+            # The coroutine unwinds here; the thread and its ffmpeg do not.
+            mem_probe.orphans(token, "local_render.cancelled")
+            raise
+        mem_probe.orphans(token, "local_render.finished")
         metadata: dict[str, Any] = {"runner": "ffmpeg"}
         if overlay_warnings:
             metadata["overlayWarnings"] = overlay_warnings
@@ -436,6 +443,12 @@ class FfmpegLocalMediaRunner:
                 "segments",
             )
             concurrency = self._segment_concurrency(len(spec.inputs))
+            mem_probe.budget(
+                "compose.segment_pool",
+                active=concurrency,
+                limit=concurrency,
+                segments=len(spec.inputs),
+            )
             outcomes: dict[int, _SegmentRender] = {}
             done_signals = 0
 
