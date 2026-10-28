@@ -73,7 +73,6 @@ from .models import CURRENT_PROJECT_SCHEMA_VERSION, Project
 from .serialization import project_etag
 from .review_bookkeeping import is_human_review_change
 from .store import ProjectSnapshot, ProjectStore
-from .transaction_gc import request_project_sweep
 from .transaction_index import (
     plan_transaction_scan,
     record_transaction_scan,
@@ -1233,6 +1232,13 @@ class ProjectCommitBoundary:
         # so commit history asks for its own collection once it outgrows the
         # threshold. This runs before the current transaction exists, which is
         # what keeps the sweep off the committing thread's critical path.
+        #
+        # Imported here rather than at module level on purpose:
+        # transaction_gc reaches services.media_files, whose package init
+        # reaches this module back through project_files.facade -- a module
+        # level edge here closes that cycle and breaks plugin installation.
+        from .transaction_gc import request_project_sweep
+
         request_project_sweep(
             runtime_root.parent,
             directory_count=plan.directory_count,
