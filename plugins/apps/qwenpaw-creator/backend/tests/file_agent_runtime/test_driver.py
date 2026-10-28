@@ -623,6 +623,7 @@ def _edit_client(*, description: str):
             "ground_image_objects",
             "browser_use",
             "elements_at",
+            "confirm_prompt_sync",
             "delegate_to_agent",
             "request_workgraph_execution",
         }

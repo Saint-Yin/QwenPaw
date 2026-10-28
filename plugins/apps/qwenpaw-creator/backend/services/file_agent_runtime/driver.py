@@ -8467,6 +8467,16 @@ class FileCreatorAgentRuntime:
                     + "\nR2V prompt 由你直接负责；请只修复上述"
                     " Project 字段并重新核对，保留已经完成的工作。"
                 )
+        if any(node.prompt_sync_required for node in feedback_nodes):
+            # The plan/prompt gate only clears through a real text edit or an
+            # explicit keep-current decision. Without naming that decision the
+            # model can only re-read the same shots until the resume fuse
+            # trips.
+            text += (
+                "\n若你已核对某个镜头的叙述与提示词，确认现有提示词仍然准确、"
+                "无需改写，请调用 confirm_prompt_sync（stage 指定 storyboard 或 "
+                "video）记录该结论；不要反复 read_project 复核同一镜头。"
+            )
         message_source = (
             self.YOLO_RESUME_SOURCE
             if auto_approve
