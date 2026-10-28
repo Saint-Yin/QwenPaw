@@ -8190,6 +8190,14 @@ class FileCreatorAgentRuntime:
         elements yet must still resume. Outside auto_approve such a failure
         still queues only the free prompt repair; paid continuation keeps
         waiting for a human.
+
+        The fuse below only counts resumes inside one uninterrupted runtime
+        streak, so a human message used to re-arm it: the same unchanged gap
+        came back right after any unrelated chat turn and the Agent re-read
+        the same shots again. Every resume therefore persists the fingerprint
+        of the gap it asked about plus the DONE set at that moment, and a
+        repeat is dropped while that fingerprint, the project generation and
+        the DONE set are all unchanged.
         """
 
         from .manual_regeneration_hold import ManualRegenerationHoldStore
@@ -8385,6 +8393,51 @@ class FileCreatorAgentRuntime:
                 separators=(",", ":"),
             ).encode("utf-8"),
         ).hexdigest()[:32]
+        # A human turn used to be a full reset. The fingerprint covers exactly
+        # the nodes/missing/errors this resume text asks about, so an identical
+        # fingerprint on an unchanged project generation means the previous
+        # instruction is still unanswered — re-sending it only burns model
+        # turns. Any real write bumps the generation, any gate change moves the
+        # fingerprint and any new DONE node counts as progress, so the
+        # suppression releases itself. Transient failures bypass it: their
+        # resume died before it could act.
+        if not after_failure:
+            latest_resume = None
+            spans_human_turn = False
+            for item in reversed(messages):
+                if item.role != "user":
+                    continue
+                if item.source in {
+                    self.YOLO_RESUME_SOURCE,
+                    self.PROMPT_CONTRACT_RESUME_SOURCE,
+                }:
+                    latest_resume = item
+                    break
+                if item.source in {
+                    self.MAINLINE_RESUME_SOURCE,
+                    NOTIFICATION_SOURCE,
+                }:
+                    continue
+                spans_human_turn = True
+            if spans_human_turn and latest_resume is not None:
+                previous_done = set(
+                    latest_resume.metadata.get("doneNodeIdsAtResume") or (),
+                )
+                if (
+                    latest_resume.source == active_resume_source
+                    and latest_resume.metadata.get("projectGeneration")
+                    == snapshot.generation
+                    and latest_resume.metadata.get("actionableFingerprint")
+                    == actionable_fingerprint
+                    and not completed_now - previous_done
+                ):
+                    logger.info(
+                        "%s skipped for %s: gap unchanged since message %s",
+                        active_resume_source,
+                        project_id,
+                        latest_resume.message_seq,
+                    )
+                    return
         unproductive_resumes = resume_streak
         no_progress = False
         if checkpoint_valid:
@@ -8501,6 +8554,8 @@ class FileCreatorAgentRuntime:
             metadata={
                 "resumeAfterRunId": run_id,
                 "projectGeneration": snapshot.generation,
+                "actionableFingerprint": actionable_fingerprint,
+                "doneNodeIdsAtResume": sorted(completed_now),
                 "unfinishedElements": unfinished,
                 "modelRequiredNodes": [
                     node.node_id for node in feedback_nodes[:12]

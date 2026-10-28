@@ -3274,6 +3274,124 @@ def test_completion_resume_mode_separation_keeps_absolute_ceiling(
         assert state["wakes"] == []
 
 
+@pytest.fixture(name="prompt_contract_runtime")
+def _prompt_contract_runtime(tmp_path, monkeypatch):
+    services, snapshot = _create_project(tmp_path, initial_goal="完成短剧")
+    driver = _driver(services, lambda _messages, _tools: AgentModelTurn())
+    state = {
+        "generation": snapshot.generation,
+        "nodes": [
+            WorkNode(
+                node_id="storyboard:ep1",
+                kind="storyboard",
+                label="第一场 · 分镜",
+                status=WorkNodeStatus.GATED,
+                missing=("分镜内容与提示词待同步",),
+                authored_text_gap=True,
+                prompt_sync_required=True,
+                dispatch_fingerprint="input-0",
+            ),
+        ],
+    }
+    monkeypatch.setattr(
+        driver_module,
+        "get_media_review_mode",
+        lambda: "manual",
+    )
+    monkeypatch.setattr(
+        services.projects,
+        "read",
+        lambda _project_id: replace(
+            snapshot,
+            generation=state["generation"],
+        ),
+    )
+    monkeypatch.setattr(
+        driver_module,
+        "derive_work_graph",
+        lambda *_args, **_kwargs: WorkGraph(
+            nodes=tuple(state["nodes"]),
+            generation=state["generation"],
+        ),
+    )
+    return services, driver, state
+
+
+def _append_human_message(services, text: str) -> int:
+    return services.sessions.append_message(
+        PROJECT_ID,
+        SESSION_ID,
+        CONVERSATION_ID,
+        role="user",
+        content_parts=[{"type": "text", "text": text}],
+        source="initial_creation",
+        channel=MessageChannel.COMPOSER,
+    ).message.message_seq
+
+
+def test_prompt_contract_resume_is_not_rearmed_by_an_unrelated_human_turn(
+    prompt_contract_runtime,
+) -> None:
+    services, driver, _state = prompt_contract_runtime
+    messages = _queue_completion_resume(driver, run_id="run-1")
+    resume = messages[-1]
+    assert resume.source == driver.PROMPT_CONTRACT_RESUME_SOURCE
+    assert "分镜内容与提示词待同步" in resume.content_parts[0].text
+    assert "confirm_prompt_sync" in resume.content_parts[0].text
+    assert resume.metadata["actionableFingerprint"]
+    # The same gap inside one uninterrupted streak still trips the fuse.
+    paused = _queue_completion_resume(driver, run_id="run-2")
+    assert paused[-1].source == "creator_execution_notice"
+    assert (
+        paused[-1].metadata["executionPause"]["reason"]
+        == "no_committed_progress"
+    )
+    # A chat turn that wrote nothing must not re-arm the fuse: the identical
+    # instruction was already delivered and is still unanswered.
+    human_seq = _append_human_message(services, "你好")
+    settled = _queue_completion_resume(driver, run_id="run-3")
+    assert settled[-1].message_seq == human_seq
+    assert not any(
+        item.source == driver.PROMPT_CONTRACT_RESUME_SOURCE
+        and item.message_seq > human_seq
+        for item in settled
+    )
+
+
+def test_prompt_contract_resume_returns_after_any_committed_write(
+    prompt_contract_runtime,
+) -> None:
+    services, driver, state = prompt_contract_runtime
+    resume = _queue_completion_resume(driver, run_id="run-1")[-1]
+    _queue_completion_resume(driver, run_id="run-2")
+    human_seq = _append_human_message(services, "改一下结尾")
+    state["generation"] += 1
+    resumed = _queue_completion_resume(driver, run_id="run-3")
+    assert resumed[-1].message_seq > human_seq
+    assert resumed[-1].source == driver.PROMPT_CONTRACT_RESUME_SOURCE
+    assert (
+        resumed[-1].metadata["actionableFingerprint"]
+        == resume.metadata["actionableFingerprint"]
+    )
+
+
+def test_prompt_contract_resume_still_retries_a_transient_failure(
+    prompt_contract_runtime,
+) -> None:
+    services, driver, _state = prompt_contract_runtime
+    _queue_completion_resume(driver, run_id="run-1")
+    _queue_completion_resume(driver, run_id="run-2")
+    human_seq = _append_human_message(services, "你好")
+    retried = _queue_completion_resume(
+        driver,
+        run_id="run-3",
+        after_failure=True,
+    )
+    assert retried[-1].message_seq > human_seq
+    assert retried[-1].source == driver.PROMPT_CONTRACT_RESUME_SOURCE
+    assert "瞬态故障" in retried[-1].content_parts[0].text
+
+
 @pytest.mark.parametrize(
     "streak,same_generation",
     [(1, True), (5, False), (4, False)],
