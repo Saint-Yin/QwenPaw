@@ -898,6 +898,31 @@ def _misnested_element_field_hint(item: Mapping[str, Any]) -> str:
     return ""
 
 
+def _null_written_field_hint(item: Mapping[str, Any]) -> str:
+    """Name a non-nullable field the jq output handed over as ``null``.
+
+    The recurring cause is a re-rooted path: once the program has drilled
+    in with ``| .interactive_presentation``, writing
+    ``.interactive_presentation.screens`` asks jq for one level deeper than
+    it exists, and an absent path evaluates to ``null``. The bare pydantic
+    wording ("should be a valid dictionary") hides that, so the model goes
+    back to re-reading the whole Project instead of fixing the program.
+    """
+
+    if item.get("input") is not None:
+        return ""
+    if not str(item.get("type", "")).endswith("_type"):
+        return ""
+    loc = tuple(str(part) for part in item.get("loc") or ())
+    pointer = "/" + "/".join(loc) if loc else "$"
+    return (
+        f"{pointer} 被写成 null，而 Project 要求非空值。"
+        "若 jq program 已用 `|` 下钻到该对象的父层，父层以下的字段要写"
+        " `.字段名`；再写完整路径会被 jq 当成更深一层而求值为 null。"
+        "也可改用赋值式 `.父.字段 = …`，它天然保留兄弟字段"
+    )
+
+
 def _translate_project_schema_error(
     error: ValidationError,
     *,
@@ -926,8 +951,11 @@ def _translate_project_schema_error(
                     break
             else:
                 misnested = _misnested_element_field_hint(item)
+                null_written = _null_written_field_hint(item)
                 if misnested:
                     hint = f"（{misnested}）"
+                elif null_written:
+                    hint = f"（{null_written}）"
                 elif item.get("type") == "extra_forbidden":
                     hint = (
                         "（该字段不在 Project Schema 中，"
