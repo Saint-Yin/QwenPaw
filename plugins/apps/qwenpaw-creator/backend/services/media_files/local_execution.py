@@ -3390,6 +3390,7 @@ def _resolve_execution(
     command: CreatorCommandType,
     target_ref: str,
     arguments: Mapping[str, Any],
+    enforce_scene_gate: bool = True,
 ) -> _ResolvedExecution:
     project = snapshot.project
     if command is CreatorCommandType.EXECUTE_EDIT:
@@ -3405,11 +3406,19 @@ def _resolve_execution(
         # Scene-loop gate (upstream scene_gate): a declared ledger must be
         # fully locked with fresh fingerprints before the expensive master
         # render; the check itself is pure computation.
-        from services.render_review.scene_review import (
-            validate_scene_ledger_locked,
-        )
+        #
+        # ``enforce_scene_gate`` exists because an expired lock is the one
+        # blocker the pipeline repairs on its own: the dispatch path
+        # auto-rereviews stale scenes just before resolving. Callers that
+        # run *ahead* of that repair (the route precheck) or that replay an
+        # already-rendered Task must pass False, or the stale lock would
+        # reject the request before the repair ever gets a turn.
+        if enforce_scene_gate:
+            from services.render_review.scene_review import (
+                validate_scene_ledger_locked,
+            )
 
-        validate_scene_ledger_locked(timeline)
+            validate_scene_ledger_locked(timeline)
         return _timeline_execution(
             project=project,
             timeline=timeline,
@@ -5133,6 +5142,7 @@ def validate_local_media_execution(
     command: CreatorCommandType | str,
     target_ref: str,
     arguments: Mapping[str, Any] | None = None,
+    enforce_scene_gate: bool = True,
 ) -> None:
     """Synchronously pre-validate the execution plan before dispatching.
 
@@ -5154,6 +5164,7 @@ def validate_local_media_execution(
         command=CreatorCommandType(command),
         target_ref=target_ref,
         arguments=dict(arguments or {}),
+        enforce_scene_gate=enforce_scene_gate,
     )
     assert_media_review_admission(
         reviews=services.reviews.all_pending(project_id),
@@ -5191,6 +5202,9 @@ def find_reusable_local_media_task(
             command=command_value,
             target_ref=target_ref,
             arguments={},
+            # Replaying a succeeded Task renders nothing, so an expired
+            # scene lock must not cost the caller the reuse.
+            enforce_scene_gate=False,
         )
     except (ConflictError, ValidationError):
         return None
