@@ -3178,6 +3178,137 @@ def test_yolo_repeated_state_pauses_visibly_once_across_restart(
     assert driver.executions.list_tasks(PROJECT_ID) == []
 
 
+def _resume_once(driver, *, run_id, **kwargs):
+    asyncio.run(
+        driver._queue_yolo_completion_resume(
+            project_id=PROJECT_ID,
+            session_id=SESSION_ID,
+            conversation_id=CONVERSATION_ID,
+            run_id=run_id,
+            **kwargs,
+        ),
+    )
+
+
+def _spy_message_reads(monkeypatch, driver):
+    calls = []
+    original = driver.sessions.list_messages
+
+    def spy(*args, **kwargs):
+        calls.append(args[1:])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(driver.sessions, "list_messages", spy)
+    return calls
+
+
+def test_fused_pause_memo_skips_the_history_reread_next_tick(
+    completion_resume_runtime,
+    monkeypatch,
+) -> None:
+    services, driver, _state = completion_resume_runtime
+    _queue_completion_resume(driver, run_id="run-first")
+    fused = _queue_completion_resume(driver, run_id="run-fuse")
+    notices = [
+        item for item in fused if item.source == "creator_execution_notice"
+    ]
+    assert len(notices) == 1
+    calls = _spy_message_reads(monkeypatch, driver)
+
+    _resume_once(driver, run_id="run-second-tick")
+
+    # Nothing moved, so the fused verdict is replayed from the memo: the tick
+    # must not rebuild a history whose answer it already has.
+    assert calls == []
+    assert [
+        item
+        for item in services.sessions.list_messages(
+            PROJECT_ID,
+            SESSION_ID,
+            limit=None,
+        )
+        if item.source == "creator_execution_notice"
+    ] == notices
+
+
+def test_fused_pause_memo_releases_when_a_human_message_lands(
+    completion_resume_runtime,
+    monkeypatch,
+) -> None:
+    services, driver, _state = completion_resume_runtime
+    _queue_completion_resume(driver, run_id="run-first")
+    _queue_completion_resume(driver, run_id="run-fuse")
+    _append_human_message(services, "把第一场的台词补齐")
+    calls = _spy_message_reads(monkeypatch, driver)
+
+    _resume_once(driver, run_id="run-after-human")
+
+    # A new message moved the head, so the fuse has to be re-decided against
+    # the real history -- the memo may not swallow a human re-arm.
+    assert calls
+
+
+def test_fused_pause_memo_releases_when_a_task_finishes_without_a_write(
+    completion_resume_runtime,
+    monkeypatch,
+) -> None:
+    _services, driver, state = completion_resume_runtime
+    _queue_completion_resume(driver, run_id="run-first")
+    _queue_completion_resume(driver, run_id="run-fuse")
+    # A media task completing is durable progress the Project generation never
+    # sees. The fuse reads it as a new DONE node, so the memo key must cover
+    # node statuses or a finished shot would stay paused forever.
+    state["nodes"].append(
+        WorkNode("visual:new", "visual", "新角色", WorkNodeStatus.DONE),
+    )
+    calls = _spy_message_reads(monkeypatch, driver)
+
+    _resume_once(driver, run_id="run-after-task")
+
+    assert calls
+
+
+def test_completion_resume_reuses_the_projection_it_was_given(
+    completion_resume_runtime,
+    monkeypatch,
+) -> None:
+    services, driver, state = completion_resume_runtime
+    snapshot = services.projects.read(PROJECT_ID)
+    graph = WorkGraph(
+        nodes=tuple(state["nodes"]),
+        generation=state["generation"],
+    )
+    reads = []
+    derives = []
+    monkeypatch.setattr(
+        services.projects,
+        "read",
+        lambda _project_id: reads.append(_project_id) or snapshot,
+    )
+    monkeypatch.setattr(
+        driver_module,
+        "derive_work_graph",
+        lambda *_args, **_kwargs: derives.append(1) or graph,
+    )
+
+    _resume_once(
+        driver,
+        run_id="run-tick",
+        snapshot=snapshot,
+        task_records=[],
+        graph=graph,
+    )
+
+    assert reads == []
+    assert derives == []
+    messages = services.sessions.list_messages(
+        PROJECT_ID,
+        SESSION_ID,
+        limit=None,
+    )
+    assert any(item.source == driver.YOLO_RESUME_SOURCE for item in messages)
+
+
 @pytest.fixture(name="prompt_contract_runtime")
 def _prompt_contract_runtime(tmp_path, monkeypatch):
     services, snapshot = _create_project(tmp_path, initial_goal="完成短剧")
