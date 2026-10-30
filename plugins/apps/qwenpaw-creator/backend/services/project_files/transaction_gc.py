@@ -20,10 +20,11 @@ deliberately conservative:
   inherit its uncertainty.
 * The newest :data:`TERMINAL_TRANSACTION_RETENTION` terminal transactions stay,
   so a rollback or an incident review still has recent receipts.
-* Nothing older than the Project's reclaim baseline is touched, matching the
-  scratch release rule: history a Project arrived with is treated as the
-  user's, and a build that cannot read compressed snapshots must be able to
-  roll back to a plain-document tree.
+* Pre-baseline history goes too, by default: a customer cannot press anything
+  inside a pod, and space that only returns after a click never comes back.  A
+  Project that chose to keep its history -- its own marker, or
+  ``CREATOR_STORAGE_KEEP_HISTORY`` for a whole install -- is still untouched
+  below the baseline, matching the scratch release rule.
 
 One env var turns the whole sweep off without a code change.
 """
@@ -39,7 +40,7 @@ import threading
 from typing import Any
 
 from services.media_files.task_scratch import (
-    read_history_authorization,
+    history_reclaim_kept,
     read_scratch_baseline,
 )
 from services.runtime_files.atomic_store import AtomicJsonRecordStore
@@ -136,12 +137,13 @@ def collect_project_transactions(
     transactions_root = Path(project_root) / "runtime" / TRANSACTIONS_DIR_NAME
     if not transactions_root.is_dir():
         return (0, 0)
-    authorized = read_history_authorization(project_root) is not None
+    kept = history_reclaim_kept(project_root)
     baseline = read_scratch_baseline(Path(project_root))
-    if baseline is None and not authorized:
-        # Nothing is provably newer than an unrecorded start; the scratch sweep
-        # stamps it this boot, so the next one can collect.  An authorized
-        # Project needs no such proof -- a person asked for the history back.
+    if baseline is None and kept:
+        # A Project keeping its history needs proof that a transaction is newer
+        # than its start, and an unrecorded start proves nothing; the scratch
+        # sweep stamps it this boot, so the next one can collect.  A Project
+        # whose history is not kept needs no such proof at all.
         return (0, 0)
     candidates: list[tuple[float, Path, int]] = []
     for entry in transactions_root.iterdir():
@@ -151,12 +153,11 @@ def collect_project_transactions(
             continue
         if (
             baseline is not None
-            and not authorized
+            and kept
             and _mtime(entry) < baseline.timestamp()
         ):
-            # Arrived with the Project: pre-upgrade history, not this
-            # build's to reclaim -- unless a person authorized taking the
-            # history back.
+            # Arrived with the Project, and this Project asked for its history
+            # to be kept -- so the date gate still protects it.
             continue
         candidates.append((_mtime(entry), entry, _directory_bytes(entry)))
     if len(candidates) <= retention:
@@ -185,8 +186,8 @@ def collect_terminal_transactions(
 ) -> TransactionGCSummary:
     """Sweep every discovered Project once; never raise, never gate startup.
 
-    ``project_ids`` scopes the sweep, which is what the authorized history
-    reclaim uses after a person pressed it for one Project.
+    ``project_ids`` scopes the sweep, which is what the on-demand reclaim uses
+    when a person asks for their space back before the next boot.
     """
 
     if not transaction_gc_enabled():

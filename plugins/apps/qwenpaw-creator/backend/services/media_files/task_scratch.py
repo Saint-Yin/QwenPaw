@@ -72,13 +72,16 @@ KEEP_FILE_NAMES = frozenset({"provider-tasks.jsonl"})
 BASELINE_FILE_NAME = ".storage-baseline.json"
 BASELINE_VERSION = 1
 
-# A Project's pre-baseline history is the user's, not this build's to
-# reclaim -- until a person says otherwise.  One file per Project records
-# that decision, so both sweeps (scratch and transactions) honour it
-# without a code change, and without moving the baseline: shifting it
-# forward would exclude *more* history, and deleting it would only be
-# re-stamped by the next sweep.
-HISTORY_AUTHORIZATION_FILE_NAME = ".storage-history-authorized.json"
+# Pre-baseline history is reclaimed by default: a customer cannot shell into a
+# pod to press anything, and a sweep that waits for consent never collects.
+# What makes the sweeps safe is unchanged -- only a journal-declared terminal
+# transaction goes, the newest receipts stay inside the retention window,
+# QUARANTINED work is kept as evidence, and a terminal Task must be
+# quiet first.
+# Two ways to restore the old promise that an upgrade rewrites nothing: one env
+# var for a whole install, one marker per Project for a person's own choice.
+HISTORY_OPTOUT_FILE_NAME = ".storage-history-optout.json"
+KEEP_PROJECT_HISTORY_ENV = "CREATOR_STORAGE_KEEP_HISTORY"
 
 # A terminal Task that quiet for less than this may still be finishing a
 # concurrent commit elsewhere, so the crash sweep waits it out.
@@ -87,6 +90,11 @@ ORPHAN_RELEASE_GRACE = timedelta(minutes=15)
 TaskStore = Any
 
 _DISABLED_VALUES = frozenset({"0", "false", "no", "off"})
+
+# The keep-history switch is the opposite polarity of the feature switches: it
+# is off unless somebody asks for it, because its whole job is to restore a
+# protection the default no longer applies.
+_ENABLED_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 def scratch_release_enabled() -> bool:
@@ -559,30 +567,27 @@ def read_scratch_baseline(project_root: Path) -> datetime | None:
     return _parse_baseline(stored)
 
 
-def _history_authorization_store(
+def _history_optout_store(
     project_root: Path,
 ) -> AtomicJsonRecordStore[dict[str, Any]]:
     return AtomicJsonRecordStore(
-        Path(project_root) / "runtime" / HISTORY_AUTHORIZATION_FILE_NAME,
+        Path(project_root) / "runtime" / HISTORY_OPTOUT_FILE_NAME,
         None,
     )
 
 
-def read_history_authorization(project_root: Path) -> datetime | None:
-    """When a person authorized reclaiming this Project's pre-baseline history.
-
-    Absent means history stays exactly as the Project arrived -- the promise
-    every upgrade so far has made.
-    """
+def read_history_optout(project_root: Path) -> datetime | None:
+    """When this Project chose to keep its pre-baseline history, if it ever
+    did."""
 
     try:
-        store = _history_authorization_store(Path(project_root))
+        store = _history_optout_store(Path(project_root))
         stored = store.read_or_none()
     except OSError:
         return None
     if not isinstance(stored, dict):
         return None
-    raw = stored.get("authorizedAt")
+    raw = stored.get("keptSince")
     if not isinstance(raw, str):
         return None
     try:
@@ -591,36 +596,45 @@ def read_history_authorization(project_root: Path) -> datetime | None:
         return None
 
 
-def authorize_history_reclaim(
+def keep_project_history(
     project_root: Path,
     *,
     now: datetime,
 ) -> datetime:
-    """Record the authorization once, keeping the first authorized moment.
-
-    A second press must not look like a fresh decision, and the write goes
-    through the same atomic store as the baseline, so an interrupted process
-    leaves either the old answer or the new one -- never a half-written record.
-    """
+    """Record the choice to keep one Project's history, once."""
 
     moment = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
     moment = moment.astimezone(timezone.utc)
-    store = _history_authorization_store(Path(project_root))
-    existing = read_history_authorization(project_root)
+    store = _history_optout_store(Path(project_root))
+    existing = read_history_optout(project_root)
     if existing is not None:
         return existing
     try:
         store.try_create(
-            {"version": BASELINE_VERSION, "authorizedAt": moment.isoformat()},
+            {"version": BASELINE_VERSION, "keptSince": moment.isoformat()},
         )
     except OSError as exc:
         logger.warning(
-            "history reclaim authorization cannot be recorded: %s (%s)",
+            "history keep choice cannot be recorded: %s (%s)",
             store.path,
             exc,
         )
         raise
-    return read_history_authorization(project_root) or moment
+    return read_history_optout(project_root) or moment
+
+
+def history_reclaim_kept(project_root: Path) -> bool:
+    """Whether this Project's pre-baseline history must be left alone.
+
+    The env switch is the fleet-wide emergency stop and the marker is a
+    person's choice for one Project; neither weakens any other rule, they only
+    restore the date gate that the default now ignores.
+    """
+
+    raw = os.environ.get(KEEP_PROJECT_HISTORY_ENV, "")
+    if raw.strip().casefold() in _ENABLED_VALUES:
+        return True
+    return read_history_optout(project_root) is not None
 
 
 def remember_scratch_baseline(
@@ -705,8 +719,9 @@ def release_orphaned_scratch(
     path normally deletes these files long before a sweep runs, so the sweep
     exists only for the window where the process died mid-release.
 
-    ``project_ids`` scopes the sweep to named Projects -- what the authorized
-    history reclaim calls with after a person pressed it for one Project.
+    ``project_ids`` scopes the sweep to named Projects -- what the on-demand
+    reclaim calls with when a person asks for their space back right now rather
+    than at the next boot.
     """
 
     moment = now or datetime.now(timezone.utc)
@@ -723,9 +738,9 @@ def release_orphaned_scratch(
         projects += 1
         project_root = Path(services.projects.project_root(project_id))
         baseline = remember_scratch_baseline(project_root, now=moment)
-        # An authorized Project has no history this sweep must respect; an
-        # unauthorized one keeps every byte that arrived before it was managed.
-        authorized = read_history_authorization(project_root) is not None
+        # Opted-out Projects keep every byte that arrived before they started
+        # being managed; by default the date gate no longer protects them.
+        kept = history_reclaim_kept(project_root)
         task_work = project_root / "runtime" / "task-work"
         directories = {
             item.name: item for item in _scratch_directories(task_work)
@@ -747,7 +762,7 @@ def release_orphaned_scratch(
                 continue
             if not is_releasable_terminal_task(task):
                 continue
-            if not authorized and task.updated_at < baseline:
+            if kept and task.updated_at < baseline:
                 continue
             if moment - task.updated_at < grace:
                 continue
@@ -834,7 +849,7 @@ def project_storage_profile(
     for project_id in services.projects.discover_project_ids():
         root = Path(services.projects.project_root(project_id))
         baseline = read_scratch_baseline(root)
-        authorized_at = read_history_authorization(root)
+        kept_since = read_history_optout(root)
         try:
             finished = {
                 task.task_id: task
@@ -887,8 +902,8 @@ def project_storage_profile(
             {
                 "projectId": project_id,
                 "baselineAt": baseline.isoformat() if baseline else None,
-                "historyAuthorizedAt": (
-                    authorized_at.isoformat() if authorized_at else None
+                "historyKeptAt": (
+                    kept_since.isoformat() if kept_since else None
                 ),
                 **measured,
             },

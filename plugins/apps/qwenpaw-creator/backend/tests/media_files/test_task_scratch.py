@@ -283,9 +283,15 @@ def test_a_failing_listener_cannot_rollback_task_state(
 
 
 @_needs_pinned_release
-def test_sweep_ignores_everything_from_before_the_baseline(
+def test_sweep_releases_pre_baseline_scratch_by_default(
     tmp_path: Path,
 ) -> None:
+    """A settled Task is settled whatever day it was.
+
+    An imported Project held 326 SUCCEEDED tasks -- 9.5 GB -- all older than
+    its baseline; a gate that only opened on a click could not reach them, so
+    the default released them and the click became an opt-out.
+    """
     scratch = _scratch(tmp_path)
     store = ProjectExecutionStore(tmp_path)
     store.create_task(_task(TaskStatus.QUEUED))
@@ -306,9 +312,9 @@ def test_sweep_ignores_everything_from_before_the_baseline(
 
     swept = release_orphaned_scratch(_services(tmp_path), now=T0)
 
-    assert swept.removed_files == 0
+    assert swept.removed_files == 2
     assert read_scratch_baseline(tmp_path / PROJECT_ID) == T0
-    assert len(_media(scratch)) == 2
+    assert _media(scratch) == []
 
     # A task that finished after the baseline is fair game once it is quiet.
     later = _scratch(tmp_path, "task-2")
@@ -330,18 +336,17 @@ def test_sweep_ignores_everything_from_before_the_baseline(
 
     assert summary.removed_files == 2
     assert _media(later) == []
-    assert len(_media(scratch)) == 2
+    assert _media(scratch) == []
 
 
 @_needs_pinned_release
-def test_authorization_releases_the_pre_baseline_scratch(
+def test_keeping_history_spares_the_pre_baseline_scratch(
     tmp_path: Path,
 ) -> None:
-    """The same door, for terminal Task scratch.
+    """The #217 promise, kept as a per-Project choice.
 
-    Without it an imported Project keeps every byte of its finished work: one
-    in the field held 326 SUCCEEDED tasks -- 9.5 GB -- all older than its
-    baseline, and the sweep freed nothing at all.
+    Opting out restores the date gate and nothing else: a still-running or
+    quarantined Task was never in scope to begin with.
     """
 
     scratch = _scratch(tmp_path)
@@ -362,16 +367,16 @@ def test_authorization_releases_the_pre_baseline_scratch(
         updated_at=T0 - timedelta(days=1),
     )
     task_scratch.remember_scratch_baseline(tmp_path / PROJECT_ID, now=T0)
-    task_scratch.authorize_history_reclaim(tmp_path / PROJECT_ID, now=T0)
+    task_scratch.keep_project_history(tmp_path / PROJECT_ID, now=T0)
 
     swept = release_orphaned_scratch(
         _services(tmp_path),
         now=T0 + ORPHAN_RELEASE_GRACE + timedelta(minutes=5),
     )
 
-    assert swept.removed_files == 2
-    assert _media(scratch) == []
-    # The documents that are not scratch media survive any authorization.
+    assert swept.removed_files == 0
+    assert len(_media(scratch)) == 2
+    # Documents are never scratch media, kept or not.
     assert "spec.json" in _survivors(scratch)
     assert "provider-tasks.jsonl" in _survivors(scratch)
 
@@ -522,13 +527,15 @@ def test_allocating_scratch_baselines_a_project_that_was_never_created(
     assert summary.removed_files == 1
 
 
-def test_scratch_brought_in_by_an_import_stays_protected(
+def test_scratch_brought_in_by_an_import_is_reclaimed_by_default(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # The stamp lands at first allocation, later than any archived Task, so
-    # the "pre-upgrade bytes stay put" rule holds for a Project that arrived
-    # through an archive rather than through creation.
+    # the old date gate used to protect a Project that arrived through an
+    # archive -- precisely the imported 24 GB Projects that could not free a
+    # byte on their own.  Settled scratch goes by default now; choosing to
+    # keep the history restores the gate (see the opt-out case above).
     from utils.paths import media_task_scope, task_work_root
 
     legacy = _scratch(tmp_path, "task-legacy")
@@ -554,8 +561,8 @@ def test_scratch_brought_in_by_an_import_stays_protected(
         now=now + ORPHAN_RELEASE_GRACE + timedelta(minutes=5),
     )
 
-    assert summary.removed_files == 0
-    assert len(_media(legacy)) == 2
+    assert summary.removed_files == 2
+    assert _media(legacy) == []
 
 
 def _replace_with_a_link(scratch: Path, outside: Path) -> Path:

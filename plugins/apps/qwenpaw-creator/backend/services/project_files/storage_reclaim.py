@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Authorize and run the history reclaim for one Project.
+"""Run the settled-history sweeps for one Project, right now.
 
-Two sweeps already exist -- terminal transactions and terminal task
-scratch -- and both stop at a Project's reclaim baseline: history a
-Project arrived with belongs to the user, and an upgrade must not rewrite
-it.  A person can lift that boundary, and this module is the only door.  It
-records the authorization for one Project, then runs both existing sweeps
-over that Project alone and reports what actually left the disk.
+The sweeps already run at boot: terminal transactions past the retention window
+and terminal Task scratch.  By default they no longer stop at a Project's
+reclaim baseline, because a customer inside a pod cannot press anything and
+space that waits for a click never comes back.
 
-Nothing here deletes by hand, so every rule the sweeps already enforce still
-applies: only a transaction whose own ``journal.json`` names a terminal state,
-the newest receipts inside the retention window, ``QUARANTINED`` work kept as
-evidence, a quiet period before a terminal Task's scratch is touched, and both
-environment switches.  Authorization opens the date gate; it opens
-nothing else.
+This module is the on-demand door for the same code -- "give me my space back
+now, not at the next restart".  It deletes nothing itself, so every rule the
+sweeps already enforce still applies: only a transaction whose own
+``journal.json`` names a terminal state, the newest receipts inside the
+retention window, ``QUARANTINED`` work kept as evidence, a quiet period before
+a terminal Task's scratch is touched, and both environment switches.  A Project
+that explicitly chose to keep its history is reported as kept and left alone.
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from services.media_files.task_scratch import (
-    authorize_history_reclaim,
+    history_reclaim_kept,
     release_orphaned_scratch,
 )
 
@@ -34,10 +33,10 @@ from .transaction_gc import collect_terminal_transactions
 
 @dataclass(frozen=True, slots=True)
 class HistoryReclaimResult:
-    """What one authorized sweep actually freed."""
+    """What one on-demand sweep actually freed."""
 
     project_id: str
-    authorized_at: datetime
+    history_kept: bool
     removed_transactions: int
     transaction_bytes: int
     released_files: int
@@ -50,11 +49,11 @@ def reclaim_project_history(
     *,
     now: datetime | None = None,
 ) -> HistoryReclaimResult:
-    """Authorize and reclaim one Project's settled history; report the delta.
+    """Sweep one Project's settled history now; report the real delta.
 
-    The Project is addressed on disk before anything is written, so a malformed
-    or unknown id fails without leaving an authorization behind.  Existence is
-    the only assertion: a Project whose ``project.json`` no longer validates is
+    The Project is addressed on disk before anything is deleted, so a malformed
+    or unknown id fails without touching a byte.  Existence is the only
+    assertion: a Project whose ``project.json`` no longer validates is
     precisely the case where freeing its settled history still has to work.
     """
 
@@ -62,7 +61,15 @@ def reclaim_project_history(
     project_root = Path(services.projects.project_root(project_id))
     if not services.projects.project_path(project_id).is_file():
         raise ProjectNotFound(f"Project does not exist: {project_id}")
-    authorized_at = authorize_history_reclaim(project_root, now=moment)
+    if history_reclaim_kept(project_root):
+        return HistoryReclaimResult(
+            project_id=project_id,
+            history_kept=True,
+            removed_transactions=0,
+            transaction_bytes=0,
+            released_files=0,
+            released_bytes=0,
+        )
     transactions = collect_terminal_transactions(
         services,
         project_ids=(project_id,),
@@ -74,7 +81,7 @@ def reclaim_project_history(
     )
     return HistoryReclaimResult(
         project_id=project_id,
-        authorized_at=authorized_at,
+        history_kept=False,
         removed_transactions=transactions.removed_transactions,
         transaction_bytes=transactions.removed_bytes,
         released_files=scratch.removed_files,

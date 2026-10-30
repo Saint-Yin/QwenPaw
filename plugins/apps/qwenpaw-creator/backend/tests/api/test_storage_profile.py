@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-
 pytestmark = pytest.mark.unit
 
 TOTAL_KEYS = {
@@ -112,7 +111,7 @@ def test_reclaim_history_refuses_an_unconfirmed_press(
     assert len(list(transactions.iterdir())) == 60
 
 
-def test_reclaim_history_sweeps_only_the_authorized_project(
+def test_reclaim_history_sweeps_only_the_requested_project(
     api_request,
     app,
     api_runtime_root,
@@ -129,8 +128,8 @@ def test_reclaim_history_sweeps_only_the_authorized_project(
 
     assert response.status_code == 200
     body = response.json()
-    # Retention still applies: the newest 50 receipts are kept even when a
-    # person authorizes the history, so only the surplus left the disk.
+    # The on-demand sweep is the boot sweep, so retention still holds: the
+    # newest 50 receipts stay, only the surplus leaves.
     assert body["removedTransactions"] == 10
     assert body["transactionBytes"] > 0
     assert len(list(first.iterdir())) == 50
@@ -138,5 +137,35 @@ def test_reclaim_history_sweeps_only_the_authorized_project(
 
     profile = api_request(app, "GET", "/storage/profile").json()
     rows = {item["projectId"]: item for item in profile["projects"]}
-    assert rows[PROJECT_A]["historyAuthorizedAt"]
-    assert rows[PROJECT_B]["historyAuthorizedAt"] is None
+    assert rows[PROJECT_A]["historyKeptAt"] is None
+    assert rows[PROJECT_B]["historyKeptAt"] is None
+
+
+def test_reclaim_history_refuses_a_project_that_kept_its_history(
+    api_request,
+    app,
+    api_runtime_root,
+):
+    """Opting out is answered with a refusal, not a silent zero.
+
+    A button that reports success while deleting nothing teaches the person
+    to press it again, so the kept case has to say so out loud.
+    """
+
+    from services.media_files.task_scratch import keep_project_history
+
+    transactions = _seed_legacy_project(api_runtime_root, PROJECT_A, count=60)
+    keep_project_history(
+        api_runtime_root / PROJECT_A,
+        now=datetime.now(timezone.utc),
+    )
+
+    response = api_request(
+        app,
+        "POST",
+        f"/storage/projects/{PROJECT_A}/reclaim-history",
+        json={"confirm": True},
+    )
+
+    assert response.status_code == 409
+    assert len(list(transactions.iterdir())) == 60

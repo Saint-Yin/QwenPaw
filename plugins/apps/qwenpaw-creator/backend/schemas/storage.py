@@ -13,9 +13,9 @@ class ProjectStorageProfileData(StrictModel):
 
     project_id: str = Field(alias="projectId")
     baseline_at: str | None = Field(default=None, alias="baselineAt")
-    history_authorized_at: str | None = Field(
+    history_kept_at: str | None = Field(
         default=None,
-        alias="historyAuthorizedAt",
+        alias="historyKeptAt",
     )
     task_work_bytes: int = Field(default=0, alias="taskWorkBytes")
     task_work_legacy_bytes: int = Field(default=0, alias="taskWorkLegacyBytes")
@@ -38,10 +38,10 @@ class HistoryReclaimRequest(StrictModel):
 
 
 class HistoryReclaimResultData(StrictModel):
-    """What one authorized history reclaim actually took off the disk."""
+    """What one on-demand history sweep actually took off the disk."""
 
     project_id: str = Field(alias="projectId")
-    authorized_at: str = Field(alias="authorizedAt")
+    history_kept: bool = Field(alias="historyKept")
     removed_transactions: int = Field(default=0, alias="removedTransactions")
     transaction_bytes: int = Field(default=0, alias="transactionBytes")
     released_files: int = Field(default=0, alias="releasedFiles")

@@ -19,7 +19,7 @@ import time
 import pytest
 
 from services.media_files.task_scratch import (
-    authorize_history_reclaim,
+    keep_project_history,
     remember_scratch_baseline,
 )
 from services.project_files import transaction_gc
@@ -135,15 +135,51 @@ def test_an_unknown_state_is_not_treated_as_terminal(tmp_path):
     assert future.is_dir()
 
 
-def test_history_before_the_baseline_is_left_alone(tmp_path):
+def test_pre_baseline_history_is_reclaimed_by_default(tmp_path):
+    """A customer inside a pod cannot press anything, so the date gate is
+    gone by default: a settled transaction is settled whatever day it was.
+    """
+
     project_root = _managed(tmp_path)
-    _transaction(project_root, "txn-legacy", "ABORTED", age_days=-5)
+    legacy = _transaction(project_root, "txn-legacy", "ABORTED", age_days=-5)
+
+    count, size = collect_project_transactions(project_root, retention=0)
+
+    assert count == 1
+    assert size > 0
+    assert not legacy.is_dir()
+
+
+def test_keeping_history_restores_the_baseline_gate(tmp_path):
+    """The #217 promise survives as an explicit choice, per Project."""
+
+    project_root = _managed(tmp_path)
+    legacy = _transaction(project_root, "txn-legacy", "ABORTED", age_days=-5)
+    keep_project_history(project_root, now=BASELINE)
 
     assert collect_project_transactions(project_root, retention=0) == (0, 0)
-    assert (project_root / "runtime" / "transactions" / "txn-legacy").is_dir()
+    assert legacy.is_dir()
 
 
-def test_a_project_without_a_baseline_is_skipped(tmp_path):
+def test_the_install_switch_keeps_every_projects_history(
+    tmp_path,
+    monkeypatch,
+):
+    """One env var restores the fleet-wide behaviour without a code change."""
+
+    monkeypatch.setenv("CREATOR_STORAGE_KEEP_HISTORY", "1")
+    project_root = _managed(tmp_path)
+    legacy = _transaction(project_root, "txn-legacy", "ABORTED", age_days=-5)
+
+    assert collect_project_transactions(project_root, retention=0) == (0, 0)
+    assert legacy.is_dir()
+
+
+def test_a_project_without_a_baseline_is_swept_now(tmp_path):
+    """No baseline used to mean "nothing is provably new"; with the date gate
+    no longer protecting history there is nothing left to wait for.
+    """
+
     project_root = _runtime(tmp_path)
     directory = _transaction(
         project_root,
@@ -152,23 +188,22 @@ def test_a_project_without_a_baseline_is_skipped(tmp_path):
         age_days=1,
     )
 
-    assert collect_project_transactions(project_root, retention=0) == (0, 0)
-    assert directory.is_dir()
+    assert collect_project_transactions(project_root, retention=0) != (0, 0)
+    assert not directory.is_dir()
 
 
-def test_authorization_takes_the_pre_baseline_history_back(tmp_path):
-    """A person can lift the date gate; no other rule bends with it.
+def test_the_default_sweep_bends_no_other_rule(tmp_path):
+    """Reclaiming by default changes the date gate and nothing else.
 
     Field note: one imported Project held 618 terminal transactions -- 8.4 GB
-    -- every one older than its baseline, so the sweep that already existed
-    freed exactly nothing until somebody authorized it.
+    -- every one older than its baseline, so the gated sweep freed exactly
+    nothing.  Retention and the terminal-state test still have to hold.
     """
 
     project_root = _managed(tmp_path)
     oldest = _transaction(project_root, "txn-oldest", "ABORTED", age_days=-9)
     recent = _transaction(project_root, "txn-recent", "ABORTED", age_days=-5)
     unsettled = _transaction(project_root, "txn-open", "PREPARED", age_days=-5)
-    authorize_history_reclaim(project_root, now=BASELINE)
 
     count, size = collect_project_transactions(project_root, retention=1)
 

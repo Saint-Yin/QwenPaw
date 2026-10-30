@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Storage accounting, plus the one action that takes settled history back."""
+"""Storage accounting, plus the on-demand sweep that frees settled history."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import asyncio
 
 from fastapi import APIRouter, Depends, Query
 
-from domain.errors import BadRequestError, NotFoundError
+from domain.errors import BadRequestError, ConflictError, NotFoundError
 from schemas.storage import (
     HistoryReclaimRequest,
     HistoryReclaimResultData,
@@ -19,7 +19,6 @@ from services.project_files.storage_reclaim import reclaim_project_history
 from services.project_files.store import ProjectNotFound
 
 from .dependencies import CreatorErrorRoute, project_file_services
-
 
 router = APIRouter(
     prefix="/storage",
@@ -56,14 +55,14 @@ async def reclaim_history(
     payload: HistoryReclaimRequest,
     services: CreatorFileServices = Depends(project_file_services),
 ) -> HistoryReclaimResultData:
-    """Take one Project's settled history back, for a person who asked for it.
+    """Take one Project's settled history back now, not at the next restart.
 
-    Pre-baseline history is protected by design -- an upgrade must not rewrite
-    what the user arrived with -- so this is the only door, and it requires an
-    explicit ``confirm``.  What runs afterwards is the pair of sweeps that
-    already exist, over this Project alone: terminal transactions beyond the
-    retention window, and terminal Task scratch.  The response reports bytes
-    actually freed, never an estimate.
+    The same two sweeps run by themselves at boot -- terminal transactions past
+    the retention window, and terminal Task scratch.  Reclaiming pre-baseline
+    history is the default; a Project that explicitly chose to keep it is
+    refused rather than silently doing nothing.  ``confirm`` is required
+    because
+    the caller is a person watching a button, not a cron job.
     """
 
     if not payload.confirm:
@@ -76,10 +75,12 @@ async def reclaim_history(
         )
     except ProjectNotFound as exc:
         raise NotFoundError(str(exc)) from exc
+    if result.history_kept:
+        raise ConflictError("该项目已选择保留历史数据，未执行回收")
     return HistoryReclaimResultData.model_validate(
         {
             "projectId": result.project_id,
-            "authorizedAt": result.authorized_at.isoformat(),
+            "historyKept": result.history_kept,
             "removedTransactions": result.removed_transactions,
             "transactionBytes": result.transaction_bytes,
             "releasedFiles": result.released_files,
