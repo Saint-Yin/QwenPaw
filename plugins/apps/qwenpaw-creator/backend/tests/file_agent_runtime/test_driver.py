@@ -5683,3 +5683,139 @@ def test_upload_joining_a_live_run_starts_understanding(
         "本轮上传素材的理解已启动" in str(entry.get("content") or "")
         for entry in joined_turn
     )
+
+
+def _quiet_tick_driver(tmp_path):
+    """One idle Project whose every message is already consumed."""
+
+    services, _snapshot = _create_project(tmp_path, initial_goal="完成短剧")
+    session = services.sessions.get_project_session(PROJECT_ID)
+    services.sessions.mark_messages_consumed(
+        PROJECT_ID,
+        SESSION_ID,
+        through_seq=session.last_message_seq,
+        goal_id=GOAL_ID,
+    )
+    driver = _driver(services, lambda _messages, _tools: AgentModelTurn())
+    counts = {"messages": 0, "project_read": 0}
+    list_messages = driver.sessions.list_messages
+
+    def spy_messages(*args, **kwargs):
+        counts["messages"] += 1
+        return list_messages(*args, **kwargs)
+
+    driver.sessions.list_messages = spy_messages
+    read_project = services.projects.read
+
+    def spy_read(project_id):
+        counts["project_read"] += 1
+        return read_project(project_id)
+
+    services.projects.read = spy_read
+    return services, driver, counts
+
+
+def test_reconcile_skips_the_chain_while_nothing_durable_moved(
+    tmp_path,
+) -> None:
+    services, driver, counts = _quiet_tick_driver(tmp_path)
+
+    asyncio.run(driver._reconcile_project(PROJECT_ID))
+    after_first = dict(counts)
+    assert after_first["messages"] > 0  # the chain really ran
+
+    asyncio.run(driver._reconcile_project(PROJECT_ID))
+    assert counts == after_first  # quiet tick: no scan, no read, no derivation
+
+    # A new human request must be picked up on the very next tick, not after
+    # the quiet ceiling: the pointer moved, so the guard cannot swallow it.
+    services.sessions.admit_user_request(
+        PROJECT_ID,
+        SESSION_ID,
+        CONVERSATION_ID,
+        request_id="next",
+        client_message_id="next",
+        content_parts=[{"type": "text", "text": "再加一个镜头"}],
+        source="user",
+        channel=MessageChannel.COMPOSER,
+        classification=MessageClassification.MUTATION_INSTRUCTION,
+    )
+    asyncio.run(driver._reconcile_project(PROJECT_ID))
+    assert counts["messages"] > after_first["messages"]
+
+
+def test_reconcile_skips_a_deliberately_parked_head(tmp_path) -> None:
+    """A parked head is a verdict, not a reason to re-scan every tick.
+
+    Every real Project here holds 3-21 unconsumed automated messages that
+    reconcile intentionally does not launch; re-deriving that "no" each tick
+    was the whole idle cost.
+    """
+
+    services, driver, counts = _quiet_tick_driver(tmp_path)
+    admitted = services.sessions.admit_user_request(
+        PROJECT_ID,
+        SESSION_ID,
+        CONVERSATION_ID,
+        request_id="parked",
+        client_message_id="parked",
+        content_parts=[{"type": "text", "text": "先别动这条"}],
+        source="user",
+        channel=MessageChannel.COMPOSER,
+        classification=MessageClassification.MUTATION_INSTRUCTION,
+    )
+    driver._blocked_heads[PROJECT_ID] = admitted.message.message_seq
+
+    asyncio.run(driver._reconcile_project(PROJECT_ID))
+    settled = dict(counts)
+    asyncio.run(driver._reconcile_project(PROJECT_ID))
+    assert counts == settled  # same head, same decision, no re-scan
+
+    # A second request moves the head, and the next tick must see it at once.
+    services.sessions.admit_user_request(
+        PROJECT_ID,
+        SESSION_ID,
+        CONVERSATION_ID,
+        request_id="newer",
+        client_message_id="newer",
+        content_parts=[{"type": "text", "text": "现在改这个"}],
+        source="user",
+        channel=MessageChannel.COMPOSER,
+        classification=MessageClassification.MUTATION_INSTRUCTION,
+    )
+    asyncio.run(driver._reconcile_project(PROJECT_ID))
+    assert counts["messages"] > settled["messages"]
+
+
+def test_reconcile_quiet_window_expires(tmp_path) -> None:
+    _services, driver, counts = _quiet_tick_driver(tmp_path)
+    asyncio.run(driver._reconcile_project(PROJECT_ID))
+    settled = dict(counts)
+    asyncio.run(driver._reconcile_project(PROJECT_ID))
+    assert counts == settled
+
+    driver._RECONCILE_QUIET_CEILING_SECONDS = -1.0
+
+    asyncio.run(driver._reconcile_project(PROJECT_ID))
+    assert counts["messages"] > settled["messages"]
+
+
+@pytest.mark.parametrize("status", ["RUNNING", "RESUMING"])
+def test_reconcile_never_quiet_while_the_session_is_settling(
+    tmp_path,
+    status,
+) -> None:
+    from services.runtime_files.models import CreatorSessionStatus
+
+    services, driver, counts = _quiet_tick_driver(tmp_path)
+    asyncio.run(driver._reconcile_project(PROJECT_ID))
+    settled = dict(counts)
+    services.sessions.set_session_status(
+        PROJECT_ID,
+        SESSION_ID,
+        getattr(CreatorSessionStatus, status),
+    )
+
+    asyncio.run(driver._reconcile_project(PROJECT_ID))
+
+    assert counts["messages"] > settled["messages"]

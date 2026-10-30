@@ -1598,6 +1598,11 @@ class FileCreatorAgentRuntime:
         # In-process only: a restart re-evaluates once and the persisted
         # ``executionPauseKey`` dedupe keeps the visible notice singular.
         self._auto_resume_pause_memo: dict[str, tuple[Any, ...]] = {}
+        # Per Project quiet-tick fingerprint: (monotonic time, signature).  Lets
+        # an idle Project cost a handful of stats per tick instead of a Project
+        # parse, a task scan and a work-graph derivation (§9.6 of
+        # docs/oom-triage.md: 13 Projects were 543 ms of that every 1.8 s).
+        self._reconcile_quiet: dict[str, tuple[float, Any]] = {}
         # Durable-interrupt stall tracking: project -> (run_id, first seen
         # monotonic time).  A RUNNING run with no local handle normally
         # belongs to another live process, but when that owner died before
@@ -2453,6 +2458,92 @@ class FileCreatorAgentRuntime:
         session = await self._converge_resolved_review(project_id, session)
         return session
 
+    # How long a Project may be treated as quiet before the reconcile chain is
+    # forced to run once more, even if every stamp below still matches.  The
+    # idle-notification escape valve ages on wall-clock
+    # (NOTIFY_IDLE_FLUSH_COOLDOWN_SECONDS = 120s), so a ceiling an order of
+    # magnitude smaller cannot delay it meaningfully, and it bounds any change
+    # this process cannot observe (a peer writing inside the tick window).
+    _RECONCILE_QUIET_CEILING_SECONDS = 15.0
+
+    def _durable_stamp(self, project_id: str, session_id: str) -> Any | None:
+        """Stat-only fingerprint of the durable state a tick would read.
+
+        An atomic replace-write renames into its parent directory, so the
+        parent's mtime already carries it; the two streams this path appends to
+        are statted by name because appending leaves the parent alone.
+        ``None`` means the Project cannot be fingerprinted and must never be
+        treated as quiet.
+        """
+
+        def stamp(path: Path) -> tuple[int, int] | None:
+            try:
+                info = path.stat()
+            except OSError:
+                return None
+            return (info.st_mtime_ns, info.st_size)
+
+        root = self.services.projects.project_root(project_id)
+        runtime = root / "runtime"
+        parts: list[Any] = [("project", stamp(root / "project.json"))]
+        try:
+            children = sorted(runtime.iterdir(), key=lambda item: item.name)
+        except OSError:
+            return None
+        for entry in children:
+            parts.append((entry.name, stamp(entry)))
+        session_dir = runtime / "sessions" / session_id
+        for name in ("session.json", "messages.jsonl"):
+            parts.append((f"sessions/{name}", stamp(session_dir / name)))
+        return parts
+
+    async def _reconcile_is_quiet(self, project_id: str, session: Any) -> bool:
+        """Return True when the whole reconcile chain would repeat itself.
+
+        Only three conditions veto the cache, because they are the ones time or
+        this process -- not the filesystem -- can change: a run launched here,
+        a Session holding a cross-process lease (the orphan grace ages on the
+        clock), and a Session still settling.  A parked head message is *not* a
+        veto: its identity is part of the signature, so the tick re-runs the
+        moment the head moves and can still skip while the verdict is
+        "deliberately not launching".
+        """
+
+        if self._active.get(project_id) is not None:
+            return False
+        if session.active_run_id is not None:
+            return False
+        if session.status is not CreatorSessionStatus.IDLE:
+            return False
+        durable = await asyncio.to_thread(
+            self._durable_stamp,
+            project_id,
+            session.session_id,
+        )
+        if durable is None:
+            self._reconcile_quiet.pop(project_id, None)
+            return False
+        signature = (
+            durable,
+            session.last_consumed_message_seq,
+            session.last_message_seq,
+            session.queued_user_message_count,
+            self._blocked_heads.get(project_id),
+            get_media_review_mode(),
+            get_image_model_name(),
+            get_video_model_name(),
+        )
+        now = time.monotonic()
+        remembered = self._reconcile_quiet.get(project_id)
+        if (
+            remembered is not None
+            and remembered[1] == signature
+            and now - remembered[0] < self._RECONCILE_QUIET_CEILING_SECONDS
+        ):
+            return True
+        self._reconcile_quiet[project_id] = (now, signature)
+        return False
+
     async def _reconcile_project(self, project_id: str) -> None:
         handle = self._active.get(project_id)
         if handle is not None and handle.task.done():
@@ -2474,6 +2565,11 @@ class FileCreatorAgentRuntime:
             handle,
         )
         if session is None:
+            return
+        if await self._reconcile_is_quiet(project_id, session):
+            # Nothing durable moved since the last projection: the pending
+            # scan, the outbox read and the work-graph derivation below would
+            # produce the same answer from the same bytes.
             return
         pending = await asyncio.to_thread(
             self.sessions.list_messages,
