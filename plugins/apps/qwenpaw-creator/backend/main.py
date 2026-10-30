@@ -64,6 +64,9 @@ from services.runtime_files.runtime_dependencies import (  # noqa: E402
     CreatorBinaryDependencyError,
     ensure_creator_runtime_dependencies,
 )
+from services.runtime_files.session_elision import (  # noqa: E402
+    elide_stored_conversations,
+)
 from services.storage_root import (  # noqa: E402
     CreatorDataRootError,
     require_creator_data_root,
@@ -158,6 +161,14 @@ app.include_router(creator_router)
 # Creator file runtime handle kept for the lifetime of the app.
 _file_services: CreatorFileServices | None = None
 
+# A background maintenance pass has to be referenced or the loop may collect it
+# mid-file.
+_elision_task: "asyncio.Task[None] | None" = None
+
+# Long enough for recovery and the first page to settle, short enough that a
+# customer's reclaimed space arrives while they are still looking at the list.
+_ELISION_DELAY_SECONDS = 20.0
+
 
 async def _sweep_orphaned_scratch(services: CreatorFileServices) -> None:
     """Collect scratch a killed process left behind, without gating startup.
@@ -209,9 +220,39 @@ async def _collect_settled_transactions(services: CreatorFileServices) -> None:
         )
 
 
+async def _elide_stored_conversations(
+    services: CreatorFileServices,
+) -> None:
+    """Collapse legacy project echoes inside stored conversations.
+
+    Deferred and never awaited by the startup hook: where the two sweeps above
+    walk directories, this one reads whole session streams -- and a 606 MB one
+    is read by a child process precisely so the server never has to hold it.
+    Each pass records where it left every file, so the next boot pays a stat
+    instead of a re-read.
+    """
+
+    await asyncio.sleep(_ELISION_DELAY_SECONDS)
+    try:
+        summary = await elide_stored_conversations(services)
+    except Exception:  # noqa: BLE001 - cleanup must never gate the app
+        logger.warning("stored conversation elision failed", exc_info=True)
+        return
+    for failure in summary.failures:
+        logger.warning("stored conversation elision failed: %s", failure)
+    if summary.saved_bytes:
+        logger.info(
+            "stored conversation echoes collapsed: projects=%s files=%s "
+            "bytes=%s",
+            summary.projects,
+            summary.files,
+            summary.saved_bytes,
+        )
+
+
 @app.hook("startup", priority=90)
 async def _startup() -> None:  # pylint: disable=too-many-statements
-    global _file_services
+    global _file_services, _elision_task
     try:
         configure_creator_runtime_environment()
         data_root = require_creator_data_root()
@@ -287,6 +328,7 @@ async def _startup() -> None:  # pylint: disable=too-many-statements
     logger.info("QwenPaw Creator file runtime ready at %s", data_root)
     await _sweep_orphaned_scratch(services)
     await _collect_settled_transactions(services)
+    _elision_task = asyncio.create_task(_elide_stored_conversations(services))
     # Loud, not silent: explicitly set review env vars take full control
     # and the settings-center toggles are ignored — a field incident had
     # review running with the UI switched off because a stale env stayed
