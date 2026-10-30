@@ -72,6 +72,14 @@ KEEP_FILE_NAMES = frozenset({"provider-tasks.jsonl"})
 BASELINE_FILE_NAME = ".storage-baseline.json"
 BASELINE_VERSION = 1
 
+# A Project's pre-baseline history is the user's, not this build's to
+# reclaim -- until a person says otherwise.  One file per Project records
+# that decision, so both sweeps (scratch and transactions) honour it
+# without a code change, and without moving the baseline: shifting it
+# forward would exclude *more* history, and deleting it would only be
+# re-stamped by the next sweep.
+HISTORY_AUTHORIZATION_FILE_NAME = ".storage-history-authorized.json"
+
 # A terminal Task that quiet for less than this may still be finishing a
 # concurrent commit elsewhere, so the crash sweep waits it out.
 ORPHAN_RELEASE_GRACE = timedelta(minutes=15)
@@ -551,6 +559,70 @@ def read_scratch_baseline(project_root: Path) -> datetime | None:
     return _parse_baseline(stored)
 
 
+def _history_authorization_store(
+    project_root: Path,
+) -> AtomicJsonRecordStore[dict[str, Any]]:
+    return AtomicJsonRecordStore(
+        Path(project_root) / "runtime" / HISTORY_AUTHORIZATION_FILE_NAME,
+        None,
+    )
+
+
+def read_history_authorization(project_root: Path) -> datetime | None:
+    """When a person authorized reclaiming this Project's pre-baseline history.
+
+    Absent means history stays exactly as the Project arrived -- the promise
+    every upgrade so far has made.
+    """
+
+    try:
+        store = _history_authorization_store(Path(project_root))
+        stored = store.read_or_none()
+    except OSError:
+        return None
+    if not isinstance(stored, dict):
+        return None
+    raw = stored.get("authorizedAt")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def authorize_history_reclaim(
+    project_root: Path,
+    *,
+    now: datetime,
+) -> datetime:
+    """Record the authorization once, keeping the first authorized moment.
+
+    A second press must not look like a fresh decision, and the write goes
+    through the same atomic store as the baseline, so an interrupted process
+    leaves either the old answer or the new one -- never a half-written record.
+    """
+
+    moment = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    moment = moment.astimezone(timezone.utc)
+    store = _history_authorization_store(Path(project_root))
+    existing = read_history_authorization(project_root)
+    if existing is not None:
+        return existing
+    try:
+        store.try_create(
+            {"version": BASELINE_VERSION, "authorizedAt": moment.isoformat()},
+        )
+    except OSError as exc:
+        logger.warning(
+            "history reclaim authorization cannot be recorded: %s (%s)",
+            store.path,
+            exc,
+        )
+        raise
+    return read_history_authorization(project_root) or moment
+
+
 def remember_scratch_baseline(
     project_root: Path,
     *,
@@ -623,6 +695,7 @@ def release_orphaned_scratch(
     *,
     now: datetime | None = None,
     grace: timedelta = ORPHAN_RELEASE_GRACE,
+    project_ids: Iterable[str] | None = None,
 ) -> ScratchSweepSummary:
     """Collect the scratch a crash left behind after a Task already finished.
 
@@ -631,6 +704,9 @@ def release_orphaned_scratch(
     state after the Project baseline and has not been touched since.  The event
     path normally deletes these files long before a sweep runs, so the sweep
     exists only for the window where the process died mid-release.
+
+    ``project_ids`` scopes the sweep to named Projects -- what the authorized
+    history reclaim calls with after a person pressed it for one Project.
     """
 
     moment = now or datetime.now(timezone.utc)
@@ -642,9 +718,14 @@ def release_orphaned_scratch(
     removed_files = 0
     removed_bytes = 0
     for project_id in services.projects.discover_project_ids():
+        if project_ids is not None and project_id not in set(project_ids):
+            continue
         projects += 1
         project_root = Path(services.projects.project_root(project_id))
         baseline = remember_scratch_baseline(project_root, now=moment)
+        # An authorized Project has no history this sweep must respect; an
+        # unauthorized one keeps every byte that arrived before it was managed.
+        authorized = read_history_authorization(project_root) is not None
         task_work = project_root / "runtime" / "task-work"
         directories = {
             item.name: item for item in _scratch_directories(task_work)
@@ -666,7 +747,7 @@ def release_orphaned_scratch(
                 continue
             if not is_releasable_terminal_task(task):
                 continue
-            if task.updated_at < baseline:
+            if not authorized and task.updated_at < baseline:
                 continue
             if moment - task.updated_at < grace:
                 continue
@@ -753,6 +834,7 @@ def project_storage_profile(
     for project_id in services.projects.discover_project_ids():
         root = Path(services.projects.project_root(project_id))
         baseline = read_scratch_baseline(root)
+        authorized_at = read_history_authorization(root)
         try:
             finished = {
                 task.task_id: task
@@ -805,6 +887,9 @@ def project_storage_profile(
             {
                 "projectId": project_id,
                 "baselineAt": baseline.isoformat() if baseline else None,
+                "historyAuthorizedAt": (
+                    authorized_at.isoformat() if authorized_at else None
+                ),
                 **measured,
             },
         )

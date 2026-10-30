@@ -38,7 +38,10 @@ import shutil
 import threading
 from typing import Any
 
-from services.media_files.task_scratch import read_scratch_baseline
+from services.media_files.task_scratch import (
+    read_history_authorization,
+    read_scratch_baseline,
+)
 from services.runtime_files.atomic_store import AtomicJsonRecordStore
 from services.runtime_files.path_safety import is_link_path
 
@@ -133,10 +136,12 @@ def collect_project_transactions(
     transactions_root = Path(project_root) / "runtime" / TRANSACTIONS_DIR_NAME
     if not transactions_root.is_dir():
         return (0, 0)
+    authorized = read_history_authorization(project_root) is not None
     baseline = read_scratch_baseline(Path(project_root))
-    if baseline is None:
+    if baseline is None and not authorized:
         # Nothing is provably newer than an unrecorded start; the scratch sweep
-        # stamps it this boot, so the next one can collect.
+        # stamps it this boot, so the next one can collect.  An authorized
+        # Project needs no such proof -- a person asked for the history back.
         return (0, 0)
     candidates: list[tuple[float, Path, int]] = []
     for entry in transactions_root.iterdir():
@@ -144,9 +149,14 @@ def collect_project_transactions(
             continue
         if _journal_state(entry) not in TERMINAL_JOURNAL_STATES:
             continue
-        if _mtime(entry) < baseline.timestamp():
-            # Arrived with the Project: pre-upgrade history, not this build's
-            # to reclaim.
+        if (
+            baseline is not None
+            and not authorized
+            and _mtime(entry) < baseline.timestamp()
+        ):
+            # Arrived with the Project: pre-upgrade history, not this
+            # build's to reclaim -- unless a person authorized taking the
+            # history back.
             continue
         candidates.append((_mtime(entry), entry, _directory_bytes(entry)))
     if len(candidates) <= retention:
@@ -171,16 +181,24 @@ def collect_terminal_transactions(
     services: Any,
     *,
     retention: int = TERMINAL_TRANSACTION_RETENTION,
+    project_ids: Any | None = None,
 ) -> TransactionGCSummary:
-    """Sweep every discovered Project once; never raise, never gate startup."""
+    """Sweep every discovered Project once; never raise, never gate startup.
+
+    ``project_ids`` scopes the sweep, which is what the authorized history
+    reclaim uses after a person pressed it for one Project.
+    """
 
     if not transaction_gc_enabled():
         return TransactionGCSummary()
+    wanted = None if project_ids is None else set(project_ids)
     projects = 0
     swept = 0
     removed = 0
     removed_bytes = 0
     for project_id in services.projects.discover_project_ids():
+        if wanted is not None and project_id not in wanted:
+            continue
         projects += 1
         try:
             project_root = Path(services.projects.project_root(project_id))

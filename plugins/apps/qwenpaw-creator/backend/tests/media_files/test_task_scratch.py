@@ -334,6 +334,49 @@ def test_sweep_ignores_everything_from_before_the_baseline(
 
 
 @_needs_pinned_release
+def test_authorization_releases_the_pre_baseline_scratch(
+    tmp_path: Path,
+) -> None:
+    """The same door, for terminal Task scratch.
+
+    Without it an imported Project keeps every byte of its finished work: one
+    in the field held 326 SUCCEEDED tasks -- 9.5 GB -- all older than its
+    baseline, and the sweep freed nothing at all.
+    """
+
+    scratch = _scratch(tmp_path)
+    store = ProjectExecutionStore(tmp_path)
+    store.create_task(_task(TaskStatus.QUEUED))
+    _moved(
+        store,
+        "task-1",
+        frm=TaskStatus.QUEUED,
+        to=TaskStatus.RUNNING,
+        updated_at=T0 - timedelta(days=2),
+    )
+    _moved(
+        store,
+        "task-1",
+        frm=TaskStatus.RUNNING,
+        to=TaskStatus.SUCCEEDED,
+        updated_at=T0 - timedelta(days=1),
+    )
+    task_scratch.remember_scratch_baseline(tmp_path / PROJECT_ID, now=T0)
+    task_scratch.authorize_history_reclaim(tmp_path / PROJECT_ID, now=T0)
+
+    swept = release_orphaned_scratch(
+        _services(tmp_path),
+        now=T0 + ORPHAN_RELEASE_GRACE + timedelta(minutes=5),
+    )
+
+    assert swept.removed_files == 2
+    assert _media(scratch) == []
+    # The documents that are not scratch media survive any authorization.
+    assert "spec.json" in _survivors(scratch)
+    assert "provider-tasks.jsonl" in _survivors(scratch)
+
+
+@_needs_pinned_release
 def test_sweep_holds_recent_and_orphan_directories(tmp_path: Path) -> None:
     recent = _scratch(tmp_path, "task-1")
     unknown = _scratch(tmp_path, "task-ghost")

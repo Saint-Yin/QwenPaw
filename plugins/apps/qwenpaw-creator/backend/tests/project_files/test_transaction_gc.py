@@ -18,7 +18,10 @@ import time
 
 import pytest
 
-from services.media_files.task_scratch import remember_scratch_baseline
+from services.media_files.task_scratch import (
+    authorize_history_reclaim,
+    remember_scratch_baseline,
+)
 from services.project_files import transaction_gc
 from services.project_files.transaction_gc import (
     collect_project_transactions,
@@ -151,6 +154,29 @@ def test_a_project_without_a_baseline_is_skipped(tmp_path):
 
     assert collect_project_transactions(project_root, retention=0) == (0, 0)
     assert directory.is_dir()
+
+
+def test_authorization_takes_the_pre_baseline_history_back(tmp_path):
+    """A person can lift the date gate; no other rule bends with it.
+
+    Field note: one imported Project held 618 terminal transactions -- 8.4 GB
+    -- every one older than its baseline, so the sweep that already existed
+    freed exactly nothing until somebody authorized it.
+    """
+
+    project_root = _managed(tmp_path)
+    oldest = _transaction(project_root, "txn-oldest", "ABORTED", age_days=-9)
+    recent = _transaction(project_root, "txn-recent", "ABORTED", age_days=-5)
+    unsettled = _transaction(project_root, "txn-open", "PREPARED", age_days=-5)
+    authorize_history_reclaim(project_root, now=BASELINE)
+
+    count, size = collect_project_transactions(project_root, retention=1)
+
+    assert count == 1
+    assert size > 0
+    assert not oldest.is_dir()  # the oldest beyond the retention goes first
+    assert recent.is_dir()  # the newest receipt is still kept
+    assert unsettled.is_dir()  # an unsettled transaction is never touched
 
 
 def test_the_settled_listing_is_invalidated(tmp_path):

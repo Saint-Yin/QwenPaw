@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Read-only storage accounting for the Creator runtime."""
+"""Storage accounting, and the one action that takes settled history back."""
 
 from __future__ import annotations
 
@@ -13,6 +13,10 @@ class ProjectStorageProfileData(StrictModel):
 
     project_id: str = Field(alias="projectId")
     baseline_at: str | None = Field(default=None, alias="baselineAt")
+    history_authorized_at: str | None = Field(
+        default=None,
+        alias="historyAuthorizedAt",
+    )
     task_work_bytes: int = Field(default=0, alias="taskWorkBytes")
     task_work_legacy_bytes: int = Field(default=0, alias="taskWorkLegacyBytes")
     task_work_reclaimable_bytes: int = Field(
@@ -25,6 +29,23 @@ class ProjectStorageProfileData(StrictModel):
         alias="transactionsLegacyBytes",
     )
     orphan_bytes: int = Field(default=0, alias="orphanBytes")
+
+
+class HistoryReclaimRequest(StrictModel):
+    """An explicit, deliberate press: the action refuses a missing confirm."""
+
+    confirm: bool = False
+
+
+class HistoryReclaimResultData(StrictModel):
+    """What one authorized history reclaim actually took off the disk."""
+
+    project_id: str = Field(alias="projectId")
+    authorized_at: str = Field(alias="authorizedAt")
+    removed_transactions: int = Field(default=0, alias="removedTransactions")
+    transaction_bytes: int = Field(default=0, alias="transactionBytes")
+    released_files: int = Field(default=0, alias="releasedFiles")
+    released_bytes: int = Field(default=0, alias="releasedBytes")
 
 
 class StorageTotalsData(StrictModel):
