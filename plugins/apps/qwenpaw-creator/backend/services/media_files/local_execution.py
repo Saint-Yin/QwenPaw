@@ -170,6 +170,9 @@ from utils.remote_download import download_remote_file
 # pylint: enable=no-name-in-module
 
 if TYPE_CHECKING:
+    # task_scratch reaches back here through its own imports, so the sweep
+    # budget is a type annotation only at runtime.
+    from services.media_files.task_scratch import SweepBudget
     from services.project_files.facade import CreatorFileServices
 
 
@@ -3068,6 +3071,143 @@ def _validate_contiguous_edit_elements(
             )
         expected_start_tick = element.span.end_tick
         previous_id = element.element_id
+
+
+EDIT_RECONCILIATION_LEDGER = ".edit-source-reconciliation.json"
+
+
+@dataclass(frozen=True, slots=True)
+class EditTimelineReconciliationReport:
+    """What one background Edit pass took on."""
+
+    scanned_projects: int = 0
+    reconciled_projects: int = 0
+    failed_projects: int = 0
+    failures: tuple[str, ...] = ()
+
+
+def _project_document_stamp(project_root: Path) -> tuple[int, int] | None:
+    """``(mtime_ns, size)`` of one ``project.json``, or None when unreadable."""
+
+    try:
+        info = (project_root / "project.json").stat()
+    except OSError:
+        return None
+    return (info.st_mtime_ns, info.st_size)
+
+
+def _reconcile_one_project(services: Any, project_id: str) -> bool:
+    """Cap one Project's live Edit chains, committing only what moved."""
+
+    base = services.projects.read(project_id)
+    candidate = base.project.model_dump(mode="json")
+    file_store = AssetFileStore(services.projects.project_root(project_id))
+    changed = False
+    for timeline_id in (candidate.get("timelines") or {}).get("items", {}):
+        # A ``snapshot:`` timeline is frozen history: an Edit cut inside it
+        # records what was once true, and rewriting it would edit the past.
+        if str(timeline_id).startswith("snapshot:"):
+            continue
+        if _trim_edit_chain(
+            candidate,
+            project=base.project,
+            file_store=file_store,
+            target_ref=str(timeline_id),
+        ):
+            changed = True
+    if not changed:
+        return False
+    services.commits.commit(
+        base=base,
+        candidate=candidate,
+        origin=ChangeOrigin.RUNTIME_TASK,
+        review_policy=ReviewPolicy.AUTO_FIX,
+        caused_by_request_id=(
+            f"edit-source-reconcile:{project_id}:"
+            f"{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+        ),
+    )
+    return True
+
+
+def reconcile_edit_timelines_across_projects(
+    services: Any,
+    *,
+    budget: "SweepBudget | None" = None,
+) -> EditTimelineReconciliationReport:
+    """Cap every Project's Edit chain at its media, without being asked.
+
+    Composing is the natural moment to notice that a cut claims more footage
+    than its file holds, but waiting for one leaves the plan page measuring
+    232 s against a player that says 81.9 s for as long as nobody exports --
+    and a person who just upgraded sees that contradiction on the first
+    look. This pass runs in the post-startup maintenance window instead.
+
+    One ``stat`` per Project decides whether its document moved since the
+    last look, so a healthy install pays a read only for Projects that
+    changed and the identity-only startup sweep the load work just settled
+    on stays that way. ``snapshot:`` timelines are frozen history and are
+    left alone; a Project that cannot be read is reported and skipped
+    rather than ending the pass.
+    """
+
+    ledger_store = AtomicJsonRecordStore(
+        Path(services.root) / EDIT_RECONCILIATION_LEDGER,
+        None,
+    )
+    try:
+        stored = ledger_store.read_or_none()
+    except Exception:  # noqa: BLE001 - a lost ledger only costs one re-read
+        stored = None
+    ledger: dict[str, Any] = stored if isinstance(stored, dict) else {}
+    scanned = 0
+    reconciled = 0
+    failed = 0
+    failures: list[str] = []
+    for project_id in services.projects.discover_project_ids():
+        if budget is not None and not budget.has_room():
+            break
+        project_root = Path(services.projects.project_root(project_id))
+        stamp = _project_document_stamp(project_root)
+        if stamp is None:
+            continue
+        seen = ledger.get(project_id)
+        if isinstance(seen, dict) and seen.get("sourceStamp") == list(stamp):
+            continue
+        scanned += 1
+        try:
+            changed = _reconcile_one_project(services, project_id)
+        except (
+            Exception
+        ) as error:  # noqa: BLE001 - one Project must not stop the pass
+            failures.append(f"{project_id}: {type(error).__name__}: {error}")
+            failed += 1
+            continue
+        # Record the document as it now stands -- a commit moved it.
+        ledger[project_id] = {
+            "sourceStamp": list(
+                _project_document_stamp(project_root) or stamp,
+            ),
+        }
+        if changed:
+            reconciled += 1
+            logger.warning(
+                "edit timelines capped to measured media: project=%s",
+                project_id,
+            )
+    try:
+        ledger_store.write(ledger)
+    except OSError as error:
+        logger.warning(
+            "edit reconciliation ledger cannot be written: %s",
+            error,
+        )
+    return EditTimelineReconciliationReport(
+        scanned_projects=scanned,
+        reconciled_projects=reconciled,
+        failed_projects=failed,
+        failures=tuple(failures),
+    )
 
 
 def _measured_output_seconds(spec: LocalMediaExecutionSpec) -> float | None:

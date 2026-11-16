@@ -31,6 +31,7 @@ from services.media_files.local_execution import (
     _measured_output_seconds,
     _motion_document_matches_text,
     _trim_edit_chain,
+    reconcile_edit_timelines_across_projects,
 )
 from services.media_files.motion_blueprints import subtitle_pack_animation
 
@@ -711,3 +712,181 @@ def test_composed_duration_is_measured_from_the_file_not_the_plan(
     # A file that cannot be probed keeps the planned number rather than
     # publishing a null duration every later reader has to guard against.
     assert _measured_output_seconds(spec) == 232.0
+
+
+class _StubProjects:
+    def __init__(self, root: Path, documents: dict) -> None:
+        self.root = root
+        self.documents = documents
+
+    def discover_project_ids(self):
+        return tuple(self.documents)
+
+    def project_root(self, project_id: str) -> Path:
+        return self.root / project_id
+
+    def read(self, project_id: str):
+        self.reads = getattr(self, "reads", 0) + 1
+        return SimpleNamespace(project=self.documents[project_id])
+
+
+class _StubCommits:
+    def __init__(self, projects: _StubProjects) -> None:
+        self.projects = projects
+        self.calls: list[dict] = []
+
+    def commit(self, *, base, candidate, **_kwargs):
+        self.calls.append(candidate)
+        project_id = base.project.project_id
+        self.projects.documents[project_id] = Project.model_validate(candidate)
+        return SimpleNamespace(snapshot=self.projects.documents[project_id])
+
+
+def _project_with(candidate: dict, project_id: str) -> Project:
+    """A valid Project carrying one candidate timeline."""
+
+    dumped = Project.new(project_id=project_id, name="edit").model_dump(
+        mode="json",
+    )
+    timeline = candidate["timelines"]["items"]["timeline:main"]
+    timeline["timeline_id"] = "timeline:main"
+    for element in timeline["elements_by_id"].values():
+        # Visual Elements carry a canvas location; the candidate dict is
+        # otherwise a pure-tick fixture.
+        element.setdefault("location", {})
+    dumped["timelines"]["items"]["timeline:main"] = timeline
+    dumped["assets"]["source_versions_by_id"] = {
+        version_id: {
+            "logical_asset_id": f"asset-{version_id}",
+            "name": f"{version_id}.mp4",
+            "checksum": "c" * 64,
+            "created_at": "2026-11-16T00:00:00+00:00",
+            **row,
+        }
+        for version_id, row in candidate["assets"][
+            "source_versions_by_id"
+        ].items()
+    }
+    dumped["assets"]["files_by_id"] = {
+        row["file_id"]: {
+            "file_id": row["file_id"],
+            "kind": "source_original",
+            "relative_uri": f"assets/sources/{row['file_id']}.mp4",
+            "sha256": "c" * 64,
+            "size_bytes": 1,
+            "media_type": "video/mp4",
+            "created_at": "2026-11-16T00:00:00+00:00",
+        }
+        for row in dumped["assets"]["source_versions_by_id"].values()
+    }
+    return Project.model_validate(dumped)
+
+
+def _stub_media_probe(monkeypatch, seconds_by_file: dict[str, float]) -> None:
+    """Answer ffprobe per file and keep the probe off the real filesystem.
+
+    The Project model already refuses a source range past a *recorded*
+    duration; the shape that actually survives in the field is a row with
+    no duration at all, so every case here starts from ``None`` and lets
+    the pass measure it.
+    """
+
+    from services.media_files import local_execution
+
+    class _Probe:
+        def __init__(self, seconds: float) -> None:
+            self.duration_seconds = seconds
+
+    def fake_probe(target, **_kwargs):
+        return _Probe(seconds_by_file[Path(target).name])
+
+    monkeypatch.setattr(local_execution, "probe_media", fake_probe)
+    monkeypatch.setattr(
+        local_execution,
+        "_indexed_version",
+        lambda _project, version_id, **_kwargs: (
+            SimpleNamespace(
+                file_id=f"{version_id}-file",
+                relative_uri="assets/sources/x.mp4",
+            ),
+            object(),
+        ),
+    )
+    monkeypatch.setattr(
+        AssetFileStore,
+        "resolve_verified_path",
+        lambda _self, indexed: Path(f"/tmp/{indexed.file_id}.mp4"),
+    )
+
+
+def test_startup_pass_caps_a_stale_timeline_without_being_asked(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """The upgrade case: nobody composes, yet the plan must stop lying."""
+
+    _stub_media_probe(
+        monkeypatch,
+        {"v-qwen4-file.mp4": 29.918, "v-qoduck-file.mp4": 54.153},
+    )
+    candidate = _edit_candidate(first_seconds=None, second_seconds=None)
+    project_id = "project-1"
+    root = tmp_path / project_id
+    root.mkdir(parents=True)
+    (root / "project.json").write_text("{}", encoding="utf-8")
+    projects = _StubProjects(
+        tmp_path,
+        {project_id: _project_with(candidate, project_id)},
+    )
+    commits = _StubCommits(projects)
+    services = SimpleNamespace(
+        root=tmp_path,
+        projects=projects,
+        commits=commits,
+    )
+
+    report = reconcile_edit_timelines_across_projects(services)
+    assert report.scanned_projects == 1
+    assert report.reconciled_projects == 1
+    assert len(commits.calls) == 1
+    elements = commits.calls[0]["timelines"]["items"]["timeline:main"][
+        "elements_by_id"
+    ]
+    assert elements["el-qwen4"]["span"]["duration_tick"] == 29_918
+    assert elements["el-qoduck"]["span"]["start_tick"] == 29_918
+    # The measured lengths are stamped in the same commit, so the next read
+    # is arithmetic and the model's own range check finally has teeth.
+    rows = commits.calls[0]["assets"]["source_versions_by_id"]
+    assert rows["v-qwen4"]["duration_seconds"] == 29.918
+    assert rows["v-qoduck"]["duration_seconds"] == 54.153
+
+
+def test_startup_pass_reloads_only_documents_that_moved(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A repeat pass must not re-read every Project: one stat decides."""
+
+    _stub_media_probe(
+        monkeypatch,
+        {"v-qwen4-file.mp4": 29.918, "v-qoduck-file.mp4": 54.153},
+    )
+    candidate = _edit_candidate(first_seconds=None, second_seconds=None)
+    project_id = "project-1"
+    root = tmp_path / project_id
+    root.mkdir(parents=True)
+    (root / "project.json").write_text("{}", encoding="utf-8")
+    projects = _StubProjects(
+        tmp_path,
+        {project_id: _project_with(candidate, project_id)},
+    )
+    services = SimpleNamespace(
+        root=tmp_path,
+        projects=projects,
+        commits=_StubCommits(projects),
+    )
+    reconcile_edit_timelines_across_projects(services)
+    first_reads = projects.reads
+    second = reconcile_edit_timelines_across_projects(services)
+    assert second.scanned_projects == 0
+    assert projects.reads == first_reads

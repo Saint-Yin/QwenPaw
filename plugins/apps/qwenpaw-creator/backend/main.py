@@ -50,6 +50,9 @@ from services.media_files import (  # noqa: E402
     shutdown_file_media_execution_services,
     start_file_media_execution_services,
 )
+from services.media_files.local_execution import (  # noqa: E402
+    reconcile_edit_timelines_across_projects,
+)
 from services.media_files.motion_engine import ensure_vendor_libs  # noqa: E402
 from services.media_files.task_scratch import (
     budget_from_environment,
@@ -235,6 +238,44 @@ async def _collect_settled_transactions(
         )
 
 
+async def _reconcile_edit_timelines(
+    services: CreatorFileServices,
+    budget,
+) -> None:
+    """Cap stale Edit timelines at their media, without waiting for a compose.
+
+    First in the maintenance pass on purpose: it is the one step that fixes
+    what the person sees rather than what the disk holds, and it costs a
+    ``stat`` per Project once the documents have been through once. A pass
+    that cannot finish inside the shared budget simply leaves the rest for
+    the next start.
+
+    Takes the registry handle as an argument rather than reading the module
+    global: shutdown clears that global while this sweep may still be
+    walking Projects, and a half-run pass on ``None`` would be a crash
+    instead of the skipped pass it should be.
+    """
+
+    try:
+        report = await asyncio.to_thread(
+            reconcile_edit_timelines_across_projects,
+            services,
+            budget=budget,
+        )
+    except Exception:  # noqa: BLE001 - a sweep must never gate the app
+        logger.warning("edit timeline reconciliation failed", exc_info=True)
+        return
+    for failure in report.failures:
+        logger.warning("edit timeline reconciliation skipped: %s", failure)
+    if report.reconciled_projects:
+        logger.info(
+            "edit timelines capped to measured media: projects=%s "
+            "scanned=%s",
+            report.reconciled_projects,
+            report.scanned_projects,
+        )
+
+
 async def _run_storage_maintenance(
     services: CreatorFileServices,
 ) -> None:
@@ -251,6 +292,7 @@ async def _run_storage_maintenance(
 
     await asyncio.sleep(_MAINTENANCE_DELAY_SECONDS)
     budget = budget_from_environment()
+    await _reconcile_edit_timelines(services, budget)
     await _sweep_orphaned_scratch(services, budget)
     await _collect_settled_transactions(services, budget)
     await _elide_stored_conversations(services)
