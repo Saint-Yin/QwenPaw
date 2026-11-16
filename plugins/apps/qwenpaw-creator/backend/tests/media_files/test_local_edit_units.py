@@ -13,19 +13,24 @@ import asyncio
 from pathlib import Path
 import shutil
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
 from domain.enums import CreatorCommandType
 from domain.errors import StorageIntegrityError
 from services.media_files import keyframe_cache
+from services.project_files.assets import AssetFileStore
+from services.project_files.models import Project
 from services.media_files.element_adapter import reconcile_candidate_span
 from services.media_files.local_execution import (
     FfmpegLocalMediaRunner,
     LocalMediaExecutionSpec,
     LocalMediaInput,
     _caption_fallback_style_kwargs,
+    _measured_output_seconds,
     _motion_document_matches_text,
+    _trim_edit_chain,
 )
 from services.media_files.motion_blueprints import subtitle_pack_animation
 
@@ -483,3 +488,226 @@ def test_normalized_overlay_without_a_pick_keeps_the_pack_motion() -> None:
     assert kwargs["entrance"] == expected["entrance"]
     assert kwargs["exit"] == expected["exit"]
     assert kwargs["loop"] == expected["loop"]
+
+
+# ── Edit spans capped at the media that actually exists ──────────────────────
+#
+# Field shape: an imported comparison cut described two screen recordings as
+# 180 s and 52 s. The prose was believed, the files were never measured, and
+# the compose produced 29.918 + 52 = 81.9 s. The plan page then showed
+# 03:00 + 00:52 in the rough-cut strip while the same artifact played as 1:21
+# in the overview rail -- two numbers, both faithful to their own source.
+
+
+def _edit_candidate(
+    *,
+    first_seconds: float | None,
+    second_seconds: float | None,
+) -> dict:
+    def version(version_id: str, seconds: float | None) -> dict:
+        row = {
+            "version_id": version_id,
+            "file_id": f"{version_id}-file",
+            "media_kind": "video",
+            "media_type": "video/mp4",
+        }
+        if seconds is not None:
+            row["duration_seconds"] = seconds
+        return row
+
+    def cut(
+        element_id: str,
+        version_id: str,
+        start: int,
+        duration: int,
+    ) -> dict:
+        return {
+            "element_id": element_id,
+            "enabled": True,
+            "span": {"start_tick": start, "duration_tick": duration},
+            "creation": {
+                "type": "edit",
+                "intent": "pick",
+                "original_sound": "preserve",
+            },
+            "render_source": {
+                "type": "source_asset_version",
+                "version_id": version_id,
+                "source_in_tick": 0,
+                "source_out_tick": duration,
+                "playback_rate": 1.0,
+            },
+        }
+
+    return {
+        "assets": {
+            "source_versions_by_id": {
+                "v-qwen4": version("v-qwen4", first_seconds),
+                "v-qoduck": version("v-qoduck", second_seconds),
+            },
+        },
+        "timelines": {
+            "items": {
+                "timeline:main": {
+                    "ticks_per_second": 1000,
+                    "elements_by_id": {
+                        "el-qwen4": cut("el-qwen4", "v-qwen4", 0, 180_000),
+                        "el-qoduck": cut(
+                            "el-qoduck",
+                            "v-qoduck",
+                            180_000,
+                            52_000,
+                        ),
+                        # A caption anchored past the first cut's old end
+                        # must ride the same shift, or it would burn onto
+                        # footage that is no longer anywhere in the film.
+                        "el-caption": {
+                            "element_id": "el-caption",
+                            "enabled": True,
+                            "span": {
+                                "start_tick": 200_000,
+                                "duration_tick": 3_000,
+                            },
+                            "creation": {"type": "overlay", "text": "字幕"},
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+
+def _trim(candidate: dict, tmp_path: Path) -> bool:
+    return _trim_edit_chain(
+        candidate,
+        project=Project.new(project_id="p-trim", name="trim"),
+        file_store=AssetFileStore(tmp_path),
+        target_ref="timeline:timeline:main",
+    )
+
+
+def _cut_elements(candidate: dict) -> dict:
+    return candidate["timelines"]["items"]["timeline:main"]["elements_by_id"]
+
+
+def test_edit_span_longer_than_its_media_is_capped_and_the_chain_closes_up(
+    tmp_path: Path,
+) -> None:
+    candidate = _edit_candidate(first_seconds=29.918, second_seconds=54.153)
+    assert _trim(candidate, tmp_path) is True
+    elements = _cut_elements(candidate)
+    first = elements["el-qwen4"]
+    assert first["span"]["duration_tick"] == 29_918
+    assert first["render_source"]["source_out_tick"] == 29_918
+    second = elements["el-qoduck"]
+    # Its own media is long enough, so only its position moves: the second
+    # cut now starts where the shortened first one ends.
+    assert second["span"]["start_tick"] == 29_918
+    assert second["span"]["duration_tick"] == 52_000
+    assert second["render_source"]["source_out_tick"] == 52_000
+    assert elements["el-caption"]["span"]["start_tick"] == 49_918
+    # The Timeline now measures what the rendered file measures.
+    assert (
+        max(
+            item["span"]["start_tick"] + item["span"]["duration_tick"]
+            for item in elements.values()
+        )
+        == 81_918
+    )
+    # Replaying costs nothing: nothing is over-long any more.
+    assert _trim(candidate, tmp_path) is False
+
+
+def test_media_that_fits_the_plan_is_left_untouched(tmp_path: Path) -> None:
+    candidate = _edit_candidate(first_seconds=180.0, second_seconds=52.0)
+    assert _trim(candidate, tmp_path) is False
+    assert (
+        _cut_elements(candidate)["el-qwen4"]["span"]["duration_tick"]
+        == 180_000
+    )
+
+
+def test_unmeasured_source_is_probed_once_and_the_answer_is_stamped(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A version row with no length gets one probe, then carries the number."""
+
+    from services.media_files import local_execution
+
+    class _Probe:
+        duration_seconds = 29.918
+
+    monkeypatch.setattr(
+        local_execution,
+        "probe_media",
+        lambda *_args, **_kwargs: _Probe(),
+    )
+    monkeypatch.setattr(
+        local_execution,
+        "_indexed_version",
+        lambda _project, version_id, **_kwargs: (
+            SimpleNamespace(
+                file_id=f"{version_id}-file",
+                relative_uri="assets/sources/x.mp4",
+            ),
+            object(),
+        ),
+    )
+    monkeypatch.setattr(
+        AssetFileStore,
+        "resolve_verified_path",
+        lambda _self, indexed: Path(f"/tmp/{indexed.file_id}.mp4"),
+    )
+    candidate = _edit_candidate(first_seconds=None, second_seconds=54.153)
+    assert _trim(candidate, tmp_path) is True
+    row = candidate["assets"]["source_versions_by_id"]["v-qwen4"]
+    assert row["duration_seconds"] == 29.918
+    assert (
+        _cut_elements(candidate)["el-qwen4"]["span"]["duration_tick"] == 29_918
+    )
+
+    # The stamped row means a later pass stays arithmetic: no second subprocess.
+    def _no_more_probes(*_args, **_kwargs):
+        raise AssertionError("re-probed an already measured source")
+
+    monkeypatch.setattr(local_execution, "probe_media", _no_more_probes)
+    assert _trim(candidate, tmp_path) is False
+
+
+def test_composed_duration_is_measured_from_the_file_not_the_plan(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    spec = LocalMediaExecutionSpec(
+        command=CreatorCommandType.COMPOSE_FINAL_VIDEO,
+        target_ref="timeline:timeline:main",
+        task_id="task-1",
+        work_dir=tmp_path,
+        output_path=tmp_path / "final.mp4",
+        inputs=(),
+        transitions=(),
+        audio_plan="preserve",
+        expected_duration_seconds=232.0,
+        canvas_size=(1280, 720),
+    )
+
+    from services.media_files import local_execution
+
+    class _Probe:
+        duration_seconds = 81.922
+
+    monkeypatch.setattr(
+        local_execution,
+        "probe_media",
+        lambda *_args, **_kwargs: _Probe(),
+    )
+    assert _measured_output_seconds(spec) == 81.922
+
+    def _unreadable(*_args, **_kwargs):
+        raise local_execution.MediaProbeError("no such file")
+
+    monkeypatch.setattr(local_execution, "probe_media", _unreadable)
+    # A file that cannot be probed keeps the planned number rather than
+    # publishing a null duration every later reader has to guard against.
+    assert _measured_output_seconds(spec) == 232.0
