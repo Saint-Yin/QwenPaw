@@ -1177,6 +1177,10 @@ def project_storage_profile(
         "transactionsLegacyBytes": 0,
         "orphanBytes": 0,
         "eventStreamBytes": 0,
+        # Segment-continuity extracts (runtime/continuity/<digest>/) are
+        # scratch too: the continuity GC pass collects them, and the
+        # profile reports what is left so the bucket is never invisible.
+        "continuityBytes": 0,
     }
     projects: list[dict[str, Any]] = []
     for project_id in services.projects.discover_project_ids():
@@ -1240,10 +1244,21 @@ def project_storage_profile(
                 measured["transactionsLegacyBytes"] += size
             else:
                 measured["transactionsBytes"] += size
+        continuity_root = root / "runtime" / "continuity"
+        for directory in (
+            []
+            if is_link_path(continuity_root)
+            else _child_directories(continuity_root)
+        ):
+            size, _newest = _directory_bytes(directory)
+            measured["continuityBytes"] += size
         if include_orphans:
             measured["orphanBytes"] = _orphan_bytes(services, project_id, root)
         # What the automatic passes would take here if they were allowed: the
         # console shows it next to a confirm button once it exceeds the cap.
+        # Continuity extracts join the tally because the startup sweep
+        # (sweep_orphaned_continuity) reclaims them like task-work; leaving
+        # them out would report a footprint the automatic pass actually frees.
         # Imported late: transaction_gc imports this module at top level.
         from services.project_files.transaction_gc import (
             surplus_transaction_bytes,
@@ -1252,6 +1267,7 @@ def project_storage_profile(
         pending_bytes = (
             surplus_transaction_bytes(root)
             + measured["taskWorkReclaimableBytes"]
+            + measured["continuityBytes"]
         )
         for key, value in measured.items():
             totals[key] += value

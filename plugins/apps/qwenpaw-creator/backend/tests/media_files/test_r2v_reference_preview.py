@@ -175,11 +175,19 @@ def test_preview_mirrors_submit_order_and_reserves_missing_storyboard() -> (
     assert shifted["ready"] is False
     assert shifted["references"][0] == {
         "index": 1,
+        "imageIndex": 1,
+        "videoIndex": None,
         "versionId": "",
         "kind": "storyboard",
         "available": False,
         "name": "分镜图（待生成）",
     }
+    # The reserved storyboard owns 图1, so plan images behind it carry
+    # the future-real wire ordinals rather than storyboard-less ones.
+    assert [item["imageIndex"] for item in shifted["references"][1:]] == [
+        2,
+        3,
+    ]
     assert [
         (item["index"], item["versionId"]) for item in shifted["references"]
     ] == [

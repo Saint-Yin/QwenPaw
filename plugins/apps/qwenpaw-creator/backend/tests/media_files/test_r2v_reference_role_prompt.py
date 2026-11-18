@@ -129,6 +129,73 @@ def test_submit_path_renders_the_block_into_each_provider_dialect(
         assert f"{first} = 分镜图（第一镜 分镜图）" in rendered
 
 
+def test_role_mapping_numbers_images_and_videos_per_type(monkeypatch) -> None:
+    """The provider wire numbers images and videos in separate sequences
+    (``图N`` / ``视频N``, see the capability templates and the submit
+    ordinal loop), so the role block must too.
+
+    With a video reference in the plan, positional image numbering would
+    either label a nonexistent 图N for the continuity last frame or
+    collide two materials on one marker — both inside the paid request.
+    Project video references get their own 视频N line; the tail clip is
+    declared by the suffix, not here.
+    """
+    from models import config as model_config
+
+    monkeypatch.setattr(
+        model_config,
+        "get_video_model_name",
+        lambda: "wan3.0-video",
+    )
+    monkeypatch.setattr(model_config, "get_video_backend", lambda: "")
+
+    project = _project()
+    project.assets.source_versions_by_id["src:clip"] = SourceAssetVersion(
+        version_id="src:clip",
+        logical_asset_id="asset:clip",
+        name="参考视频片段",
+        file_id="file-clip",
+        checksum="3" * 64,
+        media_kind="video",
+        media_type="video/mp4",
+        created_at=_NOW,
+    )
+    # Plan order: storyboard image, a video reference, another image; then
+    # the two continuity anchors appended at the tail (last frame first).
+    version_ids = [
+        "art:sb",
+        "src:clip",
+        "art:ahai",
+        "continuity:last_frame:prevV1",
+        "continuity:tail_clip:prevV1",
+    ]
+    continuity_labels = {
+        "continuity:last_frame:prevV1": "上一段末帧",
+        "continuity:tail_clip:prevV1": None,
+    }
+
+    prompt = _append_reference_role_mapping(
+        "镜头描述。",
+        project,
+        version_ids,
+        storyboard_id="art:sb",
+        continuity_labels=continuity_labels,
+    )
+
+    # Images keep a dense 图N sequence across the video gap; the video
+    # reference is addressed in its own 视频N sequence.
+    assert "[Image 1] = 分镜图（第一镜 分镜图）" in prompt
+    assert "[Image 2] = 阿海（ahai:storm）视觉图" in prompt
+    assert "[Image 3] = 上一段末帧" in prompt
+    assert "视频1 = 参考视频片段" in prompt
+    # The collision regression: each image marker appears exactly once
+    # and the tail clip is declared by the suffix, not as a 图 line.
+    for n in (1, 2, 3):
+        assert prompt.count(f"[Image {n}]") == 1
+    assert "[Image 4]" not in prompt
+    assert "上一段尾段" not in prompt
+
+
 def test_structured_reference_models_get_no_invented_numbering(
     monkeypatch,
 ) -> None:

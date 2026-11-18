@@ -747,6 +747,28 @@ def is_wan3_video_model(model_name: str) -> bool:
     return _WAN_30_REFERENCE_PATTERN.fullmatch(model_name.strip()) is not None
 
 
+def supports_video_continuation(
+    model_name: str,
+    protocol_backend: str = "",
+) -> bool:
+    """True when the configured model officially documents a video-extension
+    task that the R2V submit path can drive by adding a ``reference_video``
+    alongside the regular image references.
+
+    Wan3.0 All-in-One is currently the only family with an explicit
+    "视频延长" contract reachable through the r2v request route. Wan2.7
+    documents video continuation via ``first_clip`` on the i2v endpoint,
+    which is a different request shape not wired here. HappyHorse, Veo,
+    Seedance, Kling and Vidu either forbid video references or use them
+    only as style/subject anchors, so the executor must fall back to
+    last-frame image continuity for those models.
+    """
+
+    del protocol_backend  # reserved: any Wan3-compatible gateway alias keeps
+    # the same model_id contract, so backend key never overrides the answer.
+    return is_wan3_video_model(model_name)
+
+
 def is_vidu_model(model_name: str) -> bool:
     """True when the configured video model is a Bailian-hosted Vidu model."""
 
@@ -1922,6 +1944,7 @@ __all__ = [
     "is_vidu_model",
     "is_wan3_video_model",
     "seedance_video_generation",
+    "supports_video_continuation",
     "validate_video_mode",
     "video_backend_key",
     "video_model_capability",

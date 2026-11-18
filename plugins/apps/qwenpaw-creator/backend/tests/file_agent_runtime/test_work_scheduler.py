@@ -1625,8 +1625,9 @@ def _graph_sequence(monkeypatch, graphs: list[WorkGraph]) -> None:
         *,
         media_models=None,
         pending_reviews=(),
+        ffmpeg_ready=None,
     ):
-        del tasks
+        del tasks, ffmpeg_ready
         index = min(state["index"], len(graphs) - 1)
         state["index"] += 1
         return graphs[index]

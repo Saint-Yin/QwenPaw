@@ -23,7 +23,10 @@ from models.config import (
     get_video_model_name,
 )
 from services.file_agent_runtime import manual_regeneration_hold
-from services.file_agent_runtime.work_graph import derive_work_graph
+from services.file_agent_runtime.work_graph import (
+    derive_work_graph,
+    probe_ffmpeg_ready,
+)
 from services.file_agent_runtime.work_scheduler import (
     WorkGraphScheduler,
     _abandoned_queued_targets,
@@ -57,6 +60,7 @@ def _graph_payload(project_id: str, services: CreatorFileServices) -> dict:
         tasks=tasks,
         pending_reviews=services.reviews.all_pending(project_id),
         media_models=(get_image_model_name(), get_video_model_name()),
+        ffmpeg_ready=probe_ffmpeg_ready(),
     )
     hold = manual_regeneration_hold.ManualRegenerationHoldStore(
         services.root,
@@ -217,6 +221,7 @@ async def dispatch_work_graph_node(
         snapshot.project,
         tasks=tasks,
         media_models=(get_image_model_name(), get_video_model_name()),
+        ffmpeg_ready=await asyncio.to_thread(probe_ffmpeg_ready),
     )
     node = graph.by_id.get(node_id)
     if node is None:

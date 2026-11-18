@@ -54,6 +54,9 @@ from services.media_files.local_execution import (  # noqa: E402
     reconcile_edit_timelines_across_projects,
 )
 from services.media_files.motion_engine import ensure_vendor_libs  # noqa: E402
+from services.media_files.segment_continuity import (  # noqa: E402
+    sweep_orphaned_continuity,
+)
 from services.media_files.task_scratch import (
     budget_from_environment,
     release_orphaned_scratch,
@@ -208,6 +211,32 @@ async def _sweep_orphaned_scratch(
         )
 
 
+async def _sweep_orphaned_continuity(
+    services: CreatorFileServices,
+    budget,
+) -> None:
+    """Collect segment-continuity extracts idle Projects left behind.
+
+    Active Projects prune their own continuity scratch on every extract;
+    this is the safety net for Projects that stopped generating, so their
+    last/tail anchors do not linger indefinitely. Best-effort and budget-
+    shared with the other sweeps; never gates startup.
+    """
+
+    try:
+        removed = await asyncio.to_thread(
+            partial(sweep_orphaned_continuity, services, budget=budget),
+        )
+    except Exception:  # noqa: BLE001 - cleanup must never gate startup
+        logger.warning("orphaned continuity sweep failed", exc_info=True)
+        return
+    if removed:
+        logger.info(
+            "orphaned continuity extracts released: dirs=%s",
+            removed,
+        )
+
+
 async def _collect_settled_transactions(
     services: CreatorFileServices,
     budget,
@@ -294,6 +323,7 @@ async def _run_storage_maintenance(
     budget = budget_from_environment()
     await _reconcile_edit_timelines(services, budget)
     await _sweep_orphaned_scratch(services, budget)
+    await _sweep_orphaned_continuity(services, budget)
     await _collect_settled_transactions(services, budget)
     await _elide_stored_conversations(services)
 
