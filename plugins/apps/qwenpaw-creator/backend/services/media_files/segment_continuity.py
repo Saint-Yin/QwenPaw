@@ -73,30 +73,31 @@ _FFMPEG_TIMEOUT_SECONDS = 120
 _FFPROBE_TIMEOUT_SECONDS = 30
 _VIDEO_CONTINUATION_CREATIONS = (R2VCreation, I2VCreation)
 
-# Operator-side dial for the tail-clip channel. Empirically the Wan3.0
-# "视频延长" path constrains generation harder than a plain still anchor,
-# so some runs look worse with the tail clip than with the last frame
-# alone. Setting CREATOR_CONTINUITY_TAIL_CLIP=0 demotes R2V to image-only
-# continuity — the exact path non-continuation models already take — with
-# no code change and no loss of segment linkage. On by default.
+# Operator-side dial for the tail-clip channel. Superseded by the
+# unified CREATOR_VIDEO_CONTINUITY mode in models.video_task_plans;
+# kept as a read-only alias so hosts configured with the old variable
+# keep their semantics (0/false/no/off demotes to weak continuity).
 CONTINUITY_TAIL_CLIP_ENV = "CREATOR_CONTINUITY_TAIL_CLIP"
 _TAIL_CLIP_DISABLED_VALUES = frozenset({"0", "false", "no", "off"})
 
 
 def tail_clip_enabled() -> bool:
-    """Whether R2V continuity may ship the predecessor's tail clip video.
+    """Deprecated alias: whether the strongest material may ship.
 
-    On unless ``CREATOR_CONTINUITY_TAIL_CLIP`` is set to a disabled value.
-    This gates only the *tail clip*; the last-frame image anchor and the
-    whole continuity concept stay active either way, so turning it off
-    never drops linkage — it just stops using the "视频延长" request shape.
+    The submit path no longer consults this — ``_build_continuity_plan``
+    reads ``video_continuity_mode()`` directly. Only the mapping stays:
+    auto ships materials, weak/off do not.
     """
 
-    raw = os.environ.get(CONTINUITY_TAIL_CLIP_ENV, "")
-    return raw.strip().casefold() not in _TAIL_CLIP_DISABLED_VALUES
+    from models.video_task_plans import (
+        CONTINUITY_MODE_AUTO,
+        video_continuity_mode,
+    )
+
+    return video_continuity_mode() == CONTINUITY_MODE_AUTO
 
 
-_continuity_cache: "OrderedDict[tuple[str, str, bool], ContinuityBundle]" = (
+_continuity_cache: "OrderedDict[tuple[str, str, str], ContinuityBundle]" = (
     OrderedDict()
 )
 _continuity_cache_lock = threading.Lock()
@@ -107,7 +108,7 @@ _continuity_cache_lock = threading.Lock()
 # bundle in the double-check below. Cache hits move the key to the
 # MRU end so eviction retires the least recently *used* bundle, not
 # merely the oldest inserted one.
-_continuity_extract_locks: dict[tuple[str, str, bool], threading.Lock] = {}
+_continuity_extract_locks: dict[tuple[str, str, str], threading.Lock] = {}
 _continuity_locks_guard = threading.Lock()
 # digest -> expire_at epoch seconds, see _INFLIGHT_TTL_SECONDS.
 _continuity_inflight: dict[str, float] = {}
@@ -573,16 +574,28 @@ def _cut_both(
     ffprobe_path: str,
     prev_version: str,
     prev_element_id: str,
-    include_tail_clip: bool,
+    material_mode: str = "none",
+    tail_seconds: float = _TAIL_CLIP_SECONDS,
 ) -> tuple[ContinuityEntry, ...]:
-    """Cut last_frame (+ optional tail_clip) with atomic writes.
+    """Cut last_frame (+ optional continuation material) atomically.
+
+    ``material_mode`` selects the extension material:
+    ``"none"`` = image anchor only (I2V chains, weak continuity);
+    ``"clip"`` = a freshly cut ``tail_seconds`` tail written next to the
+    frame; ``"full"`` = the predecessor's WHOLE published artifact
+    referenced in place. Full mode writes nothing: the Asset Index file
+    is immutable content-addressed, prune only walks the runtime
+    continuity dir, and re-cutting MBs of video to copy what already
+    exists would only burn ffmpeg time. The extension entry keeps the
+    ``tail_clip`` reference id either way, so a predecessor reroll
+    shifts the fingerprint identically for both materials.
 
     Last-frame extraction is mandatory: any failure raises and the
     caller falls back to no continuity at all. Tail-clip extraction is
-    attempted only when ``include_tail_clip`` is true, and its failure
-    degrades softly (last_frame still returned) so I2V chains, which
-    only need the last frame, are never blocked by a container-level
-    tail-clip glitch on a Wan3.0-configured machine.
+    attempted only in ``clip`` mode, and its failure degrades softly
+    (last_frame still returned) so I2V chains, which only need the last
+    frame, are never blocked by a container-level tail-clip glitch on a
+    Wan3.0-configured machine.
     """
 
     last_frame_path = work_dir / "last_frame.png"
@@ -601,7 +614,33 @@ def _cut_both(
             role_label="上一段末帧（本段起始状态对齐此图）",
         ),
     ]
-    if not include_tail_clip:
+    if material_mode == "none":
+        return tuple(entries)
+    if material_mode == "full":
+        # The predecessor's published artifact IS the material: reference
+        # it in place. Immutable, content-addressed, and outside the
+        # continuity prune root — nothing to cut, nothing to reclaim.
+        try:
+            full_duration = _probe_duration(source, ffprobe_path)
+        except RuntimeError as error:
+            # An unmeasurable material would send a provider duration we
+            # cannot justify; skip the whole anchor instead.
+            raise RuntimeError(
+                f"整段续写素材时长探测失败: {error}",
+            ) from error
+        if full_duration <= 0:
+            raise RuntimeError("整段续写素材时长非法，跳过续写素材")
+        entries.append(
+            _build_entry(
+                "tail_clip",
+                path=source,
+                prev_version=prev_version,
+                prev_element_id=prev_element_id,
+                media_type="video/mp4",
+                role_label="上一段完整视频（含音频，作为向后延长起点）",
+                duration_seconds=full_duration,
+            ),
+        )
         return tuple(entries)
     tail_clip_path = work_dir / "tail_clip.mp4"
     try:
@@ -610,7 +649,7 @@ def _cut_both(
         # An unreadable duration must not cost us the tail: the cutter
         # falls back to container-relative ``-sseof`` seeking below.
         total = 0.0
-    tail = min(_TAIL_CLIP_SECONDS, total) if total > 0 else _TAIL_CLIP_SECONDS
+    tail = min(tail_seconds, total) if total > 0 else tail_seconds
     try:
         _atomic_run(
             lambda tmp, ff: _extract_tail_clip_into(
@@ -843,7 +882,8 @@ def extract_continuity_artifacts(
     project_root: Path,
     timeline: Timeline,
     element: TimelineElement,
-    include_tail_clip: bool,
+    material_mode: str = "none",
+    tail_seconds: float = _TAIL_CLIP_SECONDS,
 ) -> ContinuityBundle | None:
     """Return predecessor's last_frame (+ optional tail_clip) for injection.
 
@@ -908,7 +948,7 @@ def extract_continuity_artifacts(
     if not ffmpeg_path or not ffprobe_path:
         raise RuntimeError("ffmpeg/ffprobe 未就绪，跳过段间衔接注入")
 
-    cache_key = (prev_version, ffmpeg_path, include_tail_clip)
+    cache_key = (prev_version, ffmpeg_path, material_mode)
     with _continuity_cache_lock:
         cached = _continuity_cache.get(cache_key)
         if cached is not None:
@@ -947,7 +987,8 @@ def extract_continuity_artifacts(
                 ffprobe_path=ffprobe_path,
                 prev_version=prev_version,
                 prev_element_id=prev.element_id,
-                include_tail_clip=include_tail_clip,
+                material_mode=material_mode,
+                tail_seconds=tail_seconds,
             )
         except OSError as error:
             # Disk full, unwritable scratch, vanished mount: keep the
@@ -960,7 +1001,7 @@ def extract_continuity_artifacts(
             predecessor_video_version_id=prev_version,
             entries=entries,
         )
-        evicted_keys: list[tuple[str, str, bool]] = []
+        evicted_keys: list[tuple[str, str, str]] = []
         with _continuity_cache_lock:
             _continuity_cache[cache_key] = bundle
             _continuity_cache.move_to_end(cache_key)
