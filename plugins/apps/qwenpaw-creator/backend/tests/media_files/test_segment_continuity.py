@@ -1023,6 +1023,114 @@ def test_apply_continuity_traces_tail_degradation(
     assert reasons == ["tail_clip_degraded"]
 
 
+def test_tail_clip_enabled_env_switch(monkeypatch) -> None:
+    """The operator dial is pure-env: on by default, off on 0/false/no/off
+    (case/whitespace insensitive), so linkage can be demoted to image-only
+    without a code change."""
+
+    from services.media_files.segment_continuity import tail_clip_enabled
+
+    monkeypatch.delenv("CREATOR_CONTINUITY_TAIL_CLIP", raising=False)
+    assert tail_clip_enabled() is True
+    monkeypatch.setenv("CREATOR_CONTINUITY_TAIL_CLIP", "1")
+    assert tail_clip_enabled() is True
+    for off in ("0", "false", "off", "NO", " Off "):
+        monkeypatch.setenv("CREATOR_CONTINUITY_TAIL_CLIP", off)
+        assert tail_clip_enabled() is False
+
+
+def test_apply_continuity_env_off_demotes_wan3_to_image_only(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """CREATOR_CONTINUITY_TAIL_CLIP=0 must gate the tail-clip channel even
+    on a continuation-capable model: extract is asked for ``include_tail_clip
+    =False`` (image-only), while the default run on the same Wan3.0 config
+    still requests the tail clip. This pins the AND-gate — the tail flag can
+    only ever *demote*, never promote a non-continuation model."""
+
+    from models import config as model_config
+    import services.media_files.r2v_execution as rx
+    from services.media_files.segment_continuity import ContinuityBundle
+
+    monkeypatch.setattr(
+        model_config,
+        "get_video_model_name",
+        lambda: "wan3.0-video",
+    )
+    monkeypatch.setattr(model_config, "get_video_backend", lambda: "wan")
+    monkeypatch.setattr(
+        rx,
+        "_assert_r2v_reference_budget",
+        lambda *a, **k: None,
+    )
+    entry = _frame_entry(tmp_path)
+
+    def run_extract(include_capture: dict):
+        def fake_extract(**kw):
+            include_capture["include_tail_clip"] = kw["include_tail_clip"]
+            return ContinuityBundle(
+                predecessor_element_id="e1",
+                predecessor_video_version_id="prev-version-1",
+                entries=(entry,),
+            )
+
+        return fake_extract
+
+    first = _element("e1", start=0)
+    second = _element("e2", start=4000)
+    project, timeline = _project([first, second])
+
+    # Default (env unset): Wan3.0 requests the tail clip.
+    monkeypatch.delenv("CREATOR_CONTINUITY_TAIL_CLIP", raising=False)
+    seen_on: dict = {}
+    monkeypatch.setattr(
+        rx,
+        "extract_continuity_artifacts",
+        run_extract(seen_on),
+    )
+    rx._apply_continuity_to_references(
+        project=project,
+        project_root=tmp_path,
+        timeline=timeline,
+        element=second,
+        version_ids=["ref-a", "ref-b"],
+        urls=[],
+        checksums=[],
+        provenance=[],
+        read_set=[],
+        voice_urls=[],
+        output_duration_seconds=4,
+    )
+    assert seen_on["include_tail_clip"] is True
+
+    # Env off: the same model demotes to image-only continuity.
+    monkeypatch.setenv("CREATOR_CONTINUITY_TAIL_CLIP", "0")
+    seen_off: dict = {}
+    monkeypatch.setattr(
+        rx,
+        "extract_continuity_artifacts",
+        run_extract(seen_off),
+    )
+    ids, _labels, suffix, _voices = rx._apply_continuity_to_references(
+        project=project,
+        project_root=tmp_path,
+        timeline=timeline,
+        element=second,
+        version_ids=["ref-a", "ref-b"],
+        urls=[],
+        checksums=[],
+        provenance=[],
+        read_set=[],
+        voice_urls=[],
+        output_duration_seconds=4,
+    )
+    assert seen_off["include_tail_clip"] is False
+    assert ids == ("ref-a", "ref-b", entry.reference_id)
+    assert "[Image 3]" in suffix
+    assert "视频" not in suffix
+
+
 def test_i2v_auto_first_frame_adopts_prev_last_frame(
     tmp_path,
     monkeypatch,

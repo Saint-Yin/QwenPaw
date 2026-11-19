@@ -73,6 +73,29 @@ _FFMPEG_TIMEOUT_SECONDS = 120
 _FFPROBE_TIMEOUT_SECONDS = 30
 _VIDEO_CONTINUATION_CREATIONS = (R2VCreation, I2VCreation)
 
+# Operator-side dial for the tail-clip channel. Empirically the Wan3.0
+# "视频延长" path constrains generation harder than a plain still anchor,
+# so some runs look worse with the tail clip than with the last frame
+# alone. Setting CREATOR_CONTINUITY_TAIL_CLIP=0 demotes R2V to image-only
+# continuity — the exact path non-continuation models already take — with
+# no code change and no loss of segment linkage. On by default.
+CONTINUITY_TAIL_CLIP_ENV = "CREATOR_CONTINUITY_TAIL_CLIP"
+_TAIL_CLIP_DISABLED_VALUES = frozenset({"0", "false", "no", "off"})
+
+
+def tail_clip_enabled() -> bool:
+    """Whether R2V continuity may ship the predecessor's tail clip video.
+
+    On unless ``CREATOR_CONTINUITY_TAIL_CLIP`` is set to a disabled value.
+    This gates only the *tail clip*; the last-frame image anchor and the
+    whole continuity concept stay active either way, so turning it off
+    never drops linkage — it just stops using the "视频延长" request shape.
+    """
+
+    raw = os.environ.get(CONTINUITY_TAIL_CLIP_ENV, "")
+    return raw.strip().casefold() not in _TAIL_CLIP_DISABLED_VALUES
+
+
 _continuity_cache: "OrderedDict[tuple[str, str, bool], ContinuityBundle]" = (
     OrderedDict()
 )
@@ -1011,4 +1034,5 @@ __all__ = [
     "find_predecessor_video_element",
     "resolve_predecessor_video_version",
     "sweep_orphaned_continuity",
+    "tail_clip_enabled",
 ]

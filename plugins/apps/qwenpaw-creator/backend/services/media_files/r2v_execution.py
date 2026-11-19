@@ -115,6 +115,7 @@ from services.media_files.segment_continuity import (
     extract_continuity_artifacts,
     find_predecessor_video_element,
     resolve_predecessor_video_version,
+    tail_clip_enabled,
 )
 from services.observability import report_error, trace_event
 from services.project_files.remote_cache import public_source_url
@@ -1510,9 +1511,12 @@ def _apply_continuity_to_references(
     project_version_ids = tuple(version_ids)
     baseline_voice_urls = tuple(voice_urls)
     try:
-        include_tail = supports_video_continuation(
-            model_config.get_video_model_name(),
-            model_config.get_video_backend(),
+        include_tail = (
+            supports_video_continuation(
+                model_config.get_video_model_name(),
+                model_config.get_video_backend(),
+            )
+            and tail_clip_enabled()
         )
         bundle = extract_continuity_artifacts(
             project=project,
