@@ -481,6 +481,33 @@ def test_atomic_run_writes_tmp_then_replaces_final(
     assert list(tmp_path.glob("*.tmp.*")) == []
 
 
+def test_atomic_run_temp_keeps_real_extension(tmp_path) -> None:
+    """Regression for the shipped-anchor bug: ffmpeg picks its output muxer
+    from the filename extension, so the private temp name must end in the
+    *real* suffix. The old ``with_suffix('.png.tmp.<pid>.<tid>')`` left a
+    ``.tid`` extension, and every last-frame / tail-clip cut failed with
+    'Unable to find a suitable output format' — silently dropping all
+    continuity anchors. Capture the tmp path handed to the extractor and
+    assert the extension survives for both image and video outputs."""
+
+    from services.media_files import segment_continuity as sc
+
+    seen: list[Path] = []
+
+    def record(tmp: Path, _ff: str) -> None:
+        seen.append(tmp)
+        tmp.write_bytes(b"bytes")
+
+    sc._atomic_run(record, tmp_path / "last_frame.png", "/usr/bin/ffmpeg")
+    sc._atomic_run(record, tmp_path / "tail_clip.mp4", "/usr/bin/ffmpeg")
+
+    assert [p.suffix for p in seen] == [".png", ".mp4"]
+    # Uniqueness markers still precede the extension (collision-free).
+    assert ".tmp." in seen[0].name
+    assert (tmp_path / "last_frame.png").exists()
+    assert (tmp_path / "tail_clip.mp4").exists()
+
+
 def test_tail_clip_failure_degrades_to_last_frame_only(
     tmp_path,
     monkeypatch,

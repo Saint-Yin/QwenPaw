@@ -497,10 +497,18 @@ def _atomic_run(
     materialized file. Existing outputs are not re-cut when they are
     already present (cache-hit path), so this function is only reached
     on miss under the per-key extraction lock.
+
+    The uniqueness markers go *before* the extension, not appended after
+    it: ffmpeg picks the output muxer from the filename suffix, so a temp
+    name like ``last_frame.png.tmp.123.456`` (suffix ``.456``) fails with
+    "Unable to find a suitable output format". Keeping ``.png`` /
+    ``.mp4`` as the trailing suffix lets the real cutter infer the format
+    while the write still lands in a private, collision-free path.
     """
 
-    tmp_path = final_path.with_suffix(
-        f"{final_path.suffix}.tmp.{os.getpid()}.{threading.get_ident()}",
+    tmp_path = final_path.with_name(
+        f"{final_path.stem}.tmp.{os.getpid()}.{threading.get_ident()}"
+        f"{final_path.suffix}",
     )
     try:
         extract(tmp_path, ffmpeg_path)
