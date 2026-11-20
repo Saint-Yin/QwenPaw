@@ -937,6 +937,31 @@ async def submit_video_task(
                     model_name=effective_model,
                 )
             media.append({"type": "reference_image", "url": resolved_url})
+    elif normalized_mode == "video_extend":
+        # First-class continuation: the predecessor's published video is
+        # the ONLY media entry, sent as reference_video with extend
+        # intent carried by the prompt. No reference stack, so there is
+        # no image/video ordinal mapping to maintain.
+        if len(unique_references) != 1:
+            raise ModelError(
+                "video_extend expects exactly one predecessor video "
+                f"reference, got {len(unique_references)}",
+                model_name=effective_model,
+                retryable=False,
+            )
+        resolved_references = await _resolve_reference_media_urls(
+            unique_references,
+            upload_backend,
+        )
+        resolved_url, media_kind = resolved_references[0]
+        if media_kind != "video":
+            raise ModelError(
+                "video_extend material must be a video: "
+                f"{unique_references[0][:120]}",
+                model_name=effective_model,
+                retryable=False,
+            )
+        media.append({"type": "reference_video", "url": resolved_url})
     elif normalized_mode == "r2v":
         voice_support = video_reference_voice_support(
             effective_model,

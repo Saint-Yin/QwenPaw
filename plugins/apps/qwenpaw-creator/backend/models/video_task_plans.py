@@ -1,29 +1,29 @@
 # -*- coding: utf-8 -*-
-"""Wan3.0 video task-shape planning and the continuity operator mode.
+"""First-class video task kinds and the continuity planning layer.
 
-Wan3.0 is All-in-One: one model id routes between text-to-video,
-first-frame (and first/last-frame) image-to-video, omni reference
-generation and video extension purely from ``input.media`` types plus
-prompt intent. Two contract facts drive the plan (measured against the
-official docs, and M0-verified against the live API on 2026-11-19):
+Wan3.0 (and the other All-in-One families) expose five peer task types
+that the provider routes on ``input.media`` types plus prompt intent:
+text-to-video, image-to-video (first / first+last frame), omni
+reference generation, video editing and video extension. They are
+*peers*: extension and editing are not decorations on top of the
+reference stack, they are their own request shapes.
+
+Two contract facts (official docs, M0-verified against the live API on
+2026-11-19) shape the planner:
 
 * ``first_frame``/``last_frame`` are mutually exclusive with every
-  ``reference_*`` type — "the last frame as first_frame WITH the cast
-  reference stack" is not a request Wan3.0 can express.
-* Video extension (``reference_video`` + 延长 intent) may freely combine
-  with ``reference_image`` entries, and it is the only shape where the
-  next segment starts *pixel-exactly* from the predecessor's tail while
-  still consuming character/scene anchors.
+  ``reference_*`` type, so a continuation that needs pixel-level
+  anchoring cannot also carry the cast reference stack.
 * An extension response CONTAINS the material: submitting an 8s clip
   with ``duration=13`` returns a 13s video whose first 8s are the
-  material (measured: output first frame SSIM 0.81 vs the material's
-  FIRST frame, 0.40 vs its last frame). Callers must submit
-  ``duration = material + new`` and trim the material prefix before
-  publishing the segment artifact.
+  material (output head frame SSIM 0.81 vs the material's first frame).
+  Callers must submit ``duration = material + new`` and trim the
+  material prefix before publishing, or the segment duplicates its
+  predecessor on the timeline.
 
-This module is pure: it never touches the filesystem, providers or the
-Project graph. ``r2v_execution`` gathers the facts (predecessor
-resolution, probed durations, scene identity) and executes the plan.
+The planner is pure: facts in, one ``VideoTaskPlan`` out. It never
+touches the filesystem, providers or the Project graph; the execution
+layer gathers durable facts and runs the plan.
 """
 
 from __future__ import annotations
@@ -39,10 +39,6 @@ import math
 WAN_30_MAX_REFERENCE_VIDEO_SECONDS = 15.0
 WAN_30_MAX_INPUT_PLUS_OUTPUT_SECONDS = 30.0
 WAN_30_EXTEND_HEADROOM_SECONDS = 2.0
-# Trimmed-tail material fallback when the whole predecessor clip cannot
-# fit the budget above: enough motion for the extension to match, small
-# enough to keep long segments eligible.
-EXTEND_CLIP_FALLBACK_SECONDS = 5.0
 
 CONTINUITY_MODE_AUTO = "auto"
 CONTINUITY_MODE_WEAK = "weak"
@@ -60,73 +56,87 @@ VIDEO_CONTINUITY_MODE_ENV = "CREATOR_VIDEO_CONTINUITY"
 LEGACY_TAIL_CLIP_ENV = "CREATOR_CONTINUITY_TAIL_CLIP"
 
 
-class VideoTaskShape(StrEnum):
-    """The Wan3.0 request task a segment submission materializes as."""
+class VideoTaskKind(StrEnum):
+    """The five peer provider task types a submission materializes as.
 
-    TEXT_ONLY = "text_only"
-    FIRST_FRAME = "first_frame"
-    FIRST_LAST_FRAME = "first_last_frame"
-    OMNI_REFERENCE = "omni_reference"
-    # Omni reference stack PLUS a predecessor video anchor; prompt carries
-    # the extension intent, so the provider continues the predecessor's
-    # tail pixel-coherently while still honoring image references. The
-    # published artifact is the material prefix trimmed off.
-    EXTEND = "extend"
+    Values match the wire ``mode`` strings consumed by
+    ``video_model.submit_video_task`` so a plan's kind can be handed
+    straight to the provider layer.
+    """
+
+    T2V = "t2v"
+    I2V = "i2v"
+    R2V = "r2v"
+    VIDEO_EDIT = "video_edit"
+    # Continuation: media carries ONLY the predecessor video as
+    # ``reference_video`` plus an extend-intent prompt. No reference
+    # stack, no synthetic ids, no last-frame image — the predecessor's
+    # own footage is the continuity, and the published artifact is the
+    # material prefix trimmed off.
+    VIDEO_EXTEND = "video_extend"
 
 
 @dataclass(frozen=True, slots=True)
 class ContinuityFacts:
-    """Deterministic, already-published inputs to one plan decision.
+    """Deterministic, already-published inputs to one routing decision.
 
-    ``predecessor_duration_seconds`` is probed from the predecessor's
-    selected artifact; ``same_scene`` compares the two Elements'
-    ``scene_ref`` identity. Everything here is durable data, so the same
-    project state always plans the same shape (claim/submit replay safe).
+    ``predecessor_version_id`` is the predecessor Element's selected
+    main-slot artifact (the real Asset Index version an extension
+    references); ``predecessor_duration_seconds`` is probed from it.
+    ``same_scene`` compares the two Elements' ``scene_ref``; ``
+    new_elements`` is true when this segment introduces a character or
+    prop the predecessor did not carry. ``cross_episode`` marks a
+    segment with no in-timeline predecessor (a new episode's opener).
+    Everything here is durable data, so the same project state always
+    routes the same way (claim/submit replay safe).
     """
 
+    creation_type: str = "r2v"
     has_published_predecessor: bool = False
-    same_scene: bool = False
+    predecessor_version_id: str = ""
     predecessor_duration_seconds: float = 0.0
+    same_scene: bool = False
+    cross_episode: bool = False
+    new_elements: bool = False
+    explicit_first_frame: bool = False
     segment_duration_seconds: int = 0
     ffmpeg_ready: bool = True
     video_extension_supported: bool = False
-    has_reference_stack: bool = False
 
 
 @dataclass(frozen=True, slots=True)
-class Wan3TaskPlan:
-    """What the submit path must do differently for this segment.
+class VideoTaskPlan:
+    """The routed task kind plus everything the submit path must honour.
 
-    ``last_frame_anchor``: append the predecessor's last-frame image as a
-    reference_image anchor (weak continuity). ``extension_material``:
-    ``""`` (none), ``"full"`` (the predecessor's whole published video as
-    reference_video) or ``"clip"`` (a trimmed tail of
-    ``material_duration_seconds``). ``ratio`` overrides the project
-    ratio when the shape must follow the material instead of the plan.
-    ``submit_duration_seconds`` is the provider duration (extension
-    semantics: material + new), which the timeline keeps separate as the
-    Element's own duration. ``trim_offset_seconds`` is how much of the
-    returned video's head is material and must be cut before publishing;
-    ``None`` means the provider output is already the segment.
+    ``predecessor_version_id``/``material_duration_seconds``/
+    ``trim_offset_seconds`` are only meaningful for VIDEO_EXTEND (the
+    material is the predecessor's whole published video). ``ratio``
+    overrides the project ratio when the kind must follow the material
+    (extension) instead of the plan. ``submit_duration_seconds`` is the
+    provider duration (extension semantics: material + new); the
+    timeline keeps the Element's own duration separately.
+    ``auto_first_frame`` marks an I2V whose first frame is adopted from
+    the predecessor's last frame rather than authored.
     """
 
-    shape: VideoTaskShape
-    last_frame_anchor: bool = False
-    extension_material: str = ""
+    kind: VideoTaskKind
+    predecessor_version_id: str = ""
     material_duration_seconds: float = 0.0
     ratio: str = ""
     submit_duration_seconds: int = 0
     trim_offset_seconds: float | None = None
+    auto_first_frame: bool = False
 
 
 def video_continuity_mode() -> str:
     """Unified operator dial for inter-segment continuity: auto/weak/off.
 
-    ``auto`` (default) lets the planner pick the strongest shape the
-    facts allow; ``weak`` pins the image-only last-frame anchor (the
-    behaviour measured as acceptable in production); ``off`` disables
-    injection entirely. The deprecated ``CREATOR_CONTINUITY_TAIL_CLIP``
-    alias maps ``0`` to weak so already-deployed hosts keep semantics.
+    ``auto`` (default) lets the planner route same-scene segments onto
+    the strongest continuation kind the facts allow; ``weak`` and
+    ``off`` both pin segments to plain R2V (no continuation), the
+    difference being historical only. The deprecated
+    ``CREATOR_CONTINUITY_TAIL_CLIP`` alias maps ``0`` to weak so
+    already-deployed hosts keep semantics.
     """
 
     raw = os.environ.get(VIDEO_CONTINUITY_MODE_ENV, "").strip().casefold()
@@ -142,56 +152,69 @@ def video_continuity_mode() -> str:
     return CONTINUITY_MODE_AUTO
 
 
-def _omni(
+def _plain(
     facts: ContinuityFacts,
+    kind: VideoTaskKind,
     *,
-    last_frame: bool,
     ratio: str,
-) -> Wan3TaskPlan:
-    return Wan3TaskPlan(
-        shape=VideoTaskShape.OMNI_REFERENCE,
-        last_frame_anchor=last_frame,
+    auto_first_frame: bool = False,
+) -> VideoTaskPlan:
+    return VideoTaskPlan(
+        kind=kind,
         ratio=ratio,
         submit_duration_seconds=facts.segment_duration_seconds,
+        auto_first_frame=auto_first_frame,
     )
 
 
 # pylint: disable-next=too-many-return-statements
-def select_wan3_task_plan(
+def select_video_task_kind(
+    base_mode: str,
     facts: ContinuityFacts,
     *,
     mode: str = CONTINUITY_MODE_AUTO,
     project_ratio: str = "",
-) -> Wan3TaskPlan:
-    """Pick the strongest Wan3.0 shape the published facts allow.
+) -> VideoTaskPlan:
+    """Route one segment submission onto a first-class task kind.
 
-    Rule order (docs + M0 measured):
-    1. No predecessor / no ffmpeg / ``off``: no continuity at all.
-    2. Model without a documented extension contract, or ``weak`` mode:
-       last-frame image anchor inside the omni reference stack.
-    3. Scene change: pixel continuation would fight the cut; anchor with
-       the last frame only (weak), keeping the reference stack.
-    4. Same scene on an extension-capable model: EXTEND with the whole
-       predecessor video when it fits the 15s/30s budgets, else a
-       trimmed tail fallback, else degrade to the weak anchor.
-    First-frame shapes stay with their own request path (an authored
-    ``first_frame_version_id`` or the I2V auto frame); this planner
-    covers the R2V stack only.
+    Non-r2v base modes keep their own kind (the author already chose
+    i2v/t2v/video_edit; i2v may still auto-adopt the predecessor frame).
+    For an r2v base the planner applies the continuity rules in order:
+
+    1. ``off``/``weak``, no published predecessor, a new episode, a scene
+       change, or newly introduced characters/props: plain R2V. A pure
+       continuation carries no reference stack, so anything that needs
+       new anchors must stay omni-reference; a cut (scene change) fights
+       pixel continuation.
+    2. Same scene, no new elements, extension-capable model, and the
+       whole predecessor fits the 15s/30s budgets: VIDEO_EXTEND — the
+       strongest continuity (picture, camera motion and audio all
+       continue from the predecessor's tail).
+    3. Same scene but extension unavailable or over budget: I2V with the
+       predecessor's last frame auto-adopted as first frame (pixel-level
+       start, weaker than extend). Needs ffmpeg; without it fall back to
+       plain R2V.
     """
 
-    # OMNI keeps the caller's project ratio verbatim (empty in, empty
-    # out): the submit path already resolved it. Only EXTEND overrides
-    # to adaptive because the material dictates the frame there.
-    ratio = project_ratio
-    if mode == CONTINUITY_MODE_OFF or not facts.has_published_predecessor:
-        return _omni(facts, last_frame=False, ratio=ratio)
-    if not facts.ffmpeg_ready:
-        # No extract at all without ffmpeg: not even the image anchor.
-        return _omni(facts, last_frame=False, ratio=ratio)
-    if mode == CONTINUITY_MODE_WEAK or not facts.video_extension_supported:
-        return _omni(facts, last_frame=True, ratio=ratio)
-    if not facts.same_scene:
-        return _omni(facts, last_frame=True, ratio=ratio)
+    if base_mode != "r2v":
+        kind = VideoTaskKind(base_mode)
+        return _plain(
+            facts,
+            kind,
+            ratio=project_ratio,
+            auto_first_frame=(
+                kind is VideoTaskKind.I2V and not facts.explicit_first_frame
+            ),
+        )
+
+    if (
+        mode in (CONTINUITY_MODE_OFF, CONTINUITY_MODE_WEAK)
+        or not facts.has_published_predecessor
+        or facts.cross_episode
+        or not facts.same_scene
+        or facts.new_elements
+    ):
+        return _plain(facts, VideoTaskKind.R2V, ratio=project_ratio)
 
     segment = facts.segment_duration_seconds
     budget = (
@@ -199,34 +222,29 @@ def select_wan3_task_plan(
     )
     prev = facts.predecessor_duration_seconds
     if (
-        0 < prev <= WAN_30_MAX_REFERENCE_VIDEO_SECONDS
+        facts.video_extension_supported
+        and facts.predecessor_version_id
+        and 0 < prev <= WAN_30_MAX_REFERENCE_VIDEO_SECONDS
         and prev + segment <= budget
     ):
-        return Wan3TaskPlan(
-            shape=VideoTaskShape.EXTEND,
-            last_frame_anchor=True,
-            extension_material="full",
+        return VideoTaskPlan(
+            kind=VideoTaskKind.VIDEO_EXTEND,
+            predecessor_version_id=facts.predecessor_version_id,
             material_duration_seconds=prev,
             # The provider matches the material's own frame; the project
-            # ratio must not force a letterbox the extension path cannot
-            # honour mid-clip.
+            # ratio must not force a letterbox mid-clip.
             ratio="adaptive",
             submit_duration_seconds=int(math.ceil(prev + segment)),
             trim_offset_seconds=prev,
         )
-    if EXTEND_CLIP_FALLBACK_SECONDS + segment <= budget:
-        return Wan3TaskPlan(
-            shape=VideoTaskShape.EXTEND,
-            last_frame_anchor=True,
-            extension_material="clip",
-            material_duration_seconds=EXTEND_CLIP_FALLBACK_SECONDS,
-            ratio="adaptive",
-            submit_duration_seconds=int(
-                EXTEND_CLIP_FALLBACK_SECONDS + segment,
-            ),
-            trim_offset_seconds=EXTEND_CLIP_FALLBACK_SECONDS,
+    if facts.ffmpeg_ready:
+        return _plain(
+            facts,
+            VideoTaskKind.I2V,
+            ratio=project_ratio,
+            auto_first_frame=True,
         )
-    return _omni(facts, last_frame=True, ratio=ratio)
+    return _plain(facts, VideoTaskKind.R2V, ratio=project_ratio)
 
 
 __all__ = [
@@ -234,8 +252,8 @@ __all__ = [
     "CONTINUITY_MODE_OFF",
     "CONTINUITY_MODE_WEAK",
     "ContinuityFacts",
-    "VideoTaskShape",
-    "Wan3TaskPlan",
-    "select_wan3_task_plan",
+    "VideoTaskKind",
+    "VideoTaskPlan",
+    "select_video_task_kind",
     "video_continuity_mode",
 ]

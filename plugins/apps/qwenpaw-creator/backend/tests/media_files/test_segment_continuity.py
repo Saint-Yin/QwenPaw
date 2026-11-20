@@ -508,113 +508,6 @@ def test_atomic_run_temp_keeps_real_extension(tmp_path) -> None:
     assert (tmp_path / "tail_clip.mp4").exists()
 
 
-def test_tail_clip_failure_degrades_to_last_frame_only(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """Regression for Major #3: a container-level tail-clip failure
-    must not block an otherwise usable last-frame anchor, otherwise
-    I2V chains lose the fallback the reviewer specifically asked us
-    to protect."""
-
-    from services.media_files import segment_continuity as sc
-
-    source = tmp_path / "prev.mp4"
-    source.write_bytes(b"fake-video")
-    work_dir = tmp_path / "work"
-    work_dir.mkdir()
-
-    def fake_run(cmd, **kwargs):  # noqa: ARG001
-        # ffprobe path: emit a plausible duration.
-        if "-show_entries" in cmd:
-
-            class _Probe:
-                returncode = 0
-                stdout = "7.5"
-                stderr = ""
-
-            return _Probe()
-        # ffmpeg path: land bytes at the requested output.
-        output = Path(cmd[-1])
-        output.write_bytes(b"fake-frame")
-
-        class _Result:
-            returncode = 0
-            stdout = ""
-            stderr = ""
-
-        return _Result()
-
-    monkeypatch.setattr(sc.subprocess, "run", fake_run)
-
-    def explode(*args, **kwargs):  # noqa: ANN002, ANN003
-        raise RuntimeError("container-level tail failure")
-
-    monkeypatch.setattr(sc, "_extract_tail_clip_into", explode)
-
-    entries = sc._cut_both(
-        source=source,
-        work_dir=work_dir,
-        ffmpeg_path="/usr/bin/ffmpeg",
-        ffprobe_path="/usr/bin/ffprobe",
-        prev_version="prev-version-1",
-        prev_element_id="e1",
-        material_mode="clip",
-    )
-    kinds = {entry.kind for entry in entries}
-    assert kinds == {"last_frame"}
-    # last_frame materialized before the failed tail attempt.
-    assert (work_dir / "last_frame.png").exists()
-
-
-def test_tail_clip_seek_uses_duration_or_sseof(tmp_path, monkeypatch) -> None:
-    """With a known duration the cut starts at total-tail; with an
-    unknown duration it must seek from the container end (``-sseof``),
-    never fall back to ``-ss 0`` which would capture the predecessor's
-    OPENING frames and anchor the successor on the wrong end."""
-
-    from services.media_files import segment_continuity as sc
-
-    source = tmp_path / "prev.mp4"
-    source.write_bytes(b"fake-video")
-    out = tmp_path / "tail.mp4"
-    commands: list[list[str]] = []
-
-    def fake_run(cmd, **kwargs):  # noqa: ARG001
-        commands.append(list(cmd))
-        Path(cmd[-1]).write_bytes(b"fake-clip")
-
-        class _Result:
-            returncode = 0
-            stdout = ""
-            stderr = ""
-
-        return _Result()
-
-    monkeypatch.setattr(sc.subprocess, "run", fake_run)
-
-    sc._extract_tail_clip(
-        source,
-        out,
-        "/usr/bin/ffmpeg",
-        tail_seconds=3.0,
-        total_duration=7.5,
-    )
-    assert commands[0][commands[0].index("-ss") + 1] == "4.500000"
-    assert "-sseof" not in commands[0]
-
-    commands.clear()
-    sc._extract_tail_clip(
-        source,
-        out,
-        "/usr/bin/ffmpeg",
-        tail_seconds=3.0,
-        total_duration=0.0,
-    )
-    assert commands[0][commands[0].index("-sseof") + 1] == "-3.000000"
-    assert "-ss" not in commands[0]
-
-
 def test_i2v_gate_opens_via_public_work_graph() -> None:
     """Nit #9 follow-up: exercise the readiness transition through
     ``derive_work_graph`` rather than poking the private gate helper,
@@ -735,7 +628,7 @@ def test_lru_eviction_retires_extract_locks(tmp_path, monkeypatch) -> None:
     )
     monkeypatch.setattr(
         sc,
-        "_cut_both",
+        "_cut_last_frame",
         lambda **kwargs: cuts.append(kwargs) or (entry,),
     )
     monkeypatch.setattr(sc, "_CACHE_MAX_ITEMS", 1)
@@ -748,13 +641,12 @@ def test_lru_eviction_retires_extract_locks(tmp_path, monkeypatch) -> None:
             project_root=tmp_path,
             timeline=timeline,
             element=second,
-            material_mode="none",
         )
 
     bundle_v1 = extract()
     assert bundle_v1 is not None
     assert len(cuts) == 1
-    key_v1 = ("v1", "/usr/bin/ffmpeg", "none")
+    key_v1 = ("v1", "/usr/bin/ffmpeg")
     assert key_v1 in sc._continuity_extract_locks
 
     # Same predecessor version: double-check cache hit, no re-cut.
@@ -770,7 +662,7 @@ def test_lru_eviction_retires_extract_locks(tmp_path, monkeypatch) -> None:
     assert len(cuts) == 2
     assert key_v1 not in sc._continuity_cache
     assert key_v1 not in sc._continuity_extract_locks
-    assert ("v2", "/usr/bin/ffmpeg", "none") in sc._continuity_extract_locks
+    assert ("v2", "/usr/bin/ffmpeg") in sc._continuity_extract_locks
 
 
 def test_design_skips_emit_trace(tmp_path, monkeypatch) -> None:
@@ -796,7 +688,6 @@ def test_design_skips_emit_trace(tmp_path, monkeypatch) -> None:
             project_root=tmp_path,
             timeline=timeline,
             element=lone,
-            material_mode="none",
         )
         is None
     )
@@ -810,7 +701,6 @@ def test_design_skips_emit_trace(tmp_path, monkeypatch) -> None:
             project_root=tmp_path,
             timeline=timeline,
             element=lone,
-            material_mode="none",
         )
         is None
     )
@@ -823,215 +713,6 @@ def test_design_skips_emit_trace(tmp_path, monkeypatch) -> None:
     assert reasons == ["no_predecessor", "predecessor_unpublished"]
     assert all(kw["component"] == "continuity" for _n, kw in events)
     assert events[1][1]["prev_element_id"] == "e1"
-
-
-def test_apply_continuity_traces_bundle_unavailable(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """m4: the submit-side no-op return must also be observable, and
-    must leave every caller list untouched."""
-
-    from models import config as model_config
-    import services.observability as obs
-    import services.media_files.r2v_execution as rx
-
-    events: list[tuple[str, dict]] = []
-    monkeypatch.setattr(
-        obs,
-        "trace_event",
-        lambda name, **kw: events.append((name, kw)),
-    )
-    monkeypatch.setattr(
-        rx,
-        "trace_event",
-        lambda name, **kw: events.append((name, kw)),
-    )
-    monkeypatch.setattr(
-        model_config,
-        "get_video_model_name",
-        lambda: "wan3.0-video",
-    )
-    monkeypatch.setattr(model_config, "get_video_backend", lambda: "wan")
-
-    lone = _element("e1", start=0)
-    project, timeline = _project([lone])
-    urls, checksums, provenance = ["u"], ["c"], ["p"]
-    read_set: list[dict] = [{"ref": "p"}]
-    ids, labels, suffix, voices = rx._apply_continuity_to_references(
-        project=project,
-        project_root=tmp_path,
-        timeline=timeline,
-        element=lone,
-        version_ids=["ref-1"],
-        urls=urls,
-        checksums=checksums,
-        provenance=provenance,
-        read_set=read_set,
-        voice_urls=[""],
-        output_duration_seconds=4,
-    )
-    assert ids == ("ref-1",)
-    assert labels == {}
-    assert suffix == ""
-    assert voices == ("",)
-    assert (urls, checksums, provenance, read_set) == (
-        ["u"],
-        ["c"],
-        ["p"],
-        [{"ref": "p"}],
-    )
-    reasons = [
-        kw["attributes"]["reason"]
-        for name, kw in events
-        if name == "creator.continuity.skipped"
-    ]
-    assert "bundle_unavailable" in reasons
-
-
-def test_apply_continuity_reports_missing_last_frame(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """m4: a bundle without a last frame violates the extraction
-    invariant and must report, not silently no-op."""
-
-    from models import config as model_config
-    import services.media_files.r2v_execution as rx
-    from services.media_files.segment_continuity import ContinuityBundle
-
-    reports: list[dict] = []
-    monkeypatch.setattr(rx, "report_error", lambda **kw: reports.append(kw))
-    monkeypatch.setattr(
-        model_config,
-        "get_video_model_name",
-        lambda: "wan3.0-video",
-    )
-    monkeypatch.setattr(model_config, "get_video_backend", lambda: "wan")
-    monkeypatch.setattr(
-        rx,
-        "extract_continuity_artifacts",
-        lambda **kw: ContinuityBundle(
-            predecessor_element_id="e1",
-            predecessor_video_version_id="prev-version-1",
-            entries=(),
-        ),
-    )
-
-    first = _element("e1", start=0)
-    second = _element("e2", start=4000)
-    project, timeline = _project([first, second])
-    ids, labels, suffix, voices = rx._apply_continuity_to_references(
-        project=project,
-        project_root=tmp_path,
-        timeline=timeline,
-        element=second,
-        version_ids=[],
-        urls=[],
-        checksums=[],
-        provenance=[],
-        read_set=[],
-        voice_urls=[],
-        output_duration_seconds=4,
-    )
-    assert ids == ()
-    assert labels == {}
-    assert suffix == ""
-    assert voices == ()
-    assert len(reports) == 1
-    assert reports[0]["code"] == "CONTINUITY_LAST_FRAME_MISSING"
-    assert reports[0]["component"] == "r2v.continuity"
-
-
-def test_apply_continuity_traces_tail_degradation(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """m4: on a continuation-capable model, a soft-degraded bundle
-    (last frame only) must trace the submit-side consequence while
-    still injecting the image anchor."""
-
-    from models import config as model_config
-    import services.media_files.r2v_execution as rx
-    from services.media_files.segment_continuity import ContinuityBundle
-
-    events: list[tuple[str, dict]] = []
-    monkeypatch.setattr(
-        rx,
-        "trace_event",
-        lambda name, **kw: events.append((name, kw)),
-    )
-    monkeypatch.setattr(
-        model_config,
-        "get_video_model_name",
-        lambda: "wan3.0-video",
-    )
-    monkeypatch.setattr(model_config, "get_video_backend", lambda: "wan")
-    monkeypatch.setattr(
-        rx,
-        "_assert_r2v_reference_budget",
-        lambda *a, **k: None,
-    )
-    entry = _frame_entry(tmp_path)
-    monkeypatch.setattr(
-        rx,
-        "extract_continuity_artifacts",
-        lambda **kw: ContinuityBundle(
-            predecessor_element_id="e1",
-            predecessor_video_version_id="prev-version-1",
-            entries=(entry,),
-        ),
-    )
-
-    first = _element("e1", start=0)
-    second = _element("e2", start=4000)
-    project, timeline = _project([first, second])
-    urls: list[str] = []
-    checksums: list[str] = []
-    provenance: list[str] = []
-    read_set: list[dict] = []
-    from models.video_task_plans import VideoTaskShape, Wan3TaskPlan
-
-    # Non-empty plan so ``last_frame_index`` is exercised end to end:
-    # the suffix must cite ``[Image len(plan)+1]`` — the same mixed
-    # send-order ordinal the role mapping assigns the appended frame.
-    ids, labels, suffix, voices = rx._apply_continuity_to_references(
-        project=project,
-        project_root=tmp_path,
-        timeline=timeline,
-        element=second,
-        version_ids=["ref-a", "ref-b"],
-        urls=urls,
-        checksums=checksums,
-        provenance=provenance,
-        read_set=read_set,
-        voice_urls=[],
-        output_duration_seconds=4,
-        plan=Wan3TaskPlan(
-            shape=VideoTaskShape.EXTEND,
-            last_frame_anchor=True,
-            extension_material="clip",
-            material_duration_seconds=5.0,
-            ratio="adaptive",
-            submit_duration_seconds=13,
-            trim_offset_seconds=5.0,
-        ),
-    )
-    assert ids == ("ref-a", "ref-b", entry.reference_id)
-    assert labels == {entry.reference_id: entry.role_label}
-    assert "[Image 3]" in suffix
-    assert "视频" not in suffix
-    assert voices == ("",)
-    assert urls == [entry.url]
-    assert checksums == [entry.checksum]
-    assert provenance == [entry.provenance_ref]
-    assert read_set == [entry.as_read_entry()]
-    reasons = [
-        kw["attributes"]["reason"]
-        for name, kw in events
-        if name == "creator.continuity.skipped"
-    ]
-    assert reasons == ["tail_clip_degraded"]
 
 
 def test_tail_clip_enabled_env_switch(monkeypatch) -> None:
@@ -1048,156 +729,6 @@ def test_tail_clip_enabled_env_switch(monkeypatch) -> None:
     for off in ("0", "false", "off", "NO", " Off "):
         monkeypatch.setenv("CREATOR_CONTINUITY_TAIL_CLIP", off)
         assert tail_clip_enabled() is False
-
-
-def test_apply_continuity_plan_drives_material_anchor_and_shortcut(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """The materialized Wan3TaskPlan — not env lookups inside the submit
-    path — decides everything: an EXTEND clip plan requests
-    ``material_mode="clip"`` with the planned tail length and ships both
-    anchors; a weak plan ships image-only; a no-anchor plan (off mode or
-    unusable predecessor) short-circuits before ffmpeg with a trace; the
-    legacy ``plan=None`` call shape keeps the historical image anchor."""
-
-    import services.media_files.r2v_execution as rx
-    from models.video_task_plans import (
-        VideoTaskShape,
-        Wan3TaskPlan,
-    )
-    from services.media_files import segment_continuity as sc
-    from services.media_files.segment_continuity import ContinuityBundle
-
-    monkeypatch.setattr(
-        rx,
-        "_assert_r2v_reference_budget",
-        lambda *a, **k: None,
-    )
-    frame = _frame_entry(tmp_path)
-    mp4 = tmp_path / "tail_clip.mp4"
-    mp4.write_bytes(b"fake-mp4")
-    tail = sc._build_entry(
-        "tail_clip",
-        path=mp4,
-        prev_version="prev-version-1",
-        prev_element_id="e1",
-        media_type="video/mp4",
-        role_label="上一段尾段视频（含音频，作为向后延长起点）",
-        duration_seconds=5.0,
-    )
-
-    def run_extract(capture: dict, entries):
-        def fake_extract(**kw):
-            capture["material_mode"] = kw["material_mode"]
-            capture["tail_seconds"] = kw.get("tail_seconds")
-            return ContinuityBundle(
-                predecessor_element_id="e1",
-                predecessor_video_version_id="prev-version-1",
-                entries=entries,
-            )
-
-        return fake_extract
-
-    first = _element("e1", start=0)
-    second = _element("e2", start=4000)
-    project, timeline = _project([first, second])
-    call = {
-        "project": project,
-        "project_root": tmp_path,
-        "timeline": timeline,
-        "element": second,
-        "version_ids": ["ref-a", "ref-b"],
-        "urls": [],
-        "checksums": [],
-        "provenance": [],
-        "read_set": [],
-        "voice_urls": [],
-        "output_duration_seconds": 4,
-    }
-
-    extend_plan = Wan3TaskPlan(
-        shape=VideoTaskShape.EXTEND,
-        last_frame_anchor=True,
-        extension_material="clip",
-        material_duration_seconds=5.0,
-        ratio="adaptive",
-        submit_duration_seconds=13,
-        trim_offset_seconds=5.0,
-    )
-    seen: dict = {}
-    monkeypatch.setattr(
-        rx,
-        "extract_continuity_artifacts",
-        run_extract(seen, (frame, tail)),
-    )
-    ids, _labels, suffix, _voices = rx._apply_continuity_to_references(
-        plan=extend_plan,
-        **call,
-    )
-    assert seen == {"material_mode": "clip", "tail_seconds": 5.0}
-    assert ids[-2:] == (frame.reference_id, tail.reference_id)
-    assert "向后延长" in suffix and "[Image 3]" in suffix
-
-    weak_plan = Wan3TaskPlan(
-        shape=VideoTaskShape.OMNI_REFERENCE,
-        last_frame_anchor=True,
-        ratio="16:9",
-        submit_duration_seconds=4,
-    )
-    seen = {}
-    monkeypatch.setattr(
-        rx,
-        "extract_continuity_artifacts",
-        run_extract(seen, (frame,)),
-    )
-    ids, _labels, suffix, _voices = rx._apply_continuity_to_references(
-        plan=weak_plan,
-        **call,
-    )
-    assert seen["material_mode"] == "none"
-    assert ids[-1:] == (frame.reference_id,)
-    assert "起始状态" in suffix and "向后延长" not in suffix
-
-    off_plan = Wan3TaskPlan(
-        shape=VideoTaskShape.OMNI_REFERENCE,
-        last_frame_anchor=False,
-        ratio="16:9",
-        submit_duration_seconds=4,
-    )
-    seen = {}
-    monkeypatch.setattr(
-        rx,
-        "extract_continuity_artifacts",
-        run_extract(seen, (frame,)),
-    )
-    events: list[tuple[str, dict]] = []
-    monkeypatch.setattr(
-        rx,
-        "trace_event",
-        lambda name, **kw: events.append((name, kw)),
-    )
-    ids, _labels, suffix, _voices = rx._apply_continuity_to_references(
-        plan=off_plan,
-        **call,
-    )
-    assert seen == {}
-    assert ids == ("ref-a", "ref-b") and suffix == ""
-    assert (
-        events
-        and events[0][1]["attributes"]["reason"] == "plan_omni_reference"
-    )
-
-    # Legacy plan=None callers (I2V helpers, non-r2v) keep image anchor.
-    seen = {}
-    monkeypatch.setattr(
-        rx,
-        "extract_continuity_artifacts",
-        run_extract(seen, (frame,)),
-    )
-    ids, _labels, suffix, _voices = rx._apply_continuity_to_references(**call)
-    assert seen["material_mode"] == "none"
-    assert ids[-1:] == (frame.reference_id,)
 
 
 def test_i2v_auto_first_frame_adopts_prev_last_frame(
@@ -1262,7 +793,6 @@ def test_i2v_auto_first_frame_adopts_prev_last_frame(
     )
     assert adopted is entry
     assert len(calls) == 1
-    assert calls[0]["material_mode"] == "none"
 
 
 def test_i2v_auto_first_frame_reports_failure_and_invariant(
@@ -1429,59 +959,14 @@ def test_extract_converts_disk_oserror_to_runtime(
     def boom(**kwargs):  # noqa: ARG001
         raise PermissionError(28, "no space left on device")
 
-    monkeypatch.setattr(sc, "_cut_both", boom)
+    monkeypatch.setattr(sc, "_cut_last_frame", boom)
     with pytest.raises(RuntimeError, match="no space"):
         sc.extract_continuity_artifacts(
             project=project,
             project_root=tmp_path,
             timeline=timeline,
             element=second,
-            material_mode="none",
         )
-
-
-def test_probe_failure_falls_back_to_sseof_tail(tmp_path, monkeypatch) -> None:
-    """N-1: an ffprobe timeout must degrade to container-relative
-    seeking, not lose the tail clip (and never cut the head)."""
-
-    import subprocess as sp
-
-    from services.media_files import segment_continuity as sc
-
-    source = tmp_path / "prev.mp4"
-    source.write_bytes(b"fake-video")
-    work_dir = tmp_path / "work"
-    work_dir.mkdir()
-    commands: list[list[str]] = []
-
-    def fake_run(cmd, **kwargs):  # noqa: ARG001
-        commands.append(list(cmd))
-        if "-show_entries" in cmd:
-            raise sp.TimeoutExpired(cmd=cmd, timeout=1)
-        Path(cmd[-1]).write_bytes(b"fake-bytes")
-
-        class _Result:
-            returncode = 0
-            stdout = ""
-            stderr = ""
-
-        return _Result()
-
-    monkeypatch.setattr(sc.subprocess, "run", fake_run)
-    entries = sc._cut_both(
-        source=source,
-        work_dir=work_dir,
-        ffmpeg_path="/usr/bin/ffmpeg",
-        ffprobe_path="/usr/bin/ffprobe",
-        prev_version="prev-version-1",
-        prev_element_id="e1",
-        material_mode="clip",
-    )
-    assert {entry.kind for entry in entries} == {"last_frame", "tail_clip"}
-    tail_cmd = next(c for c in commands if "-sseof" in c and "-t" in c)
-    assert tail_cmd[tail_cmd.index("-sseof") + 1] == "-3.000000"
-    tail_entry = next(e for e in entries if e.kind == "tail_clip")
-    assert tail_entry.duration_seconds == 3.0
 
 
 def test_prune_removes_old_unreferenced_dirs(tmp_path, monkeypatch) -> None:
@@ -1548,7 +1033,7 @@ def test_video_edit_fingerprint_ignores_continuity() -> None:
         second,
         mode="video_edit",
     )
-    assert any(item.startswith("continuity:") for item in r2v_ids)
+    assert not any(item.startswith("continuity:") for item in r2v_ids)
     assert not any(item.startswith("continuity:") for item in edit_ids)
     assert edit_ids == video_reference_plan(project, second)
 
@@ -1556,8 +1041,18 @@ def test_video_edit_fingerprint_ignores_continuity() -> None:
     _select_prev_video(project, "e1", "prev-version-2")
     after = _submission_input_fingerprint(project, "e2", mode="video_edit")
     assert before == after
-    # Control: the r2v-mode fingerprint does track the prev version.
-    assert _submission_input_fingerprint(project, "e2") != before
+    # Control: the first-class extend mode DOES track the prev version
+    # (its only continuity input is the predecessor's real artifact),
+    # while pure r2v no longer carries any continuity reference.
+    assert (
+        _submission_input_fingerprint(
+            project,
+            "e2",
+            mode="video_extend",
+        )
+        != before
+    )
+    assert _submission_input_fingerprint(project, "e2") == before
 
 
 def test_explicit_frame_i2v_skips_prev_chain() -> None:
@@ -1730,73 +1225,6 @@ def test_stale_missing_excludes_foreign_deps() -> None:
     assert node.missing == ()
 
 
-def test_apply_budget_failure_rolls_back_injection(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """N-10: the budget rollback branch must pop exactly what it
-    appended and hand the caller back its untouched paid render."""
-
-    from models import config as model_config
-    import services.media_files.r2v_execution as rx
-    from services.media_files.r2v_execution import VideoReferenceBudgetError
-    from services.media_files.segment_continuity import ContinuityBundle
-
-    reports: list[dict] = []
-    monkeypatch.setattr(rx, "report_error", lambda **kw: reports.append(kw))
-    monkeypatch.setattr(
-        model_config,
-        "get_video_model_name",
-        lambda: "wan3.0-video",
-    )
-    monkeypatch.setattr(model_config, "get_video_backend", lambda: "wan")
-    entry = _frame_entry(tmp_path)
-
-    def deny_budget(*args, **kwargs):  # noqa: ARG001
-        raise VideoReferenceBudgetError(
-            "VIDEO_REFERENCE_BUDGET_EXCEEDED: test",
-        )
-
-    monkeypatch.setattr(rx, "_assert_r2v_reference_budget", deny_budget)
-    monkeypatch.setattr(
-        rx,
-        "extract_continuity_artifacts",
-        lambda **kw: ContinuityBundle(
-            predecessor_element_id="e1",
-            predecessor_video_version_id="prev-version-1",
-            entries=(entry,),
-        ),
-    )
-
-    project, timeline, _first, second = _two_segment_project()
-    urls, checksums, provenance = ["u"], ["c"], ["p"]
-    read_set = [{"ref": "p"}]
-    ids, labels, suffix, voices = rx._apply_continuity_to_references(
-        project=project,
-        project_root=tmp_path,
-        timeline=timeline,
-        element=second,
-        version_ids=["ref-1"],
-        urls=urls,
-        checksums=checksums,
-        provenance=provenance,
-        read_set=read_set,
-        voice_urls=[""],
-        output_duration_seconds=4,
-    )
-    assert ids == ("ref-1",)
-    assert (urls, checksums, provenance, read_set) == (
-        ["u"],
-        ["c"],
-        ["p"],
-        [{"ref": "p"}],
-    )
-    assert labels == {}
-    assert suffix == ""
-    assert voices == ("",)
-    assert reports[-1]["code"] == "CONTINUITY_SKIPPED_BUDGET"
-
-
 def test_atomic_run_failure_leaves_no_final_or_residue(tmp_path) -> None:
     """N-10: a failing extract must leave neither a half-written final
     nor tmp residue — the success-path test alone cannot tell the
@@ -1868,7 +1296,7 @@ def test_cache_hit_refreshes_lru_order(tmp_path, monkeypatch) -> None:
         "_resolve_prev_video_path",
         lambda *a, **k: source,
     )
-    monkeypatch.setattr(sc, "_cut_both", lambda **kw: (entry,))
+    monkeypatch.setattr(sc, "_cut_last_frame", lambda **kw: (entry,))
     monkeypatch.setattr(sc, "_CACHE_MAX_ITEMS", 2)
     monkeypatch.setattr(sc, "_continuity_cache", OrderedDict())
     monkeypatch.setattr(sc, "_continuity_extract_locks", {})
@@ -1880,7 +1308,6 @@ def test_cache_hit_refreshes_lru_order(tmp_path, monkeypatch) -> None:
             project_root=tmp_path,
             timeline=timeline,
             element=second,
-            material_mode="none",
         )
 
     extract("v1")
@@ -2295,90 +1722,6 @@ def test_marker_bounds_follow_image_sequence() -> None:
         _validate_authored_marker_bounds("参考 [Image 3]。", project, all_images)
 
 
-def test_per_type_ordinals_align_across_suffix_and_role_block(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """Major-1 (end to end): the suffix and the role block derive from
-    the same per-type numbering — with a video in the plan the last
-    frame lands on the next real image ordinal and the tail clip on the
-    next video ordinal. This pins the PRODUCTION indices, not
-    hand-fed markers, so a regression in either side turns red."""
-
-    from models import config as model_config
-    import services.media_files.r2v_execution as rx
-    from services.media_files import segment_continuity as sc
-    from services.media_files.segment_continuity import ContinuityBundle
-
-    monkeypatch.setattr(
-        model_config,
-        "get_video_model_name",
-        lambda: "wan3.0-video",
-    )
-    monkeypatch.setattr(model_config, "get_video_backend", lambda: "wan")
-    monkeypatch.setattr(
-        rx,
-        "_assert_r2v_reference_budget",
-        lambda *a, **k: None,
-    )
-    first = _element("e1", start=0)
-    second = _element("e2", start=4000)
-    project, timeline = _project([first, second])
-    _publish_artifact(project, "aa", "img-1", media_type="image/png")
-    _publish_artifact(project, "bb", "vid-1", media_type="video/mp4")
-    _publish_artifact(project, "cc", "img-2", media_type="image/png")
-    frame = _frame_entry(tmp_path)
-    tail_path = tmp_path / "tail_clip.mp4"
-    tail_path.write_bytes(b"fake-clip")
-    tail = sc._build_entry(
-        "tail_clip",
-        path=tail_path,
-        prev_version="prev-version-1",
-        prev_element_id="e1",
-        media_type="video/mp4",
-        role_label="上一段尾段",
-        duration_seconds=3.0,
-    )
-    monkeypatch.setattr(
-        rx,
-        "extract_continuity_artifacts",
-        lambda **kw: ContinuityBundle(
-            predecessor_element_id="e1",
-            predecessor_video_version_id="prev-version-1",
-            entries=(frame, tail),
-        ),
-    )
-
-    ids, labels, suffix, _voices = rx._apply_continuity_to_references(
-        project=project,
-        project_root=tmp_path,
-        timeline=timeline,
-        element=second,
-        version_ids=["img-1", "vid-1", "img-2"],
-        urls=[],
-        checksums=[],
-        provenance=[],
-        read_set=[],
-        voice_urls=[],
-        output_duration_seconds=4,
-    )
-    # Two plan images -> last frame is 图3; one plan video -> tail 视频2.
-    assert "[Image 3]" in suffix
-    assert "将视频2向后延长" in suffix
-    block = rx._append_reference_role_mapping(
-        "镜头描述。",
-        project,
-        list(ids),
-        storyboard_id="img-1",
-        continuity_labels=labels,
-    )
-    assert "[Image 2] = img-2" in block
-    assert "[Image 3] = 上一段末帧" in block
-    assert "视频1 = vid-1" in block
-    for n in (1, 2, 3):
-        assert block.count(f"[Image {n}]") == 1
-
-
 def test_extract_registers_inflight_anchor(tmp_path, monkeypatch) -> None:
     """Major-2: a successful extract registers the predecessor digest,
     so event-driven prunes in the same process treat the anchors a
@@ -2398,7 +1741,7 @@ def test_extract_registers_inflight_anchor(tmp_path, monkeypatch) -> None:
         "_resolve_prev_video_path",
         lambda *a, **k: source,
     )
-    monkeypatch.setattr(sc, "_cut_both", lambda **kw: (entry,))
+    monkeypatch.setattr(sc, "_cut_last_frame", lambda **kw: (entry,))
     monkeypatch.setattr(sc, "_continuity_cache", OrderedDict())
     monkeypatch.setattr(sc, "_continuity_extract_locks", {})
     inflight: dict = {}
@@ -2409,7 +1752,6 @@ def test_extract_registers_inflight_anchor(tmp_path, monkeypatch) -> None:
         project_root=tmp_path,
         timeline=timeline,
         element=second,
-        material_mode="none",
     )
     assert sc._digest_for("v1") in inflight
 
@@ -2448,44 +1790,6 @@ def test_prune_protects_inflight_registry_entries(
     assert not expired.exists()
 
 
-def test_claim_fingerprint_ignores_never_shipped_anchors() -> None:
-    """Minor-2: with no anchors in the frozen payload (budget skip,
-    ffmpeg missing) a prev reroll must not drift the submission
-    fingerprint; payloads that did ship anchors still track it."""
-
-    from services.media_files.r2v_execution import (
-        _submission_input_fingerprint,
-    )
-
-    project, _timeline, _f, _s = _two_segment_project("prevV1")
-    no_anchor_before = _submission_input_fingerprint(
-        project,
-        "e2",
-        payload_refs=["sb-v1"],
-    )
-    _select_prev_video(project, "e1", "prevV2")
-    assert (
-        _submission_input_fingerprint(
-            project,
-            "e2",
-            payload_refs=["sb-v1"],
-        )
-        == no_anchor_before
-    )
-    shipped_a = _submission_input_fingerprint(
-        project,
-        "e2",
-        payload_refs=["sb-v1", "continuity:last_frame:prevV2"],
-    )
-    _select_prev_video(project, "e1", "prevV3")
-    shipped_b = _submission_input_fingerprint(
-        project,
-        "e2",
-        payload_refs=["sb-v1", "continuity:last_frame:prevV2"],
-    )
-    assert shipped_a != shipped_b
-
-
 def test_missing_ffmpeg_drops_prev_chain_from_r2v_nodes() -> None:
     """Minor-2 (graph side): when ffmpeg cannot run, anchors never
     ship — r2v nodes must not chain on prev, and their fingerprint must
@@ -2514,57 +1818,57 @@ def test_missing_ffmpeg_drops_prev_chain_from_r2v_nodes() -> None:
     assert "video:e1" in optimistic.deps
 
 
-def test_extract_full_material_references_artifact_in_place(
+def test_resolve_extend_request_is_pure_reference_video(
     tmp_path,
     monkeypatch,
 ) -> None:
-    """``material_mode="full"`` references the predecessor artifact in
-    place: no tail cut, no bytes under the continuity dir, the stable
-    ``tail_clip`` synthetic id (rerolls shift it exactly like the clip
-    material would), and the probed true duration for the provider
-    budget. An unmeasurable material raises instead of shipping an
-    extension with an unjustifiable duration."""
+    """The first-class VIDEO_EXTEND submission carries ONLY the
+    predecessor's real artifact as reference_video: no reference stack,
+    no synthetic ids, no last-frame image; ratio follows the material
+    and the provider duration/trim encode material+new semantics."""
 
-    from services.media_files import segment_continuity as sc
+    from models.video_task_plans import VideoTaskKind, VideoTaskPlan
+    from services.media_files import r2v_execution as rx
 
-    def fake_atomic(extract, final, ff):  # noqa: ARG001 - stand-in cut
-        Path(final).parent.mkdir(parents=True, exist_ok=True)
-        Path(final).write_bytes(b"png")
-
-    monkeypatch.setattr(sc, "_atomic_run", fake_atomic)
-    monkeypatch.setattr(sc, "_probe_duration", lambda *a, **k: 8.0)
-    source = tmp_path / "prev.mp4"
-    source.write_bytes(b"full-video-bytes")
-    work_dir = tmp_path / "work"
-    entries = sc._cut_both(
-        source=source,
-        work_dir=work_dir,
-        ffmpeg_path="/usr/bin/ffmpeg",
-        ffprobe_path="/usr/bin/ffprobe",
-        prev_version="v1",
-        prev_element_id="e1",
-        material_mode="full",
+    monkeypatch.setattr(
+        rx,
+        "_resolve_single_media_version",
+        lambda **kw: (
+            "file:///prev.mp4",
+            "sha256:abc",
+            "artifact-version:prev-v",
+            {"ref": "artifact-version:prev-v"},
+        ),
     )
-    frame, tail = entries
-    assert frame.kind == "last_frame"
-    assert tail.kind == "tail_clip"
-    assert tail.path == source
-    assert tail.duration_seconds == 8.0
-    assert tail.reference_id == "continuity:tail_clip:v1"
-    assert "完整视频" in tail.role_label
-    assert not (work_dir / "tail_clip.mp4").exists()
-
-    def boom(*a, **k):
-        raise RuntimeError("probe down")
-
-    monkeypatch.setattr(sc, "_probe_duration", boom)
-    with pytest.raises(RuntimeError):
-        sc._cut_both(
-            source=source,
-            work_dir=work_dir,
-            ffmpeg_path="/usr/bin/ffmpeg",
-            ffprobe_path="/usr/bin/ffprobe",
-            prev_version="v1",
-            prev_element_id="e1",
-            material_mode="full",
-        )
+    _project, _timeline, first, second = _two_segment_project("prev-v")
+    plan = VideoTaskPlan(
+        kind=VideoTaskKind.VIDEO_EXTEND,
+        predecessor_version_id="prev-v",
+        material_duration_seconds=8.0,
+        ratio="adaptive",
+        submit_duration_seconds=18,
+        trim_offset_seconds=8.0,
+    )
+    resolved = rx._resolve_extend_request(
+        project=_project,
+        project_root=tmp_path,
+        element=second,
+        element_id=second.element_id,
+        target_ref=f"element:{second.element_id}",
+        plan=plan,
+        prompt="本段新内容",
+        resolution="720P",
+        watermark=False,
+        generate_audio=True,
+        duration_seconds=10,
+    )
+    assert resolved.mode == "video_extend"
+    assert resolved.reference_version_ids == ("prev-v",)
+    assert resolved.reference_urls == ("file:///prev.mp4",)
+    assert resolved.continuity_shape == "video_extend"
+    assert resolved.continuity_trim_offset == 8.0
+    assert resolved.provider_duration_seconds == 18
+    assert resolved.ratio == "adaptive"
+    assert "向后延长" in resolved.prompt
+    assert "[Image" not in resolved.prompt
+    assert first.element_id != second.element_id

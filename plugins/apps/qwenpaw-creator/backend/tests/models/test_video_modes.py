@@ -260,7 +260,7 @@ def test_effective_name_derives_suffix_for_bare_wan_family() -> None:
     ("backend", "model_name", "expected"),
     [
         ("wan", "wan2.7", {"r2v", "t2v", "i2v"}),
-        ("wan", "wan3.0-video", {"r2v", "t2v", "i2v"}),
+        ("wan", "wan3.0-video", {"r2v", "t2v", "i2v", "video_extend"}),
         ("wan", "happyhorse-1.1", {"r2v", "t2v", "i2v"}),
         ("seedance2", "doubao-seedance-2-5-260628", {"r2v", "t2v", "i2v"}),
         ("seedance2", "doubao-seedance-2-0-260128", {"r2v", "t2v", "i2v"}),
@@ -486,7 +486,7 @@ def test_happyhorse_11_video_edit_rejected_before_provider(
 def test_guidance_describes_the_mode_matrix_per_model() -> None:
     happyhorse = video_model_prompt_guidance("happyhorse-1.1-r2v")
     assert "生成模式矩阵" in happyhorse
-    assert "不支持的 mode（video_edit）" in happyhorse
+    assert "不支持的 mode（video_edit, video_extend" in happyhorse
     assert "`[Image 1]`、`[Image 2]`" in happyhorse
     assert "1–9 张图片" in happyhorse
     assert "3–15 秒" in happyhorse
@@ -497,7 +497,7 @@ def test_guidance_describes_the_mode_matrix_per_model() -> None:
     assert "只取前 15 秒" in happyhorse_10
 
     wan = video_model_prompt_guidance("wan2.7-r2v")
-    assert "不支持的 mode（video_edit）" in wan
+    assert "不支持的 mode（video_edit, video_extend" in wan
     # Canonical [Image N] is now the authoring form for every model; what
     # differs is the rendered wire syntax the guidance describes below it.
     assert "`[Image 1]`、`[Image 2]`" in wan
@@ -535,7 +535,7 @@ def test_guidance_describes_the_mode_matrix_per_model() -> None:
     assert "图片最多 9 张" in seedance
     assert "视频最多 3 个" in seedance
     assert "合计最多 12 个" in seedance
-    assert "不支持的 mode（video_edit）" in seedance
+    assert "不支持的 mode（video_edit, video_extend" in seedance
     assert "`image1`" in seedance
     assert "`video1`" in seedance
     assert "中文 Prompt 用“图片1、图片2" in seedance
@@ -583,7 +583,7 @@ def test_guidance_describes_the_mode_matrix_per_model() -> None:
     assert "[1, 16] 秒" in vidu_bailian
     assert "“图1为…；图2为…”" in vidu_bailian
     assert "不发明 `视频N`" in vidu_bailian
-    assert "不支持的 mode（t2v, i2v, video_edit）" in vidu_bailian
+    assert "不支持的 mode（t2v, i2v, video_edit, video_extend" in vidu_bailian
     vidu_direct = video_model_prompt_guidance("viduq3-mix")
     assert "720p/1080p" in vidu_direct
     assert "结构化 `images`/`videos`" in vidu_direct

@@ -332,8 +332,11 @@ _VIDU_DIRECT_Q2_PRO_REFERENCE_CAPABILITY = VideoReferenceCapability(
 
 # Generation modes exposed on the r2v_generation tool. ``r2v`` keeps the
 # historical behaviour; the others map onto the upstream model families
-# (happyhorse-*-t2v/-i2v/-video-edit, wan*-t2v/-i2v).
-VIDEO_MODES = ("r2v", "t2v", "i2v", "video_edit")
+# (happyhorse-*-t2v/-i2v/-video-edit, wan*-t2v/-i2v). ``video_extend`` is
+# the first-class continuation task (reference_video + extend intent);
+# the planning layer routes same-scene segments onto it, and only
+# extension-capable models declare it.
+VIDEO_MODES = ("r2v", "t2v", "i2v", "video_edit", "video_extend")
 
 _DASHSCOPE_VIDEO_DOCUMENTATION = (
     "https://help.aliyun.com/zh/model-studio/video-generation-api-reference"
@@ -872,7 +875,7 @@ def video_model_capability(
         documentation_url = _HAPPYHORSE_REFERENCE_DOCUMENTATION
     elif backend == "wan":
         if is_wan3_video_model(model):
-            modes = frozenset({"r2v", "t2v", "i2v"})
+            modes = frozenset({"r2v", "t2v", "i2v", "video_extend"})
             documentation_url = _WAN_30_REFERENCE_DOCUMENTATION
         elif _WAN_27_MODEL_PATTERN.fullmatch(
             model,

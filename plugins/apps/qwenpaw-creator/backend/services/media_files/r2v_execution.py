@@ -58,9 +58,9 @@ from models.config import is_media_review_enabled
 from models.reference_markers import canonical_marker_indices
 from models.video_task_plans import (
     ContinuityFacts,
-    VideoTaskShape,
-    Wan3TaskPlan,
-    select_wan3_task_plan,
+    VideoTaskKind,
+    VideoTaskPlan,
+    select_video_task_kind,
     video_continuity_mode,
 )
 from schemas.common import StrictModel
@@ -117,13 +117,12 @@ from services.media_files.visual_reference_resolution import (
 )
 from services.media_files.segment_continuity import (
     ContinuityEntry,
-    continuity_prompt_suffix,
     continuity_reference_ids,
     extract_continuity_artifacts,
     find_predecessor_video_element,
     resolve_predecessor_video_version,
 )
-from services.observability import report_error, trace_event
+from services.observability import report_error
 from services.project_files.remote_cache import public_source_url
 from services.project_files.store import ProjectSnapshot, ProjectStoreError
 from services.run_review.media_review import (
@@ -1396,9 +1395,20 @@ def _reference_ids_with_continuity(
             if isinstance(creation, R2VCreation)
             else ()
         )
+    if mode == "video_extend":
+        # The extension's only continuity input is the predecessor's real
+        # published artifact; a reroll changes this version and drifts
+        # the fingerprint naturally (no synthetic ids needed).
+        prev = find_predecessor_video_element(timeline, element)
+        ver = (
+            resolve_predecessor_video_version(project, prev) if prev else None
+        )
+        return (ver,) if ver else ()
     if isinstance(creation, R2VCreation):
-        base = video_reference_plan(project, element)
-        return (*base, *continuity_reference_ids(project, timeline, element))
+        # R2V is a pure omni-reference task: the planning layer routes
+        # continuity onto VIDEO_EXTEND / I2V instead, so the reference
+        # stack carries no synthetic anchors.
+        return video_reference_plan(project, element)
     if isinstance(creation, I2VCreation):
         if creation.first_frame_version_id:
             # Explicit input already lives inside ``creation`` in the
@@ -1427,19 +1437,30 @@ def _submission_input_fingerprint(
         element,
         mode=mode,
     )
-    if payload_refs is not None and not any(
-        str(item).startswith("continuity:") for item in payload_refs
-    ):
-        # The frozen wire request carried no synthetic anchors (budget
-        # skip, ffmpeg missing, …). Anchors that never shipped must not
-        # drift the claim on a predecessor reroll — the same rationale
-        # the video_edit exclusion states: invalidating here re-queues
-        # bytes the request already proved it does not use.
-        references = tuple(
-            item
-            for item in references
-            if not str(item).startswith("continuity:")
+    if payload_refs is not None:
+        payload_synthetic = tuple(
+            str(item)
+            for item in payload_refs
+            if str(item).startswith("continuity:")
         )
+        if payload_synthetic:
+            # Legacy frozen payloads (pre first-class-extend refactor)
+            # carried synthetic anchors; keep them in the comparison so
+            # in-flight claims from the previous build still validate.
+            references = (
+                *references,
+                *(p for p in payload_synthetic if p not in references),
+            )
+        else:
+            # The frozen wire request carried no synthetic anchors.
+            # Anchors that never shipped must not drift the claim on a
+            # predecessor reroll — the same rationale the video_edit
+            # exclusion states.
+            references = tuple(
+                item
+                for item in references
+                if not str(item).startswith("continuity:")
+            )
     return _fingerprint(
         {
             "creation": creation,
@@ -1487,23 +1508,26 @@ def _submission_input_fingerprint_legacy(
     )
 
 
-def _build_continuity_plan(
+def _build_task_plan(
     project: Project,
     project_root: Path,
     timeline: Timeline,
     element: TimelineElement,
     *,
+    base_mode: str,
     duration_seconds: int,
     ratio: str,
-) -> Wan3TaskPlan:
-    """Materialize the Wan3.0 task shape for one R2V segment submission.
+) -> VideoTaskPlan:
+    """Route one segment submission onto a first-class task kind.
 
-    Gathers only durable published facts (predecessor resolution, probed
-    material duration, scene identity, ffmpeg availability, model
-    extension contract) so the same project state always plans the same
-    shape, and a claim/replay on a later dispatch re-derives honestly.
-    Non-Wan3.0 providers land on the weak last-frame anchor — their
-    pre-plan behaviour, byte for byte.
+    Gathers only durable published facts (predecessor resolution and
+    version, probed material duration, scene identity, newly introduced
+    characters/props, ffmpeg availability, model extension contract) so
+    the same project state always routes the same way and a claim/replay
+    on a later dispatch re-derives honestly. Non-r2v base modes pass
+    through unchanged; for r2v the planner applies the continuity rules
+    (same scene + no new elements + budget → VIDEO_EXTEND, else I2V
+    auto-first-frame, else pure R2V).
     """
 
     from models import config as model_config
@@ -1514,18 +1538,26 @@ def _build_continuity_plan(
         _resolve_prev_video_path,
     )
 
-    mode = video_continuity_mode()
-    has_predecessor = False
-    same_scene = False
-    prev_duration = 0.0
+    creation = element.creation
     prev = find_predecessor_video_element(timeline, element)
+    prev_version = ""
+    prev_duration = 0.0
+    same_scene = False
+    new_elements = False
+    has_prev = False
     if prev is not None:
-        prev_version = resolve_predecessor_video_version(project, prev)
-        if prev_version:
-            has_predecessor = True
+        resolved = resolve_predecessor_video_version(project, prev)
+        if resolved:
+            has_prev = True
+            prev_version = resolved
             same_scene = getattr(prev.creation, "scene_ref", None) == (
-                getattr(element.creation, "scene_ref", None)
+                getattr(creation, "scene_ref", None)
             )
+            prev_refs = set(getattr(prev.creation, "character_refs", []) or [])
+            prev_refs |= set(getattr(prev.creation, "prop_refs", []) or [])
+            cur_refs = set(getattr(creation, "character_refs", []) or [])
+            cur_refs |= set(getattr(creation, "prop_refs", []) or [])
+            new_elements = bool(cur_refs - prev_refs)
             try:
                 source = _resolve_prev_video_path(
                     project,
@@ -1543,13 +1575,20 @@ def _build_continuity_plan(
                 if ffprobe_path and source.exists():
                     prev_duration = _probe_duration(source, ffprobe_path)
             except (RuntimeError, ValidationError, OSError):
-                # Unknown material length still supports the trimmed
-                # clip fallback; the planner probes that budget itself.
+                # Unknown material length: the planner's budget check
+                # then declines VIDEO_EXTEND and falls back safely.
                 prev_duration = 0.0
     facts = ContinuityFacts(
-        has_published_predecessor=has_predecessor,
-        same_scene=same_scene,
+        creation_type=str(getattr(creation, "type", base_mode)),
+        has_published_predecessor=has_prev,
+        predecessor_version_id=prev_version,
         predecessor_duration_seconds=prev_duration,
+        same_scene=same_scene,
+        cross_episode=prev is None,
+        new_elements=new_elements,
+        explicit_first_frame=bool(
+            getattr(creation, "first_frame_version_id", ""),
+        ),
         segment_duration_seconds=duration_seconds,
         ffmpeg_ready=bool(probe_ffmpeg_ready()),
         video_extension_supported=supports_video_continuation(
@@ -1557,203 +1596,73 @@ def _build_continuity_plan(
             model_config.get_video_backend(),
         ),
     )
-    return select_wan3_task_plan(facts, mode=mode, project_ratio=ratio)
+    return select_video_task_kind(
+        base_mode,
+        facts,
+        mode=video_continuity_mode(),
+        project_ratio=ratio,
+    )
 
 
-def _apply_continuity_to_references(
+def _resolve_extend_request(
     *,
     project: Project,
     project_root: Path,
-    timeline: Timeline,
     element: TimelineElement,
-    version_ids: Sequence[str],
-    urls: list[str],
-    checksums: list[str],
-    provenance: list[str],
-    read_set: list[dict[str, Any]],
-    voice_urls: Sequence[str],
-    output_duration_seconds: int,
-    plan: Wan3TaskPlan | None = None,
-) -> tuple[tuple[str, ...], Mapping[str, str | None], str, tuple[str, ...]]:
-    """Append segment-continuity entries to the submit-time reference lists.
+    element_id: str,
+    target_ref: str,
+    plan: VideoTaskPlan,
+    prompt: str,
+    resolution: str,
+    watermark: bool,
+    generate_audio: bool,
+    duration_seconds: int,
+) -> _ResolvedR2V:
+    """Assemble the first-class VIDEO_EXTEND continuation submission.
 
-    Mutates ``urls`` / ``checksums`` / ``provenance`` / ``read_set`` in
-    place and returns the merged ``version_ids`` (with synthetic
-    ``continuity:*`` IDs at the tail), a mapping that lets
-    ``_append_reference_role_mapping`` describe those IDs, the prompt
-    suffix the R2V path should append after the storyboard, and the
-    extended voice
-    tuple (empty string per continuity entry — they never carry a
-    character voice).
-
-    Extraction or budget failures fall back to a no-op that leaves the
-    caller's paid render untouched: continuity is best-effort by
-    design, and a stale ffmpeg or over-tight budget must not turn a
-    working generation into a hard failure. Every skip is observable:
-    design-level skips trace ``creator.continuity.skipped`` and
-    failure-driven ones report through ``report_error``.
+    ``input.media`` carries ONLY the predecessor's published video as
+    ``reference_video`` plus an extend-intent prompt — no reference
+    stack, no synthetic ids, no last-frame image — so the provider
+    routes to its video-extension task and continues the predecessor's
+    tail (picture, camera motion and audio). ``ratio`` follows the
+    material (adaptive) and the provider duration is ``material + new``;
+    the returned video's material prefix is trimmed before publication
+    so the segment artifact never duplicates its predecessor.
     """
 
-    from services.media_files.segment_continuity import _TAIL_CLIP_SECONDS
-
-    project_version_ids = tuple(version_ids)
-    baseline_voice_urls = tuple(voice_urls)
-    # A missing plan means the caller's provider has no Wan3.0 task-shape
-    # plan (non-r2v paths, or plans disabled upstream): fall back to the
-    # weak image anchor, which is exactly what every non-continuation
-    # model has always shipped.
-    if plan is None:
-        material_mode = "none"
-        last_frame_anchor = True
-    else:
-        material_mode = plan.extension_material or "none"
-        last_frame_anchor = plan.last_frame_anchor
-        if not last_frame_anchor and material_mode == "none":
-            # off mode / no usable predecessor: skip before ffmpeg.
-            trace_event(
-                "creator.continuity.skipped",
-                component="r2v.continuity",
-                status="ok",
-                attributes={"reason": f"plan_{plan.shape.value}"},
-                project_id=str(project.project_id),
-                element_id=element.element_id,
-            )
-            return project_version_ids, {}, "", baseline_voice_urls
-    include_tail = material_mode != "none"
-    try:
-        bundle = extract_continuity_artifacts(
-            project=project,
-            project_root=project_root,
-            timeline=timeline,
-            element=element,
-            material_mode=material_mode,
-            tail_seconds=(
-                plan.material_duration_seconds
-                if plan is not None
-                and plan.extension_material == "clip"
-                and plan.material_duration_seconds > 0
-                else _TAIL_CLIP_SECONDS
-            ),
-        )
-    except (RuntimeError, ValidationError) as error:
-        report_error(
-            component="r2v.continuity",
-            code="CONTINUITY_EXTRACTION_FAILED",
-            message=str(error),
-            error=error,
-            project_id=str(project.project_id),
-            element_id=element.element_id,
-        )
-        return project_version_ids, {}, "", baseline_voice_urls
-    if bundle is None:
-        # The decision point inside extract_continuity_artifacts already
-        # traced/reported why; mirror the skip on the submit side so a
-        # trace filtered by r2v.continuity still explains the outcome.
-        trace_event(
-            "creator.continuity.skipped",
-            component="r2v.continuity",
-            status="ok",
-            attributes={"reason": "bundle_unavailable"},
-            project_id=str(project.project_id),
-            element_id=element.element_id,
-        )
-        return project_version_ids, {}, "", baseline_voice_urls
-
-    last_frame = bundle.entry("last_frame")
-    tail_clip = bundle.entry("tail_clip")
-    if last_frame is None:
-        # _cut_both always emits a last frame; a bundle without one is
-        # an invariant violation, not a design skip.
-        report_error(
-            component="r2v.continuity",
-            code="CONTINUITY_LAST_FRAME_MISSING",
-            message="段间衔接 bundle 缺少 last_frame，跳过衔接注入",
-            project_id=str(project.project_id),
-            element_id=element.element_id,
-            prev_element_id=bundle.predecessor_element_id,
-        )
-        return project_version_ids, {}, "", baseline_voice_urls
-    if include_tail and tail_clip is None:
-        # Soft-degraded at extraction time (reported there); record the
-        # submit-side consequence so traces show this segment went out
-        # with image-only continuity on a continuation-capable model.
-        trace_event(
-            "creator.continuity.skipped",
-            component="r2v.continuity",
-            status="ok",
-            attributes={"reason": "tail_clip_degraded"},
-            project_id=str(project.project_id),
-            element_id=element.element_id,
-        )
-
-    # Per-type wire sequences via the shared numbering helper (the role
-    # block numbers the same extended list the same way): the last frame
-    # takes the next IMAGE ordinal and the tail clip the next VIDEO
-    # ordinal, so suffix and role block cannot drift apart or collide,
-    # and 图N never points past the last real image on the wire.
-    plan_kinds = [
-        kind
-        for _version_id, kind, _ordinal in number_references_by_media(
-            project,
-            project_version_ids,
-        )
-    ]
-    last_frame_index = plan_kinds.count("image") + 1
-    tail_clip_index = (
-        plan_kinds.count("video") + 1 if tail_clip is not None else None
+    prev_version = plan.predecessor_version_id
+    video_url, checksum, ref, entry = _resolve_single_media_version(
+        project=project,
+        project_root=project_root,
+        version_id=prev_version,
+        media_prefix="video/",
+        label="extendMaterial",
     )
-
-    labels: dict[str, str | None] = {
-        last_frame.reference_id: last_frame.role_label,
-    }
-    if tail_clip is not None:
-        labels[tail_clip.reference_id] = None
-
-    appended = [last_frame] if tail_clip is None else [last_frame, tail_clip]
-    extended_ids = [*project_version_ids, *(e.reference_id for e in appended)]
-    for entry in appended:
-        urls.append(entry.url)
-        checksums.append(entry.checksum)
-        provenance.append(entry.provenance_ref)
-        read_set.append(entry.as_read_entry())
-    merged_voice_urls = (*baseline_voice_urls, *("" for _ in appended))
-
-    continuity_media: list[tuple[str, float | None]] = []
-    for entry in appended:
-        if entry.kind == "tail_clip":
-            continuity_media.append(("video", entry.duration_seconds))
-        else:
-            continuity_media.append(("image", None))
-
-    try:
-        _assert_r2v_reference_budget(
-            project,
-            extended_ids,
-            project_root=project_root,
-            output_duration_seconds=output_duration_seconds,
-            continuity_media=continuity_media,
-        )
-    except (VideoReferenceBudgetError, VideoModelCapabilityError) as error:
-        report_error(
-            component="r2v.continuity",
-            code="CONTINUITY_SKIPPED_BUDGET",
-            message=str(error),
-            error=error,
-            project_id=str(project.project_id),
-            element_id=element.element_id,
-        )
-        for _ in appended:
-            urls.pop()
-            checksums.pop()
-            provenance.pop()
-            read_set.pop()
-        return project_version_ids, {}, "", baseline_voice_urls
-
-    suffix = continuity_prompt_suffix(
-        last_frame_index=last_frame_index,
-        tail_clip_index=tail_clip_index,
+    extend_prompt = "将视频1向后延长，保持人物、场景、运镜与环境声与前段连贯，" "随后展开本段新内容：\n" + prompt
+    return _ResolvedR2V(
+        target_ref=target_ref,
+        element_id=element_id,
+        element_label=element.label,
+        prompt=extend_prompt,
+        ratio=plan.ratio or "adaptive",
+        duration_seconds=duration_seconds,
+        resolution=resolution,
+        watermark=watermark,
+        generate_audio=generate_audio,
+        reference_version_ids=(prev_version,),
+        reference_urls=(video_url,),
+        reference_checksums=(checksum,),
+        provenance_refs=(ref,),
+        read_set=(entry,),
+        reference_voice_urls=(),
+        slot_id=f"element:{element_id}:main",
+        slot_kind="element_video",
+        owner_ref=f"element:{element_id}",
+        mode=VideoTaskKind.VIDEO_EXTEND.value,
+        continuity_shape=VideoTaskKind.VIDEO_EXTEND.value,
+        continuity_trim_offset=float(plan.trim_offset_seconds or 0.0),
+        provider_duration_seconds=plan.submit_duration_seconds,
     )
-    return tuple(extended_ids), labels, suffix, merged_voice_urls
 
 
 def _i2v_auto_first_frame_entry(
@@ -1785,7 +1694,6 @@ def _i2v_auto_first_frame_entry(
             project_root=project_root,
             timeline=timeline,
             element=element,
-            material_mode="none",
         )
     except (RuntimeError, ValidationError) as error:
         report_error(
@@ -1982,9 +1890,40 @@ def _resolve_request(
     if not isinstance(watermark, bool) or not isinstance(generate_audio, bool):
         raise ValidationError("R2V watermark/generateAudio 必须是 boolean")
 
-    continuity_suffix = ""
-    continuity_labels: Mapping[str, str | None] = {}
-    continuity_plan: Wan3TaskPlan | None = None
+    task_plan: VideoTaskPlan | None = None
+    if mode == "r2v":
+        # The planning layer may route a same-scene continuation onto a
+        # first-class continuation task instead of the omni reference
+        # stack. Routing happens after the base-mode/creation check so
+        # the author's declared creation type still gates admission.
+        task_plan = _build_task_plan(
+            project,
+            project_root,
+            timeline,
+            element,
+            base_mode="r2v",
+            duration_seconds=duration_seconds,
+            ratio=ratio,
+        )
+        if task_plan.kind is VideoTaskKind.VIDEO_EXTEND:
+            return _resolve_extend_request(
+                project=project,
+                project_root=project_root,
+                element=element,
+                element_id=element_id,
+                target_ref=target_ref,
+                plan=task_plan,
+                prompt=prompt,
+                resolution=resolution,
+                watermark=watermark,
+                generate_audio=generate_audio,
+                duration_seconds=duration_seconds,
+            )
+        if task_plan.kind is VideoTaskKind.I2V:
+            # Same scene but no usable extension contract/budget: hand
+            # the segment to the first-class I2V first-frame adoption.
+            mode = "i2v"
+            first_frame_ref = ""
     if mode == "r2v":
         version_ids = video_reference_plan(project, element)
         _validate_authored_marker_bounds(prompt, project, version_ids)
@@ -2006,48 +1945,15 @@ def _resolve_request(
             version_ids=version_ids,
         )
         read_set = [*read_set, *voice_read_entries]
-        # Shape first: the plan decides material (none/clip/full) and the
-        # provider-facing duration semantics before any anchor bytes move.
-        continuity_plan = _build_continuity_plan(
-            project,
-            project_root,
-            timeline,
-            element,
-            duration_seconds=duration_seconds,
-            ratio=ratio,
-        )
-        (
-            version_ids,
-            continuity_labels,
-            continuity_suffix,
-            voice_urls,
-        ) = _apply_continuity_to_references(
-            project=project,
-            project_root=project_root,
-            timeline=timeline,
-            element=element,
-            version_ids=version_ids,
-            urls=urls,
-            checksums=checksums,
-            provenance=provenance,
-            read_set=read_set,
-            voice_urls=voice_urls,
-            output_duration_seconds=duration_seconds,
-            plan=continuity_plan,
-        )
+        # Pure omni-reference: continuity is the planning layer's job
+        # (VIDEO_EXTEND / I2V), so the stack carries no synthetic anchors
+        # and the role block lists only authored references.
         prompt = _append_reference_role_mapping(
             prompt,
             project,
             version_ids,
             storyboard_id=storyboard_id,
-            continuity_labels=continuity_labels,
         )
-        if continuity_suffix:
-            # Appended before the canonical-marker rewrite so the
-            # ``[Image N]`` inside reaches the provider in the shape
-            # the configured model documents (图N for Wan3.0,
-            # [Image N] verbatim for HappyHorse / structured refs).
-            prompt = prompt + continuity_suffix
     prompt = _render_reference_markers(
         media_prompt_entity_names(prompt, project),
     )
@@ -2059,6 +1965,18 @@ def _resolve_request(
     first_frame_url = ""
     video_url = ""
     if mode == "i2v":
+        if i2v_continuity_entry is None and not first_frame_ref:
+            # Routed here by the planner (same-scene continuation with no
+            # usable extension contract) or an authored i2v with no
+            # frame: adopt the predecessor's last frame as first frame.
+            i2v_continuity_entry = _i2v_auto_first_frame_entry(
+                project=project,
+                project_root=project_root,
+                timeline=timeline,
+                element=element,
+            )
+            if i2v_continuity_entry is not None:
+                first_frame_ref = i2v_continuity_entry.reference_id
         if i2v_continuity_entry is not None:
             # Synthetic continuity IDs never appear in the Asset Index;
             # their file:// URL and checksum already come straight from
@@ -2098,26 +2016,12 @@ def _resolve_request(
         provenance = [ref]
         read_set = [entry]
 
-    # EXTEND ships ``material + new`` as the provider duration and lets
-    # the material dictate the frame; the Element's timeline duration
-    # stays authoritative for budget, prompt timing and compose spans.
-    # Gated on a non-empty suffix: if the anchors were skipped (extract
-    # failure, budget rollback), the request is plain omni-reference and
-    # must NOT carry extension semantics.
-    extends = (
-        bool(
-            continuity_suffix,
-        )
-        and continuity_plan is not None
-        and (continuity_plan.shape is VideoTaskShape.EXTEND)
-    )
-
     return _ResolvedR2V(
         target_ref=target_ref,
         element_id=element_id,
         element_label=element.label,
         prompt=prompt,
-        ratio="adaptive" if extends else ratio,
+        ratio=ratio,
         duration_seconds=duration_seconds,
         resolution=resolution,
         watermark=watermark,
@@ -2132,17 +2036,9 @@ def _resolve_request(
         slot_kind="element_video",
         owner_ref=f"element:{element_id}",
         mode=mode,
-        continuity_shape=(VideoTaskShape.EXTEND.value if extends else ""),
-        continuity_trim_offset=(
-            float(continuity_plan.trim_offset_seconds or 0.0)
-            if extends and continuity_plan is not None
-            else 0.0
-        ),
-        provider_duration_seconds=(
-            continuity_plan.submit_duration_seconds
-            if extends and continuity_plan is not None
-            else None
-        ),
+        continuity_shape="",
+        continuity_trim_offset=0.0,
+        provider_duration_seconds=None,
         first_frame_version_id=first_frame_ref if mode == "i2v" else "",
         first_frame_url=first_frame_url,
         video_version_id=video_ref if mode == "video_edit" else "",
