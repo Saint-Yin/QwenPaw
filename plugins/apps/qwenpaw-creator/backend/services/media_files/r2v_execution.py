@@ -1638,6 +1638,23 @@ def _resolve_extend_request(
         media_prefix="video/",
         label="extendMaterial",
     )
+    # The r2v video node's staleness check requires the Element's
+    # storyboard selection to appear in the artifact provenance. Extend
+    # does not *send* the storyboard, but it is still the authored visual
+    # plan for this segment; recording it keeps a published extend
+    # artifact from reading as perpetually STALE (which would auto-
+    # regenerate it in a loop) while still re-opening on storyboard edits.
+    provenance = [ref]
+    storyboard_slot = project.assets.artifact_slots_by_id.get(
+        f"element:{element.element_id}:storyboard",
+    )
+    storyboard_selected = getattr(
+        storyboard_slot,
+        "selected_version_id",
+        None,
+    )
+    if storyboard_selected:
+        provenance.append(f"artifact-version:{storyboard_selected}")
     extend_prompt = "将视频1向后延长，保持人物、场景、运镜与环境声与前段连贯，" "随后展开本段新内容：\n" + prompt
     return _ResolvedR2V(
         target_ref=target_ref,
@@ -1652,7 +1669,7 @@ def _resolve_extend_request(
         reference_version_ids=(prev_version,),
         reference_urls=(video_url,),
         reference_checksums=(checksum,),
-        provenance_refs=(ref,),
+        provenance_refs=tuple(provenance),
         read_set=(entry,),
         reference_voice_urls=(),
         slot_id=f"element:{element_id}:main",
@@ -4686,7 +4703,10 @@ class FileR2VExecutionService:
             duration = (
                 float(raw_duration)
                 if raw_duration is not None
-                else float(request["durationSeconds"])
+                else float(
+                    request.get("providerDurationSeconds")
+                    or request["durationSeconds"],
+                )
             )
         except (TypeError, ValueError) as error:
             raise ValidationError("R2V provider durationSeconds 非法") from error

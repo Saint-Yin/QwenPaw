@@ -1872,3 +1872,61 @@ def test_resolve_extend_request_is_pure_reference_video(
     assert "向后延长" in resolved.prompt
     assert "[Image" not in resolved.prompt
     assert first.element_id != second.element_id
+
+
+def test_extend_provenance_records_storyboard_to_break_stale_loop(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Regression for the V1..V24 regeneration loop: the r2v video node's
+    staleness check requires the Element's storyboard selection in the
+    artifact provenance. Extend does not send the storyboard, so without
+    recording it every published extend artifact read as perpetually
+    STALE and auto_approve re-rendered it forever. The provenance must
+    carry both the predecessor material and the storyboard selection."""
+
+    from models.video_task_plans import VideoTaskKind, VideoTaskPlan
+    from services.media_files import r2v_execution as rx
+
+    monkeypatch.setattr(
+        rx,
+        "_resolve_single_media_version",
+        lambda **kw: (
+            "file:///prev.mp4",
+            "sha256:abc",
+            "artifact-version:prev-v",
+            {"ref": "artifact-version:prev-v"},
+        ),
+    )
+    project, _timeline, _first, second = _two_segment_project("prev-v")
+    slot_id = f"element:{second.element_id}:storyboard"
+    project.assets.artifact_slots_by_id[slot_id] = ArtifactSlot(
+        slot_id=slot_id,
+        owner_ref=f"element:{second.element_id}",
+        kind="element_storyboard",
+        version_ids=["sb-v"],
+        selected_version_id="sb-v",
+    )
+    plan = VideoTaskPlan(
+        kind=VideoTaskKind.VIDEO_EXTEND,
+        predecessor_version_id="prev-v",
+        material_duration_seconds=8.0,
+        ratio="adaptive",
+        submit_duration_seconds=18,
+        trim_offset_seconds=8.0,
+    )
+    resolved = rx._resolve_extend_request(
+        project=project,
+        project_root=tmp_path,
+        element=second,
+        element_id=second.element_id,
+        target_ref=f"element:{second.element_id}",
+        plan=plan,
+        prompt="x",
+        resolution="720P",
+        watermark=False,
+        generate_audio=True,
+        duration_seconds=10,
+    )
+    assert "artifact-version:prev-v" in resolved.provenance_refs
+    assert "artifact-version:sb-v" in resolved.provenance_refs
