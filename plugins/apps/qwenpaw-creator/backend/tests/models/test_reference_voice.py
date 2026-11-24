@@ -324,3 +324,51 @@ def test_voice_excerpt_decodes_and_fits_total_budget(tmp_path, voice_count):
         audio.writeframes(bytes(32000))
     with pytest.raises(ModelError, match="at least 1 second"):
         asyncio.run(inspect())
+
+
+# ── shared project BGM as trailing reference_audio ───────────────────────────
+
+
+def _submit_with_bgm(monkeypatch, model: str, *, backend: str = "wan"):
+    captured: dict = {}
+    _bind(monkeypatch, model, captured, backend=backend)
+    asyncio.run(
+        video_model.submit_video_task(
+            prompt="两个角色对话",
+            reference_image_url_list=["https://cdn.example/rusty.png"],
+            reference_voice_urls=["https://cdn.example/rusty-voice.mp3"],
+            reference_bgm_url="https://cdn.example/bgm-bed.mp3",
+            ratio="16:9",
+            duration=5,
+            resolution="720P",
+            mode="r2v",
+        ),
+    )
+    return captured["body"]
+
+
+def test_wan3_bgm_rides_last_with_explicit_ordinal(monkeypatch) -> None:
+    """The bgm clip is the LAST reference_audio entry so its 音频N ordinal
+    is voices+1, and the prompt states the music contract explicitly."""
+
+    body = _submit_with_bgm(monkeypatch, "wan3.0-video")
+    media = body["input"]["media"]
+    audios = [item for item in media if item.get("type") == "reference_audio"]
+    assert audios[-1] == {
+        "type": "reference_audio",
+        "url": "resolved://bgm-bed.mp3",
+    }
+    assert len(audios) == 2  # one enrolled voice + bgm
+    prompt = body["input"]["prompt"]
+    assert "音频2 为本片段背景音乐参考" in prompt
+
+
+def test_non_wan3_bgm_reference_is_dropped_not_misnumbered(
+    monkeypatch,
+) -> None:
+    # wan2.7 voices ride per-media; there is no standalone reference_audio
+    # contract to append a bgm bed to, so it must be skipped entirely.
+    body = _submit_with_bgm(monkeypatch, "wan2.7-r2v")
+    media = body["input"]["media"]
+    assert not any(item.get("type") == "reference_audio" for item in media)
+    assert "背景音乐参考" not in body["input"]["prompt"]

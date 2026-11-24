@@ -102,6 +102,17 @@ class ContinuityFacts:
     segment_duration_seconds: int = 0
     ffmpeg_ready: bool = True
     video_extension_supported: bool = False
+    # Author-intent signals read off the Timeline (see the routing
+    # matrix): ``transition_kind`` is the normalized kind of an explicit
+    # Transition element between predecessor and this segment
+    # ("none"/"cut"/"blend"); ``continuity_intent`` classifies the
+    # segment's ``creation.continuity`` text ("continue"/"cut"/
+    # "neutral"); ``one_take`` marks continuity text that explicitly
+    # asks for an unbroken camera continuation (一镜到底/延续运镜), the
+    # only way VIDEO_EXTEND is still chosen for an r2v segment.
+    transition_kind: str = "none"
+    continuity_intent: str = "neutral"
+    one_take: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +128,12 @@ class VideoTaskPlan:
     timeline keeps the Element's own duration separately.
     ``auto_first_frame`` marks an I2V whose first frame is adopted from
     the predecessor's last frame rather than authored.
+    ``strong_continuity`` marks an R2V whose reference stack the
+    executor must lead with the predecessor's last frame (promoted to
+    图1, authored [Image N] markers shifted +1) so a same-scene
+    continuous take opens on the predecessor's final picture; A/B
+    measurement showed the buried-anchor stack (storyboard-led) seams at
+    SSIM 0.39-0.53 while a single promoted anchor reaches ~0.79.
     """
 
     kind: VideoTaskKind
@@ -126,6 +143,7 @@ class VideoTaskPlan:
     submit_duration_seconds: int = 0
     trim_offset_seconds: float | None = None
     auto_first_frame: bool = False
+    strong_continuity: bool = False
 
 
 def video_continuity_mode() -> str:
@@ -179,20 +197,29 @@ def select_video_task_kind(
 
     Non-r2v base modes keep their own kind (the author already chose
     i2v/t2v/video_edit; i2v may still auto-adopt the predecessor frame).
-    For an r2v base the planner applies the continuity rules in order:
+    For an r2v base the planner applies the author-intent routing rules
+    in order — the seam evidence (A/B, 2026-11-24) is that a PROMOTED
+    last-frame anchor inside the reference stack stitches nearly as well
+    as pixel-locking while keeping the cast references and the bgm
+    reference_audio channel, so same-scene continuations stay R2V:
 
-    1. ``off``/``weak``, no published predecessor, a new episode, a scene
-       change, or newly introduced characters/props: plain R2V. A pure
-       continuation carries no reference stack, so anything that needs
-       new anchors must stay omni-reference; a cut (scene change) fights
-       pixel continuation.
-    2. Same scene, no new elements, extension-capable model, and the
-       whole predecessor fits the 15s/30s budgets: VIDEO_EXTEND — the
-       strongest continuity (picture, camera motion and audio all
-       continue from the predecessor's tail).
-    3. Same scene but extension unavailable or over budget: I2V with the
-       predecessor's last frame auto-adopted as first frame (pixel-level
-       start, weaker than extend). Needs ffmpeg; without it fall back to
+    1. ``off``/``weak``, no published predecessor, or a new episode:
+       plain R2V.
+    2. An explicit Transition element between predecessor and this
+       segment (cut OR blend): plain R2V — the author asked for an edit
+       point, and a crossfade hides the seam by construction.
+    3. continuity text with cut vocabulary (切到/另一机位/时间跳转…):
+       plain R2V.
+    4. Scene change or newly introduced characters/props: plain R2V —
+       new anchors need the reference stack, and a cut fights pixel
+       continuation.
+    5. ``one_take`` text, extension-capable model, whole predecessor
+       within the 15s/30s budgets: VIDEO_EXTEND (camera and audio
+       literally continue; output is prefix-trimmed before publishing).
+    6. Otherwise (same scene, continuous-take or neutral intent):
+       R2V with ``strong_continuity`` — the executor extracts the
+       predecessor's last frame and leads the reference stack with it.
+       Without ffmpeg the anchor cannot be extracted, so fall back to
        plain R2V.
     """
 
@@ -211,9 +238,11 @@ def select_video_task_kind(
         mode in (CONTINUITY_MODE_OFF, CONTINUITY_MODE_WEAK)
         or not facts.has_published_predecessor
         or facts.cross_episode
-        or not facts.same_scene
-        or facts.new_elements
     ):
+        return _plain(facts, VideoTaskKind.R2V, ratio=project_ratio)
+    if facts.transition_kind != "none" or facts.continuity_intent == "cut":
+        return _plain(facts, VideoTaskKind.R2V, ratio=project_ratio)
+    if not facts.same_scene or facts.new_elements:
         return _plain(facts, VideoTaskKind.R2V, ratio=project_ratio)
 
     segment = facts.segment_duration_seconds
@@ -222,7 +251,8 @@ def select_video_task_kind(
     )
     prev = facts.predecessor_duration_seconds
     if (
-        facts.video_extension_supported
+        facts.one_take
+        and facts.video_extension_supported
         and facts.predecessor_version_id
         and 0 < prev <= WAN_30_MAX_REFERENCE_VIDEO_SECONDS
         and prev + segment <= budget
@@ -238,11 +268,12 @@ def select_video_task_kind(
             trim_offset_seconds=prev,
         )
     if facts.ffmpeg_ready:
-        return _plain(
-            facts,
-            VideoTaskKind.I2V,
-            ratio=project_ratio,
-            auto_first_frame=True,
+        plan = _plain(facts, VideoTaskKind.R2V, ratio=project_ratio)
+        return VideoTaskPlan(
+            kind=plan.kind,
+            ratio=plan.ratio,
+            submit_duration_seconds=plan.submit_duration_seconds,
+            strong_continuity=True,
         )
     return _plain(facts, VideoTaskKind.R2V, ratio=project_ratio)
 

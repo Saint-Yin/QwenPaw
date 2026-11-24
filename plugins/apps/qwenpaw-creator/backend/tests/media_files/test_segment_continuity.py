@@ -1033,7 +1033,10 @@ def test_video_edit_fingerprint_ignores_continuity() -> None:
         second,
         mode="video_edit",
     )
-    assert not any(item.startswith("continuity:") for item in r2v_ids)
+    # Strong-continuity r2v now DOES lead the stack with the promoted
+    # anchor id (the planner routes this same-scene pair onto it), while
+    # video_edit still never sees a continuity input.
+    assert r2v_ids and r2v_ids[0].startswith("continuity:")
     assert not any(item.startswith("continuity:") for item in edit_ids)
     assert edit_ids == video_reference_plan(project, second)
 
@@ -1043,7 +1046,8 @@ def test_video_edit_fingerprint_ignores_continuity() -> None:
     assert before == after
     # Control: the first-class extend mode DOES track the prev version
     # (its only continuity input is the predecessor's real artifact),
-    # while pure r2v no longer carries any continuity reference.
+    # while strong-continuity r2v now leads its own promoted anchor id —
+    # a shape distinct from both video_edit and extend.
     assert (
         _submission_input_fingerprint(
             project,
@@ -1052,7 +1056,7 @@ def test_video_edit_fingerprint_ignores_continuity() -> None:
         )
         != before
     )
-    assert _submission_input_fingerprint(project, "e2") == before
+    assert _submission_input_fingerprint(project, "e2") != before
 
 
 def test_explicit_frame_i2v_skips_prev_chain() -> None:
@@ -1930,3 +1934,431 @@ def test_extend_provenance_records_storyboard_to_break_stale_loop(
     )
     assert "artifact-version:prev-v" in resolved.provenance_refs
     assert "artifact-version:sb-v" in resolved.provenance_refs
+
+
+# ── author-intent routing signals (Transition / continuity text) ─────────────
+
+
+def test_shift_authored_image_refs_moves_markers() -> None:
+    from services.media_files.r2v_execution import _shift_authored_image_refs
+
+    shifted = _shift_authored_image_refs(
+        "[Image 1] 为分镜图；[Image 2] 提供角色身份",
+        1,
+    )
+    assert "[Image 2] 为分镜图" in shifted
+    assert "[Image 3] 提供角色身份" in shifted
+
+
+def test_continuity_signals_reads_transition_and_keywords() -> None:
+    from services.media_files.r2v_execution import _continuity_signals
+    from services.project_files.models import (
+        TransitionCreation,
+    )
+
+    first = _element("e1", start=0)
+    second = _element("e2", start=4000)
+    transition = TimelineElement(
+        element_id="t-1",
+        label="t-1",
+        span=TimelineSpan(start_tick=3800, duration_tick=400),
+        creation=TransitionCreation(
+            from_element_id="e1",
+            to_element_id="e2",
+            transition_kind="crossfade",
+        ),
+    )
+    _proj, timeline = _project([first, second, transition])
+    kind, intent, one_take = _continuity_signals(timeline, second, first)
+    assert kind == "blend"
+    assert intent == "neutral"
+    assert one_take is False
+
+    transition.creation = transition.creation.model_copy(
+        update={"transition_kind": "cut"},
+    )
+    assert _continuity_signals(timeline, second, first)[0] == "cut"
+
+    no_transition = _element("e2", start=4000)
+    no_transition.creation = no_transition.creation.model_copy(
+        update={"continuity": "承接上一段：七仙女落向山道，同一动作继续"},
+    )
+    _proj2, timeline2 = _project([first, no_transition])
+    kind, intent, one_take = _continuity_signals(
+        timeline2,
+        no_transition,
+        first,
+    )
+    assert kind == "none"
+    assert intent == "continue"
+    assert one_take is False
+
+    one_take_el = _element("e3", start=4000)
+    one_take_el.creation = one_take_el.creation.model_copy(
+        update={"continuity": "一镜到底跟随俯冲，延续运镜"},
+    )
+    assert _continuity_signals(
+        _project([first, one_take_el])[1],
+        one_take_el,
+        first,
+    )[2]
+    cut_el = _element("e4", start=4000)
+    cut_el.creation = cut_el.creation.model_copy(
+        update={"continuity": "切到另一机位，时间跳转三年后"},
+    )
+    assert (
+        _continuity_signals(
+            _project([first, cut_el])[1],
+            cut_el,
+            first,
+        )[1]
+        == "cut"
+    )
+
+
+def test_r2v_strong_continuity_matrix(monkeypatch) -> None:
+    from models import config as model_config
+    from services.file_agent_runtime import work_graph
+    from services.media_files import r2v_execution as rx
+
+    monkeypatch.setattr(work_graph, "probe_ffmpeg_ready", lambda: True)
+    monkeypatch.setattr(
+        model_config,
+        "get_video_model_name",
+        lambda: "wan3.0-video",
+    )
+    monkeypatch.setattr(model_config, "get_video_backend", lambda: "wan")
+    project, timeline, first, second = _two_segment_project("prev-v")
+    assert rx._r2v_strong_continuity(project, timeline, second)
+
+    cut = _element("e2", start=4000)
+    cut.creation = cut.creation.model_copy(
+        update={"continuity": "切到另一机位"},
+    )
+    _p, tl = _project([first, cut])
+    _select_prev_video(_p, "e1", "prev-v")
+    assert not rx._r2v_strong_continuity(_p, tl, cut)
+
+    one_take = _element("e2", start=4000)
+    one_take.creation = one_take.creation.model_copy(
+        update={"continuity": "一镜到底延续运镜"},
+    )
+    _p, tl = _project([first, one_take])
+    _select_prev_video(_p, "e1", "prev-v")
+    # wan3.0 can extend a one-take → the r2v strong path must NOT claim
+    # the anchor (the dispatch would ship as VIDEO_EXTEND instead).
+    assert not rx._r2v_strong_continuity(_p, tl, one_take)
+    monkeypatch.setattr(
+        model_config,
+        "get_video_model_name",
+        lambda: "wan2.6-r2v",
+    )
+    assert rx._r2v_strong_continuity(_p, tl, one_take)
+    monkeypatch.setattr(work_graph, "probe_ffmpeg_ready", lambda: False)
+    assert not rx._r2v_strong_continuity(_p, tl, one_take)
+
+
+def test_resolve_request_promotes_anchor_for_strong_continuity(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The executor leads the stack with the predecessor's last frame,
+    shifts the author's [Image N] sentences +1, labels 图1 and adds the
+    first-frame imperative — the A/B-proven seam shape (0.79 vs 0.39)."""
+
+    from services.media_files import r2v_execution as rx
+    from services.media_files.segment_continuity import ContinuityEntry
+    from services.project_files.models import (
+        ArtifactVersion,
+        IndexedFile,
+    )
+    from services.project_files.store import ProjectSnapshot
+
+    project, _tl, _first, second = _two_segment_project("prev-v")
+    # Storyboard slot + version so the r2v branch resolves.
+    project.assets.artifact_slots_by_id[
+        "element:e2:storyboard"
+    ] = ArtifactSlot(
+        slot_id="element:e2:storyboard",
+        owner_ref="element:e2",
+        kind="r2v_storyboard_image",
+        version_ids=["sb-v1"],
+        selected_version_id="sb-v1",
+    )
+    project.assets.files_by_id["file-sb-v1"] = IndexedFile(
+        file_id="file-sb-v1",
+        kind="artifact_payload",
+        media_type="image/png",
+        relative_uri="assets/artifacts/file-sb-v1",
+        sha256="1" * 64,
+        size_bytes=1,
+        created_at="2026-08-05T00:00:00Z",
+    )
+    project.assets.artifact_versions_by_id["sb-v1"] = ArtifactVersion(
+        version_id="sb-v1",
+        name="sb-v1",
+        slot_id="element:e2:storyboard",
+        kind="r2v_storyboard_image",
+        owner_ref="element:e2",
+        file_id="file-sb-v1",
+        checksum="1" * 64,
+        based_on_generation=1,
+        provenance_refs=[],
+        stale=False,
+        created_at="2026-08-05T00:00:00Z",
+    )
+    from services.project_files.models import ElementOutput
+
+    second.outputs["storyboard"] = ElementOutput(
+        slot_id="element:e2:storyboard",
+    )
+    second.creation = second.creation.model_copy(
+        update={
+            "video_prompt": "[Image 1] 为本镜头分镜图，人物跃下。",
+            "video_reference_version_ids": [],
+        },
+    )
+
+    import services.project_files.production_stage as ps
+
+    monkeypatch.setattr(
+        ps,
+        "assert_media_production_allowed",
+        lambda *_a, **_k: None,
+    )
+    import services.project_files.prompt_sync as psm
+
+    monkeypatch.setattr(
+        psm,
+        "assert_r2v_prompt_sync",
+        lambda *_a, **_k: None,
+    )
+    from models.video_task_plans import VideoTaskKind, VideoTaskPlan
+
+    monkeypatch.setattr(
+        rx,
+        "_build_task_plan",
+        lambda *_a, **_k: VideoTaskPlan(
+            kind=VideoTaskKind.R2V,
+            submit_duration_seconds=4,
+            strong_continuity=True,
+        ),
+    )
+    anchor = ContinuityEntry(
+        kind="last_frame",
+        reference_id="continuity:last_frame:prev-v",
+        url="file:///anchor.png",
+        checksum="sha256:aaa",
+        path=Path("/anchor.png"),
+        role_label="上一片段末帧（本段起始画面）",
+        provenance_ref="artifact-version:prev-v",
+        media_type="image/png",
+    )
+    monkeypatch.setattr(
+        rx,
+        "_i2v_auto_first_frame_entry",
+        lambda **_kw: anchor,
+    )
+    monkeypatch.setattr(
+        rx,
+        "_assert_r2v_reference_budget",
+        lambda *_a, **_k: None,
+    )
+
+    def fake_versions(**kw):
+        ids = list(kw["version_ids"])
+        return (
+            [f"url::{item}" for item in ids],
+            [f"sum::{item}" for item in ids],
+            [f"ref::{item}" for item in ids],
+            [{"ref": f"ref::{item}"} for item in ids],
+        )
+
+    monkeypatch.setattr(rx, "_resolve_reference_versions", fake_versions)
+    monkeypatch.setattr(
+        rx,
+        "_resolve_reference_voices",
+        lambda **_kw: ([], []),
+    )
+    monkeypatch.setattr(rx, "_resolve_bgm_reference", lambda *_a, **_k: "")
+    from models import config as model_config
+
+    monkeypatch.setattr(
+        model_config,
+        "get_video_model_name",
+        lambda: "wan3.0-video",
+    )
+    monkeypatch.setattr(model_config, "get_video_backend", lambda: "wan")
+
+    snapshot = ProjectSnapshot(project=project, etag="e1", generation=1)
+    resolved = rx._resolve_request(
+        snapshot=snapshot,
+        project_root=tmp_path,
+        target_ref="element:e2",
+        arguments={"prompt": "[Image 1] 为本镜头分镜图，人物跃下。"},
+    )
+    assert resolved.reference_version_ids[0] == (
+        "continuity:last_frame:prev-v"
+    )
+    assert "sb-v1" in resolved.reference_version_ids
+    assert resolved.reference_urls[0] == "file:///anchor.png"
+    # Author's sentence now addresses 图2 (the storyboard), not the anchor.
+    assert "[Image 2]" in resolved.prompt or "图2" in resolved.prompt
+    assert "第一帧严格对齐" in resolved.prompt
+    assert resolved.bgm_reference_url == ""
+
+
+# ── bgm reference_audio resolution (planning side) ───────────────────────────
+
+
+def _bgm_project(tmp_path, *, with_bgm: bool = True):
+    from services.project_files.models import (
+        AudioCreation,
+        SourceAssetVersion,
+    )
+
+    first = _element("e1", start=0)
+    second = _element("e2", start=4000)
+    project, timeline = _project([first, second])
+    if not with_bgm:
+        return project, timeline, second
+    music = tmp_path / "assets" / "sources" / "bed.mp3"
+    music.parent.mkdir(parents=True, exist_ok=True)
+    music.write_bytes(b"ID3" + b"\0" * 100)
+    bgm_el = TimelineElement(
+        element_id="bgm-1",
+        label="bgm-1",
+        span=TimelineSpan(start_tick=0, duration_tick=30000),
+        creation=AudioCreation(
+            source_asset_version_id="audio-v1",
+            role="bgm",
+        ),
+    )
+    timeline = timeline.model_copy(
+        update={
+            "elements_by_id": {
+                **timeline.elements_by_id,
+                "bgm-1": bgm_el,
+            },
+        },
+    )
+    project.timelines.items["timeline:main"] = timeline
+    project.assets.source_versions_by_id["audio-v1"] = SourceAssetVersion(
+        version_id="audio-v1",
+        logical_asset_id="asset-a1",
+        name="bed",
+        file_id="file-audio-v1",
+        checksum="2" * 64,
+        media_kind="audio",
+        media_type="audio/mpeg",
+        created_at="2026-08-05T00:00:00Z",
+    )
+    from services.project_files.models import IndexedFile
+
+    project.assets.files_by_id["file-audio-v1"] = IndexedFile(
+        file_id="file-audio-v1",
+        kind="source_original",
+        media_type="audio/mpeg",
+        relative_uri="assets/sources/bed.mp3",
+        sha256="2" * 64,
+        size_bytes=103,
+        created_at="2026-08-05T00:00:00Z",
+    )
+    return project, timeline, second
+
+
+def _bind_bgm_config(monkeypatch, model="wan3.0-video"):
+    from models import config as model_config
+
+    monkeypatch.setattr(model_config, "get_video_model_name", lambda: model)
+    monkeypatch.setattr(model_config, "get_video_backend", lambda: "wan")
+
+
+def test_bgm_reference_skips_without_bgm_element(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from services.media_files import r2v_execution as rx
+
+    project, timeline, _second = _bgm_project(tmp_path, with_bgm=False)
+    _bind_bgm_config(monkeypatch)
+    assert (
+        rx._resolve_bgm_reference(
+            project,
+            timeline,
+            tmp_path,
+            voice_count=0,
+            element_id="e2",
+        )
+        == ""
+    )
+
+
+def test_bgm_reference_respects_voice_slot_budget(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from services.media_files import r2v_execution as rx
+
+    project, timeline, _second = _bgm_project(tmp_path)
+    _bind_bgm_config(monkeypatch)
+    monkeypatch.setattr(
+        rx,
+        "_bgm_excerpt",
+        lambda *_a, **_k: "file:///bed.mp3",
+    )
+    reported: list = []
+    monkeypatch.setattr(
+        rx,
+        "report_error",
+        lambda **kw: reported.append(kw),
+    )
+    assert (
+        rx._resolve_bgm_reference(
+            project,
+            timeline,
+            tmp_path,
+            voice_count=4,
+            element_id="e2",
+        )
+        == "file:///bed.mp3"
+    )
+    assert not reported
+    # wan3.0 documents five audio slots; 5 voices + bgm does not fit.
+    assert (
+        rx._resolve_bgm_reference(
+            project,
+            timeline,
+            tmp_path,
+            voice_count=5,
+            element_id="e2",
+        )
+        == ""
+    )
+    assert reported and reported[0]["code"] == "BGM_SKIPPED_BUDGET"
+
+
+def test_bgm_reference_skips_for_models_without_standalone_audio(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from services.media_files import r2v_execution as rx
+
+    project, timeline, _second = _bgm_project(tmp_path)
+    # wan2.6 documents no audio reference input at all.
+    _bind_bgm_config(monkeypatch, model="wan2.6-r2v")
+    monkeypatch.setattr(
+        rx,
+        "report_error",
+        lambda **kw: None,
+    )
+    assert (
+        rx._resolve_bgm_reference(
+            project,
+            timeline,
+            tmp_path,
+            voice_count=0,
+            element_id="e2",
+        )
+        == ""
+    )

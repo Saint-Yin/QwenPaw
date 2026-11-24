@@ -698,6 +698,7 @@ async def submit_video_task(
     first_frame_url: Optional[str] = None,
     video_url: Optional[str] = None,
     reference_voice_urls: Optional[list[str]] = None,
+    reference_bgm_url: Optional[str] = None,
     preserve_reference_slots: bool = False,
 ) -> str:
     """Submit a video generation task and return its task_id.
@@ -1091,6 +1092,42 @@ async def submit_video_task(
                     + "；".join(mappings)
                     + "。音频只提供对应角色的声音身份；台词与演唱内容遵循本段"
                     "剧本，不复述试听样本，不让其他角色使用该声音。"
+                )
+        bgm_url = (reference_bgm_url or "").strip()
+        if bgm_url:
+            # Shared project BGM ships as the LAST reference_audio entry so
+            # its 音频N ordinal is voice count + 1; the planning layer only
+            # sends it for models whose standalone audio-reference slots
+            # still have room (voices + 1 within the documented budget).
+            if not is_wan3_video_model(effective_model):
+                logger.info(
+                    "BGM reference skipped: model %s has no wan3 "
+                    "reference_audio contract",
+                    effective_model,
+                )
+            else:
+                resolved_bgm, bgm_kind = await _resolve_reference_media_url(
+                    bgm_url,
+                    upload_backend,
+                )
+                if bgm_kind != "audio":
+                    raise ModelError(
+                        "bgm reference must be an audio file: "
+                        f"{bgm_url[:120]}",
+                        model_name=effective_model,
+                        retryable=False,
+                    )
+                media.append(
+                    {"type": "reference_audio", "url": resolved_bgm},
+                )
+                audio_count = sum(
+                    1
+                    for item in media
+                    if item.get("type") == "reference_audio"
+                )
+                prompt += (
+                    f"\n音频{audio_count} 为本片段背景音乐参考：生成配乐"
+                    "与其风格、调性和节奏保持一致并全段连续，不另起新配乐。"
                 )
 
     url = ""

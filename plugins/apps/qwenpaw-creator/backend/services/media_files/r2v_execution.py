@@ -29,6 +29,7 @@ import os
 from pathlib import Path, PurePosixPath
 import socket
 import stat
+import subprocess
 import threading
 import time
 from typing import Any, Literal, Protocol
@@ -57,6 +58,8 @@ from domain.errors import (
 from models.config import is_media_review_enabled
 from models.reference_markers import canonical_marker_indices
 from models.video_task_plans import (
+    CONTINUITY_MODE_OFF,
+    CONTINUITY_MODE_WEAK,
     ContinuityFacts,
     VideoTaskKind,
     VideoTaskPlan,
@@ -351,6 +354,7 @@ class ExistingR2VProvider:
         first_frame_url: str | None = None,
         video_url: str | None = None,
         reference_voice_urls: Sequence[str] = (),
+        reference_bgm_url: str | None = None,
     ) -> str:
         from models.video_model import submit_video_task
 
@@ -369,6 +373,7 @@ class ExistingR2VProvider:
             reference_voice_urls=(
                 list(reference_voice_urls) if reference_voice_urls else None
             ),
+            reference_bgm_url=reference_bgm_url,
         )
 
     async def poll(self, provider_task_id: str) -> Mapping[str, Any]:
@@ -497,6 +502,10 @@ class _ResolvedR2V:
     # bound to each reference ("" = none). Only filled when the configured
     # video model documents an audio reference input.
     reference_voice_urls: tuple[str, ...] = ()
+    # Shared project BGM shipped as one extra ``reference_audio`` entry so
+    # every segment syncs its soundtrack to the same clip (music seam
+    # continuity). "" = no bgm Element / budget skip → native audio.
+    bgm_reference_url: str = ""
     first_frame_version_id: str = ""
     first_frame_url: str = ""
     video_version_id: str = ""
@@ -1405,10 +1414,15 @@ def _reference_ids_with_continuity(
         )
         return (ver,) if ver else ()
     if isinstance(creation, R2VCreation):
-        # R2V is a pure omni-reference task: the planning layer routes
-        # continuity onto VIDEO_EXTEND / I2V instead, so the reference
-        # stack carries no synthetic anchors.
-        return video_reference_plan(project, element)
+        base = video_reference_plan(project, element)
+        if _r2v_strong_continuity(project, timeline, element):
+            # The promoted last-frame anchor really ships inside the
+            # image stack, so it must drift this fingerprint when the
+            # predecessor rerolls (claim fails, parked FAILED re-
+            # qualifies) exactly like the old injected anchors did.
+            anchors = continuity_reference_ids(project, timeline, element)
+            return (anchors[0], *base) if anchors else base
+        return base
     if isinstance(creation, I2VCreation):
         if creation.first_frame_version_id:
             # Explicit input already lives inside ``creation`` in the
@@ -1508,6 +1522,287 @@ def _submission_input_fingerprint_legacy(
     )
 
 
+_CONTINUITY_CUT_KEYWORDS = (
+    "切到",
+    "切换到",
+    "另一机位",
+    "时间跳转",
+    "回忆",
+    "闪回",
+    "转场到",
+)
+_CONTINUITY_CONTINUE_KEYWORDS = (
+    "承接",
+    "继续",
+    "同一动作",
+    "延续",
+    "一镜",
+)
+_CONTINUITY_ONE_TAKE_KEYWORDS = ("一镜到底", "延续运镜")
+
+
+def _continuity_signals(
+    timeline: Timeline,
+    element: TimelineElement,
+    prev: TimelineElement | None,
+) -> tuple[str, str, bool]:
+    """Author-intent signals shared by the planner and the fingerprint.
+
+    Returns ``(transition_kind, continuity_intent, one_take)`` read off
+    durable Project data only: an explicit Transition element wired
+    predecessor→this segment (normalized to "cut"/"blend", else
+    "none"), and the keyword class of ``creation.continuity``. Both
+    callers must derive the same values or a claim would drift from the
+    dispatched shape, so this stays pure — no filesystem, no provider.
+    """
+
+    transition_kind = "none"
+    if prev is not None:
+        for item in timeline.elements_by_id.values():
+            creation = item.creation
+            if (
+                getattr(creation, "type", "") == "transition"
+                and creation.from_element_id == prev.element_id
+                and creation.to_element_id == element.element_id
+            ):
+                from services.media_files.transitions import (
+                    normalize_transition_kind,
+                )
+
+                transition_kind = (
+                    "cut"
+                    if normalize_transition_kind(creation.transition_kind)
+                    == "cut"
+                    else "blend"
+                )
+                break
+    text = str(getattr(element.creation, "continuity", "") or "")
+    one_take = any(k in text for k in _CONTINUITY_ONE_TAKE_KEYWORDS)
+    if any(k in text for k in _CONTINUITY_CUT_KEYWORDS):
+        intent = "cut"
+    elif any(k in text for k in _CONTINUITY_CONTINUE_KEYWORDS):
+        intent = "continue"
+    else:
+        intent = "neutral"
+    return transition_kind, intent, one_take
+
+
+def _r2v_strong_continuity(
+    project: Project,
+    timeline: Timeline,
+    element: TimelineElement,
+) -> bool:
+    """Whether the r2v submit path will (did) promote a last-frame anchor.
+
+    Mirrors the planner's rules 1-4 and 6 from durable project data plus
+    the ffmpeg probe. Rule 5 (one-take extension) is treated as
+    "not strong" whenever the model could extend: the dispatch may then
+    have shipped as VIDEO_EXTEND (different fingerprint mode entirely),
+    and for the over-budget fallback the payload-driven synthetic-ID
+    union in ``_submission_input_fingerprint`` still validates frozen
+    strong payloads across the upgrade window.
+    """
+
+    if video_continuity_mode() in (CONTINUITY_MODE_OFF, CONTINUITY_MODE_WEAK):
+        return False
+    prev = find_predecessor_video_element(timeline, element)
+    if prev is None or not resolve_predecessor_video_version(project, prev):
+        return False
+    transition_kind, intent, one_take = _continuity_signals(
+        timeline,
+        element,
+        prev,
+    )
+    if transition_kind != "none" or intent == "cut":
+        return False
+    if getattr(prev.creation, "scene_ref", None) != getattr(
+        element.creation,
+        "scene_ref",
+        None,
+    ):
+        return False
+    prev_refs = set(getattr(prev.creation, "character_refs", []) or [])
+    prev_refs |= set(getattr(prev.creation, "prop_refs", []) or [])
+    cur_refs = set(getattr(element.creation, "character_refs", []) or [])
+    cur_refs |= set(getattr(element.creation, "prop_refs", []) or [])
+    if cur_refs - prev_refs:
+        return False
+    if one_take:
+        from models import config as model_config
+        from models.video_capabilities import supports_video_continuation
+
+        if supports_video_continuation(
+            model_config.get_video_model_name(),
+            model_config.get_video_backend(),
+        ):
+            return False
+    from services.file_agent_runtime.work_graph import probe_ffmpeg_ready
+
+    return bool(probe_ffmpeg_ready())
+
+
+def _shift_authored_image_refs(prompt: str, delta: int) -> str:
+    """Move every authored ``[Image N]`` marker by ``delta``.
+
+    The strong-continuity executor prepends the anchor at 图1, so the
+    author's own per-image sentences must follow the new ordinals or
+    "[Image 1] 为本镜头分镜图" would address the anchor. Markers are
+    the canonical authoring form; rendering to provider labels happens
+    later in ``_render_reference_markers``.
+    """
+
+    from models.reference_markers import CANONICAL_MARKER_PATTERN
+
+    def bump(match: "re.Match[str]") -> str:
+        shifted = int(match.group(1)) + delta
+        return match.group(0).replace(match.group(1), str(shifted), 1)
+
+    return CANONICAL_MARKER_PATTERN.sub(bump, prompt or "")
+
+
+def _resolve_bgm_reference(
+    project: Project,
+    timeline: Timeline,
+    project_root: Path,
+    *,
+    voice_count: int,
+    element_id: str,
+) -> str:
+    """Locate the shared project BGM to ship as one extra reference_audio.
+
+    Every segment generating its own native BGM makes the soundtrack
+    jump at each seam. When the author carries one enabled ``role=bgm``
+    audio Element on the timeline (user-uploaded配乐), the same clip
+    rides along EVERY segment as ``reference_audio`` so the provider
+    syncs each render to it. Skips are conservative and leave the
+    segment on native audio (status quo): no bgm Element, unreadable
+    file, or a model whose standalone audio-reference slots cannot fit
+    ``voices + 1`` within the documented budget.
+    """
+
+    from models import config as model_config
+    from models.video_capabilities import (
+        REFERENCE_VOICE_STANDALONE,
+        video_reference_voice_support,
+    )
+    from services.project_files.models import AudioCreation
+
+    bgm_creation = None
+    for item in timeline.elements_by_id.values():
+        creation = item.creation
+        if (
+            item.enabled
+            and isinstance(creation, AudioCreation)
+            and creation.role == "bgm"
+        ):
+            bgm_creation = creation
+            break
+    if bgm_creation is None:
+        return ""
+    version = project.assets.source_versions_by_id.get(
+        bgm_creation.source_asset_version_id,
+    )
+    indexed = (
+        project.assets.files_by_id.get(version.file_id)
+        if version is not None
+        else None
+    )
+    if indexed is None:
+        return ""
+    try:
+        path = _indexed_path(project_root, indexed)
+    except (NotFoundError, ValidationError, OSError):
+        return ""
+    if not path.exists():
+        return ""
+    support = video_reference_voice_support(
+        model_config.get_video_model_name(),
+        model_config.get_video_backend(),
+    )
+    shape, budget = support or ("", 0)
+    if shape != REFERENCE_VOICE_STANDALONE or voice_count + 1 > budget:
+        report_error(
+            component="r2v.bgm",
+            code="BGM_SKIPPED_BUDGET",
+            message=(
+                "reference_audio 槽位预算不足以同时装角色音色与配乐，" "本段跳过 bgm 参考音频（音乐退回原生生成）"
+            ),
+            project_id=str(project.project_id),
+            element_id=element_id,
+            voice_count=voice_count,
+            audio_budget=budget,
+        )
+        return ""
+    return _bgm_excerpt(project, project_root, path, element_id)
+
+
+def _bgm_excerpt(
+    project: Project,
+    project_root: Path,
+    source: Path,
+    element_id: str,
+) -> str:
+    """Return a file URI for the first <=15s of the bgm track.
+
+    Wan3.0 caps reference audio at five clips / 15s total; a full-length
+    soundtrack is excerpted once per project cache. Long files that
+    cannot be probed or cut fall back to the untouched source (the
+    provider will reject over-budget audio, and the segment then fails
+    loudly instead of silently shipping a wrong clip).
+    """
+
+    max_seconds = 15.0
+    cache_dir = project_root / "runtime" / "media-cache" / "bgm"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    target = cache_dir / f"{source.stem[:40]}-head15{source.suffix}"
+    if target.exists():
+        return target.resolve().as_uri()
+    from services.runtime_files.runtime_dependencies import (
+        resolve_ffmpeg,
+        resolve_ffprobe,
+    )
+    from services.media_files.segment_continuity import _probe_duration
+
+    ffmpeg_path = resolve_ffmpeg()
+    ffprobe_path = resolve_ffprobe(ffmpeg_path=ffmpeg_path)
+    try:
+        if ffprobe_path and _probe_duration(source, ffprobe_path) <= (
+            max_seconds + 0.01
+        ):
+            return source.resolve().as_uri()
+        tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
+        subprocess.run(
+            [
+                ffmpeg_path,
+                "-y",
+                "-v",
+                "error",
+                "-i",
+                str(source),
+                "-t",
+                str(max_seconds),
+                "-c:a",
+                "copy",
+                str(tmp),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
+        os.replace(tmp, target)
+    except (
+        RuntimeError,
+        ValidationError,
+        OSError,
+        subprocess.SubprocessError,
+    ):
+        # Stream-copy can fail on exotic containers; the untouched
+        # source still lets short clips work and long ones surface a
+        # provider-side error rather than a silent wrong render.
+        return source.resolve().as_uri()
+    return target.resolve().as_uri()
+
+
 def _build_task_plan(
     project: Project,
     project_root: Path,
@@ -1545,6 +1840,11 @@ def _build_task_plan(
     same_scene = False
     new_elements = False
     has_prev = False
+    transition_kind, continuity_intent, one_take = _continuity_signals(
+        timeline,
+        element,
+        prev,
+    )
     if prev is not None:
         resolved = resolve_predecessor_video_version(project, prev)
         if resolved:
@@ -1595,6 +1895,9 @@ def _build_task_plan(
             model_config.get_video_model_name(),
             model_config.get_video_backend(),
         ),
+        transition_kind=transition_kind,
+        continuity_intent=continuity_intent,
+        one_take=one_take,
     )
     return select_video_task_kind(
         base_mode,
@@ -1936,40 +2239,98 @@ def _resolve_request(
                 generate_audio=generate_audio,
                 duration_seconds=duration_seconds,
             )
-        if task_plan.kind is VideoTaskKind.I2V:
-            # Same scene but no usable extension contract/budget: hand
-            # the segment to the first-class I2V first-frame adoption.
-            mode = "i2v"
-            first_frame_ref = ""
+    bgm_reference_url = ""
     if mode == "r2v":
         version_ids = video_reference_plan(project, element)
+        strong_anchor_entry = None
+        if task_plan is not None and task_plan.strong_continuity:
+            # Promoted last-frame anchor: lead the stack with the
+            # predecessor's final picture at 图1 and shift the author's
+            # own [Image N] sentences so they keep addressing the right
+            # media. A/B evidence: a promoted anchor stitches at ~0.79
+            # SSIM while a buried one (storyboard-led stack) drops to
+            # 0.39-0.53 — the stack order, not the anchor concept, was
+            # the production defect.
+            strong_anchor_entry = _i2v_auto_first_frame_entry(
+                project=project,
+                project_root=project_root,
+                timeline=timeline,
+                element=element,
+            )
+            if strong_anchor_entry is None:
+                # Extraction failed (already reported); plain r2v is
+                # the documented degradation, never a blocked segment.
+                task_plan = None
+            else:
+                version_ids = (
+                    strong_anchor_entry.reference_id,
+                    *version_ids,
+                )
+                prompt = _shift_authored_image_refs(prompt, 1)
         _validate_authored_marker_bounds(prompt, project, version_ids)
         _assert_r2v_reference_budget(
             project,
             version_ids,
             project_root=project_root,
             output_duration_seconds=duration_seconds,
+            continuity_media=(
+                (("image", None),) if strong_anchor_entry is not None else ()
+            ),
+        )
+        real_version_ids = tuple(
+            item for item in version_ids if not item.startswith("continuity:")
         )
         urls, checksums, provenance, read_set = _resolve_reference_versions(
             project=project,
             project_root=project_root,
-            version_ids=version_ids,
+            version_ids=real_version_ids,
         )
+        if strong_anchor_entry is not None:
+            anchor = strong_anchor_entry
+            urls.insert(0, anchor.url)
+            checksums.insert(0, anchor.checksum)
+            provenance.insert(0, anchor.provenance_ref)
+            read_set.insert(
+                0,
+                {
+                    "ref": anchor.provenance_ref,
+                    "versionId": anchor.reference_id,
+                    "fileId": None,
+                    "checksum": anchor.checksum,
+                    "sourceUrl": anchor.url,
+                },
+            )
         voice_urls, voice_read_entries = _resolve_reference_voices(
             project=project,
             project_root=project_root,
             creation=creation,
-            version_ids=version_ids,
+            version_ids=real_version_ids,
         )
         read_set = [*read_set, *voice_read_entries]
-        # Pure omni-reference: continuity is the planning layer's job
-        # (VIDEO_EXTEND / I2V), so the stack carries no synthetic anchors
-        # and the role block lists only authored references.
+        # Continuity is the planning layer's job: a plain r2v stack
+        # carries no synthetic anchors, a strong-continuity one leads
+        # with the promoted last frame, and VIDEO_EXTEND returned above.
         prompt = _append_reference_role_mapping(
             prompt,
             project,
             version_ids,
             storyboard_id=storyboard_id,
+            continuity_labels=(
+                {
+                    strong_anchor_entry.reference_id: ("上一片段末帧（本段起始画面）"),
+                }
+                if strong_anchor_entry is not None
+                else None
+            ),
+        )
+        if strong_anchor_entry is not None:
+            prompt += "\n开场第一帧严格对齐图1（上一片段末帧），保持人物位置、" "光线与环境声一致，随后按本段分镜节奏自然展开。"
+        bgm_reference_url = _resolve_bgm_reference(
+            project,
+            timeline,
+            project_root,
+            voice_count=len([item for item in voice_urls if item]),
+            element_id=element_id,
         )
     prompt = _render_reference_markers(
         media_prompt_entity_names(prompt, project),
@@ -2056,6 +2417,7 @@ def _resolve_request(
         continuity_shape="",
         continuity_trim_offset=0.0,
         provider_duration_seconds=None,
+        bgm_reference_url=bgm_reference_url,
         first_frame_version_id=first_frame_ref if mode == "i2v" else "",
         first_frame_url=first_frame_url,
         video_version_id=video_ref if mode == "video_edit" else "",
@@ -2838,6 +3200,10 @@ class FileR2VExecutionService:
             payload["referenceVoiceUrls"] = list(
                 resolved.reference_voice_urls,
             )
+        if resolved.bgm_reference_url:
+            # Same fingerprint-identity rule: the shared bgm reference
+            # audio joins only when it actually ships.
+            payload["bgmReferenceUrl"] = resolved.bgm_reference_url
         if resolved.continuity_shape:
             # Extension semantics join only for real EXTEND requests,
             # same fingerprint-identity rule as the voice field.
@@ -3915,6 +4281,10 @@ class FileR2VExecutionService:
                         # Same legacy-signature courtesy as above.
                         extra_arguments["reference_voice_urls"] = tuple(
                             str(item) for item in request["referenceVoiceUrls"]
+                        )
+                    if request.get("bgmReferenceUrl"):
+                        extra_arguments["reference_bgm_url"] = str(
+                            request["bgmReferenceUrl"],
                         )
                     return await self.provider.submit(
                         prompt=str(request["prompt"]),
