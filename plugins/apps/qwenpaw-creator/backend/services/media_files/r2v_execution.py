@@ -2401,7 +2401,14 @@ def _resolve_request(
             ),
         )
         if strong_anchor_entry is not None:
-            prompt += "\n开场第一帧严格对齐图1（上一片段末帧），保持人物位置、" "光线与环境声一致，随后按本段剧本节奏自然展开。"
+            # Spec §2 wording: the first-frame imperative is the FIRST
+            # sentence, matching the controlled A/B shape that measured
+            # 0.786 ("图1 为本段起始状态，第一帧对齐图1，随后：…"), not a
+            # trailing afterthought competing with the role block.
+            prompt = (
+                "开场第一帧严格对齐图1（上一片段末帧），保持人物位置、"
+                "光线与环境声一致，随后按本段剧本节奏自然展开。\n" + prompt
+            )
         bgm_reference_url = _resolve_bgm_reference(
             project,
             timeline,

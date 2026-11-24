@@ -2213,7 +2213,8 @@ def test_resolve_request_promotes_anchor_for_strong_continuity(
     assert "上一片段末帧（本段起始画面）" in resolved.prompt
     # The action sentence survives the clause swap untouched.
     assert "人物跃下" in resolved.prompt
-    assert "第一帧严格对齐" in resolved.prompt
+    # Spec §2: the first-frame imperative is the FIRST sentence.
+    assert resolved.prompt.startswith("开场第一帧严格对齐图1")
     assert resolved.bgm_reference_url == ""
 
 
