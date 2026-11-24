@@ -855,3 +855,34 @@ def test_frozen_inputs_still_current_by_video_mode(
         project,
         task,
     )
+
+
+def test_plain_r2v_frozen_payload_keeps_the_legacy_key_set(
+    tmp_path,
+    monkeypatch,
+):
+    """Regression guardrail (continuity plan §5): an unchanged Project
+    state must freeze the exact pre-continuity request shape. The
+    mode/extension/bgm/voice keys join only when those paths actually
+    ship, so a plain r2v dispatch stays byte-identical across builds —
+    old digests keep validating and no new field can silently widen the
+    claim surface."""
+
+    services = _services(tmp_path, monkeypatch)
+    dispatched = _dispatch(services, key="video-legacy-keys")
+    tasks = ProjectExecutionStore(services.root).list_tasks(PROJECT_ID)
+    task = next(t for t in tasks if t.task_id == dispatched.task_id)
+    request = task.metadata["requestSnapshot"]
+    for key in (
+        "mode",
+        "continuityShape",
+        "continuityTrimOffset",
+        "providerDurationSeconds",
+        "bgmReferenceUrl",
+        "referenceVoiceUrls",
+        "firstFrameUrl",
+        "firstFrameVersionId",
+        "videoUrl",
+        "videoVersionId",
+    ):
+        assert key not in request, f"plain r2v payload grew key {key}"
