@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import socket
 import stat
@@ -1420,8 +1421,26 @@ def _reference_ids_with_continuity(
             # image stack, so it must drift this fingerprint when the
             # predecessor rerolls (claim fails, parked FAILED re-
             # qualifies) exactly like the old injected anchors did.
+            # Mirror the resolver's storyboard swap: when the template
+            # sentence is rewritable the storyboard drops out and the
+            # anchor inherits its 图1 ordinal.
             anchors = continuity_reference_ids(project, timeline, element)
-            return (anchors[0], *base) if anchors else base
+            if not anchors:
+                return base
+            if (
+                _storyboard_anchor_swap(
+                    str(getattr(creation, "video_prompt", "") or ""),
+                )
+                is not None
+            ):
+                selected = selected_element_output(
+                    project,
+                    element,
+                    "storyboard",
+                )
+                storyboard_id = selected[1] if selected is not None else ""
+                base = tuple(item for item in base if item != storyboard_id)
+            return (anchors[0], *base)
         return base
     if isinstance(creation, I2VCreation):
         if creation.first_frame_version_id:
@@ -1644,11 +1663,12 @@ def _r2v_strong_continuity(
 def _shift_authored_image_refs(prompt: str, delta: int) -> str:
     """Move every authored ``[Image N]`` marker by ``delta``.
 
-    The strong-continuity executor prepends the anchor at 图1, so the
-    author's own per-image sentences must follow the new ordinals or
-    "[Image 1] 为本镜头分镜图" would address the anchor. Markers are
-    the canonical authoring form; rendering to provider labels happens
-    later in ``_render_reference_markers``.
+    Fallback shape for strong continuity when the storyboard sentence
+    cannot be rewritten (see ``_storyboard_anchor_swap``): the anchor is
+    prepended at 图1 and the author's own per-image sentences must
+    follow the new ordinals or "[Image 1] 为本镜头分镜图" would address
+    the anchor. Markers are the canonical authoring form; rendering to
+    provider labels happens later in ``_render_reference_markers``.
     """
 
     from models.reference_markers import CANONICAL_MARKER_PATTERN
@@ -1658,6 +1678,34 @@ def _shift_authored_image_refs(prompt: str, delta: int) -> str:
         return match.group(0).replace(match.group(1), str(shifted), 1)
 
     return CANONICAL_MARKER_PATTERN.sub(bump, prompt or "")
+
+
+# The skill template fixes the storyboard's authored sentence to lead
+# with "[Image 1] 为本镜头分镜图" and end at the first clause break;
+# strong continuity replaces exactly that sentence with the anchor's
+# role, which lets the storyboard leave the reference stack without
+# leaving the author's words pointing at the wrong image.
+_STORYBOARD_CLAUSE_RE = re.compile(
+    r"\[Image 1\][^；。\n]*?分镜图[^；。\n]*?[；。]",
+)
+_ANCHOR_CLAUSE = "[Image 1] 为上一片段末帧（本段起始画面），第一帧严格对齐该图；"
+
+
+def _storyboard_anchor_swap(prompt: str) -> str | None:
+    """Swap the templated storyboard sentence for the anchor sentence.
+
+    Returns the rewritten prompt when the clause is found (the
+    storyboard can then be dropped from the stack — every OTHER
+    authored ordinal stays intact because the anchor inherits the
+    storyboard's 图1 slot), or ``None`` when the author deviated from
+    the template, in which case the caller keeps the storyboard and
+    shifts all markers instead. Deterministic on project data, so the
+    dispatch resolver and the fingerprint derive the same shape.
+    """
+
+    if not prompt or not _STORYBOARD_CLAUSE_RE.search(prompt):
+        return None
+    return _STORYBOARD_CLAUSE_RE.sub(_ANCHOR_CLAUSE, prompt, count=1)
 
 
 def _resolve_bgm_reference(
@@ -2262,11 +2310,29 @@ def _resolve_request(
                 # the documented degradation, never a blocked segment.
                 task_plan = None
             else:
-                version_ids = (
-                    strong_anchor_entry.reference_id,
-                    *version_ids,
-                )
-                prompt = _shift_authored_image_refs(prompt, 1)
+                swapped = _storyboard_anchor_swap(prompt)
+                if swapped is not None:
+                    # Plan shape: the storyboard leaves the stack and
+                    # the anchor inherits its 图1 slot, so every other
+                    # authored ordinal stays intact. E2E evidence
+                    # (2026-11-24): a kept storyboard still pulled the
+                    # opening composition (seam 0.60) while the
+                    # storyboard-free single-anchor stack measured 0.79.
+                    prompt = swapped
+                    version_ids = (
+                        strong_anchor_entry.reference_id,
+                        *(
+                            item
+                            for item in version_ids
+                            if item != storyboard_id
+                        ),
+                    )
+                else:
+                    version_ids = (
+                        strong_anchor_entry.reference_id,
+                        *version_ids,
+                    )
+                    prompt = _shift_authored_image_refs(prompt, 1)
         _validate_authored_marker_bounds(prompt, project, version_ids)
         _assert_r2v_reference_budget(
             project,
@@ -2324,7 +2390,7 @@ def _resolve_request(
             ),
         )
         if strong_anchor_entry is not None:
-            prompt += "\n开场第一帧严格对齐图1（上一片段末帧），保持人物位置、" "光线与环境声一致，随后按本段分镜节奏自然展开。"
+            prompt += "\n开场第一帧严格对齐图1（上一片段末帧），保持人物位置、" "光线与环境声一致，随后按本段剧本节奏自然展开。"
         bgm_reference_url = _resolve_bgm_reference(
             project,
             timeline,

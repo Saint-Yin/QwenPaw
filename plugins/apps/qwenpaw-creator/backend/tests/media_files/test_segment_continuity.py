@@ -2114,7 +2114,7 @@ def test_resolve_request_promotes_anchor_for_strong_continuity(
     )
     second.creation = second.creation.model_copy(
         update={
-            "video_prompt": "[Image 1] 为本镜头分镜图，人物跃下。",
+            "video_prompt": ("[Image 1] 为本镜头分镜图，只采用其构图与节奏；人物跃下。"),
             "video_reference_version_ids": [],
         },
     )
@@ -2195,17 +2195,161 @@ def test_resolve_request_promotes_anchor_for_strong_continuity(
         snapshot=snapshot,
         project_root=tmp_path,
         target_ref="element:e2",
-        arguments={"prompt": "[Image 1] 为本镜头分镜图，人物跃下。"},
+        arguments={
+            "prompt": "[Image 1] 为本镜头分镜图，只采用其构图与节奏；人物跃下。",
+        },
     )
     assert resolved.reference_version_ids[0] == (
         "continuity:last_frame:prev-v"
     )
-    assert "sb-v1" in resolved.reference_version_ids
+    # Plan shape: the storyboard clause was rewritable, so the
+    # storyboard drops out and the anchor inherits its 图1 slot.
+    assert "sb-v1" not in resolved.reference_version_ids
     assert resolved.reference_urls[0] == "file:///anchor.png"
-    # Author's sentence now addresses 图2 (the storyboard), not the anchor.
-    assert "[Image 2]" in resolved.prompt or "图2" in resolved.prompt
+    assert "上一片段末帧（本段起始画面）" in resolved.prompt
+    # The action sentence survives the clause swap untouched.
+    assert "人物跃下" in resolved.prompt
     assert "第一帧严格对齐" in resolved.prompt
     assert resolved.bgm_reference_url == ""
+
+
+def test_resolve_request_falls_back_to_keep_and_shift(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Without the template sentence the storyboard stays (no dangling
+    author words) and every marker shifts +1 behind the anchor."""
+
+    import services.project_files.production_stage as ps
+    import services.project_files.prompt_sync as psm
+    from models import config as model_config
+    from models.video_task_plans import VideoTaskKind, VideoTaskPlan
+    from services.media_files import r2v_execution as rx
+    from services.media_files.segment_continuity import ContinuityEntry
+    from services.project_files.models import (
+        ArtifactVersion,
+        ElementOutput,
+        IndexedFile,
+    )
+    from services.project_files.store import ProjectSnapshot
+
+    project, _tl, _first, second = _two_segment_project("prev-v")
+    project.assets.artifact_slots_by_id[
+        "element:e2:storyboard"
+    ] = ArtifactSlot(
+        slot_id="element:e2:storyboard",
+        owner_ref="element:e2",
+        kind="r2v_storyboard_image",
+        version_ids=["sb-v1"],
+        selected_version_id="sb-v1",
+    )
+    project.assets.files_by_id["file-sb-v1"] = IndexedFile(
+        file_id="file-sb-v1",
+        kind="artifact_payload",
+        media_type="image/png",
+        relative_uri="assets/artifacts/file-sb-v1",
+        sha256="1" * 64,
+        size_bytes=1,
+        created_at="2026-08-05T00:00:00Z",
+    )
+    project.assets.artifact_versions_by_id["sb-v1"] = ArtifactVersion(
+        version_id="sb-v1",
+        name="sb-v1",
+        slot_id="element:e2:storyboard",
+        kind="r2v_storyboard_image",
+        owner_ref="element:e2",
+        file_id="file-sb-v1",
+        checksum="1" * 64,
+        based_on_generation=1,
+        provenance_refs=[],
+        stale=False,
+        created_at="2026-08-05T00:00:00Z",
+    )
+    second.outputs["storyboard"] = ElementOutput(
+        slot_id="element:e2:storyboard",
+    )
+    second.creation = second.creation.model_copy(
+        update={
+            "video_prompt": "[Image 1] 是本镜头的草图风格，人物跃下。",
+            "video_reference_version_ids": [],
+        },
+    )
+    monkeypatch.setattr(
+        ps,
+        "assert_media_production_allowed",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        psm,
+        "assert_r2v_prompt_sync",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        rx,
+        "_build_task_plan",
+        lambda *_a, **_k: VideoTaskPlan(
+            kind=VideoTaskKind.R2V,
+            submit_duration_seconds=4,
+            strong_continuity=True,
+        ),
+    )
+    anchor = ContinuityEntry(
+        kind="last_frame",
+        reference_id="continuity:last_frame:prev-v",
+        url="file:///anchor.png",
+        checksum="sha256:aaa",
+        path=Path("/anchor.png"),
+        role_label="上一片段末帧（本段起始画面）",
+        provenance_ref="artifact-version:prev-v",
+        media_type="image/png",
+    )
+    monkeypatch.setattr(
+        rx,
+        "_i2v_auto_first_frame_entry",
+        lambda **_kw: anchor,
+    )
+    monkeypatch.setattr(
+        rx,
+        "_assert_r2v_reference_budget",
+        lambda *_a, **_k: None,
+    )
+
+    def fake_versions(**kw):
+        ids = list(kw["version_ids"])
+        return (
+            [f"url::{item}" for item in ids],
+            [f"sum::{item}" for item in ids],
+            [f"ref::{item}" for item in ids],
+            [{"ref": f"ref::{item}"} for item in ids],
+        )
+
+    monkeypatch.setattr(rx, "_resolve_reference_versions", fake_versions)
+    monkeypatch.setattr(
+        rx,
+        "_resolve_reference_voices",
+        lambda **_kw: ([], []),
+    )
+    monkeypatch.setattr(rx, "_resolve_bgm_reference", lambda *_a, **_k: "")
+    monkeypatch.setattr(
+        model_config,
+        "get_video_model_name",
+        lambda: "wan3.0-video",
+    )
+    monkeypatch.setattr(model_config, "get_video_backend", lambda: "wan")
+
+    snapshot = ProjectSnapshot(project=project, etag="e1", generation=1)
+    resolved = rx._resolve_request(
+        snapshot=snapshot,
+        project_root=tmp_path,
+        target_ref="element:e2",
+        arguments={"prompt": "[Image 1] 是本镜头的草图风格，人物跃下。"},
+    )
+    assert resolved.reference_version_ids == (
+        "continuity:last_frame:prev-v",
+        "sb-v1",
+    )
+    # Author marker shifted to 图2 behind the anchor.
+    assert "图2" in resolved.prompt or "[Image 2]" in resolved.prompt
 
 
 # ── bgm reference_audio resolution (planning side) ───────────────────────────
