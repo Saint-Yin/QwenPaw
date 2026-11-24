@@ -2205,6 +2205,10 @@ def test_resolve_request_promotes_anchor_for_strong_continuity(
     # Plan shape: the storyboard clause was rewritable, so the
     # storyboard drops out and the anchor inherits its 图1 slot.
     assert "sb-v1" not in resolved.reference_version_ids
+    # Staleness-gate regression: the dropped storyboard must still be
+    # recorded in provenance, or published clips loop STALE forever
+    # (auto_approve re-bills the render every ~3.5 minutes).
+    assert "artifact-version:sb-v1" in resolved.provenance_refs
     assert resolved.reference_urls[0] == "file:///anchor.png"
     assert "上一片段末帧（本段起始画面）" in resolved.prompt
     # The action sentence survives the clause swap untouched.

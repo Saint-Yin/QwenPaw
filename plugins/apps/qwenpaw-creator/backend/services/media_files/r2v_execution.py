@@ -2366,6 +2366,17 @@ def _resolve_request(
                     "sourceUrl": anchor.url,
                 },
             )
+            if storyboard_id and storyboard_id not in version_ids:
+                # The r2v video node's staleness gate requires the
+                # Element's storyboard selection in the artifact
+                # provenance. The swap path drops the storyboard from
+                # the SENT stack (the anchor inherits its 图1 slot) but
+                # it remains the authored visual plan for this segment:
+                # record it, or every published strong-continuity clip
+                # reads as perpetually STALE and auto_approve re-bills
+                # the render in a loop (field case 2026-11-24: s5
+                # re-dispatched every ~3.5 minutes).
+                provenance.append(f"artifact-version:{storyboard_id}")
         voice_urls, voice_read_entries = _resolve_reference_voices(
             project=project,
             project_root=project_root,
