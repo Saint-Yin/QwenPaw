@@ -340,7 +340,11 @@
     "creditsRingTitle": "Credits usage",
     "creditsRingAria": "Remaining Credits",
     "creditsRingUnavailable": "Unavailable: cannot reach the platform credits endpoint",
-    "blueprint": "Video script"
+    "blueprint": "Video script",
+    "continuityLabel": "Segment continuity",
+    "continuityTooltip": "On: same-scene segments render serially with anchored seams for smoother picture and music (scene changes and cuts still parallelize automatically). Off: every segment renders in parallel — faster, but transitions fall back to plain reference generation. Only affects segments not yet started; switch anytime.",
+    "continuityUpdated": "Segment continuity setting updated",
+    "continuityUpdateFailed": "Failed to update setting: {{detail}}"
   },
   "modelConfig": {
     "title": "Model Configuration",
@@ -863,11 +867,7 @@
     "subtitleStyleApplied": "Subtitle style updated. Click 'Compose Final Cut' to refresh the video.",
     "subtitleStyleFailed": "Subtitle style update failed: {{detail}}",
     "subtitleStyleSkippedDesign": "{{count}} caption(s) get their look from their own motion design, so the pack motion does not apply there",
-    "subtitleStyleMotionUnowned": "This caption's look comes from its own motion design, which the style pack never rewrites; tune entrance / exit / loop in the motion design",
-    "continuityLabel": "Segment continuity",
-    "continuityTooltip": "On: same-scene segments render serially with anchored seams for smoother picture and music flow. Off: all segments render in parallel — faster, but transitions fall back to plain reference generation. Only affects segments not yet started.",
-    "continuityUpdated": "Segment continuity setting updated",
-    "continuityUpdateFailed": "Failed to update setting: {{detail}}"
+    "subtitleStyleMotionUnowned": "This caption's look comes from its own motion design, which the style pack never rewrites; tune entrance / exit / loop in the motion design"
   },
   "r2v": {
     "title": "Video Plan / {{element}} / Production Workbench",

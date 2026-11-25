@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { message, Modal, Switch, Tooltip } from "antd";
+import { message, Modal, Tooltip } from "antd";
 import { Bookmark, FileText, Info, Loader2, RefreshCw, X } from "lucide-react";
 import { MenuUnfoldOutlined } from "@ant-design/icons";
 import { navigate, useParams, useSearchParams } from "@/routing/navigation";
@@ -234,39 +234,6 @@ export default function PlanPage() {
       }
     },
     [id, timeline, patchProject, pollOnce, t],
-  );
-
-  // Inter-segment continuity dial (backend: settings.video_continuity).
-  // ON ("continuity") keeps same-scene segments serialized and anchored;
-  // OFF ("throughput") lets every segment render in parallel as plain
-  // omni-reference. Only affects undispatched segments; never re-rolls
-  // published clips.
-  const handleToggleContinuity = useCallback(
-    async (checked: boolean) => {
-      const stored = project?.settings.video_continuity;
-      const value = checked ? "continuity" : "throughput";
-      if ((stored ?? "continuity") === value) return;
-      try {
-        await patchProject(id, [
-          {
-            op: stored === undefined ? "add" : "replace",
-            path: projectJsonPointer("settings", "video_continuity"),
-            before: stored,
-            missingBefore: stored === undefined,
-            value,
-          },
-        ]);
-        await pollOnce(id);
-        message.success(t("plan.continuityUpdated"));
-      } catch (error) {
-        message.error(
-          t("plan.continuityUpdateFailed", {
-            detail: (error as Error).message,
-          }),
-        );
-      }
-    },
-    [id, project?.settings.video_continuity, patchProject, pollOnce, t],
   );
 
   // One confirmed pick may be two backend calls (the project-wide pack and
@@ -903,20 +870,6 @@ export default function PlanPage() {
             {/* When the workspace runs out of width the info chips fold
               into one tooltip so the action buttons keep their room. */}
             <div className="flex flex-wrap items-center gap-2 @max-[559px]:hidden">
-              <label
-                className="flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-white px-2.5 py-1 text-xs font-medium text-[var(--color-text-secondary)] dark:bg-[var(--color-bg-elevated)]"
-                title={t("plan.continuityTooltip")}
-              >
-                <Switch
-                  size="small"
-                  checked={
-                    (project.settings.video_continuity ?? "continuity") ===
-                    "continuity"
-                  }
-                  onChange={(checked) => void handleToggleContinuity(checked)}
-                />
-                {t("plan.continuityLabel")}
-              </label>
               <span className="rounded-lg border border-[var(--color-border)] bg-white px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] dark:bg-[var(--color-bg-elevated)]">
                 {project.settings.aspect_ratio}
               </span>

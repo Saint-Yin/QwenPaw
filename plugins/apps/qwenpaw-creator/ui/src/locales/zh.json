@@ -340,7 +340,11 @@
     "creditsRingTitle": "Credits 用量",
     "creditsRingAria": "Credits 剩余额度",
     "creditsRingUnavailable": "暂不可用：未连上平台额度接口",
-    "blueprint": "视频脚本"
+    "blueprint": "视频脚本",
+    "continuityLabel": "段间连贯优先",
+    "continuityTooltip": "开启：同场景相邻段串行生成，画面与配乐衔接更连贯（换景/硬切段仍自动并行）。关闭：全部片段并行生成，出片更快，但段间衔接退化为普通参考生成。仅影响尚未开始生成的片段，随时可改。",
+    "continuityUpdated": "段间连贯设置已更新",
+    "continuityUpdateFailed": "设置更新失败：{{detail}}"
   },
   "modelConfig": {
     "title": "模型配置",
@@ -863,11 +867,7 @@
     "subtitleStyleApplied": "字幕风格已更新，请点击「合成最终成片」刷新视频",
     "subtitleStyleFailed": "字幕风格更新失败：{{detail}}",
     "subtitleStyleSkippedDesign": "其中 {{count}} 条字幕的外观由其动效设计决定，风格包动效对它们不适用",
-    "subtitleStyleMotionUnowned": "这条字幕的外观由其动效设计决定，风格包不会重写它；入场/出场/循环请在动效设计里调整",
-    "continuityLabel": "段间连贯优先",
-    "continuityTooltip": "开启：同场景相邻段串行生成，画面与配乐衔接更连贯。关闭：所有片段并行生成，出片更快，但段间衔接退化为普通参考生成。仅影响尚未开始生成的片段。",
-    "continuityUpdated": "段间连贯设置已更新",
-    "continuityUpdateFailed": "设置更新失败：{{detail}}"
+    "subtitleStyleMotionUnowned": "这条字幕的外观由其动效设计决定，风格包不会重写它；入场/出场/循环请在动效设计里调整"
   },
   "r2v": {
     "title": "视频方案 / {{element}} / 制作工作台",

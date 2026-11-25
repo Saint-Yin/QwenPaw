@@ -32,6 +32,7 @@ import type { ProjectStorageProfile } from "@/api/creator";
 import { useModelConfigStore } from "@/store/modelConfigStore";
 import { useRecreateStore } from "@/store/recreateStore";
 import { useRouter, useSearchParams } from "@/routing/navigation";
+import ContinuityToggle from "@/components/creator/ContinuityToggle";
 import ModelBadges from "@/components/creator/ModelBadges";
 import ModelCreditsNotice from "@/components/creator/ModelCreditsNotice";
 import StorageReclaimNotice from "@/components/creator/StorageReclaimNotice";
@@ -596,6 +597,7 @@ export default function HomePage() {
               </button>
             </Tooltip>
             <LanguageToggle className="icon-button shrink-0 text-[11px] font-semibold" />
+            <ContinuityToggle />
             <CreditsRing />
             <ModelCreditsNotice />
             <ModelBadges />

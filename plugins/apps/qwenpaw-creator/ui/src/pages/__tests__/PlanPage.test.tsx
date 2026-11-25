@@ -184,52 +184,6 @@ describe("PlanPage Timeline/Element frontend", () => {
     ).toBe("新的午饭名场面");
   });
 
-  it("toggles segment continuity through a settings CAS patch", async () => {
-    const updated = cloneProject();
-    updated.generation = 4;
-    (updated.settings as Record<string, unknown>).video_continuity =
-      "throughput";
-    const { calls } = installMockFetch([
-      {
-        match: "/projects/p1/project",
-        method: "PATCH",
-        response: {
-          json: {
-            projectId: "p1",
-            generation: 4,
-            etag: '"sha256:g4"',
-            changedPointers: ["/settings/video_continuity"],
-            project: updated,
-          },
-        },
-      },
-      ...pollRoutes(),
-    ]);
-    renderPage("/project/p1/plan");
-    const toggle = await waitFor(() => {
-      const el = document.querySelector('[role="switch"]');
-      expect(el).toBeTruthy();
-      return el as HTMLElement;
-    });
-    fireEvent.click(toggle);
-    await waitFor(() =>
-      expect(calls.some((call) => call.method === "PATCH")).toBe(true),
-    );
-    const request = calls.find((call) => call.method === "PATCH")!;
-    expect(request.body).toMatchObject({
-      operations: [
-        {
-          op: "add",
-          path: "/settings/video_continuity",
-          value: "throughput",
-        },
-      ],
-    });
-    expect(
-      useProjectSnapshotStore.getState().project?.settings.video_continuity,
-    ).toBe("throughput");
-  });
-
   it.each(["source_asset_version", "artifact_version"] as const)(
     "opens an Edit backed by %s with a literal percent in its name",
     async (type) => {
