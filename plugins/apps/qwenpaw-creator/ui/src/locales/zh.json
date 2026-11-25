@@ -1157,7 +1157,8 @@
     "shotsLabel": "镜头Shots",
     "refsLabel": "关联素材",
     "advancedSettings": "更多设置",
-    "refsPill": "引用{{count}}项素材"
+    "refsPill": "引用{{count}}项素材",
+    "intentPlaceholder": "未填写创作意图：一句话说明本片段要达成什么，可直接输入"
   },
   "agent": {
     "assistant": "创作助手",

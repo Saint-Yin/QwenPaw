@@ -1157,7 +1157,8 @@
     "shotsLabel": "Shots",
     "refsLabel": "Related assets",
     "advancedSettings": "More settings",
-    "refsPill": "{{count}} refs"
+    "refsPill": "{{count}} refs",
+    "intentPlaceholder": "Creative intent not set — one sentence on what this segment must achieve; type here"
   },
   "agent": {
     "assistant": "Creative Assistant",

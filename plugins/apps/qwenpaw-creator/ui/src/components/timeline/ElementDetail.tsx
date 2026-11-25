@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Button,
+  Image,
   Input,
   InputNumber,
   Select,
@@ -106,6 +107,7 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 function TextField({
   label,
   value,
+  placeholder,
   multiline = false,
   path,
   field,
@@ -114,6 +116,7 @@ function TextField({
 }: {
   label: string;
   value: string;
+  placeholder?: string;
   multiline?: boolean;
   path: string;
   field: string;
@@ -131,6 +134,7 @@ function TextField({
       {multiline ? (
         <Input.TextArea
           value={value}
+          placeholder={placeholder}
           disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
           autoSize={{ minRows: 3, maxRows: 8 }}
@@ -293,10 +297,16 @@ function RefThumb({
   return (
     <span className="relative inline-block" title={name}>
       {url ? (
-        <img
+        <Image
           src={url}
           alt={name}
-          className="h-10 w-[54px] rounded-[10px] border border-[var(--color-border)] object-cover"
+          width={54}
+          height={40}
+          style={{
+            objectFit: "cover",
+            borderRadius: 10,
+            border: "1px solid var(--color-border)",
+          }}
         />
       ) : (
         <span className="flex h-10 w-[54px] items-center justify-center rounded-[10px] border border-dashed border-[var(--color-border)] px-1 text-center text-[9px] leading-tight text-[var(--color-text-tertiary)]">
@@ -763,6 +773,7 @@ export default function ElementDetail({
                 <TextField
                   label={t("elementDetail.intent")}
                   value={creation.intent}
+                  placeholder={t("elementDetail.intentPlaceholder")}
                   multiline
                   path={pointer("creation", "intent")}
                   field={`element:${element.element_id}/creation/intent`}
@@ -911,14 +922,16 @@ export default function ElementDetail({
               </span>
             </div>
             <div className="flex flex-wrap gap-2">
-              {r2vRefThumbs.map((item) => (
-                <RefThumb
-                  key={item.key}
-                  url={item.url}
-                  name={item.name}
-                  index={item.index}
-                />
-              ))}
+              <Image.PreviewGroup>
+                {r2vRefThumbs.map((item) => (
+                  <RefThumb
+                    key={item.key}
+                    url={item.url}
+                    name={item.name}
+                    index={item.index}
+                  />
+                ))}
+              </Image.PreviewGroup>
             </div>
           </div>
         )}
