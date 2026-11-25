@@ -107,7 +107,7 @@ export default function HeroComposerCard() {
 
   const pillSelectClassNames = {
     content:
-      "!mr-0 !w-full !-translate-x-0.5 !justify-center !text-center !text-xs !font-semibold !text-[var(--color-text-secondary)]",
+      "!mr-0 !w-full !-translate-x-0.5 !justify-center !text-center !text-xs !font-semibold !pr-5 !text-[var(--color-text-secondary)]",
     suffix:
       "!absolute !right-2 !text-[10px] !text-[var(--color-text-tertiary)]",
     popup: {
@@ -370,7 +370,7 @@ export default function HeroComposerCard() {
               ]}
               popupMatchSelectWidth={false}
               variant="borderless"
-              className="!h-8 !w-auto min-w-[56px] shrink-0 !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
+              className="!h-8 !w-auto min-w-[64px] shrink-0 !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
               classNames={pillSelectClassNames}
             />
             <Select
@@ -387,7 +387,7 @@ export default function HeroComposerCard() {
               ]}
               popupMatchSelectWidth={false}
               variant="borderless"
-              className="!h-8 !w-auto min-w-[56px] shrink-0 !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
+              className="!h-8 !w-auto min-w-[64px] shrink-0 !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
               classNames={pillSelectClassNames}
             />
             <Select
