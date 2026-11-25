@@ -303,11 +303,11 @@ export default function HeroComposerCard() {
         </div>
       </div>
 
-      <div className="mt-4 flex items-center gap-3 px-5 py-4">
+      <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-4">
         <div
           role="radiogroup"
           aria-label={t("home.projectScenario")}
-          className="flex items-center rounded-full bg-[rgba(43,27,0,0.04)] p-1 dark:bg-white/5"
+          className="flex shrink-0 items-center rounded-full bg-[rgba(43,27,0,0.04)] p-1 dark:bg-white/5"
         >
           {SCENARIO_OPTIONS.map((option) => (
             <button
@@ -316,7 +316,7 @@ export default function HeroComposerCard() {
               role="radio"
               aria-checked={scenario === option.key}
               onClick={() => handleScenarioChange(option.key)}
-              className={`cursor-pointer rounded-full px-3 py-1 text-sm font-medium leading-6 transition-colors ${
+              className={`shrink-0 cursor-pointer whitespace-nowrap rounded-full px-3 py-1 text-sm font-medium leading-6 transition-colors ${
                 scenario === option.key
                   ? "bg-white text-[#332F2E] shadow-sm dark:bg-[var(--color-bg-elevated)] dark:text-[var(--color-text-primary)]"
                   : "text-[#656563] hover:text-[var(--color-text-primary)] dark:text-[var(--color-text-secondary)]"
@@ -370,7 +370,7 @@ export default function HeroComposerCard() {
               ]}
               popupMatchSelectWidth={false}
               variant="borderless"
-              className="!h-8 !w-auto min-w-[84px] !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
+              className="!h-8 !w-auto min-w-[84px] shrink-0 !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
               classNames={pillSelectClassNames}
             />
             <Select
@@ -387,7 +387,7 @@ export default function HeroComposerCard() {
               ]}
               popupMatchSelectWidth={false}
               variant="borderless"
-              className="!h-8 !w-auto min-w-[84px] !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
+              className="!h-8 !w-auto min-w-[84px] shrink-0 !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
               classNames={pillSelectClassNames}
             />
             <Select
@@ -407,7 +407,7 @@ export default function HeroComposerCard() {
               ]}
               popupMatchSelectWidth={false}
               variant="borderless"
-              className="!h-8 !w-auto min-w-[92px] !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
+              className="!h-8 !w-auto min-w-[92px] shrink-0 !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
               classNames={pillSelectClassNames}
             />
             <SubtitleSettingsPicker
@@ -424,12 +424,12 @@ export default function HeroComposerCard() {
           </>
         )}
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <button
             type="button"
             data-onboarding-id="model-config"
             onClick={() => setModelConfigModalOpen(true)}
-            className="flex cursor-pointer items-center gap-1 rounded-full bg-[rgba(43,27,0,0.04)] px-4 py-1 text-sm font-medium leading-6 text-[#656563] transition-colors hover:bg-[rgba(43,27,0,0.08)] hover:text-[var(--color-text-primary)] dark:bg-white/5 dark:text-[var(--color-text-secondary)] dark:hover:bg-white/10"
+            className="flex shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-full bg-[rgba(43,27,0,0.04)] px-4 py-1 text-sm font-medium leading-6 text-[#656563] transition-colors hover:bg-[rgba(43,27,0,0.08)] hover:text-[var(--color-text-primary)] dark:bg-white/5 dark:text-[var(--color-text-secondary)] dark:hover:bg-white/10"
           >
             <img src={modelConfigIcon} alt="" width={20} height={20} />
             {t("home.modelConfig")}

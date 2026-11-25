@@ -3,7 +3,10 @@ import { useTranslation } from "react-i18next";
 import { Button, Modal, Select, Tooltip } from "antd";
 import type { SelectProps } from "antd";
 
-import type { SubtitleAnimationPolicy, SubtitleStyle } from "@/contracts/creator";
+import type {
+  SubtitleAnimationPolicy,
+  SubtitleStyle,
+} from "@/contracts/creator";
 import SubtitleAnimationControls from "./SubtitleAnimationControls";
 import SubtitleStyleControls from "./SubtitleStyleControls";
 import SubtitleTemplatePicker from "./SubtitleTemplatePicker";
@@ -107,7 +110,7 @@ export default function SubtitleSettingsPicker({
           )}
           popupMatchSelectWidth={false}
           variant="borderless"
-          className="!h-8 !w-auto min-w-[80px] !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
+          className="!h-8 !w-auto min-w-[80px] shrink-0 !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
           classNames={selectClassNames}
         />
       </Tooltip>
