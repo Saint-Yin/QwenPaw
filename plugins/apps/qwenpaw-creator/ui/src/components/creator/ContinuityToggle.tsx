@@ -12,7 +12,11 @@ import { projectJsonPointer } from "@/lib/projectJsonPointer";
  * segment as plain omni-reference. Persisted through the same CAS Patch
  * channel as any other project setting; affects undispatched segments only.
  */
-export default function ContinuityToggle() {
+export default function ContinuityToggle({
+  compact = false,
+}: {
+  compact?: boolean;
+} = {}) {
   const { t } = useTranslation();
   const projectId = useProjectSnapshotStore((state) => state.projectId);
   const stored = useProjectSnapshotStore(
@@ -56,14 +60,20 @@ export default function ContinuityToggle() {
   }
   return (
     <Tooltip title={t("nav.continuityTooltip")}>
-      <label className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-white px-2.5 py-1 text-xs font-medium text-[var(--color-text-secondary)] dark:bg-[var(--color-bg-elevated)]">
+      <label
+        className={`flex shrink-0 cursor-pointer items-center gap-1.5 ${
+          compact
+            ? "rounded-full bg-[rgba(43,27,0,0.04)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-text-secondary)] dark:bg-white/5"
+            : "rounded-lg border border-[var(--color-border)] bg-white px-2.5 py-1 text-xs font-medium text-[var(--color-text-secondary)] dark:bg-[var(--color-bg-elevated)]"
+        }`}
+      >
         <Switch
           size="small"
           checked={(stored ?? "continuity") === "continuity"}
           onChange={(checked) => void apply(checked)}
           aria-label={t("nav.continuityLabel")}
         />
-        {t("nav.continuityLabel")}
+        {compact ? t("nav.continuityShort") : t("nav.continuityLabel")}
       </label>
     </Tooltip>
   );

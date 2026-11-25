@@ -837,6 +837,7 @@ def test_subtitle_toggle_follows_the_subtitle_definition(
     assert stored().settings.subtitle_policy == "off"
 
 
+# pylint: disable-next=too-many-statements
 def test_subtitle_style_patch_redraws_prompts_and_documents(
     app,
     api_runtime_root,
@@ -926,7 +927,7 @@ def test_subtitle_style_patch_redraws_prompts_and_documents(
             """The committed ``project.json`` text at this exact step."""
 
             return (api_runtime_root / project_id / "project.json").read_text(
-                encoding="utf-8"
+                encoding="utf-8",
             )
 
         unknown = await client.patch(
@@ -1096,9 +1097,7 @@ def test_subtitle_style_patch_redraws_prompts_and_documents(
     assert back.settings.subtitle_style is None
     back_elements = back.timelines.items["timeline:main"].elements_by_id
     assert back_elements["caption"].creation.prompt == ""
-    assert (
-        back_elements["authored"].creation.prompt == "手写意图：这里要安静一点"
-    )
+    assert back_elements["authored"].creation.prompt == "手写意图：这里要安静一点"
     back_motion = back_elements["caption"].creation.motion
     assert back_motion.entrance == "soft_fade"
     assert "caption_animation=soft_fade/none/0" in back_motion.design_notes
@@ -1184,7 +1183,7 @@ def test_subtitle_style_patch_keeps_the_caption_box_legal(
             ),
         )
 
-    project_id, refused, baked, durable = run_scenario(app, scenario)
+    _project_id, refused, baked, durable = run_scenario(app, scenario)
     assert refused.status_code == 422, refused.text
     assert "未知的字幕风格包" in refused.text
     assert baked.status_code == 200, baked.text
@@ -1211,3 +1210,45 @@ def test_subtitle_style_patch_keeps_the_caption_box_legal(
     assert element.creation.motion is not None
     assert element.creation.motion.entrance == "pop"
     assert "caption_style=variety_pop" in element.creation.motion.design_notes
+
+
+def test_project_create_persists_video_continuity_choice(
+    app,
+    api_runtime_root,
+    run_scenario,
+):
+    """The composer's continuity pill lands in ProjectSettings; omitting
+    it keeps the field unset so the env dial stays the fallback."""
+
+    payload = _create_payload(
+        "project-create-continuity-1",
+        "末班车",
+        videoContinuity="throughput",
+    )
+
+    async def scenario(client):
+        created = await client.post("/projects", json=payload)
+        project_id = created.json()["projectId"]
+        snapshot = await client.get(f"/projects/{project_id}/project")
+        default_payload = _create_payload(
+            "project-create-continuity-2",
+            "默认项目",
+        )
+        created_default = await client.post("/projects", json=default_payload)
+        snapshot_default = await client.get(
+            f"/projects/{created_default.json()['projectId']}/project",
+        )
+        return created, snapshot, created_default, snapshot_default
+
+    created, snapshot, created_default, snapshot_default = run_scenario(
+        app,
+        scenario,
+    )
+    assert created.status_code == 201
+    settings = snapshot.json()["project"]["settings"]
+    assert settings["video_continuity"] == "throughput"
+    assert created_default.status_code == 201
+    assert (
+        snapshot_default.json()["project"]["settings"]["video_continuity"]
+        is None
+    )

@@ -321,7 +321,10 @@
     "deleteTemplateFailed": "Failed to delete template",
     "videoTemplateNone": "No Template",
     "videoTemplateHint": "Choose a preset to get started quickly",
-    "videoTemplateUserSection": "My Templates"
+    "videoTemplateUserSection": "My Templates",
+    "continuity": "Segment continuity",
+    "continuityModeContinuity": "Continuity first",
+    "continuityModeThroughput": "Fast parallel"
   },
   "nav": {
     "videoPlan": "Video Plan",
@@ -344,7 +347,8 @@
     "continuityLabel": "Segment continuity",
     "continuityTooltip": "On: same-scene segments render serially with anchored seams for smoother picture and music (scene changes and cuts still parallelize automatically). Off: every segment renders in parallel — faster, but transitions fall back to plain reference generation. Only affects segments not yet started; switch anytime.",
     "continuityUpdated": "Segment continuity setting updated",
-    "continuityUpdateFailed": "Failed to update setting: {{detail}}"
+    "continuityUpdateFailed": "Failed to update setting: {{detail}}",
+    "continuityShort": "Continuity"
   },
   "modelConfig": {
     "title": "Model Configuration",

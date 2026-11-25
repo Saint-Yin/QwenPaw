@@ -5,7 +5,6 @@ import { Link, useParams, usePathname, useRouter } from "@/routing/navigation";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
 import { useOnboardingStore } from "@/store/onboardingStore";
 import Breadcrumb from "./Breadcrumb";
-import ContinuityToggle from "@/components/creator/ContinuityToggle";
 import ModelBadges from "@/components/creator/ModelBadges";
 import CreditsRing from "@/components/creator/CreditsRing";
 import ModelCreditsNotice from "@/components/creator/ModelCreditsNotice";
@@ -128,7 +127,6 @@ export default function TopNav() {
           </button>
         </Tooltip>
         <LanguageToggle className="icon-button shrink-0 text-[11px] font-semibold" />
-        <ContinuityToggle />
         <CreditsRing />
         <ModelCreditsNotice />
         <ModelBadges />

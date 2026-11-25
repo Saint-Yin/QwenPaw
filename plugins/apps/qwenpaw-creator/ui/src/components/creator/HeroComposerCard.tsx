@@ -62,6 +62,8 @@ export default function HeroComposerCard() {
     setResolution,
     aspectRatio,
     setAspectRatio,
+    videoContinuity,
+    setVideoContinuity,
     selectedTemplateId,
     setSelectedTemplateId,
     subtitlePolicy,
@@ -386,6 +388,26 @@ export default function HeroComposerCard() {
               popupMatchSelectWidth={false}
               variant="borderless"
               className="!h-8 !w-auto min-w-[84px] !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
+              classNames={pillSelectClassNames}
+            />
+            <Select
+              aria-label={t("home.continuity")}
+              size="small"
+              value={videoContinuity}
+              onChange={setVideoContinuity}
+              options={[
+                {
+                  value: "continuity",
+                  label: t("home.continuityModeContinuity"),
+                },
+                {
+                  value: "throughput",
+                  label: t("home.continuityModeThroughput"),
+                },
+              ]}
+              popupMatchSelectWidth={false}
+              variant="borderless"
+              className="!h-8 !w-auto min-w-[92px] !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
               classNames={pillSelectClassNames}
             />
             <SubtitleSettingsPicker

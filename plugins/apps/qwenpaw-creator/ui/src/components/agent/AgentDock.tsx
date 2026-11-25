@@ -99,6 +99,7 @@ import {
 } from "@/lib/agentLiveStatus";
 import AgentProgressOverview from "./AgentProgressOverview";
 import AgentWaitHint from "./AgentWaitHint";
+import ContinuityToggle from "@/components/creator/ContinuityToggle";
 import AgentActivityIndicator from "./AgentActivityIndicator";
 import DecisionTray from "./DecisionTray";
 import FeedbackModal from "@/components/creator/FeedbackModal";
@@ -3058,6 +3059,7 @@ export default function AgentDock({
                       uploadInputRef.current.value = "";
                   }}
                 />
+                <ContinuityToggle compact />
                 <Button
                   aria-label={t("agent.uploadAsset")}
                   title={t("agent.uploadAsset")}
