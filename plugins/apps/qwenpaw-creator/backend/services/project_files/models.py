@@ -164,6 +164,13 @@ class ProjectSettings(StrictModel):
     language: str = "zh-CN"
     target_duration_seconds: float | None = Field(default=None, ge=0)
     content_type: str | None = None
+    # Project-level continuity dial (the UI's "段间连贯优先" switch):
+    # "continuity" (default) lets the planner route same-scene
+    # continuations onto anchored/extended shapes and serializes only
+    # those segments; "throughput" pins every r2v segment to plain
+    # omni-reference and lets the whole track render in parallel.
+    # Unset falls back to the global CREATOR_VIDEO_CONTINUITY env dial.
+    video_continuity: Literal["continuity", "throughput"] | None = None
     # Captions are opt-in end to end: a Project without an explicit choice
     # never grows subtitle Overlays on its own.
     subtitle_policy: Literal["auto", "on", "off"] = "off"

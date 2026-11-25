@@ -148,16 +148,16 @@ def _variant_project() -> Project:
         },
         order=["char:hero"],
     )
-    project.timelines.items["timeline:main"].elements_by_id["element:hero"] = (
-        TimelineElement(
-            element_id="element:hero",
-            span=TimelineSpan(start_tick=0, duration_tick=1_000),
-            location=ElementLocation(),
-            creation=R2VCreation(
-                character_refs=["char:hero"],
-                visual_variant_refs={"char:hero": "variant:fallen"},
-            ),
-        )
+    project.timelines.items["timeline:main"].elements_by_id[
+        "element:hero"
+    ] = TimelineElement(
+        element_id="element:hero",
+        span=TimelineSpan(start_tick=0, duration_tick=1_000),
+        location=ElementLocation(),
+        creation=R2VCreation(
+            character_refs=["char:hero"],
+            visual_variant_refs={"char:hero": "variant:fallen"},
+        ),
     )
     return Project.model_validate(project.model_dump(mode="json"))
 
@@ -264,6 +264,8 @@ def test_legacy_document_etag_survives_in_memory_schema_migration():
     # Production-stage controls also did not exist in the persisted schema.
     del raw["settings"]["production_stage"]
     del raw["settings"]["script_approval_fingerprint"]
+    # Neither did the project-level segment-continuity switch.
+    del raw["settings"]["video_continuity"]
 
     migrated = load_project_document(raw)
 

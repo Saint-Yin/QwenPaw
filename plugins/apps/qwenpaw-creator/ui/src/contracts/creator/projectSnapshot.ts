@@ -25,6 +25,7 @@ export interface ProjectSettingsDocument extends ProjectJsonRecord {
   language: string;
   target_duration_seconds: number | null;
   content_type: string | null;
+  video_continuity?: "continuity" | "throughput";
   subtitle_policy?: "auto" | "on" | "off";
   subtitle_template?: string | null;
   subtitle_style?: SubtitleStyleDocument | null;

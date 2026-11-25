@@ -219,3 +219,18 @@ def test_mode_dial_legacy_alias(monkeypatch) -> None:
     assert video_continuity_mode() == CONTINUITY_MODE_AUTO
     monkeypatch.delenv("CREATOR_CONTINUITY_TAIL_CLIP", raising=False)
     assert video_continuity_mode() == CONTINUITY_MODE_AUTO
+
+
+def test_resolve_continuity_mode_project_dial_precedence(monkeypatch) -> None:
+    from models.video_task_plans import resolve_continuity_mode
+
+    monkeypatch.delenv("CREATOR_VIDEO_CONTINUITY", raising=False)
+    monkeypatch.delenv("CREATOR_CONTINUITY_TAIL_CLIP", raising=False)
+    assert resolve_continuity_mode("continuity") == CONTINUITY_MODE_AUTO
+    assert resolve_continuity_mode("throughput") == CONTINUITY_MODE_WEAK
+    # Unset project value falls back to the env dial.
+    assert resolve_continuity_mode(None) == CONTINUITY_MODE_AUTO
+    monkeypatch.setenv("CREATOR_VIDEO_CONTINUITY", "off")
+    assert resolve_continuity_mode(None) == CONTINUITY_MODE_OFF
+    # The explicit project switch beats the env even when they disagree.
+    assert resolve_continuity_mode("continuity") == CONTINUITY_MODE_AUTO

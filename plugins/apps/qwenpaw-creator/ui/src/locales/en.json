@@ -834,7 +834,7 @@
     "applySuccess": "Changes applied",
     "applySuccessRegenRequired": "Changes applied; related results marked for regeneration",
     "applySuccessPreviewUpdated": "Changes applied; live preview updated, final cut will recompose",
-    "applySuccessComposeWaiting": "Changes applied; live preview updated, and the final cut is out of date \u2014 press Final Cut to recompose it.",
+    "applySuccessComposeWaiting": "Changes applied; live preview updated, and the final cut is out of date — press Final Cut to recompose it.",
     "applyFailed": "Apply failed: {{detail}}",
     "unsavedChanges": "Unsaved changes",
     "unsavedChangesDesc": "Page drafts will be discarded when you leave. You can go back and click \"Apply Changes\" first.",
@@ -863,7 +863,11 @@
     "subtitleStyleApplied": "Subtitle style updated. Click 'Compose Final Cut' to refresh the video.",
     "subtitleStyleFailed": "Subtitle style update failed: {{detail}}",
     "subtitleStyleSkippedDesign": "{{count}} caption(s) get their look from their own motion design, so the pack motion does not apply there",
-    "subtitleStyleMotionUnowned": "This caption's look comes from its own motion design, which the style pack never rewrites; tune entrance / exit / loop in the motion design"
+    "subtitleStyleMotionUnowned": "This caption's look comes from its own motion design, which the style pack never rewrites; tune entrance / exit / loop in the motion design",
+    "continuityLabel": "Segment continuity",
+    "continuityTooltip": "On: same-scene segments render serially with anchored seams for smoother picture and music flow. Off: all segments render in parallel — faster, but transitions fall back to plain reference generation. Only affects segments not yet started.",
+    "continuityUpdated": "Segment continuity setting updated",
+    "continuityUpdateFailed": "Failed to update setting: {{detail}}"
   },
   "r2v": {
     "title": "Video Plan / {{element}} / Production Workbench",
@@ -1580,7 +1584,7 @@
     "selectRow": "Select entire row",
     "timingAppliedRegenRequired": "Timing adjustments applied; related generation results marked for regeneration",
     "timingAppliedRecomposing": "Timing adjustments applied; recomposing final cut",
-    "timingAppliedComposeWaiting": "Timing applied; the final cut is out of date \u2014 press Final Cut to recompose it.",
+    "timingAppliedComposeWaiting": "Timing applied; the final cut is out of date — press Final Cut to recompose it.",
     "timingApplied": "Timing adjustments applied",
     "applyTimingFailed": "Failed to apply timing adjustments: {{detail}}",
     "undoCancelled": "Timeline was updated by other changes, undo cancelled to avoid overwriting new content",

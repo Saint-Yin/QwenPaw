@@ -1380,7 +1380,41 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                         project,
                         f"element:{prev_element.element_id}:main",
                     )
-                    if ffmpeg_ready is not False:
+                    # Mixed parallelism: an r2v segment only serializes
+                    # behind its predecessor while the planner could
+                    # actually route it onto an anchored shape (same
+                    # scene, no explicit Transition, no cut-flavoured
+                    # continuity, no newly introduced elements). Scene
+                    # changes and authored cuts ship plain omni
+                    # reference — they never read the predecessor's
+                    # footage, so gating them was pure latency. The
+                    # project dial wins over the env fallback, and
+                    # ``throughput`` drops every such wait so the whole
+                    # track renders in parallel. I2V auto-framing keeps
+                    # its chain: the author picked a shape that always
+                    # consumes the predecessor.
+                    from models.video_task_plans import (
+                        CONTINUITY_MODE_WEAK,
+                        resolve_continuity_mode,
+                        r2v_may_consume_predecessor,
+                    )
+
+                    may_consume = creation_type != "r2v" or (
+                        resolve_continuity_mode(
+                            getattr(
+                                project.settings,
+                                "video_continuity",
+                                None,
+                            ),
+                        )
+                        != CONTINUITY_MODE_WEAK
+                        and r2v_may_consume_predecessor(
+                            timeline.elements_by_id,
+                            element,
+                            prev_element,
+                        )
+                    )
+                    if ffmpeg_ready is not False and may_consume:
                         prev_video_node_id = f"video:{prev_element.element_id}"
                         prev_video_dep = (prev_video_node_id,)
                         prev_video_slot = anchor_slot_observed

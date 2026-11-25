@@ -2162,3 +2162,112 @@ def test_anchor_chain_waits_for_stale_intermediate_before_initial_render(
     assert [node.node_id for node in graph.regeneration_nodes()] == [
         middle_ref,
     ]
+
+
+# ── mixed parallelism: only segments that may consume the predecessor ─────
+
+
+def _pair_project(
+    *,
+    second_scene="scene:a",
+    second_kwargs=None,
+    settings_value=None,
+):
+    first = _element("g1", scene_ref="scene:a")
+    second = _element(
+        "g2",
+        scene_ref=second_scene,
+        **(second_kwargs or {}),
+    )
+    first = first.model_copy(
+        update={"span": TimelineSpan(start_tick=0, duration_tick=4000)},
+    )
+    second = second.model_copy(
+        update={"span": TimelineSpan(start_tick=4000, duration_tick=4000)},
+    )
+    project = _project()
+    # Declared scenes: assigning settings revalidates the whole Project,
+    # and scene_ref must resolve against the visual library.
+    for scene_id in tuple(dict.fromkeys(("scene:a", second_scene))):
+        if scene_id is None:
+            continue
+        project.visual.entities.items[scene_id] = VisualEntity(
+            entity_id=scene_id,
+            kind="scene",
+            name=scene_id.removeprefix("scene:"),
+            required_variant_ids=[],
+        )
+        project.visual.entities.order.append(scene_id)
+    _add_element(project, first)
+    _add_element(project, second)
+    if settings_value is not None:
+        project.settings = project.settings.model_copy(
+            update={"video_continuity": settings_value},
+        )
+    return project
+
+
+def _video_deps(project) -> tuple:
+    return derive_work_graph(project, ffmpeg_ready=True).by_id["video:g2"].deps
+
+
+def test_same_scene_take_serializes_behind_predecessor() -> None:
+    project = _pair_project(
+        second_kwargs={"continuity": "承接上一段同一动作"},
+    )
+    assert "video:g1" in _video_deps(project)
+
+
+def test_scene_change_runs_in_parallel() -> None:
+    project = _pair_project(second_scene="scene:b")
+    assert "video:g1" not in _video_deps(project)
+
+
+def test_cut_flavoured_continuity_runs_in_parallel() -> None:
+    project = _pair_project(
+        second_kwargs={"continuity": "切到另一机位，时间跳转三年后"},
+    )
+    assert "video:g1" not in _video_deps(project)
+
+
+def test_new_elements_run_in_parallel() -> None:
+    project = _pair_project(
+        second_kwargs={"prop_refs": ["prop:umbrella"]},
+    )
+    assert "video:g1" not in _video_deps(project)
+
+
+def test_throughput_setting_parallelizes_same_scene() -> None:
+    project = _pair_project(
+        second_kwargs={"continuity": "承接上一段同一动作"},
+        settings_value="throughput",
+    )
+    assert "video:g1" not in _video_deps(project)
+
+
+def test_explicit_transition_parallelizes_same_scene() -> None:
+    from services.project_files.models import TransitionCreation
+
+    project = _pair_project(
+        second_kwargs={"continuity": "承接上一段同一动作"},
+    )
+    transition = TimelineElement(
+        element_id="g-tr",
+        label="g-tr",
+        span=TimelineSpan(start_tick=3800, duration_tick=400),
+        creation=TransitionCreation(
+            from_element_id="g1",
+            to_element_id="g2",
+            transition_kind="cut",
+        ),
+    )
+    _add_element(project, transition)
+    assert "video:g1" not in _video_deps(project)
+
+
+def test_continuity_setting_keeps_anchor_serialization() -> None:
+    project = _pair_project(
+        second_kwargs={"continuity": "承接上一段同一动作"},
+        settings_value="continuity",
+    )
+    assert "video:g1" in _video_deps(project)

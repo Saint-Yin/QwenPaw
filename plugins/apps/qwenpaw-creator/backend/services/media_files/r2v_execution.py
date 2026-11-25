@@ -62,10 +62,11 @@ from models.video_task_plans import (
     CONTINUITY_MODE_OFF,
     CONTINUITY_MODE_WEAK,
     ContinuityFacts,
+    continuity_signals,
     VideoTaskKind,
     VideoTaskPlan,
+    resolve_continuity_mode,
     select_video_task_kind,
-    video_continuity_mode,
 )
 from schemas.common import StrictModel
 from services.prompt_text import (
@@ -1541,69 +1542,20 @@ def _submission_input_fingerprint_legacy(
     )
 
 
-_CONTINUITY_CUT_KEYWORDS = (
-    "切到",
-    "切换到",
-    "另一机位",
-    "时间跳转",
-    "回忆",
-    "闪回",
-    "转场到",
-)
-_CONTINUITY_CONTINUE_KEYWORDS = (
-    "承接",
-    "继续",
-    "同一动作",
-    "延续",
-    "一镜",
-)
-_CONTINUITY_ONE_TAKE_KEYWORDS = ("一镜到底", "延续运镜")
-
-
 def _continuity_signals(
     timeline: Timeline,
     element: TimelineElement,
     prev: TimelineElement | None,
 ) -> tuple[str, str, bool]:
-    """Author-intent signals shared by the planner and the fingerprint.
+    """Project-data author-intent signals (shared with the work graph).
 
-    Returns ``(transition_kind, continuity_intent, one_take)`` read off
-    durable Project data only: an explicit Transition element wired
-    predecessor→this segment (normalized to "cut"/"blend", else
-    "none"), and the keyword class of ``creation.continuity``. Both
-    callers must derive the same values or a claim would drift from the
-    dispatched shape, so this stays pure — no filesystem, no provider.
+    Thin timeline-shaped wrapper over ``models.video_task_plans.
+    continuity_signals`` so the executor, the fingerprint and the
+    dependency graph can never drift apart on keyword tables or
+    Transition lookup rules.
     """
 
-    transition_kind = "none"
-    if prev is not None:
-        for item in timeline.elements_by_id.values():
-            creation = item.creation
-            if (
-                getattr(creation, "type", "") == "transition"
-                and creation.from_element_id == prev.element_id
-                and creation.to_element_id == element.element_id
-            ):
-                from services.media_files.transitions import (
-                    normalize_transition_kind,
-                )
-
-                transition_kind = (
-                    "cut"
-                    if normalize_transition_kind(creation.transition_kind)
-                    == "cut"
-                    else "blend"
-                )
-                break
-    text = str(getattr(element.creation, "continuity", "") or "")
-    one_take = any(k in text for k in _CONTINUITY_ONE_TAKE_KEYWORDS)
-    if any(k in text for k in _CONTINUITY_CUT_KEYWORDS):
-        intent = "cut"
-    elif any(k in text for k in _CONTINUITY_CONTINUE_KEYWORDS):
-        intent = "continue"
-    else:
-        intent = "neutral"
-    return transition_kind, intent, one_take
+    return continuity_signals(timeline.elements_by_id, element, prev)
 
 
 def _r2v_strong_continuity(
@@ -1622,7 +1574,9 @@ def _r2v_strong_continuity(
     strong payloads across the upgrade window.
     """
 
-    if video_continuity_mode() in (CONTINUITY_MODE_OFF, CONTINUITY_MODE_WEAK):
+    if resolve_continuity_mode(
+        getattr(project.settings, "video_continuity", None),
+    ) in (CONTINUITY_MODE_OFF, CONTINUITY_MODE_WEAK):
         return False
     prev = find_predecessor_video_element(timeline, element)
     if prev is None or not resolve_predecessor_video_version(project, prev):
@@ -1950,7 +1904,9 @@ def _build_task_plan(
     return select_video_task_kind(
         base_mode,
         facts,
-        mode=video_continuity_mode(),
+        mode=resolve_continuity_mode(
+            getattr(project.settings, "video_continuity", None),
+        ),
         project_ratio=ratio,
     )
 
@@ -2406,8 +2362,9 @@ def _resolve_request(
             # 0.786 ("图1 为本段起始状态，第一帧对齐图1，随后：…"), not a
             # trailing afterthought competing with the role block.
             prompt = (
-                "开场第一帧严格对齐图1（上一片段末帧），保持人物位置、"
-                "光线与环境声一致，随后按本段剧本节奏自然展开。\n" + prompt
+                "开场第一帧严格对齐图1（上一片段末帧），全段布景陈设、"
+                "招牌位置、道具数量与光线氛围须与图1及场景参考图保持一致，"
+                "随后按本段剧本节奏自然展开。\n" + prompt
             )
         bgm_reference_url = _resolve_bgm_reference(
             project,
