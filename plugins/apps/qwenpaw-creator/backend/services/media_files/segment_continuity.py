@@ -28,6 +28,7 @@ from collections.abc import Callable
 from collections import OrderedDict
 from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -599,19 +600,7 @@ def _prune_continuity_dirs(
         return 0
 
 
-def _frozen_continuity_digests(task: Any) -> set[str]:
-    """Digest dirs a Task froze into its payload as continuity anchors.
-
-    Reads the frozen request snapshot's synthetic ``continuity:*:<prev>``
-    ids (r2v ``referenceVersionIds`` and i2v ``firstFrameVersionId``) and
-    maps each predecessor version back to its digest directory, so a sweep
-    can protect anchors a not-yet-submitted render still points at.
-    """
-
-    metadata = getattr(task, "metadata", None) or {}
-    snapshot = metadata.get("requestSnapshot")
-    if not isinstance(snapshot, dict):
-        return set()
+def _digests_from_snapshot(snapshot: Any) -> set[str]:
     ids: list[str] = []
     refs = snapshot.get("referenceVersionIds")
     if isinstance(refs, (list, tuple)):
@@ -629,6 +618,56 @@ def _frozen_continuity_digests(task: Any) -> set[str]:
     return digests
 
 
+def _ledger_continuity_digests(project_root: Path) -> set[str] | None:
+    """Digests referenced by ANY task in this Project's frozen ledger.
+
+    Policy (2026-11-25): an anchor a render actually shipped with is the
+    evidence of what was sent — the wire-preview view shows it — so it is
+    kept as long as the task exists, terminal or not. Only digests no
+    task references are reclaimable. Returns ``None`` when a task file
+    exists but cannot be read: callers then stay hands-off, because an
+    unreadable ledger cannot prove anything is safe to delete. A missing
+    tasks root means no task has ever frozen an anchor: empty set.
+    """
+
+    tasks_root = project_root / "runtime" / "tasks"
+    digests: set[str] = set()
+    try:
+        if not tasks_root.is_dir():
+            return set()
+        for entry in os.scandir(tasks_root):
+            task_file = Path(entry.path) / "task.json"
+            try:
+                with task_file.open(encoding="utf-8") as handle:
+                    raw = json.load(handle)
+            except (OSError, ValueError):
+                if not task_file.exists():
+                    continue  # scratch dirs without a ledger entry
+                return None
+            snapshot = (raw.get("metadata") or {}).get("requestSnapshot")
+            if isinstance(snapshot, dict):
+                digests |= _digests_from_snapshot(snapshot)
+    except OSError:
+        return None
+    return digests
+
+
+def _frozen_continuity_digests(task: Any) -> set[str]:
+    """Digest dirs a Task froze into its payload as continuity anchors.
+
+    Reads the frozen request snapshot's synthetic ``continuity:*:<prev>``
+    ids (r2v ``referenceVersionIds`` and i2v ``firstFrameVersionId``) and
+    maps each predecessor version back to its digest directory, so a sweep
+    can protect anchors a not-yet-submitted render still points at.
+    """
+
+    metadata = getattr(task, "metadata", None) or {}
+    snapshot = metadata.get("requestSnapshot")
+    if not isinstance(snapshot, dict):
+        return set()
+    return _digests_from_snapshot(snapshot)
+
+
 def sweep_orphaned_continuity(services: Any, *, budget: Any = None) -> int:
     """Maintenance GC for continuity extracts left by idle Projects.
 
@@ -640,18 +679,17 @@ def sweep_orphaned_continuity(services: Any, *, budget: Any = None) -> int:
 
     The in-memory cache is cold at startup, so it cannot protect the
     anchors a QUEUED / ADMITTED render froze into its payload; this pass
-    therefore keeps every digest referenced by work that is not
-    releasably terminal — the same ``is_releasable_terminal_task``
-    convention the scratch sweeper uses, which also preserves a
-    QUARANTINED task's anchors as audit evidence — before pruning, so a
-    restart never turns queued work into a failed submit. Surviving
+    therefore keeps every digest referenced by ANY task's frozen
+    request — an anchor a render shipped with is evidence of what was
+    actually sent (the wire-preview view reads it), terminal or not —
+    before pruning, so a restart never turns queued work into a failed
+    submit and used anchors outlive their task. Surviving
     digests are registered in the in-flight table so later event-driven
     prunes keep protecting them. Reuses ``_prune_continuity_dirs``
     (grace window + emergency switch + never raises). Returns the number
     of directories collected.
     """
 
-    from services.media_files.task_scratch import is_releasable_terminal_task
     from services.runtime_files.execution_store import ProjectExecutionStore
 
     total = 0
@@ -681,11 +719,10 @@ def sweep_orphaned_continuity(services: Any, *, budget: Any = None) -> int:
         keep: set[str] = set()
         try:
             for task in executions.list_tasks(project_id):
-                # Releasably terminal (and NOT quarantined) means the
-                # render is done with its anchors; anything else —
-                # queued, running, or quarantined evidence — keeps them.
-                if is_releasable_terminal_task(task):
-                    continue
+                # Any task that froze an anchor shipped it: the digest is
+                # evidence of what was actually sent (the wire view
+                # reads it), so terminal state no longer releases it.
+                # Only digests no task references are collected.
                 keep |= _frozen_continuity_digests(task)
         except Exception:  # noqa: BLE001 - unreadable tasks must not gate GC
             logger.warning(
@@ -838,9 +875,17 @@ def extract_continuity_artifacts(
             with _continuity_locks_guard:
                 for evicted in evicted_keys:
                     _continuity_extract_locks.pop(evicted, None)
-        pruned = _prune_continuity_dirs(
-            project_root,
-            current_digest=_digest_for(prev_version),
+        # Used anchors are ledger-protected; only digests no task
+        # references may go. An unreadable ledger means no prune at all.
+        ledger = _ledger_continuity_digests(project_root)
+        pruned = (
+            0
+            if ledger is None
+            else _prune_continuity_dirs(
+                project_root,
+                current_digest=_digest_for(prev_version),
+                extra_keep=ledger,
+            )
         )
         if pruned:
             from services.observability import trace_event

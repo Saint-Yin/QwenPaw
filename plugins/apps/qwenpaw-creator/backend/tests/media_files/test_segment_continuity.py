@@ -1466,8 +1466,10 @@ def test_sweep_orphaned_continuity_protects_inflight_task(
     tmp_path,
     monkeypatch,
 ) -> None:
-    """Minor-1 (end to end): a cold-cache startup sweep keeps the anchor
-    a QUEUED task froze and reclaims a SUCCEEDED task's anchor."""
+    """Policy (2026-11-25): a cold-cache startup sweep keeps EVERY
+    digest any task froze — queued, quarantined AND succeeded. Used
+    anchors are evidence of what was actually sent (the wire-preview
+    view reads them); only unreferenced digests are reclaimable."""
 
     import os
     import time
@@ -1549,10 +1551,10 @@ def test_sweep_orphaned_continuity_protects_inflight_task(
         ),
     )
     removed = sc.sweep_orphaned_continuity(services)
-    assert removed == 1
+    assert removed == 0
     assert inflight_dir.exists()
     assert quarantined_dir.exists()
-    assert not done_dir.exists()
+    assert done_dir.exists()
     # Survivors are registered, so later event-driven prunes keep them.
     assert sc._digest_for(inflight_prev) in sc._continuity_inflight
     assert sc._digest_for(quarantined_prev) in sc._continuity_inflight
@@ -2511,3 +2513,55 @@ def test_bgm_reference_skips_for_models_without_standalone_audio(
         )
         == ""
     )
+
+
+def test_ledger_continuity_digests_reads_frozen_task_snapshots(
+    tmp_path,
+) -> None:
+    """A SUCCEEDED task's anchor is ledger evidence: the extract-side
+    prune must keep it, and only unreferenced digests may go."""
+
+    import hashlib as _hl
+    import json as _json
+    import os as _os
+    import time as _time
+
+    from services.media_files import segment_continuity as sc
+
+    prev = "artifact-version-prev"
+    used = _hl.sha256(prev.encode()).hexdigest()[:16]
+    unused = "u" * 16
+    tasks_root = tmp_path / "runtime" / "tasks" / "task-1"
+    tasks_root.mkdir(parents=True)
+    (tasks_root / "task.json").write_text(
+        _json.dumps(
+            {
+                "metadata": {
+                    "requestSnapshot": {
+                        "referenceVersionIds": [
+                            f"continuity:last_frame:{prev}",
+                            "artifact-version-storyboard",
+                        ],
+                    },
+                },
+            },
+        ),
+        encoding="utf-8",
+    )
+    assert sc._ledger_continuity_digests(tmp_path) == {used}
+
+    root = tmp_path / "runtime" / "continuity"
+    for digest in (used, unused):
+        directory = root / digest
+        directory.mkdir(parents=True)
+        (directory / "last_frame.png").write_bytes(b"x")
+        old = _time.time() - sc._PRUNE_GRACE_SECONDS - 60
+        _os.utime(directory, (old, old))
+    removed = sc._prune_continuity_dirs(
+        tmp_path,
+        current_digest="other",
+        extra_keep=sc._ledger_continuity_digests(tmp_path),
+    )
+    assert removed == 1
+    assert (root / used / "last_frame.png").exists()
+    assert not (root / unused).exists()
