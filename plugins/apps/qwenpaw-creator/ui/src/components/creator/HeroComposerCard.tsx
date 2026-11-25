@@ -303,7 +303,7 @@ export default function HeroComposerCard() {
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-4">
+      <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-2 px-5 py-4">
         <div
           role="radiogroup"
           aria-label={t("home.projectScenario")}
@@ -370,7 +370,7 @@ export default function HeroComposerCard() {
               ]}
               popupMatchSelectWidth={false}
               variant="borderless"
-              className="!h-8 !w-auto min-w-[84px] shrink-0 !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
+              className="!h-8 !w-auto min-w-[56px] shrink-0 !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
               classNames={pillSelectClassNames}
             />
             <Select
@@ -387,7 +387,7 @@ export default function HeroComposerCard() {
               ]}
               popupMatchSelectWidth={false}
               variant="borderless"
-              className="!h-8 !w-auto min-w-[84px] shrink-0 !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
+              className="!h-8 !w-auto min-w-[56px] shrink-0 !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
               classNames={pillSelectClassNames}
             />
             <Select
@@ -407,7 +407,7 @@ export default function HeroComposerCard() {
               ]}
               popupMatchSelectWidth={false}
               variant="borderless"
-              className="!h-8 !w-auto min-w-[92px] shrink-0 !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
+              className="!h-8 !w-auto min-w-[64px] shrink-0 !rounded-full !bg-[rgba(43,27,0,0.04)] dark:!bg-white/5"
               classNames={pillSelectClassNames}
             />
             <SubtitleSettingsPicker
@@ -429,10 +429,10 @@ export default function HeroComposerCard() {
             type="button"
             data-onboarding-id="model-config"
             onClick={() => setModelConfigModalOpen(true)}
-            className="flex shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-full bg-[rgba(43,27,0,0.04)] px-4 py-1 text-sm font-medium leading-6 text-[#656563] transition-colors hover:bg-[rgba(43,27,0,0.08)] hover:text-[var(--color-text-primary)] dark:bg-white/5 dark:text-[var(--color-text-secondary)] dark:hover:bg-white/10"
+            className="flex shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-full bg-[rgba(43,27,0,0.04)] px-2.5 py-1 text-sm font-medium leading-6 text-[#656563] transition-colors hover:bg-[rgba(43,27,0,0.08)] hover:text-[var(--color-text-primary)] dark:bg-white/5 dark:text-[var(--color-text-secondary)] dark:hover:bg-white/10"
           >
             <img src={modelConfigIcon} alt="" width={20} height={20} />
-            {t("home.modelConfig")}
+            {t("home.modelConfigShort")}
           </button>
           <Tooltip title={canLaunch ? undefined : launchHint()}>
             <button
