@@ -27,6 +27,7 @@ import {
 import type {
   ProjectDocument,
   R2VReferenceOrderResponse,
+  WirePreviewResponse,
   SubtitleAnimationPolicy,
   SubtitleStyleUpdateRequest,
   TaskView,
@@ -37,6 +38,8 @@ import {
   getArtifactVersionMediaUrl,
   getAssetVersionMediaUrl,
   getR2VReferenceOrder,
+  getWireAnchorImageUrl,
+  getWirePreview,
 } from "@/api/creator";
 import { regenerateNarration } from "@/api/creator/voice";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
@@ -432,6 +435,9 @@ export default function ElementDetail({
   // r2v 总览引用缩略的权威 [Image N] 序号；失败/非 r2v 时回退客户端聚合。
   const [referenceOrder, setReferenceOrder] =
     useState<R2VReferenceOrderResponse | null>(null);
+  const [wirePreview, setWirePreview] = useState<WirePreviewResponse | null>(
+    null,
+  );
   const overviewElementId = element?.element_id ?? null;
   const overviewIsR2v = element?.creation.type === "r2v";
   useEffect(() => {
@@ -452,6 +458,28 @@ export default function ElementDetail({
       })
       .catch(() => {
         if (!cancelled) setReferenceOrder(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project.project_id, overviewElementId, overviewIsR2v]);
+  // The overview renders the AUTHORED prompt; a strong-continuity
+  // dispatch rewrites it at submit time (promoted anchor, storyboard
+  // swap). The frozen task snapshot holds the truth, so the "实际发送
+  // 内容" section reads that instead of the Project.
+  useEffect(() => {
+    if (!overviewElementId || !overviewIsR2v) {
+      setWirePreview(null);
+      return;
+    }
+    let cancelled = false;
+    setWirePreview(null);
+    getWirePreview(project.project_id, overviewElementId)
+      .then((result) => {
+        if (!cancelled) setWirePreview(result?.found ? result : null);
+      })
+      .catch(() => {
+        if (!cancelled) setWirePreview(null);
       });
     return () => {
       cancelled = true;
@@ -792,7 +820,7 @@ export default function ElementDetail({
                   </p>
                 )
               )}
-              {lead?.continuity && (
+              {creation.type !== "r2v" && lead?.continuity && (
                 <p
                   title={presentPromptEntityNames(lead.continuity, project)}
                   className="truncate text-xs leading-[1.7] text-[var(--color-text-tertiary)]"
@@ -934,6 +962,72 @@ export default function ElementDetail({
               </Image.PreviewGroup>
             </div>
           </div>
+        )}
+        {creation.type === "r2v" && wirePreview?.found && (
+          <details data-element-wire-preview className="space-y-1.5">
+            <summary className="cursor-pointer text-sm text-[var(--color-text-primary)]">
+              {t("elementDetail.wirePreview")}
+            </summary>
+            <div className="space-y-2 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-secondary)]/50 p-3">
+              <div className="text-xs text-[var(--color-text-secondary)]">
+                {t(`elementDetail.wireMode.${wirePreview.mode || "r2v"}`)}
+                {wirePreview.anchorVersionId
+                  ? ` · ${t("elementDetail.wireAnchorNote")}`
+                  : ""}
+                {" · "}
+                {wirePreview.bgmReferenceUrl
+                  ? t("elementDetail.wireBgmOn")
+                  : t("elementDetail.wireBgmOff")}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Image.PreviewGroup>
+                  {(wirePreview.referenceVersionIds || []).map((id, idx) => {
+                    const isAnchor = id.startsWith("continuity:last_frame:");
+                    const url = isAnchor
+                      ? getWireAnchorImageUrl(
+                          project.project_id,
+                          element.element_id,
+                          id.slice("continuity:last_frame:".length),
+                        )
+                      : referenceThumbUrl(project, id);
+                    return (
+                      <span
+                        key={id}
+                        className="relative inline-block"
+                        title={
+                          isAnchor ? t("elementDetail.wireAnchorNote") : id
+                        }
+                      >
+                        {url ? (
+                          <Image
+                            src={url}
+                            alt={id}
+                            width={54}
+                            height={40}
+                            style={{
+                              objectFit: "cover",
+                              borderRadius: 10,
+                              border: "1px solid var(--color-border)",
+                            }}
+                          />
+                        ) : (
+                          <span className="flex h-10 w-[54px] items-center justify-center rounded-[10px] border border-dashed border-[var(--color-border)] px-1 text-center text-[9px] leading-tight text-[var(--color-text-tertiary)]">
+                            {t("elementDetail.wireAnchorPruned")}
+                          </span>
+                        )}
+                        <i className="absolute left-1 top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-[5px] bg-black/55 px-0.5 font-mono text-[8px] font-bold not-italic text-white">
+                          {idx + 1}
+                        </i>
+                      </span>
+                    );
+                  })}
+                </Image.PreviewGroup>
+              </div>
+              <div className="max-h-[160px] overflow-y-auto whitespace-pre-wrap rounded-[10px] bg-[var(--color-bg-primary)] p-2 text-xs leading-[1.6] text-[var(--color-text-primary)]">
+                {presentPromptEntityNames(wirePreview.prompt || "", project)}
+              </div>
+            </div>
+          </details>
         )}
         {(creation.type === "t2v" || creation.type === "i2v") &&
           creation.video_prompt && (

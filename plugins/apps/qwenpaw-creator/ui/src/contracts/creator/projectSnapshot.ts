@@ -631,3 +631,16 @@ export interface ProjectPatchResponse {
     renderBlockedByGeneration: boolean;
   };
 }
+/** Frozen wire request of one Element's latest video task (read-only). */
+export interface WirePreviewResponse {
+  found: boolean;
+  taskId?: string;
+  createdAt?: string;
+  status?: string;
+  mode?: string;
+  continuityShape?: string;
+  prompt?: string;
+  referenceVersionIds?: string[];
+  anchorVersionId?: string;
+  bgmReferenceUrl?: string;
+}
