@@ -1004,6 +1004,7 @@ export default function ElementDetail({
                             alt={id}
                             width={54}
                             height={40}
+                            fallback="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='54' height='40'><rect width='54' height='40' rx='10' fill='%23eee'/><text x='27' y='24' font-size='9' text-anchor='middle' fill='%23999'>已回收</text></svg>"
                             style={{
                               objectFit: "cover",
                               borderRadius: 10,
