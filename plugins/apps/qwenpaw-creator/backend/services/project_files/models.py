@@ -888,6 +888,12 @@ class R2VCreation(StrictModel):
     # frame.
     cast_lineup_refs: list[EntityId] = Field(default_factory=list)
     recipe: GenerationRecipe | None = None
+    # Manual override of the automatic storyboard tier (2026-11-25):
+    # anchored segments normally skip the storyboard when simple and ship
+    # it with the anchor when complex; forcing this flag pins the segment
+    # to the anchored+storyboard shape even when the complexity triage
+    # says the anchor alone is enough.
+    force_storyboard: bool = False
     storyboard_prompt: str = ""
     storyboard_reference_version_ids: list[EntityId] = Field(
         default_factory=list,

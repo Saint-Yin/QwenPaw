@@ -55,3 +55,62 @@ describe("ElementDetail advanced time/layer editors", () => {
     expect(advanced!.textContent).toContain("时间与层");
   });
 });
+/**
+ * Storyboard tiers (2026-11-25): an anchored simple continuation shows
+ * the "no storyboard" copy plus the manual override instead of the
+ * storyboard preview box.
+ */
+describe("ElementDetail storyboard tiers", () => {
+  it("shows the none-tier note and the force-storyboard override", () => {
+    const project = structuredClone(projectDocument) as ProjectDocument;
+    const timeline = project.timelines.items[
+      "timeline:main"
+    ] as TimelineDocument;
+    const first = timeline.elements_by_id[
+      "r2v-window"
+    ] as TimelineElementDocument;
+    (first.creation as Record<string, unknown>).video_prompt = "男孩站着。";
+    (first.creation as Record<string, unknown>).narrative = "男孩站着。";
+    const second = structuredClone(first) as TimelineElementDocument;
+    second.element_id = "r2v-next";
+    second.span = {
+      ...second.span,
+      start_tick: first.span.start_tick + first.span.duration_tick,
+      duration_tick: 5000,
+    };
+    (second.creation as Record<string, unknown>).video_prompt =
+      "男孩抬头看手机。";
+    (second.creation as Record<string, unknown>).continuity = "承接上一段";
+    (second.creation as Record<string, unknown>).storyboard_prompt = "";
+    timeline.elements_by_id["r2v-next"] = second;
+
+    const onChange = vi.fn();
+    const utils = render(
+      <ElementDetail
+        project={project}
+        timeline={timeline}
+        element={second}
+        tasks={[]}
+        applying={false}
+        dirtyCount={0}
+        conflictPaths={[]}
+        onClose={vi.fn()}
+        onChange={onChange}
+        onApply={vi.fn()}
+        onDiscard={vi.fn()}
+        onAcceptConflicts={vi.fn()}
+        onOpenWorkbench={vi.fn()}
+      />,
+    );
+    const box = utils.container.querySelector(
+      "[data-element-overview-storyboard]",
+    );
+    expect(box?.textContent).toContain("无需分镜");
+    const button = Array.from(box?.querySelectorAll("button") ?? []).find(
+      (item) => item.textContent?.includes("仍生成分镜"),
+    );
+    expect(button).toBeTruthy();
+    fireEvent.click(button as HTMLButtonElement);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+});

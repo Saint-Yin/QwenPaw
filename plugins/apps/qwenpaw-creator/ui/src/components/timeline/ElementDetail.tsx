@@ -53,6 +53,7 @@ import {
 import { presentPromptEntityNames } from "@/lib/promptEntityNames";
 import { projectJsonPointer } from "@/lib/projectJsonPointer";
 import { storyboardOfOwner } from "@/components/workbench/referenceThumbs";
+import { storyboardTierForElement } from "@/lib/storyboardTier";
 import InlineReviewDiff from "@/components/agent/InlineReviewDiff";
 import PreviewImage from "@/components/assets/PreviewImage";
 import SubtitleStyleSection, {
@@ -425,6 +426,13 @@ export default function ElementDetail({
       setNarrationBusy(false);
     }
   };
+  const storyboardTier = useMemo(
+    () =>
+      element && element.creation.type === "r2v"
+        ? storyboardTierForElement(project, element.element_id)
+        : "plain",
+    [element, project],
+  );
   const storyboardVersionId = useMemo(
     () =>
       element && element.creation.type === "r2v"
@@ -872,30 +880,53 @@ export default function ElementDetail({
                 {t("elementDetail.storyboardLabel")}
               </span>
             </div>
-            <div className="flex items-center gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]/50 p-1.5">
-              <span className="h-[42px] w-[71px] shrink-0 overflow-hidden rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
-                {storyboardVersionId && (
-                  <PreviewImage
-                    src={getArtifactVersionMediaUrl(storyboardVersionId)}
-                    alt={t("elementDetail.storyboardLabel")}
-                    loading="lazy"
-                    className="h-full w-full object-cover"
-                  />
-                )}
-              </span>
-              <span className="min-w-0 leading-tight">
-                <span className="block truncate text-xs text-[var(--color-text-primary)]">
-                  {storyboardVersionId
-                    ? t("elementDetail.storyboardReady")
-                    : t("elementDetail.storyboardPending")}
+            {storyboardTier === "none" && !storyboardVersionId ? (
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-bg-secondary)]/50 px-3 py-2">
+                <span className="min-w-0 text-xs leading-relaxed text-[var(--color-text-secondary)]">
+                  {t("elementDetail.storyboardTierNone")}
                 </span>
-                <span className="block text-xs leading-relaxed text-[var(--color-text-tertiary)]">
-                  {t("elementDetail.storyboardHint", {
-                    action: t("elementDetail.enterWorkbench"),
-                  })}
+                <Button
+                  size="small"
+                  className="!shrink-0"
+                  disabled={applying}
+                  onClick={() =>
+                    onChange((draft) => {
+                      if (draft.creation.type === "r2v")
+                        draft.creation.force_storyboard = true;
+                    })
+                  }
+                >
+                  {t("elementDetail.forceStoryboard")}
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]/50 p-1.5">
+                <span className="h-[42px] w-[71px] shrink-0 overflow-hidden rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
+                  {storyboardVersionId && (
+                    <PreviewImage
+                      src={getArtifactVersionMediaUrl(storyboardVersionId)}
+                      alt={t("elementDetail.storyboardLabel")}
+                      loading="lazy"
+                      className="h-full w-full object-cover"
+                    />
+                  )}
                 </span>
-              </span>
-            </div>
+                <span className="min-w-0 leading-tight">
+                  <span className="block truncate text-xs text-[var(--color-text-primary)]">
+                    {storyboardVersionId
+                      ? t("elementDetail.storyboardReady")
+                      : t("elementDetail.storyboardPending")}
+                  </span>
+                  <span className="block text-xs leading-relaxed text-[var(--color-text-tertiary)]">
+                    {storyboardTier === "combined"
+                      ? t("elementDetail.storyboardTierCombined")
+                      : t("elementDetail.storyboardHint", {
+                          action: t("elementDetail.enterWorkbench"),
+                        })}
+                  </span>
+                </span>
+              </div>
+            )}
           </div>
         )}
 

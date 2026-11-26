@@ -2271,3 +2271,116 @@ def test_continuity_setting_keeps_anchor_serialization() -> None:
         settings_value="continuity",
     )
     assert "video:g1" in _video_deps(project)
+
+
+def _storyboard_tier(project, element_id: str) -> str:
+    from models.video_task_plans import r2v_continuity_storyboard_need
+
+    timeline = project.timelines.items["timeline:main"]
+    return r2v_continuity_storyboard_need(
+        project,
+        timeline,
+        timeline.elements_by_id[element_id],
+    )
+
+
+def test_storyboard_tier_matrix() -> None:
+    """Three tiers off one pure function: plain / none / combined."""
+
+    simple = _pair_project(second_kwargs={"continuity": "承接上一段"})
+    assert _storyboard_tier(simple, "g1") == "plain"
+    assert _storyboard_tier(simple, "g2") == "none"
+
+    long = _pair_project(second_kwargs={"continuity": "承接上一段"})
+    timeline = long.timelines.items["timeline:main"]
+    timeline.elements_by_id["g2"] = timeline.elements_by_id["g2"].model_copy(
+        update={
+            "span": TimelineSpan(start_tick=4000, duration_tick=12000),
+        },
+    )
+    assert _storyboard_tier(long, "g2") == "combined"
+
+    camera = _pair_project(
+        second_kwargs={
+            "continuity": "承接上一段",
+            "video_prompt": "镜头缓推向站台，男孩抬头。",
+        },
+    )
+    assert _storyboard_tier(camera, "g2") == "combined"
+
+    assert (
+        _storyboard_tier(_pair_project(second_scene="scene:b"), "g2")
+        == "plain"
+    )
+    assert (
+        _storyboard_tier(
+            _pair_project(
+                second_kwargs={"continuity": "承接上一段"},
+                settings_value="throughput",
+            ),
+            "g2",
+        )
+        == "plain"
+    )
+    forced = _pair_project(
+        second_kwargs={"continuity": "承接上一段", "force_storyboard": True},
+    )
+    assert _storyboard_tier(forced, "g2") == "combined"
+
+
+def test_none_tier_segment_has_no_storyboard_node() -> None:
+    project = _pair_project(second_kwargs={"continuity": "承接上一段"})
+    graph = derive_work_graph(project, ffmpeg_ready=True)
+    assert "storyboard:g2" not in graph.by_id
+    assert "storyboard:g2" not in graph.by_id["video:g2"].deps
+    # The first segment keeps its own storyboard node.
+    assert "storyboard:g1" in graph.by_id
+
+
+def test_none_tier_is_sticky_once_a_storyboard_exists() -> None:
+    """Legacy renders and manual overrides keep their node and artifact."""
+
+    project = _pair_project(second_kwargs={"continuity": "承接上一段"})
+    _select_slot(
+        project,
+        slot_id="element:g2:storyboard",
+        kind="r2v_storyboard_image",
+        owner_ref="element:g2",
+        version_id="art:sb2",
+    )
+    graph = derive_work_graph(project, ffmpeg_ready=True)
+    assert "storyboard:g2" in graph.by_id
+    assert "storyboard:g2" in graph.by_id["video:g2"].deps
+
+
+def test_none_tier_published_video_without_storyboard_is_not_stale() -> None:
+    """Publish-gate regression (the third loop class): an anchored
+    simple segment ships with NO storyboard at all. The recorded
+    provenance (anchor + whatever visual inputs exist) must satisfy the
+    video node's staleness gate — if the gate still demanded a
+    storyboard selection, auto_approve would re-bill the render forever
+    (the V1..V24 / s5 loop shape)."""
+
+    project = _pair_project(second_kwargs={"continuity": "承接上一段"})
+    graph = derive_work_graph(project, ffmpeg_ready=True)
+    assert "storyboard:g2" not in graph.by_id
+
+    # Predecessor video lands, then g2 publishes from the anchor alone.
+    _select_slot(
+        project,
+        slot_id="element:g1:main",
+        kind="element_video",
+        owner_ref="element:g1",
+        version_id="art:v1",
+    )
+    _select_slot(
+        project,
+        slot_id="element:g2:main",
+        kind="element_video",
+        owner_ref="element:g2",
+        version_id="art:v2",
+        provenance=["artifact-version:art:v1"],
+    )
+    graph = derive_work_graph(project, ffmpeg_ready=True)
+    assert graph.by_id["video:g2"].status is not WorkNodeStatus.STALE
+    assert graph.by_id["video:g2"].status is WorkNodeStatus.DONE

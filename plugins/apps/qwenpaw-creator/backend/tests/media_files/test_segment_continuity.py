@@ -2565,3 +2565,227 @@ def test_ledger_continuity_digests_reads_frozen_task_snapshots(
     assert removed == 1
     assert (root / used / "last_frame.png").exists()
     assert not (root / unused).exists()
+
+
+def _patch_resolve_env(monkeypatch, rx, anchor) -> None:
+    """Shared harness for _resolve_request tier tests."""
+
+    from models import config as model_config
+
+    import services.project_files.production_stage as ps
+    import services.project_files.prompt_sync as psm
+
+    from models.video_task_plans import VideoTaskKind, VideoTaskPlan
+
+    monkeypatch.setattr(
+        ps,
+        "assert_media_production_allowed",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(psm, "assert_r2v_prompt_sync", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        rx,
+        "_build_task_plan",
+        lambda *_a, **_k: VideoTaskPlan(
+            kind=VideoTaskKind.R2V,
+            submit_duration_seconds=4,
+            strong_continuity=True,
+        ),
+    )
+    monkeypatch.setattr(
+        rx,
+        "_i2v_auto_first_frame_entry",
+        lambda **_kw: anchor,
+    )
+    monkeypatch.setattr(
+        rx,
+        "_assert_r2v_reference_budget",
+        lambda *_a, **_k: None,
+    )
+
+    def fake_versions(**kw):
+        ids = list(kw["version_ids"])
+        return (
+            [f"url::{item}" for item in ids],
+            [f"sum::{item}" for item in ids],
+            [f"ref::{item}" for item in ids],
+            [{"ref": f"ref::{item}"} for item in ids],
+        )
+
+    monkeypatch.setattr(rx, "_resolve_reference_versions", fake_versions)
+    monkeypatch.setattr(
+        rx,
+        "_resolve_reference_voices",
+        lambda **_kw: ([], []),
+    )
+    monkeypatch.setattr(rx, "_resolve_bgm_reference", lambda *_a, **_k: "")
+    monkeypatch.setattr(
+        model_config,
+        "get_video_model_name",
+        lambda: "wan3.0-video",
+    )
+    monkeypatch.setattr(model_config, "get_video_backend", lambda: "wan")
+
+
+def _anchor_entry() -> object:
+    from services.media_files.segment_continuity import ContinuityEntry
+
+    return ContinuityEntry(
+        kind="last_frame",
+        reference_id="continuity:last_frame:prev-v",
+        url="file:///anchor.png",
+        checksum="sha256:aaa",
+        path=Path("/anchor.png"),
+        role_label="上一片段末帧（本段起始画面）",
+        provenance_ref="artifact-version:prev-v",
+        media_type="image/png",
+    )
+
+
+def test_resolve_request_none_tier_ships_without_storyboard(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Simple anchored segments carry no storyboard at all: the classic
+    "storyboard must be selected" requirement is lifted for the none
+    tier, the authored 末帧 sentence is rewritten to the canonical
+    anchor clause, and nothing storyboard-shaped enters provenance."""
+
+    from services.media_files import r2v_execution as rx
+    from services.project_files.store import ProjectSnapshot
+
+    project, _tl, _first, second = _two_segment_project("prev-v")
+    second.creation = second.creation.model_copy(
+        update={
+            "video_prompt": ("[Image 1] 为上一片段末帧（本段起始状态），开场对齐该图；" "男孩抬头望向雨幕。"),
+            "video_reference_version_ids": [],
+        },
+    )
+    _patch_resolve_env(monkeypatch, rx, _anchor_entry())
+
+    resolved = rx._resolve_request(
+        snapshot=ProjectSnapshot(project=project, etag="e1", generation=1),
+        project_root=tmp_path,
+        target_ref="element:e2",
+        arguments={"prompt": None},
+    )
+    assert resolved.reference_version_ids[0] == (
+        "continuity:last_frame:prev-v"
+    )
+    assert resolved.prompt.startswith("开场第一帧严格对齐图1")
+    # Marker rendering turns [Image 1] into 图1 before submit.
+    assert "图1 为上一片段末帧（本段起始画面），第一帧严格对齐该图；" in (resolved.prompt)
+    assert "男孩抬头望向雨幕" in resolved.prompt
+    assert not any("storyboard" in item for item in resolved.provenance_refs)
+
+
+def test_resolve_request_combined_tier_keeps_storyboard_with_anchor(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Complex anchored segments ship anchor AND storyboard together:
+    even when the template sentence is rewritable, the combined tier
+    must NOT swap the storyboard out — it rides as 图2 behind the
+    anchor (+1 shift) so rhythm and composition survive."""
+
+    from services.media_files import r2v_execution as rx
+    from services.project_files.models import ElementOutput
+    from services.project_files.store import ProjectSnapshot
+
+    project, _tl, _first, second = _two_segment_project("prev-v")
+    project.assets.artifact_slots_by_id[
+        "element:e2:storyboard"
+    ] = ArtifactSlot(
+        slot_id="element:e2:storyboard",
+        owner_ref="element:e2",
+        kind="r2v_storyboard_image",
+        version_ids=["sb-v1"],
+        selected_version_id="sb-v1",
+    )
+    from services.project_files.models import ArtifactVersion, IndexedFile
+
+    project.assets.files_by_id["file-sb-v1"] = IndexedFile(
+        file_id="file-sb-v1",
+        kind="artifact_payload",
+        media_type="image/png",
+        relative_uri="assets/artifacts/file-sb-v1",
+        sha256="1" * 64,
+        size_bytes=1,
+        created_at="2026-08-05T00:00:00Z",
+    )
+    project.assets.artifact_versions_by_id["sb-v1"] = ArtifactVersion(
+        version_id="sb-v1",
+        name="sb-v1",
+        slot_id="element:e2:storyboard",
+        kind="r2v_storyboard_image",
+        owner_ref="element:e2",
+        file_id="file-sb-v1",
+        checksum="1" * 64,
+        based_on_generation=1,
+        provenance_refs=[],
+        stale=False,
+        created_at="2026-08-05T00:00:00Z",
+    )
+    second.outputs["storyboard"] = ElementOutput(
+        slot_id="element:e2:storyboard",
+    )
+    second.creation = second.creation.model_copy(
+        update={
+            "video_prompt": ("[Image 1] 为本镜头分镜图，只提供构图与节奏；" "镜头缓推向站台，男孩抬头。"),
+            "video_reference_version_ids": [],
+        },
+    )
+    _patch_resolve_env(monkeypatch, rx, _anchor_entry())
+
+    resolved = rx._resolve_request(
+        snapshot=ProjectSnapshot(project=project, etag="e1", generation=1),
+        project_root=tmp_path,
+        target_ref="element:e2",
+        arguments={"prompt": None},
+    )
+    assert resolved.reference_version_ids[0] == (
+        "continuity:last_frame:prev-v"
+    )
+    # The storyboard stays in the SENT stack (promoted to 图2).
+    assert "sb-v1" in resolved.reference_version_ids
+    # Authored ordinals shifted: the storyboard sentence now reads 图2.
+    assert "图2 为本镜头分镜图" in resolved.prompt
+    assert resolved.prompt.startswith("开场第一帧严格对齐图1")
+
+
+def test_resolve_request_none_tier_strips_lingering_storyboard_clause(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Fallback the spec names by hand: an agent that still writes the
+    storyboard sentence on a none-tier segment (no artifact at all)
+    gets the clause rewritten to the anchor sentence — no dangling
+    "分镜图" words can reach the provider for a segment that ships
+    without a storyboard."""
+
+    from services.media_files import r2v_execution as rx
+    from services.project_files.store import ProjectSnapshot
+
+    project, _tl, _first, second = _two_segment_project("prev-v")
+    second.creation = second.creation.model_copy(
+        update={
+            "video_prompt": ("[Image 1] 为本镜头分镜图，只提供构图与节奏；" "男孩抬头望向雨幕。"),
+            "video_reference_version_ids": [],
+        },
+    )
+    _patch_resolve_env(monkeypatch, rx, _anchor_entry())
+
+    resolved = rx._resolve_request(
+        snapshot=ProjectSnapshot(project=project, etag="e1", generation=1),
+        project_root=tmp_path,
+        target_ref="element:e2",
+        arguments={"prompt": None},
+    )
+    # The storyboard sentence was swapped for the anchor clause...
+    assert "分镜图" not in resolved.prompt.split("【")[0]
+    assert "图1 为上一片段末帧（本段起始画面），第一帧严格对齐该图；" in (resolved.prompt)
+    # ...and nothing storyboard-shaped entered the stack or provenance.
+    assert resolved.reference_version_ids[0] == (
+        "continuity:last_frame:prev-v"
+    )
+    assert not any("sb" in item for item in resolved.provenance_refs)

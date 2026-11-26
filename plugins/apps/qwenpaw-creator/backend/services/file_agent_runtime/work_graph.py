@@ -1195,6 +1195,25 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                 )
                 task = active.get(key)
                 failure = failed.get(key)
+                # Storyboard tiers (2026-11-25): anchored simple segments
+                # skip the storyboard entirely — no node, no wait, no
+                # spend. Sticky by artifact: a selected storyboard (legacy
+                # render or manual override) keeps its node even when the
+                # triage now says the anchor alone would do.
+                from models.video_task_plans import (
+                    r2v_continuity_storyboard_need,
+                )
+
+                storyboard_tier = r2v_continuity_storyboard_need(
+                    project,
+                    timeline,
+                    element,
+                )
+                skip_storyboard = (
+                    storyboard_tier == "none"
+                    and storyboard_slot is None
+                    and task is None
+                )
                 missing = (*_upstream_missing(deps, statuses), *gate_missing)
                 authored_text_gap = False
                 upstream_selected = _element_upstream_selected(
@@ -1273,43 +1292,51 @@ def derive_work_graph(  # pylint: disable=too-many-branches,too-many-statements
                     status = WorkNodeStatus.GATED
                     missing = (storyboard_sync_gap,)
                     authored_text_gap = True
-                add(
-                    WorkNode(
-                        node_id=storyboard_id,
-                        kind="storyboard",
-                        label=f"{label} · 分镜",
-                        status=status,
-                        deps=tuple(deps),
-                        lane=lane,
-                        timeline_id=timeline_id,
-                        task_id=getattr(task, "task_id", None),
-                        progress=getattr(task, "progress", None),
-                        error=(
-                            _task_error_summary(failure)
-                            if status is WorkNodeStatus.FAILED
-                            else None
+                if skip_storyboard:
+                    storyboard_id = None
+                else:
+                    add(
+                        WorkNode(
+                            node_id=storyboard_id,
+                            kind="storyboard",
+                            label=f"{label} · 分镜",
+                            status=status,
+                            deps=tuple(deps),
+                            lane=lane,
+                            timeline_id=timeline_id,
+                            task_id=getattr(task, "task_id", None),
+                            progress=getattr(task, "progress", None),
+                            error=(
+                                _task_error_summary(failure)
+                                if status is WorkNodeStatus.FAILED
+                                else None
+                            ),
+                            missing=missing,
+                            authored_text_gap=authored_text_gap,
+                            prompt_sync_required=(
+                                bool(storyboard_sync_gap)
+                                or (
+                                    not (
+                                        creation.storyboard_prompt or ""
+                                    ).strip()
+                                    and (creation.narrative or "").strip()
+                                )
+                            ),
+                            locator={"page": "plan", "elementId": element_id},
+                            command="GENERATE_STORYBOARD_IMAGE",
+                            target_ref=f"element:{element_id}",
+                            dispatch_fingerprint=fingerprint,
+                            regeneration_of=(
+                                storyboard_slot
+                                if status
+                                in (
+                                    WorkNodeStatus.STALE,
+                                    WorkNodeStatus.FAILED,
+                                )
+                                else None
+                            ),
                         ),
-                        missing=missing,
-                        authored_text_gap=authored_text_gap,
-                        prompt_sync_required=(
-                            bool(storyboard_sync_gap)
-                            or (
-                                not (creation.storyboard_prompt or "").strip()
-                                and (creation.narrative or "").strip()
-                            )
-                        ),
-                        locator={"page": "plan", "elementId": element_id},
-                        command="GENERATE_STORYBOARD_IMAGE",
-                        target_ref=f"element:{element_id}",
-                        dispatch_fingerprint=fingerprint,
-                        regeneration_of=(
-                            storyboard_slot
-                            if status
-                            in (WorkNodeStatus.STALE, WorkNodeStatus.FAILED)
-                            else None
-                        ),
-                    ),
-                )
+                    )
 
             # Video node for all types
             video_id = f"video:{element_id}"

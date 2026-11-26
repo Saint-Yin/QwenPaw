@@ -115,6 +115,25 @@ describe("selectRoughCutFrames", () => {
     delete project.assets.files_by_id[version.file_id];
     expect(roughCutFrameForElement(project, shot).source).toBe("none");
   });
+  it("labels none-tier anchored continuations as anchor, never 待分镜", () => {
+    const project = cloneProject();
+    const timeline = project.timelines.items["timeline:main"];
+    const first = timeline.elements_by_id["r2v-window"];
+    delete project.assets.artifact_slots_by_id["element:r2v-window:video"];
+    const second = structuredClone(first);
+    second.element_id = "r2v-next";
+    second.span = {
+      ...second.span,
+      start_tick: first.span.start_tick + first.span.duration_tick,
+      duration_tick: 5000,
+    };
+    (second.creation as Record<string, unknown>).video_prompt = "男孩抬头。";
+    (second.creation as Record<string, unknown>).narrative = "男孩抬头。";
+    timeline.elements_by_id["r2v-next"] = second;
+    expect(roughCutFrameForElement(project, second).source).toBe("anchor");
+    // The first segment (no predecessor) still waits for its storyboard.
+    expect(roughCutFrameForElement(project, first).source).toBe("none");
+  });
   it("history snapshots contribute no frames and do not inflate counts", () => {
     const baseline = selectRoughCutFrames(cloneProject());
     const frames = selectRoughCutFrames(withSnapshot(cloneProject()));

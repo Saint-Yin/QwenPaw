@@ -1640,7 +1640,7 @@ def _shift_authored_image_refs(prompt: str, delta: int) -> str:
 # role, which lets the storyboard leave the reference stack without
 # leaving the author's words pointing at the wrong image.
 _STORYBOARD_CLAUSE_RE = re.compile(
-    r"\[Image 1\][^；。\n]*?分镜图[^；。\n]*?[；。]",
+    r"\[Image 1\][^；。\n]*?(?:分镜图|上一片段末帧)[^；。\n]*?[；。]",
 )
 _ANCHOR_CLAUSE = "[Image 1] 为上一片段末帧（本段起始画面），第一帧严格对齐该图；"
 
@@ -2169,16 +2169,37 @@ def _resolve_request(
             selected_storyboard[1] if selected_storyboard is not None else None
         )
         if not storyboard_id:
-            raise ValidationError(
-                "R2V Element 尚未选择 storyboard ArtifactVersion",
+            # Storyboard tiers: an anchored simple segment (``none``)
+            # ships on the last-frame anchor alone — no storyboard was
+            # ever generated, so the classic requirement does not
+            # apply. Every other shape still needs the visual plan.
+            from models.video_task_plans import (
+                r2v_continuity_storyboard_need,
             )
-        storyboard = project.assets.artifact_versions_by_id.get(storyboard_id)
-        if storyboard is None:
-            raise StorageIntegrityError(
-                "selected storyboard ArtifactVersion 不存在",
+
+            if (
+                r2v_continuity_storyboard_need(
+                    project,
+                    timeline,
+                    element,
+                )
+                != "none"
+            ):
+                raise ValidationError(
+                    "R2V Element 尚未选择 storyboard ArtifactVersion",
+                )
+        else:
+            storyboard = project.assets.artifact_versions_by_id.get(
+                storyboard_id,
             )
-        if storyboard.owner_ref != f"element:{element_id}":
-            raise StorageIntegrityError("selected storyboard 不属于目标 Element")
+            if storyboard is None:
+                raise StorageIntegrityError(
+                    "selected storyboard ArtifactVersion 不存在",
+                )
+            if storyboard.owner_ref != f"element:{element_id}":
+                raise StorageIntegrityError(
+                    "selected storyboard 不属于目标 Element",
+                )
 
     prompt = str(arguments.get("prompt") or creation.video_prompt).strip()
     if not prompt:
@@ -2266,29 +2287,51 @@ def _resolve_request(
                 # the documented degradation, never a blocked segment.
                 task_plan = None
             else:
-                swapped = _storyboard_anchor_swap(prompt)
-                if swapped is not None:
-                    # Plan shape: the storyboard leaves the stack and
-                    # the anchor inherits its 图1 slot, so every other
-                    # authored ordinal stays intact. E2E evidence
-                    # (2026-11-24): a kept storyboard still pulled the
-                    # opening composition (seam 0.60) while the
-                    # storyboard-free single-anchor stack measured 0.79.
-                    prompt = swapped
-                    version_ids = (
-                        strong_anchor_entry.reference_id,
-                        *(
-                            item
-                            for item in version_ids
-                            if item != storyboard_id
-                        ),
-                    )
-                else:
+                from models.video_task_plans import (
+                    r2v_continuity_storyboard_need,
+                )
+
+                storyboard_tier = r2v_continuity_storyboard_need(
+                    project,
+                    timeline,
+                    element,
+                )
+                if storyboard_tier == "combined":
+                    # Complex anchored segment: anchor AND storyboard
+                    # ride together (anchor 图1, storyboard promoted
+                    # to 图2, every other authored ordinal +1). The
+                    # anchor owns the starting state, the storyboard
+                    # owns rhythm and composition — they complement.
                     version_ids = (
                         strong_anchor_entry.reference_id,
                         *version_ids,
                     )
                     prompt = _shift_authored_image_refs(prompt, 1)
+                else:
+                    swapped = _storyboard_anchor_swap(prompt)
+                    if swapped is not None:
+                        # Plan shape: the storyboard leaves the stack
+                        # and the anchor inherits its 图1 slot, so
+                        # every other authored ordinal stays intact.
+                        # E2E evidence (2026-11-24): a kept storyboard
+                        # still pulled the opening composition (seam
+                        # 0.60) while the storyboard-free single-anchor
+                        # stack measured 0.79.
+                        prompt = swapped
+                        version_ids = (
+                            strong_anchor_entry.reference_id,
+                            *(
+                                item
+                                for item in version_ids
+                                if item != storyboard_id
+                            ),
+                        )
+                    else:
+                        version_ids = (
+                            strong_anchor_entry.reference_id,
+                            *version_ids,
+                        )
+                        prompt = _shift_authored_image_refs(prompt, 1)
         _validate_authored_marker_bounds(prompt, project, version_ids)
         _assert_r2v_reference_budget(
             project,

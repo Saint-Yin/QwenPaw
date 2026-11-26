@@ -29,6 +29,8 @@ layer gathers durable facts and runs the plan.
 from __future__ import annotations
 
 import os
+import re
+from typing import Any
 from dataclasses import dataclass
 from enum import StrEnum
 import math
@@ -302,6 +304,96 @@ def r2v_may_consume_predecessor(
     if transition_kind != "none" or intent == "cut":
         return False
     return True
+
+
+_CAMERA_MOVE_RE = re.compile(
+    r"(缓推|推近|推进|拉远|后拉|摇镜|横移|跟随|跟拍|环绕|升降|dolly|zoom|orbit|tracking)",
+)
+_BEAT_RE = re.compile(
+    r"(随后|紧接着|然后|最后|起初|切到|cut to|\d+\s*秒[后内]|第[一二三四五六七八九十]\s*秒)",
+)
+_PROP_STATE_RE = re.compile(
+    r"(撑开|收拢|合上|打开|关上|点亮|熄灭|点燃|收起|展开|拔出)",
+)
+
+
+def anchored_segment_is_complex(timeline: Any, element: Any) -> bool:
+    """Whether an anchored segment needs the storyboard to ride along.
+
+    The last-frame anchor guarantees a truthful STARTING state; the
+    storyboard supplies rhythm and composition. Long takes, multiple
+    people, camera moves, multi-beat narration and prop state changes
+    all ask the model to structure time — the anchor alone is not enough
+    (triage conditions from the 2026-11-25 plan, informed by Seedance
+    time-beat guidance: anything needing timeline management deserves a
+    structural reference).
+    """
+
+    creation = element.creation
+    ticks_per_second = max(timeline.ticks_per_second, 1)
+    if element.span.duration_tick / ticks_per_second > 8.0:
+        return True
+    if len(list(creation.character_refs or [])) >= 2:
+        return True
+    text = f"{creation.video_prompt}\n{creation.narrative}"
+    if _CAMERA_MOVE_RE.search(text):
+        return True
+    if _BEAT_RE.search(text):
+        return True
+    if list(creation.prop_refs or []) and _PROP_STATE_RE.search(text):
+        return True
+    return False
+
+
+def r2v_continuity_storyboard_need(
+    project: Any,
+    timeline: Any,
+    element: Any,
+) -> str:
+    """Three-tier storyboard need for one r2v segment.
+
+    ``plain``     not anchor-routed (first segment, scene change, cut,
+                  new elements, throughput dial): storyboard ships as
+                  always.
+    ``none``      anchored and simple: the storyboard is neither
+                  generated nor sent; the last-frame anchor plus the
+                  prompt carries the segment.
+    ``combined``  anchored but complex (or manually forced): anchor AND
+                  storyboard ship together, anchor as 图1, storyboard
+                  promoted to 图2 (keep+shift stack).
+
+    Pure project data so work graph, executor and fingerprint agree.
+    """
+
+    creation = getattr(element, "creation", None)
+    if getattr(creation, "type", None) != "r2v":
+        return "plain"
+    if getattr(creation, "force_storyboard", False):
+        return "combined"
+    if (
+        resolve_continuity_mode(
+            getattr(project.settings, "video_continuity", None),
+        )
+        == CONTINUITY_MODE_WEAK
+    ):
+        return "plain"
+    # Lazy import: the continuity layer already leans on this module.
+    from services.media_files.segment_continuity import (
+        find_predecessor_video_element,
+    )
+
+    prev = find_predecessor_video_element(timeline, element)
+    if not r2v_may_consume_predecessor(
+        timeline.elements_by_id,
+        element,
+        prev,
+    ):
+        return "plain"
+    return (
+        "combined"
+        if anchored_segment_is_complex(timeline, element)
+        else "none"
+    )
 
 
 def _plain(

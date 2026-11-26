@@ -1170,7 +1170,10 @@
     "wireAnchorNote": "Image 1 is the predecessor's last frame (extracted at runtime)",
     "wireAnchorPruned": "anchor pruned",
     "wireBgmOn": "shared BGM attached",
-    "wireBgmOff": "no BGM (native audio)"
+    "wireBgmOff": "no BGM (native audio)",
+    "storyboardTierNone": "This segment continues straight from the predecessor's last frame — no storyboard needed",
+    "storyboardTierCombined": "Anchor owns the start, storyboard owns the rhythm: shipped together",
+    "forceStoryboard": "Generate storyboard anyway"
   },
   "agent": {
     "assistant": "Creative Assistant",
@@ -2399,7 +2402,8 @@
       "final": "Final",
       "storyboard": "Storyboard",
       "design": "Design",
-      "none": "Pending"
+      "none": "Pending",
+      "anchor": "Anchored"
     },
     "columns": {
       "understanding": "Understanding",
